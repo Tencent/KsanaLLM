@@ -19,9 +19,9 @@ class VersionReporter {
   void Init(const ReportOption& option = ReportOption());
 
   // Stop the version reporting
-  void StopReporting();
+  void StopReporting() {}
 
   // Destroy the version reporting instance
-  void Destroy();
+  void Destroy() {}
 };
 }  //  namespace ksana_llm
