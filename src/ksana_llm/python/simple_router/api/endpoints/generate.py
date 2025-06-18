@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 PREFILL_NODES = [("prefill_group_1", "127.0.0.1:8088")]
 DECODE_NODES = [("decode_group_1", "127.0.0.1:8089")]
 
-router = APIRouter()
+raw_router = APIRouter()
 
 
 # Helper function to randomly select a node from a list
@@ -85,7 +85,7 @@ async def _drain_stream(
                 return
 
 
-@router.post("/generate")
+@raw_router.post("/generate")
 async def generate(req: Request):
     """
     Generate text by routing the request to both prefill and decode nodes

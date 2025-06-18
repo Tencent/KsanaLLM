@@ -92,12 +92,28 @@ setting:
       quant_method: auto
   # PD 分离模式下 TransferEngine使用的链接器配置
   connector:
-    router_endpoint: "http://127.0.0.1:9080"
+    # router server 地址
+    router_endpoint: "http://localhost:9080"
+    # 本节点的推理服务地址，用于RouterSever 自动寻址
+    inference_addr: "localhost:8088"
+    # 本节点组名，如果是PP并行，P1 P2 组成一组。
     group_name: "prefill_group_1"
+    # 本节点名称，例如PP并行中的 P1 or P2
     node_name: "prefill_node_1"
-    heartbeat_interval_ms: 5000
+    # 节点心跳上报间隔，用于RouterServer检查节点状态
+    heartbeat_interval_ms: 2000
+    # 首次创建链接的等待时长
+    connector_waiting_sec: 1800
+    # 一次可传输的最大Tensor数量
+    transfer_batch: 1048576
+    # 用于传输数据的线程数
+    send_thread_num: 6
+    # 通讯器类型，支持nccl或zmq
     communication_type: "nccl"
-    group_role: "prefill"
+    # PD 分离中节点的角色
+    group_role: "prefill" # or "decode"
+    # 连接器的端口号(zmq 本地bind端口)
+    coordinator_port: 13579
   # 性能统计相关配置
   profiler:
     #trace_export_url: "http://example.com/v1/traces"

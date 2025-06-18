@@ -16,6 +16,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from api import api_router
+from api.endpoints import generate
 from config import settings
 from db import db
 
@@ -80,6 +81,7 @@ app = FastAPI(
 
 # Register API routers
 app.include_router(api_router, prefix=settings.api_prefix)
+app.include_router(generate.raw_router)
 
 
 def main():
