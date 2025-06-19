@@ -1,0 +1,38 @@
+FROM tencentos/tencentos4-minimal
+
+RUN dnf install -y pip which wget git python3-devel libcurl libcurl-devel gcc g++ cmake dnf-plugins-core git-lfs gawk abseil-cpp abseil-cpp-devel
+
+RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo && \
+    yum install -y cuda-toolkit-12-4 cudnn9-cuda-12-4 libnccl libnccl-devel
+
+RUN echo "" >> /root/.bashrc && \
+    echo "export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH" >> /root/.bashrc && \
+    echo "export PATH=/usr/local/cuda-12.4/bin:$PATH" >> /root/.bashrc && \
+    ln -s /usr/local/cuda/extras/CUPTI/lib64/libcupti.so.12  /usr/local/lib64/libcupti.so.12 && \
+    echo "export LD_LIBRARY_PATH=/usr/local/lib64:$LD_LIBRARY_PATH" >> /root/.bashrc && \
+    echo "export LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/cusparselt/lib:$LD_LIBRARY_PATH" >> /root/.bashrc && \
+    source /root/.bashrc
+
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+RUN pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124 && \
+    pip install wheel
+
+RUN source /root/.bashrc && \
+    git clone http://github.com/vllm-project/flash-attention.git \
+    && cd flash-attention \
+    && git checkout v2.6.2 \
+    && awk '/PYTORCH_VERSION="2.4.0"/{print "PYTORCH_VERSION=\"2.6.0+cu124\""; print "MAIN_CUDA_VERSION=\"12.4\""; next} {print}' build.sh > output_file.sh && mv output_file.sh build.sh \
+    && bash build.sh \
+    && pip install dist/* --no-deps \
+    && cd .. && rm -rf flash-attention
+
+RUN git clone https://github.com/protocolbuffers/utf8_range.git \
+    && cd utf8_range \
+    && cmake -Dutf8_range_ENABLE_TESTS=off -DCMAKE_INSTALL_PREFIX=/usr . -B build \
+    && cd build \
+    && make -j \
+    && make install -j \
+    && cd ../.. && rm -rf utf8-range \
+    && ln -s /usr/lib/x86_64-linux-gnu/libutf8_validity.a /usr/lib/libutf8_validity.a \
+    && ln -s /usr/lib/x86_64-linux-gnu/libutf8_range.a /usr/lib/libutf8_range.a

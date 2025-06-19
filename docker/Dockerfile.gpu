@@ -6,7 +6,7 @@ LABEL MAINTAINER="ksana-llm-developer"
 RUN apt update -y
 RUN apt install -y libpython3-all-dev git-lfs
 
-RUN git clone  http://github.com/vllm-project/flash-attention.git \
+RUN git clone http://github.com/vllm-project/flash-attention.git \
     && cd flash-attention \
     && git checkout v2.6.2 \
     && awk '/PYTORCH_VERSION="2.4.0"/{print "PYTORCH_VERSION=\"2.6.0a0+ecf3bae40a.nv25.01\""; print "MAIN_CUDA_VERSION=\"12.8\""; next} {print}' build.sh > output_file.sh && mv output_file.sh build.sh \

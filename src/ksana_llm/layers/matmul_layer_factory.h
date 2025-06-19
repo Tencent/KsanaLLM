@@ -191,13 +191,6 @@ class MatMulLayerFactory {
         // block_k size
         fp8_blockwise_matmul_params.push_back(model_config_.quant_config.weight_block_size[1]);
         fp8_blockwise_matmul_params.push_back(model_config_.tensor_para_size);
-
-        // weight is [n， k], k is shape[1],
-        if (rank_ == 0) {
-          KLLM_LOG_INFO << fmt::format("rockcao weight_name: {}, weight_shape: {}", weight_name,
-                                       base_weight->GetModelWeights(weight_name).ToString());
-        }
-
         return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_blockwise_matmul_params, QUANT_BLOCK_FP8_E4M3,
                            NONE_QUANT);
       } else {
