@@ -33,6 +33,7 @@ class QuantWeight {
 
   // Group weight conversion for weight transformation, partitioning, transposition, etc.
   Status PackAndBindGroupTensor(int layer_idx, const std::string& needed_slove_weight_name);
+  Status AutoPackAndBindGroupTensor(std::vector<std::string> needed_slove_weights_name);
   Status ConvertGroupTensor();
 
   void LoadMoeIntQuantWeight(const std::string& tensor_name, std::vector<size_t>& weight_shape,

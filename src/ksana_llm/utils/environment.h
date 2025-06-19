@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "nlohmann/json.hpp"
+
 #include "ksana_llm/connector/config.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
@@ -93,6 +95,15 @@ struct QuantConfig {
 
   // (fp8) Whether input_scale is in checkpoint.
   bool is_activation_scheme_static = false;
+
+  // (fp8) Whether enable int4 moe in fp8 model.
+  bool enable_moe_int4 = false;
+
+  // Adaptation layers
+  std::vector<std::string> pattern_layers;
+
+  // Ignored layers
+  std::vector<std::string> ignored_layers;
 };
 
 // The Moe informations.
@@ -205,6 +216,7 @@ struct ModelConfig {
   // Determines if the model is a quant model.
   bool is_quant;
   QuantConfig quant_config;
+  std::vector<QuantConfig> sub_quant_configs;
 
   // Determines if the model is a moe model.
   bool is_moe = false;
@@ -221,7 +233,7 @@ struct ModelConfig {
   int cla_share_factor = 0;  // Determines the number of layers that share k and v.
   bool use_cla = false;
   bool use_qk_norm = false;  // Check if normlize the attention out q and k.
-  bool mlp_bias = false;    // Check if use bias in mlp layer.
+  bool mlp_bias = false;     // Check if use bias in mlp layer.
   // For mla model
   bool use_mla = false;
   MlaConfig mla_config;
@@ -652,6 +664,10 @@ class Environment {
 
   // Init Expert-Parallel Config from env.
   void InitializeExpertParallelConfig();
+
+  // Parse Model Quant Config
+  void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
+                             std::string &yaml_weight_quant_method, std::string &yaml_gptq_backend);
 
  private:
   // Check Whether the environment config is valid.

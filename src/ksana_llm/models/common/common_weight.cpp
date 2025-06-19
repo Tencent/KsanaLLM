@@ -218,6 +218,14 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     }
 #endif
 
+    if (model_config_.quant_config.enable_moe_int4 &&
+        (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos ||
+         tensor_name.find(".qzeros") != std::string::npos) &&
+        tensor_name.find(".experts.") != std::string::npos) {
+      quant_weight_solver_->LoadMoeIntQuantWeight(tensor_name, weight_shape, weight_data_type, weight_ptr);
+      continue;
+    }
+
     // filter out moe or mla model weight
     // TODO(winminkong): suport mla and moe weight type from fp32 to fp16/bf16 cast
     if (!quant_weight_solver_->IsEnable() &&
@@ -883,6 +891,12 @@ void CommonWeight<T>::ProcessWeights() {
       StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
     }
   }
+
+  if (model_config_.quant_config.enable_moe_int4) {
+    std::vector<std::string> needed_slove_weights_name = {"mlp.experts.down_proj", "mlp.experts.up_gate_proj"};
+    quant_weight_solver_->AutoPackAndBindGroupTensor(needed_slove_weights_name);
+  }
+
   if (quant_weight_solver_->IsEnable()) {
     quant_weight_solver_->ConvertGroupTensor();
     ConvertNextnProjTensor();

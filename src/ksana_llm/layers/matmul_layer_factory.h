@@ -234,7 +234,7 @@ class MatMulLayerFactory {
                                (model_config_.expert_para_size * model_config_.expert_world_size));  // num_experts
     size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
     size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
-    if (model_config_.quant_config.method == QUANT_GPTQ) {
+    if (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4) {
       up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
     }
     if (up_gate_hidden_size != down_hidden_size) {
@@ -259,9 +259,14 @@ class MatMulLayerFactory {
     moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);               // norm_topk_prob
     moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);        // routed_scaling_factor
     moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
-    moe_matmul_param.push_back(model_config_.quant_config.is_fp8_blockwise ? DataType::TYPE_BLOCK_FP8_E4M3
-                                                                           : DataType::TYPE_INVALID);
-    if (model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) {
+    if (model_config_.quant_config.enable_moe_int4) {
+      moe_matmul_param.push_back(DataType::TYPE_INVALID);
+    } else {
+      moe_matmul_param.push_back(model_config_.quant_config.is_fp8_blockwise ? DataType::TYPE_BLOCK_FP8_E4M3
+                                                                             : DataType::TYPE_INVALID);
+    }
+    if ((model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) ||
+        model_config_.quant_config.enable_moe_int4) {
       moe_matmul_param.push_back(DataType::TYPE_I4_GROUP);
     } else {
       moe_matmul_param.push_back(DataType::TYPE_INVALID);
@@ -283,7 +288,8 @@ class MatMulLayerFactory {
         return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_FP8_E4M3, NONE_QUANT);
       }
     }
-    if (weight_type == TYPE_UINT8 && model_config_.quant_config.method == QUANT_GPTQ) {
+    if (weight_type == TYPE_UINT8 &&
+        (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4)) {
       return CreateLayer(TYPE_UINT8, input_type, output_type, moe_matmul_param, MOE_QUANT_GTPQ, NONE_QUANT);
     }
     return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_NONE, NONE_QUANT);

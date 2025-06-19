@@ -897,4 +897,83 @@ TEST_F(EnvironmentTest, GetCacheBlockSize) {
   SetAbsorbWeightsType(absorb_type);
 }
 
+// 测试Environment的ParseModelQuantConfig方法
+TEST_F(EnvironmentTest, ParseModelQuantConfig) {
+  // 测试混合量化的配置加载
+  {
+    nlohmann::json mixed_config = {
+        {"quantization_config",
+         {{"quant_method", "mixed"},
+          {"configs",
+           {{"fp8",
+             {{"method", "fp8"}, {"activation_scheme", "dynamic"}, {"fmt", "e4m3"}, {"weight_block_size", {128, 128}}}},
+            {"gptq",
+             {{"method", "gptq"},
+              {"bits", 4},
+              {"damp_percent", 0.01},
+              {"desc_act", false},
+              {"group_size", 128},
+              {"sym", true}}}}},
+          {"layer_mapping",
+           {{"gptq",
+             {{"default_config", false},
+              {"pattern_layers", {".mlp.experts."}},
+              {"ignored_layers", nlohmann::json::array()}}},
+            {"fp8",
+             {{"default_config", true},
+              {"pattern_layers", nlohmann::json::array()},
+              {"ignored_layers", {"model.layers.61.eh_proj"}}}}}}}}};
+    ModelConfig model_config;
+    std::string yaml_weight_quant_method = "auto";
+    std::string yaml_gptq_backend = "cutlass";
+    env_.ParseModelQuantConfig(mixed_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EXPECT_TRUE(model_config.is_quant);
+    EXPECT_TRUE(model_config.quant_config.is_checkpoint_fp8_serialized);
+    EXPECT_TRUE(!model_config.quant_config.is_activation_scheme_static);
+    EXPECT_TRUE(model_config.quant_config.is_fp8_blockwise);
+    EXPECT_EQ(model_config.quant_config.method, QUANT_BLOCK_FP8_E4M3);
+    EXPECT_EQ(model_config.quant_config.weight_block_size.size(), 2);
+    EXPECT_EQ(model_config.quant_config.weight_block_size[0], 128);
+    EXPECT_EQ(model_config.quant_config.weight_block_size[1], 128);
+    EXPECT_EQ(model_config.sub_quant_configs.size(), 1);
+    EXPECT_EQ(model_config.sub_quant_configs[0].method, QUANT_GPTQ);
+    EXPECT_EQ(model_config.sub_quant_configs[0].bits, 4);
+    EXPECT_EQ(model_config.sub_quant_configs[0].group_size, 128);
+    EXPECT_EQ(model_config.sub_quant_configs[0].desc_act, false);
+  }
+
+  // 测试GPTQ量化的配置加载
+  {
+    nlohmann::json gptq_config = {{"quantization_config",
+                                   {{"quant_method", "gptq"},
+                                    {"bits", 4},
+                                    {"damp_percent", 0.01},
+                                    {"desc_act", false},
+                                    {"group_size", 128},
+                                    {"sym", true}}}};
+    ModelConfig model_config;
+    std::string yaml_weight_quant_method = "auto";
+    std::string yaml_gptq_backend = "cutlass";
+    env_.ParseModelQuantConfig(gptq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EXPECT_TRUE(model_config.is_quant);
+    EXPECT_EQ(model_config.quant_config.method, QUANT_GPTQ);
+    EXPECT_EQ(model_config.quant_config.bits, 4);
+    EXPECT_EQ(model_config.quant_config.group_size, 128);
+    EXPECT_EQ(model_config.quant_config.desc_act, false);
+  }
+
+  // 测试AWQ量化的配置加载
+  {
+    nlohmann::json awq_config = {{"quantization_config", {{"quant_method", "awq"}, {"bits", 4}, {"group_size", 128}}}};
+    ModelConfig model_config;
+    std::string yaml_weight_quant_method = "auto";
+    std::string yaml_gptq_backend = "cutlass";
+    env_.ParseModelQuantConfig(awq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EXPECT_TRUE(model_config.is_quant);
+    EXPECT_EQ(model_config.quant_config.method, QUANT_AWQ);
+    EXPECT_EQ(model_config.quant_config.bits, 4);
+    EXPECT_EQ(model_config.quant_config.group_size, 128);
+  }
+}
+
 }  // namespace ksana_llm

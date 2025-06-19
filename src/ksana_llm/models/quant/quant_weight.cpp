@@ -648,6 +648,51 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
 }
 
 template <typename T>
+Status QuantWeight<T>::AutoPackAndBindGroupTensor(std::vector<std::string> needed_slove_weights_name) {
+  for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
+    int max_layer_idx = pipeline_config_.upper_layer_idx;
+    int min_layer_idx = pipeline_config_.lower_layer_idx;
+    if (needed_slove_weight_name.find("mlp.") != std::string::npos &&
+        needed_slove_weight_name.find("expert") == std::string::npos &&
+        model_config_.moe_config.first_k_dense_replace != 0) {
+      if ((model_config_.moe_config.first_k_dense_replace - 1) >= pipeline_config_.lower_layer_idx &&
+          (model_config_.moe_config.first_k_dense_replace - 1) <= pipeline_config_.upper_layer_idx) {
+        max_layer_idx = (model_config_.moe_config.first_k_dense_replace - 1);
+      }
+      if ((model_config_.moe_config.first_k_dense_replace - 1) < pipeline_config_.lower_layer_idx) {
+        continue;
+      }
+    }
+    if (needed_slove_weight_name.find("expert") != std::string::npos &&
+        model_config_.moe_config.first_k_dense_replace != 0) {
+      if (model_config_.moe_config.first_k_dense_replace >= pipeline_config_.lower_layer_idx &&
+          model_config_.moe_config.first_k_dense_replace <= pipeline_config_.upper_layer_idx) {
+        min_layer_idx = model_config_.moe_config.first_k_dense_replace;
+      }
+      if ((model_config_.moe_config.first_k_dense_replace - 1) > pipeline_config_.upper_layer_idx) {
+        continue;
+      }
+    }
+    // TODO(winminkong) : 后期改为required_layer_idx_并解耦三个int4后端以及mla和moe权重的处理
+    for (int layer_idx = min_layer_idx; layer_idx <= max_layer_idx; ++layer_idx) {
+      PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
+    }
+    if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
+      if (needed_slove_weight_name.find("mlp.") != std::string::npos &&
+          needed_slove_weight_name.find("expert") == std::string::npos &&
+          model_config_.moe_config.first_k_dense_replace != 0) {
+        continue;
+      }
+      for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
+           ++layer_idx) {
+        PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
+      }
+    }
+  }
+  return Status();
+}
+
+template <typename T>
 Status QuantWeight<T>::ConvertGroupTensor() {
   if (!enable_) {
     return Status();
@@ -752,46 +797,7 @@ Status QuantWeight<T>::ConvertGroupTensor() {
     needed_slove_weights_name.insert(needed_slove_weights_name.end(), share_mlp_needed_slove_weights_name.begin(),
                                      share_mlp_needed_slove_weights_name.end());
   }
-  for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
-    int max_layer_idx = pipeline_config_.upper_layer_idx;
-    int min_layer_idx = pipeline_config_.lower_layer_idx;
-    if (needed_slove_weight_name.find("mlp.") != std::string::npos &&
-        needed_slove_weight_name.find("expert") == std::string::npos &&
-        model_config_.moe_config.first_k_dense_replace != 0) {
-      if ((model_config_.moe_config.first_k_dense_replace - 1) >= pipeline_config_.lower_layer_idx &&
-          (model_config_.moe_config.first_k_dense_replace - 1) <= pipeline_config_.upper_layer_idx) {
-        max_layer_idx = (model_config_.moe_config.first_k_dense_replace - 1);
-      }
-      if ((model_config_.moe_config.first_k_dense_replace - 1) < pipeline_config_.lower_layer_idx) {
-        continue;
-      }
-    }
-    if (needed_slove_weight_name.find("expert") != std::string::npos &&
-        model_config_.moe_config.first_k_dense_replace != 0) {
-      if (model_config_.moe_config.first_k_dense_replace >= pipeline_config_.lower_layer_idx &&
-          model_config_.moe_config.first_k_dense_replace <= pipeline_config_.upper_layer_idx) {
-        min_layer_idx = model_config_.moe_config.first_k_dense_replace;
-      }
-      if ((model_config_.moe_config.first_k_dense_replace - 1) > pipeline_config_.upper_layer_idx) {
-        continue;
-      }
-    }
-    // TODO(winminkong) : 后期改为required_layer_idx_并解耦三个int4后端以及mla和moe权重的处理
-    for (int layer_idx = min_layer_idx; layer_idx <= max_layer_idx; ++layer_idx) {
-      PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
-    }
-    if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
-      if (needed_slove_weight_name.find("mlp.") != std::string::npos &&
-          needed_slove_weight_name.find("expert") == std::string::npos &&
-          model_config_.moe_config.first_k_dense_replace != 0) {
-        continue;
-      }
-      for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
-           ++layer_idx) {
-        PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
-      }
-    }
-  }
+  AutoPackAndBindGroupTensor(needed_slove_weights_name);
 
   // permute lm_head: permute(1, 0)
   if (weights_map_.find("lm_head.weight") != weights_map_.end()) {
@@ -1397,9 +1403,12 @@ Status QuantWeight<T>::BindMlaFp8E4m3BlockWiseScaleOfWeight() {
 template <typename T>
 Status QuantWeight<T>::BindMoeFp8E4m3BlockWiseScaleOfWeight() {
   SetDevice(rank_);
-  const std::vector<std::string> names = {".mlp.shared_expert.gate_up_proj.", ".mlp.shared_expert.gate_proj.",
-                                          ".mlp.shared_expert.up_proj.",      ".mlp.shared_expert.down_proj.",
-                                          ".mlp.experts.down_proj.",          ".mlp.experts.up_gate_proj."};
+  std::vector<std::string> names = {".mlp.shared_expert.gate_up_proj.", ".mlp.shared_expert.gate_proj.",
+                                    ".mlp.shared_expert.up_proj.", ".mlp.shared_expert.down_proj."};
+  if (!model_config_.quant_config.enable_moe_int4) {
+    names.push_back(".mlp.experts.down_proj.");
+    names.push_back(".mlp.experts.up_gate_proj.");
+  }
   const std::unordered_set<std::string> optional_names = {
       ".mlp.shared_expert.gate_up_proj.", ".mlp.shared_expert.gate_proj.", ".mlp.shared_expert.up_proj."};
   for (auto name : names) {

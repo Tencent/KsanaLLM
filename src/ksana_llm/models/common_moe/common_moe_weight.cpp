@@ -81,7 +81,7 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoa
       continue;
     }
 
-    if (quant_weight_solver_->IsEnable()) {
+    if (quant_weight_solver_->IsEnable() || model_config_.quant_config.enable_moe_int4) {
       break;
     }
     void* weight_ptr;

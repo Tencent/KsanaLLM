@@ -21,8 +21,7 @@ class NewDeepSeekV3ConfigParser : public BaseModelConfigParser {
  private:
   // Parse quant config
   Status ParseQuantConfig(const nlohmann::json& quant_config_json,
-    std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config,
-    const std::string & yaml_weight_quant_method,
-    const std::string & yaml_gptq_backend);
+                          std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config,
+                          const std::string& yaml_weight_quant_method, const std::string& yaml_gptq_backend);
 };
 }  // namespace ksana_llm

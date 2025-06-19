@@ -65,6 +65,7 @@ struct NewDeepSeekV3Config : public BaseModelConfig {
   // Determines if the model is a quant model.
   bool is_quant;
   QuantConfig quant_config;
+  std::vector<QuantConfig> sub_quant_configs;
 
   // Config for moe
   bool is_moe = false;
