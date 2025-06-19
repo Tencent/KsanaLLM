@@ -19,10 +19,9 @@ class TopkSampling : public BaseSampling {
 
  private:
   Status RunSampling(float* logits, uint32_t* output_token, const SamplingConfig* sampling_config,
-                     SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
+                     SamplingDeviceParameter sampling_device_parameter, const ModelConfig* model_config,
                      Stream& stream) override;
 
-  int workspace_block_id_{-1};
   void* workspace_ = nullptr;
   size_t workspace_size_{0ul};
 

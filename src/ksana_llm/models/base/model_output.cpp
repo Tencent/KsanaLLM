@@ -6,29 +6,14 @@
 
 namespace ksana_llm {
 
-ModelOutput::ModelOutput(size_t max_batch_size, size_t vocab_size, int rank, std::shared_ptr<Context> context)
-    : rank_(rank), context_(context), max_batch_size_(max_batch_size), vocab_size_(vocab_size) {
-  STATUS_CHECK_FAILURE(CreateTensor(logits_tensor, {max_batch_size_, vocab_size_}, TYPE_FP32, rank_, MEMORY_DEVICE));
-
+ModelOutput::ModelOutput(const size_t max_logits_num, const size_t vocab_size, const int rank,
+                         const std::shared_ptr<Context> context, const size_t max_hidden_buffer_size,
+                         const DataType hidden_dtype)
+    : rank_(rank), context_(context) {
+  logits_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {max_logits_num, vocab_size}, rank_);
   EventCreateWithFlags(&compute_ready_event, EVENT_DISABLE_TIMING);
 }
 
-ModelOutput::~ModelOutput() {
-  STATUS_CHECK_FAILURE(DestroyTensor(logits_tensor, rank_));
-
-  EventDestroy(compute_ready_event);
-}
-
-void ModelOutput::CopyToLogistBuffer(const size_t batch_size, std::vector<ForwardRequest>& forward_reqs,
-                                     std::vector<Tensor>& logits_float) {
-  EventRecord(compute_ready_event, context_->GetComputeStreams()[rank_]);
-  StreamWaitEvent(context_->GetD2DStreams()[rank_], compute_ready_event);
-  // Copy to logits buf
-  float* logits_ptr = logits_float[0].GetPtr<float>();
-  float* logits_dst = forward_reqs[0].logits_buf[rank_] + forward_reqs[0].logits_offset * vocab_size_;
-  MemcpyAsync(logits_dst, logits_ptr, batch_size * vocab_size_ * sizeof(float), MEMCPY_DEVICE_TO_DEVICE,
-              context_->GetD2DStreams()[rank_]);
-  StreamSynchronize(context_->GetD2DStreams()[rank_]);
-}
+ModelOutput::~ModelOutput() { EventDestroy(compute_ready_event); }
 
 }  // namespace ksana_llm

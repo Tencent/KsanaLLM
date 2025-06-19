@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
@@ -38,4 +39,14 @@ TEST_F(RequestTest, SamplingConfig) {
   EXPECT_EQ(sampling_config.VerifyArgs().GetCode(), RET_INVALID_ARGUMENT);
 }
 
+TEST_F(RequestTest, RequestStatus) {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
+      std::make_shared<std::unordered_map<std::string, std::string>>();
+
+  std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  request->finish_status = Status(RET_SUCCESS, "success");
+  auto ksana_python_output = KsanaPythonOutput(request);
+  EXPECT_EQ(ksana_python_output.finish_status.GetCode(), RetCode::RET_SUCCESS);
+}
 }  // namespace ksana_llm

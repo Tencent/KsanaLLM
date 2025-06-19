@@ -10,6 +10,7 @@
 
 #include "ksana_llm/runtime/request_state.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
@@ -23,30 +24,41 @@ using namespace ksana_llm;
 class PrefixCacheManagerTest : public testing::Test {
  protected:
   void SetUp() override {
-    block_manager_config.host_allocator_config.blocks_num = device_block_num;
-    block_manager_config.device_allocator_config.blocks_num = host_block_num;
-    block_manager_config.device_allocator_config.block_token_num = block_token_num;
+    BlockAllocatorGroupConfig group_1_config;
+    group_1_config.devices = {0, 1};
+    group_1_config.device_block_num = device_block_num;
+    group_1_config.host_block_num = host_block_num;
+    group_1_config.block_size = block_token_num * 1024 * 1024;
+    group_1_config.convert_size = 0;  // 添加convert_size参数
 
-    faked_block_manager = new FakedBlockManager(block_manager_config, tensor_para_size);
-    faked_block_manager->PreAllocateBlocks();
-    SetBlockManager(faked_block_manager);
+    BlockAllocatorManagerConfig block_allocator_manager_config;
+    block_allocator_manager_config[1] = group_1_config;
+
+    block_allocator_creation_fn_ = [](MemoryLocation location, size_t block_num, size_t block_size, int rank,
+                                      std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
+                                      std::shared_ptr<Context> context, size_t convert_size) {
+      return std::make_shared<FakedBlockAllocator>(location, block_num, block_size, rank, memory_allocator, context,
+                                                   convert_size);
+    };
+
+    context_ = std::make_shared<Context>(tensor_para_size, attn_data_parallel_size);
+    memory_allocator_ = std::make_shared<FakedMemoryAllocator>();
+    BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_,
+                                                  block_allocator_creation_fn_);
 
     cache_manager_config.block_token_num = 16;
     cache_manager_config.tensor_para_size = 2;
     cache_manager_config.swap_threadpool_size = 2;
     cache_manager_config.enable_prefix_caching = true;
 
-    cache_manager = new PrefixCacheManager(cache_manager_config);
-
+    block_allocator_group_ = block_allocator_manager.GetBlockAllocatorGroup(1);
+    cache_manager = new PrefixCacheManager(cache_manager_config, block_allocator_group_);
     faked_token_generator = new FakedTokenGenerator();
-
-    block_token_num = block_manager_config.device_allocator_config.block_token_num;
   }
 
   void TearDown() override {
     delete faked_token_generator;
     delete cache_manager;
-    delete faked_block_manager;
   }
 
   // All blocks except last should be on tree, check state of every block.
@@ -81,21 +93,26 @@ class PrefixCacheManagerTest : public testing::Test {
 
   PrefixCacheManager* cache_manager = nullptr;
 
-  FakedBlockManager* faked_block_manager = nullptr;
   FakedTokenGenerator* faked_token_generator = nullptr;
+
+  std::shared_ptr<Context> context_ = nullptr;
+  std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
+  BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
+  std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
 
   size_t device_block_num = 100;
   size_t host_block_num = 100;
 
   size_t block_token_num = 16;
   size_t tensor_para_size = 2;
+  size_t attn_data_parallel_size = 1;
 };
 
 TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   cache_manager->InitializeCachedBlocks();
 
   // All blocks should be used.
-  EXPECT_EQ(GetBlockManager()->GetDeviceFreeBlockNumber(), 0);
+  EXPECT_EQ(block_allocator_group_->GetDeviceBlockAllocator()->GetFreeBlockNumber(), 0);
   EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num);
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
 
@@ -139,7 +156,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   // Generate new token and update request.
   faked_token_generator->GenerateOneToken(1, output_token_ids);
-  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, req_block_ids);
+  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids);
   EXPECT_TRUE(status.OK());
 
   // All blocks except last should be on tree, check state of every block.
@@ -206,7 +223,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   // Swap in request again.
 
   size_t swapin_need_block_num;
-  status = cache_manager->GetRequestNeededBlockNum(req_id, swapin_need_block_num);
+  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req_id, swapin_need_block_num);
   EXPECT_TRUE(status.OK());
 
   // Check needed block num.
@@ -364,11 +381,13 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   faked_token_generator->GenerateOneToken(1, output_token_ids_3);
 
   // update first request token.
-  status = cache_manager->UpdateRequestTokens(req_id_2, output_token_ids_2, req_block_ids_2);
+  status =
+      cache_manager->UpdateRequestTokens(req_id_2, output_token_ids_2, output_token_ids_2.size() - 1, req_block_ids_2);
   EXPECT_TRUE(status.OK());
 
   // update second request token, then the 3rd block should be merged.
-  status = cache_manager->UpdateRequestTokens(req_id_3, output_token_ids_3, req_block_ids_3);
+  status =
+      cache_manager->UpdateRequestTokens(req_id_3, output_token_ids_3, output_token_ids_3.size() - 1, req_block_ids_3);
   EXPECT_TRUE(status.OK());
 
   // Recheck prefix block of req 5, should be changed.
@@ -459,12 +478,13 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   // The req 4 have same data with req 2/3.
-  status = cache_manager->UpdateRequestTokens(req_id_4, output_token_ids_4, req_block_ids_4);
+  status =
+      cache_manager->UpdateRequestTokens(req_id_4, output_token_ids_4, output_token_ids_4.size() - 1, req_block_ids_4);
   EXPECT_TRUE(status.OK());
 
   // Swap in req 2.
   size_t swapin_need_block_num_2;
-  status = cache_manager->GetRequestNeededBlockNum(req_id_2, swapin_need_block_num_2);
+  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(req_id_2, swapin_need_block_num_2);
   EXPECT_TRUE(status.OK());
 
   size_t swapin_block_num_2;
@@ -511,7 +531,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num - (1 * 2));
 
   // Drop swapped req 3.
-  cache_manager->DestroySwapedRequest(req_id_3);
+  cache_manager->DestroySwappedRequest(req_id_3);
 
   // All host memory is usable.
   EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num - (3 + 1 + 1));
@@ -519,6 +539,25 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   cache_manager->DestroyFinishedRequest(req_id_2);
   cache_manager->DestroyFinishedRequest(req_id_4);
+
+  // test: 1 block in req, 5 block in cache_manager, expcet fill 4 block and append 2 new block
+  constexpr int64_t req_id_6 = 6;
+  std::vector<std::vector<int>> req_block_ids_6(tensor_para_size);
+  for (auto& req_block_tp : req_block_ids_6) {
+    req_block_tp.resize(1);
+  }
+
+  cache_manager->cached_requests_[req_id_6] = std::make_unique<PrefixCachedRequest>();
+  for (size_t i = 0; i < 5; ++i) {
+    PrefixCachedBlock* block = new PrefixCachedBlock();
+    block->memory_block_ids.resize(tensor_para_size);
+    cache_manager->cached_requests_[req_id_6]->cached_blocks.emplace_back(block);
+  }
+
+  status = cache_manager->AllocateRequestBlocks(req_id_6, 2, req_block_ids_6);
+  for (auto& req_block_tp : req_block_ids_6) {
+    EXPECT_EQ(req_block_tp.size(), 7);
+  }
 }
 
 TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
@@ -526,11 +565,11 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
     delete cache_manager;
   }
   cache_manager_config.min_flexible_cache_num = 32;
-  cache_manager = new PrefixCacheManager(cache_manager_config);
+  cache_manager = new PrefixCacheManager(cache_manager_config, block_allocator_group_);
   cache_manager->InitializeCachedBlocks();
 
   // All blocks should be used.
-  EXPECT_EQ(GetBlockManager()->GetDeviceFreeBlockNumber(), 0);
+  EXPECT_EQ(block_allocator_group_->GetDeviceBlockAllocator()->GetFreeBlockNumber(), 0);
   EXPECT_EQ(cache_manager->GetUsableBlockNumber(), device_block_num);
   EXPECT_EQ(cache_manager->GetHostFreeBlockNumber(), host_block_num);
 
@@ -554,7 +593,7 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
 
   // Generate new token and update request.
   faked_token_generator->GenerateOneToken(1, output_token_ids);
-  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, req_block_ids);
+  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids);
   EXPECT_TRUE(status.OK());
   int req_id_2 = 2;
   std::vector<int> dst_prefix16_tokens = output_token_ids;
@@ -617,4 +656,44 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   }
   cache_manager->DestroyFinishedRequest(req_id);
   cache_manager->DestroyFinishedRequest(req_id_2);
+}
+
+TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
+  cache_manager->InitializeCachedBlocks();
+  int64_t invalid_id = 999;
+
+  // Allocate request block.
+  std::vector<std::vector<int>> req_block_ids;
+  req_block_ids.resize(tensor_para_size);
+  size_t unique_block_num;
+  Status status = cache_manager->AllocateRequestBlocks(invalid_id, unique_block_num, req_block_ids);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  std::vector<int> output_token_ids;
+  status = cache_manager->UpdateRequestTokens(invalid_id, output_token_ids, 0, req_block_ids);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  status = cache_manager->UpdateCachedRequestState(invalid_id, RequestState::REQUEST_STATE_WAITING);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  status = cache_manager->GetRequestFreeableBlockNum(invalid_id, unique_block_num);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  status = cache_manager->GetRequestNeededBlockNumForOneNextToken(invalid_id, unique_block_num);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  // Swap out this request.
+  size_t swapped_block_num = 0;
+  size_t free_block_num = 0;
+  std::vector<int> swapped_memory_block_ids;
+  status = cache_manager->SwapoutRequestAsync(invalid_id, swapped_block_num, free_block_num, swapped_memory_block_ids);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  size_t swapin_block_num;
+  std::vector<int> swapped_in_memory_block_ids;
+  status = cache_manager->SwapinRequestAsync(invalid_id, swapin_block_num, req_block_ids, swapped_in_memory_block_ids);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
+
+  status = cache_manager->MergeSwapinRequest(invalid_id, req_block_ids);
+  EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 }

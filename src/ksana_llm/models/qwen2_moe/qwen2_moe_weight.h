@@ -3,29 +3,32 @@
 ==============================================================================*/
 #pragma once
 
-#include <memory>
 #include "ksana_llm/models/common_moe/common_moe_weight.h"
 
 namespace ksana_llm {
 
 template <typename T>
-class Qwen2MoeWeight : public BaseWeight {
+class Qwen2MoeWeight : public CommonMoeWeight<T> {
  public:
   Qwen2MoeWeight() {}
   explicit Qwen2MoeWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
-  Tensor GetModelWeights(const std::string& weight_name);
-
   Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                             std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list);
+                             std::vector<std::string>& weight_name_list,
+                             std::vector<std::string>& custom_name_list) override;
 
-  void ProcessWeights();
+  void ProcessWeights() override;
 
-  void SetEmbeddingsConfig();
+ protected:
+  using BaseWeight::rank_;
+
+  using BaseWeight::model_config_;
+  using BaseWeight::weights_map_;
+
+  using CommonWeight<T>::tensor_manager_;
 
  private:
-  // the moe weight instance.
-  std::shared_ptr<CommonMoeWeight<T>> common_moe_weight_ = nullptr;
+  Status PermuteShareGatingWeight(Tensor& last_share_gating_tensor, const int num_layer);
 };
 
 }  // namespace ksana_llm

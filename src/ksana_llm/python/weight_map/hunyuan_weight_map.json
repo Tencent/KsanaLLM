@@ -1,0 +1,17 @@
+{
+    "model.layers.(\\d+).mlp.gate.wg.weight": "model.layers.$1.mlp.gate.weight",
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.weight": "model.layers.$1.mlp.shared_expert.down_proj.weight",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.weight": "model.layers.$1.mlp.shared_expert.up_proj.weight",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.weight": "model.layers.$1.mlp.shared_expert.gate_proj.weight",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.weight": "model.layers.$1.mlp.shared_expert.gate_proj.weight",
+
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.input_scale": "model.layers.$1.mlp.shared_expert.down_proj.input_scale",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.input_scale": "model.layers.$1.mlp.shared_expert.up_proj.input_scale",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.input_scale": "model.layers.$1.mlp.shared_expert.gate_proj.input_scale",
+
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.weight_scale": "model.layers.$1.mlp.shared_expert.down_proj.weight_scale",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.weight_scale": "model.layers.$1.mlp.shared_expert.up_proj.weight_scale",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.weight_scale": "model.layers.$1.mlp.shared_expert.gate_proj.weight_scale",
+    "model.layers.(\\d+).self_attn.qkv_proj.weight":"model.layers.$1.self_attn.W_pack.weight",
+    "model.layers.(\\d+).mlp.gate_and_up_proj.weight":"model.layers.$1.mlp.gate_up_proj.weight"
+}

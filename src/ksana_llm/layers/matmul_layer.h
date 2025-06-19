@@ -19,6 +19,11 @@ class MatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+#ifdef ENABLE_CUDA
+  void* cublas_workspace_ptr_{nullptr};
+  cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
+#endif
+
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 #endif  // ENABLE_ACL

@@ -26,18 +26,6 @@ TEST_F(ContextTest, NvidiaInitTest) {
   EXPECT_THROW(
       {
         try {
-          std::shared_ptr<Context> context = std::make_shared<Context>(1, 2);
-        } catch (const std::runtime_error& e) {
-          EXPECT_THAT(e.what(), testing::HasSubstr(
-                                    "Only support pipeline_parallel_size == 1. Current pipeline_parallel_size_ is:"));
-          throw;
-        }
-      },
-      std::runtime_error);
-
-  EXPECT_THROW(
-      {
-        try {
           std::shared_ptr<Context> context = std::make_shared<Context>(100, 1);
         } catch (const std::runtime_error& e) {
           EXPECT_THAT(e.what(), testing::HasSubstr("tensor_parallel_size should not bigger than devices num:"));
@@ -48,10 +36,10 @@ TEST_F(ContextTest, NvidiaInitTest) {
 }
 
 TEST_F(ContextTest, NvidiaCommonTest) {
-  constexpr int tensor_parallel_size = 2;
-  constexpr int pipeline_parallel_size = 1;
-  std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, pipeline_parallel_size);
-  size_t total_rank_num = tensor_parallel_size * pipeline_parallel_size;
+  constexpr size_t tensor_parallel_size = 2;
+  constexpr int attn_data_parallel_size = 1;
+  std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, attn_data_parallel_size);
+  size_t total_rank_num = tensor_parallel_size;
 
   EXPECT_EQ(context->GetComputeStreams().size(), total_rank_num);
   EXPECT_EQ(context->ext->GetMemoryPools().size(), total_rank_num);
@@ -65,7 +53,6 @@ TEST_F(ContextTest, NvidiaCommonTest) {
   EXPECT_EQ(context->ext->GetNCCLParam().size(), total_rank_num);
 
   EXPECT_EQ(context->GetTensorParallelSize(), tensor_parallel_size);
-  EXPECT_EQ(context->GetPipeLineParallelSize(), pipeline_parallel_size);
 
   for (size_t rank_idx = 0; rank_idx < total_rank_num; ++rank_idx) {
     // check stream valid

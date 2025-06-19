@@ -14,19 +14,44 @@ std::string ScheduleOutput::ToString() {
   std::string result;
   result += "{\n";
   result += "  schedule_id: " + std::to_string(schedule_id) + "\n";
-  result += "  finish_req_ids: " + Vector2Str(finish_req_ids) + "\n";
-  result += "  merged_swapout_req_ids: " + Vector2Str(merged_swapout_req_ids) + "\n";
-  result += "  merged_swapin_req_ids: " + Vector2Str(merged_swapin_req_ids) + "\n";
-  result += "  merged_swapin_req_ids: " + Vector2Str(merged_swapin_req_ids) + "\n";
+
+  result += "  finish_req_ids:\n";
+  for (size_t finish_req_ids_on_attn_dp_idx = 0; finish_req_ids_on_attn_dp_idx < finish_req_ids.size();
+       ++finish_req_ids_on_attn_dp_idx) {
+    result += "    " + std::to_string(finish_req_ids_on_attn_dp_idx) + ": ";
+    result += Vector2Str(finish_req_ids[finish_req_ids_on_attn_dp_idx]) + "\n";
+  }
+
+  result += "  merged_swapout_req_ids:\n";
+  for (size_t merged_swapout_req_ids_on_attn_dp_idx = 0;
+       merged_swapout_req_ids_on_attn_dp_idx < merged_swapout_req_ids.size(); ++merged_swapout_req_ids_on_attn_dp_idx) {
+    result += "    " + std::to_string(merged_swapout_req_ids_on_attn_dp_idx) + ": ";
+    result += Vector2Str(merged_swapout_req_ids[merged_swapout_req_ids_on_attn_dp_idx]) + "\n";
+  }
+
+  result += "  merged_swapin_req_ids:\n";
+  for (size_t merged_swapin_req_ids_on_attn_dp_idx = 0;
+       merged_swapin_req_ids_on_attn_dp_idx < merged_swapin_req_ids.size(); ++merged_swapin_req_ids_on_attn_dp_idx) {
+    result += "    " + std::to_string(merged_swapin_req_ids_on_attn_dp_idx) + ": ";
+    result += Vector2Str(merged_swapin_req_ids[merged_swapin_req_ids_on_attn_dp_idx]) + "\n";
+  }
 
   result += "  swapout_req_block_ids:\n";
-  for (auto pair : swapout_req_block_ids) {
-    result += "    " + std::to_string(pair.first) + ": " + Vector2Str(pair.second) + "\n";
+  for (size_t swapout_req_block_ids_on_attn_dp_idx = 0;
+       swapout_req_block_ids_on_attn_dp_idx < swapout_req_block_ids.size(); ++swapout_req_block_ids_on_attn_dp_idx) {
+    result += "    " + std::to_string(swapout_req_block_ids_on_attn_dp_idx) + ": ";
+    for (auto pair : swapout_req_block_ids[swapout_req_block_ids_on_attn_dp_idx]) {
+      result += "    " + std::to_string(pair.first) + ": " + Vector2Str(pair.second) + "\n";
+    }
   }
 
   result += "  swapin_req_block_ids:\n";
-  for (auto pair : swapin_req_block_ids) {
-    result += "    " + std::to_string(pair.first) + ": " + Vector2Str(pair.second) + "\n";
+  for (size_t swapin_req_block_ids_on_attn_dp_idx = 0;
+       swapin_req_block_ids_on_attn_dp_idx < swapin_req_block_ids.size(); ++swapin_req_block_ids_on_attn_dp_idx) {
+    result += "    " + std::to_string(swapin_req_block_ids_on_attn_dp_idx) + ": ";
+    for (auto pair : swapin_req_block_ids[swapin_req_block_ids_on_attn_dp_idx]) {
+      result += "    " + std::to_string(pair.first) + ": " + Vector2Str(pair.second) + "\n";
+    }
   }
 
   result += "  running_reqs:\n";
@@ -48,36 +73,53 @@ size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_ou
 
   // finish_req_ids
   serialized_bytes += sizeof(int);
-  serialized_bytes += schedule_output->finish_req_ids.size() * sizeof(int64_t);
+  for (size_t dp_idx = 0; dp_idx < schedule_output->finish_req_ids.size(); ++dp_idx) {
+    serialized_bytes += sizeof(int);
+    serialized_bytes += schedule_output->finish_req_ids[dp_idx].size() * sizeof(int64_t);
+  }
 
   // merged swapout reqs
   serialized_bytes += sizeof(int);
-  serialized_bytes += schedule_output->merged_swapout_req_ids.size() * sizeof(int64_t);
+  for (size_t dp_idx = 0; dp_idx < schedule_output->merged_swapout_req_ids.size(); ++dp_idx) {
+    serialized_bytes += sizeof(int);
+    serialized_bytes += schedule_output->merged_swapout_req_ids[dp_idx].size() * sizeof(int64_t);
+  }
 
   // merged swapin reqs
   serialized_bytes += sizeof(int);
-  serialized_bytes += schedule_output->merged_swapin_req_ids.size() * sizeof(int64_t);
+  for (size_t dp_idx = 0; dp_idx < schedule_output->merged_swapin_req_ids.size(); ++dp_idx) {
+    serialized_bytes += sizeof(int);
+    serialized_bytes += schedule_output->merged_swapin_req_ids[dp_idx].size() * sizeof(int64_t);
+  }
 
   // swapout req with blocks.
   serialized_bytes += sizeof(int);
-  for (auto& [k, v] : schedule_output->swapout_req_block_ids) {
-    // key
-    serialized_bytes += sizeof(int64_t);
-
-    // value
+  for (size_t dp_idx = 0; dp_idx < schedule_output->swapout_req_block_ids.size(); ++dp_idx) {
+    auto& swapout_req_block_ids = schedule_output->swapout_req_block_ids[dp_idx];
     serialized_bytes += sizeof(int);
-    serialized_bytes += v.size() * sizeof(int);
+    for (auto& [k, v] : swapout_req_block_ids) {
+      // key
+      serialized_bytes += sizeof(int64_t);
+
+      // value
+      serialized_bytes += sizeof(int);
+      serialized_bytes += v.size() * sizeof(int);
+    }
   }
 
   // swapin req with blocks.
   serialized_bytes += sizeof(int);
-  for (auto& [k, v] : schedule_output->swapin_req_block_ids) {
-    // key
-    serialized_bytes += sizeof(int64_t);
-
-    // value
+  for (size_t dp_idx = 0; dp_idx < schedule_output->swapin_req_block_ids.size(); ++dp_idx) {
+    auto& swapin_req_block_ids = schedule_output->swapin_req_block_ids[dp_idx];
     serialized_bytes += sizeof(int);
-    serialized_bytes += v.size() * sizeof(int);
+    for (auto& [k, v] : swapin_req_block_ids) {
+      // key
+      serialized_bytes += sizeof(int64_t);
+
+      // value
+      serialized_bytes += sizeof(int);
+      serialized_bytes += v.size() * sizeof(int);
+    }
   }
 
   // running reqs.
@@ -93,7 +135,7 @@ size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_ou
 
     // output_tokens
     serialized_bytes += sizeof(int);
-    serialized_bytes += req->output_tokens.size() * sizeof(int);
+    serialized_bytes += req->forwarding_tokens.size() * sizeof(int);
 
     // infer_stage
     serialized_bytes += sizeof(InferStage);
@@ -114,21 +156,21 @@ size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_ou
     // prefix_cache_len
     serialized_bytes += sizeof(int);
 
-    // prefix_cache_blocks_number
-    serialized_bytes += sizeof(int);
-
     // kv_cached_token_num
     serialized_bytes += sizeof(int);
 
     // mrotary_embedding_pos_offset
     serialized_bytes += sizeof(int64_t);
+
+    // attn_dp_group_id
+    serialized_bytes += sizeof(uint32_t);
   }
 
   return serialized_bytes;
 }
 
 Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std::shared_ptr<InferRequest>>& infer_reqs,
-                                                   void* data, size_t& bytes) {
+                                                           void* data, size_t& bytes) {
   size_t offset = 0;
 
   int req_num = infer_reqs.size();
@@ -150,8 +192,8 @@ Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std
     std::memcpy(data + offset, req->model_name.data(), req->model_name.size());
     offset += req->model_name.size();
 
-    // output_tokens
-    SerializeVector(req->output_tokens, data + offset, inner_bytes);
+    // forwarding_tokens
+    SerializeVector(req->forwarding_tokens, data + offset, inner_bytes);
     offset += inner_bytes;
 
     // infer_stage
@@ -174,10 +216,6 @@ Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std
     std::memcpy(data + offset, &req->prefix_cache_len, sizeof(int));
     offset += sizeof(int);
 
-    // prefix_cache_blocks_number
-    std::memcpy(data + offset, &req->prefix_cache_blocks_number, sizeof(int));
-    offset += sizeof(int);
-
     // kv_cached_token_num
     std::memcpy(data + offset, &req->kv_cached_token_num, sizeof(int));
     offset += sizeof(int);
@@ -185,6 +223,10 @@ Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std
     // mrotary_embedding_pos_offset
     std::memcpy(data + offset, &req->mrotary_embedding_pos_offset, sizeof(int64_t));
     offset += sizeof(int64_t);
+
+    // attn_dp_group_id
+    std::memcpy(data + offset, &req->attn_dp_group_id, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
   }
   bytes = offset;
 
@@ -200,7 +242,7 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
 
   size_t inner_bytes;
 
-  for (size_t i = 0; i < req_num; ++i) {
+  for (size_t i = 0; i < static_cast<size_t>(req_num); ++i) {
     std::shared_ptr<WorkerInferRequest> req = std::make_shared<WorkerInferRequest>();
 
     // req_id
@@ -216,10 +258,10 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
     req->model_name = model_name;
     offset += model_name_size;
 
-    // output_tokens
-    std::vector<int> output_tokens;
-    DeserializeVector(data + offset, output_tokens, inner_bytes);
-    req->output_tokens = output_tokens;
+    // forwarding_tokens
+    std::vector<int> forwarding_tokens;
+    DeserializeVector(data + offset, forwarding_tokens, inner_bytes);
+    req->forwarding_tokens = forwarding_tokens;
     offset += inner_bytes;
 
     // infer_stage
@@ -244,10 +286,6 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
     req->prefix_cache_len = *reinterpret_cast<int*>(data + offset);
     offset += sizeof(int);
 
-    // prefix_cache_blocks_number
-    req->prefix_cache_blocks_number = *reinterpret_cast<int*>(data + offset);
-    offset += sizeof(int);
-
     // kv_cached_token_num
     req->kv_cached_token_num = *reinterpret_cast<int*>(data + offset);
     offset += sizeof(int);
@@ -256,8 +294,15 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
     req->mrotary_embedding_pos_offset = *reinterpret_cast<int64_t*>(data + offset);
     offset += sizeof(int64_t);
 
+    // attn_dp_group_id
+    req->attn_dp_group_id = *reinterpret_cast<uint32_t*>(data + offset);
+    offset += sizeof(uint32_t);
+
     // Get model instance from data hub.
     req->model_instance = GetModelInstance(req->model_name);
+
+    // Get cache manager from data hub.
+    req->cache_manager = GetCacheManager(req->attn_dp_group_id);
 
     worker_infer_reqs.push_back(req);
   }
@@ -276,24 +321,49 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
   size_t bytes;
 
   // finished reqs.
-  SerializeVector(schedule_output->finish_req_ids, data + offset, bytes);
-  offset += bytes;
+  int vec_size = schedule_output->finish_req_ids.size();
+  std::memcpy(data + offset, &vec_size, sizeof(int));
+  offset += sizeof(int);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    SerializeVector(schedule_output->finish_req_ids[dp_idx], data + offset, bytes);
+    offset += bytes;
+  }
 
   // merged swapout reqs
-  SerializeVector(schedule_output->merged_swapout_req_ids, data + offset, bytes);
-  offset += bytes;
+  vec_size = schedule_output->merged_swapout_req_ids.size();
+  std::memcpy(data + offset, &vec_size, sizeof(int));
+  offset += sizeof(int);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    SerializeVector(schedule_output->merged_swapout_req_ids[dp_idx], data + offset, bytes);
+    offset += bytes;
+  }
 
   // merged swapin reqs
-  SerializeVector(schedule_output->merged_swapin_req_ids, data + offset, bytes);
-  offset += bytes;
+  vec_size = schedule_output->merged_swapin_req_ids.size();
+  std::memcpy(data + offset, &vec_size, sizeof(int));
+  offset += sizeof(int);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    SerializeVector(schedule_output->merged_swapin_req_ids[dp_idx], data + offset, bytes);
+    offset += bytes;
+  }
 
   // swapout req with blocks.
-  SerializeKeyToVector(schedule_output->swapout_req_block_ids, data + offset, bytes);
-  offset += bytes;
+  vec_size = schedule_output->swapout_req_block_ids.size();
+  std::memcpy(data + offset, &vec_size, sizeof(int));
+  offset += sizeof(int);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    SerializeKeyToVector(schedule_output->swapout_req_block_ids[dp_idx], data + offset, bytes);
+    offset += bytes;
+  }
 
   // swapin req with blocks.
-  SerializeKeyToVector(schedule_output->swapin_req_block_ids, data + offset, bytes);
-  offset += bytes;
+  vec_size = schedule_output->swapin_req_block_ids.size();
+  std::memcpy(data + offset, &vec_size, sizeof(int));
+  offset += sizeof(int);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    SerializeKeyToVector(schedule_output->swapin_req_block_ids[dp_idx], data + offset, bytes);
+    offset += bytes;
+  }
 
   // running reqs.
   SerializeAsWorkerInferRequest(schedule_output->running_reqs, data + offset, bytes);
@@ -312,34 +382,59 @@ Status ScheduleOutputParser::DeserializeScheduleOutput(void* data, ScheduleOutpu
   size_t bytes;
 
   // finished reqs
-  std::vector<int64_t> finish_req_ids;
-  DeserializeVector(data + offset, finish_req_ids, bytes);
-  schedule_output->finish_req_ids = finish_req_ids;
-  offset += bytes;
+  int vec_size = *reinterpret_cast<int*>(data + offset);
+  offset += sizeof(int);
+  schedule_output->finish_req_ids.resize(vec_size);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    std::vector<int64_t> finish_req_ids;
+    DeserializeVector(data + offset, finish_req_ids, bytes);
+    schedule_output->finish_req_ids[dp_idx] = finish_req_ids;
+    offset += bytes;
+  }
 
   // merged swapout reqs
-  std::vector<int64_t> merged_swapout_req_ids;
-  DeserializeVector(data + offset, merged_swapout_req_ids, bytes);
-  schedule_output->merged_swapout_req_ids = merged_swapout_req_ids;
-  offset += bytes;
+  vec_size = *reinterpret_cast<int*>(data + offset);
+  offset += sizeof(int);
+  schedule_output->merged_swapout_req_ids.resize(vec_size);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    std::vector<int64_t> merged_swapout_req_ids;
+    DeserializeVector(data + offset, merged_swapout_req_ids, bytes);
+    schedule_output->merged_swapout_req_ids[dp_idx] = merged_swapout_req_ids;
+    offset += bytes;
+  }
 
   // merged swapin reqs
-  std::vector<int64_t> merged_swapin_req_ids;
-  DeserializeVector(data + offset, merged_swapin_req_ids, bytes);
-  schedule_output->merged_swapin_req_ids = merged_swapin_req_ids;
-  offset += bytes;
+  vec_size = *reinterpret_cast<int*>(data + offset);
+  offset += sizeof(int);
+  schedule_output->merged_swapin_req_ids.resize(vec_size);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    std::vector<int64_t> merged_swapin_req_ids;
+    DeserializeVector(data + offset, merged_swapin_req_ids, bytes);
+    schedule_output->merged_swapin_req_ids[dp_idx] = merged_swapin_req_ids;
+    offset += bytes;
+  }
 
   // swapout req with blocks.
-  std::unordered_map<int64_t, std::vector<int>> swapout_req_block_ids;
-  DeserializeKeyToVector(data + offset, swapout_req_block_ids, bytes);
-  schedule_output->swapout_req_block_ids = swapout_req_block_ids;
-  offset += bytes;
+  vec_size = *reinterpret_cast<int*>(data + offset);
+  offset += sizeof(int);
+  schedule_output->swapout_req_block_ids.resize(vec_size);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    std::unordered_map<int64_t, std::vector<int>> swapout_req_block_ids;
+    DeserializeKeyToVector(data + offset, swapout_req_block_ids, bytes);
+    schedule_output->swapout_req_block_ids[dp_idx] = swapout_req_block_ids;
+    offset += bytes;
+  }
 
   // swapin req with blocks.
-  std::unordered_map<int64_t, std::vector<int>> swapin_req_block_ids;
-  DeserializeKeyToVector(data + offset, swapin_req_block_ids, bytes);
-  schedule_output->swapin_req_block_ids = swapin_req_block_ids;
-  offset += bytes;
+  vec_size = *reinterpret_cast<int*>(data + offset);
+  offset += sizeof(int);
+  schedule_output->swapin_req_block_ids.resize(vec_size);
+  for (int dp_idx = 0; dp_idx < vec_size; ++dp_idx) {
+    std::unordered_map<int64_t, std::vector<int>> swapin_req_block_ids;
+    DeserializeKeyToVector(data + offset, swapin_req_block_ids, bytes);
+    schedule_output->swapin_req_block_ids[dp_idx] = swapin_req_block_ids;
+    offset += bytes;
+  }
 
   // running reqs.
   std::vector<std::shared_ptr<WorkerInferRequest>> worker_running_reqs;

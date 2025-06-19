@@ -37,10 +37,6 @@ class InferenceServer {
                        std::string &response_bytes);
 
  private:
-  // Read distributed config from environment variables.
-  void InitializePipelineConfig();
-
- private:
   // The inference engine.
   std::shared_ptr<InferenceEngine> inference_engine_;
 

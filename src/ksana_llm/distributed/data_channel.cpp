@@ -124,7 +124,7 @@ Status DataChannel::HandleServerPacket(NodeInfo* node_info, Packet* packet) {
     }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;
-      return Status(RET_RUNTIME, FormatStr("Not supported packet type %d", packet->type));
+      return Status(RET_RUNTIME_FAILED, FormatStr("Not supported packet type %d", packet->type));
     }
   }
 
@@ -138,7 +138,7 @@ Status DataChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
     }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;
-      return Status(RET_RUNTIME, FormatStr("Not supported packet type %d", packet->type));
+      return Status(RET_RUNTIME_FAILED, FormatStr("Not supported packet type %d", packet->type));
     }
   }
 
@@ -147,6 +147,9 @@ Status DataChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
 
 Status DataChannel::ProcessHostToDeviceLoop() {
   while (!terminated_) {
+    // Wait util recv invoked.
+    hidden_unit_buffer_pool_->WaitUtilReadyToRecv();
+
     // Waiting host buffer.
     Packet* packet = hidden_unit_buffer_pool_->GetFromHostRecvQueue();
     if (!packet) {
@@ -164,6 +167,8 @@ Status DataChannel::ProcessHostToDeviceLoop() {
     HiddenUnitHostBuffer* hidden_unit_host = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
 
     hidden_unit_buffer_pool_->ConvertHostBufferToDevice(hidden_unit_dev, hidden_unit_host);
+    KLLM_LOG_DEBUG << "DataChannel::ProcessHostToDeviceLoop. schedule_id=" << hidden_unit_dev->schedule_id
+                   << ", hidden_unit_dev=" << hidden_unit_dev;
     hidden_unit_buffer_pool_->PutToDeviceRecvQueue(hidden_unit_dev);
 
     // Free host packet.
@@ -176,11 +181,21 @@ Status DataChannel::ProcessHostToDeviceLoop() {
 Status DataChannel::ProcessSendPacketLoop() {
   while (!terminated_) {
     // Blocked, waiting util packet is ready.
-    Packet* packet = hidden_unit_buffer_pool_->GetFromSendQueue();
-    if (!packet) {
-      KLLM_LOG_WARNING << "ProcessSendPacketLoop empty packet from host send queue, break..";
+    HiddenUnitDeviceBuffer* hidden_unit = hidden_unit_buffer_pool_->GetFromSendQueue();
+    if (!hidden_unit) {
+      KLLM_LOG_WARNING << "ProcessSendPacketLoop empty hidden_unit from device send queue, break..";
       break;
     }
+
+    // Pick a host buffer.
+    Packet* packet = hidden_unit_buffer_pool_->GetHostBuffer();
+
+    // Convert device buffer to host.
+    HiddenUnitHostBuffer* hidden_unit_host = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
+    hidden_unit_buffer_pool_->ConvertDeviceBufferToHost(hidden_unit_host, hidden_unit);
+
+    // Reset packet size.
+    packet->size = hidden_unit_buffer_pool_->GetHostPacketSize(packet);
 
     // Note: Should get config after its value is updated.
     PipelineConfig pipeline_config;
@@ -189,15 +204,27 @@ Status DataChannel::ProcessSendPacketLoop() {
     std::string downstream_host = pipeline_config.downstream_host;
     uint16_t downstream_port = pipeline_config.downstream_port;
 
-    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send hidden_unit to downstream worker.";
+    time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+    ProfileEvent::PushEvent(fmt::format("Send_buffer_id_{}_shape_{}_{}", hidden_unit->schedule_id,
+                                        hidden_unit_host->shape_dims[0], hidden_unit_host->shape_dims[1]));
     Status status = client_raw_socket_->Send({downstream_host, downstream_port}, packet);
+    ProfileEvent::PopEvent();
+    time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send packet schedule_id:" << hidden_unit->schedule_id
+                   << " cost time: " << end_time_ms - start_time_ms << " ms, shape:" << hidden_unit_host->shape_dims[0]
+                   << ", " << hidden_unit_host->shape_dims[1];
 
     if (!status.OK()) {
-      KLLM_LOG_ERROR << "DataChannel process send packet loop error, send packet failed, info:" << status.GetMessage();
+      KLLM_LOG_ERROR << "DataChannel process send packet loop error, send packet failed. schedule_id="
+                     << hidden_unit->schedule_id << ", info:" << status.GetMessage();
     }
+    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send success. schedule_id=" << hidden_unit->schedule_id;
 
     // Resue the packet buffer
     hidden_unit_buffer_pool_->FreeHostBuffer(packet);
+
+    // Notify that send operation finished.
+    hidden_unit_buffer_pool_->NotifySendFinished();
   }
 
   return Status();

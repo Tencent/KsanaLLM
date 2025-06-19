@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <stdexcept>
+
 #include "fmt/core.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
@@ -14,15 +15,10 @@
 namespace ksana_llm {
 
 template <int T>
-ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_parallel_size)
-    : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
-  if (pipeline_parallel_size_ != 1) {
-    KLLM_THROW(fmt::format("Only support pipeline_parallel_size == 1. Current pipeline_parallel_size_ is: {}",
-                           pipeline_parallel_size_));
-  }
-
+ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size)
+    : tensor_parallel_size_(tensor_parallel_size), attn_data_parallel_size_(attn_data_parallel_size) {
   GetDeviceCount(&device_num_);
-  if (device_num_ < tensor_parallel_size_ * pipeline_parallel_size_) {
+  if (device_num_ < tensor_parallel_size_) {
     KLLM_THROW(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}", tensor_parallel_size_,
                            device_num_));
   }
@@ -41,6 +37,12 @@ ContextT<T>::ContextT(const int tensor_parallel_size, const int pipeline_paralle
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
   is_chief_ = pipeline_config_.world_size == 1 || pipeline_config_.node_rank == 0;
   is_standalone_ = pipeline_config_.world_size == 1;
+
+  // Initialize expert parallel configure.  Make sure ep share is_chief_ with pp
+  // is ok later.
+  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config_);
+  is_expert_chief_ = expert_parallel_config_.expert_world_size == 1 || expert_parallel_config_.expert_node_rank == 0;
+  is_expert_standalone_ = expert_parallel_config_.expert_world_size == 1;
 
   // Initialize the device extension.
   InitializeExtension();
@@ -85,6 +87,17 @@ bool ContextT<T>::IsStandalone() const {
 template <int T>
 bool ContextT<T>::IsChief() const {
   return is_chief_;
+}
+
+template <int T>
+bool ContextT<T>::IsExpertParallelStandalone() const {
+  return is_expert_standalone_;
+}
+
+// Master node of expert parallel clusters.
+template <int T>
+bool ContextT<T>::IsExpertParallelChief() const {
+  return is_expert_chief_;
 }
 
 template class ContextT<ACTIVE_DEVICE_TYPE>;

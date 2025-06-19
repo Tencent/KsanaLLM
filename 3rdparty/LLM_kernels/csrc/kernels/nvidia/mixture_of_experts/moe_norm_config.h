@@ -12,5 +12,10 @@ enum class MOEExpertScaleNormalizationMode : int {
                 //!< the topk selected experts
 };
 
+enum class RoutingFunctionType : int {
+  GREEDY_TOPK_SOFTMAX_SCORE = 1,  // fused topk with softmax
+  FAST_TOPK_SIGMOID_SCORE         // fast topk with sigmoid
+};
+
 }  // namespace nvidia
 }  // namespace llm_kernels

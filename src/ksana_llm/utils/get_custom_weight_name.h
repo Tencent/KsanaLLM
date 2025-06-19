@@ -11,8 +11,11 @@
 
 namespace ksana_llm {
 
-Status GetCustomNameList(std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list,
-                         std::string& model_path, std::string& model_type,
+Status GetCustomNameList(const std::string& model_path, const std::string& model_type,
+                         const std::vector<std::string>& weight_name_list, std::vector<std::string>& custom_name_list,
                          ModelFileFormat model_file_format = ModelFileFormat::SAFETENSORS);
+
+std::string GetWeightMapPath(const std::string& model_path, const std::string& model_type,
+                             ModelFileFormat model_file_format);
 
 }  // namespace ksana_llm

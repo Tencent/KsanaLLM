@@ -4,32 +4,15 @@
 
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
+#include "aclnnop/aclnn_embedding.h"
 #include "atb/infer_op_params.h"
 
 #include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
-#include "csrc/kernels/ascend/argmax/argmax.h"
-#include "csrc/kernels/ascend/embedding/embedding.h"
-#include "csrc/kernels/ascend/permute/permute.h"
 #include "csrc/utils/ascend/common.h"
-
-#include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
 namespace ksana_llm {
-
-aclDataType CastDataTypeToAclDataType(const DataType dtype) {
-  switch (dtype) {
-    case DataType::TYPE_FP16:
-      return aclDataType::ACL_FLOAT16;
-    case DataType::TYPE_BF16:
-      return aclDataType::ACL_BF16;
-    case DataType::TYPE_FP32:
-      return aclDataType::ACL_FLOAT;
-    default:
-      return aclDataType::ACL_FLOAT;
-  }
-}
 
 void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_table, const aclTensor* position_table,
                      aclTensor* output, aclrtStream stream, WorkSpaceFunc ws_func) {
@@ -50,19 +33,18 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
     atb::Operation* cast_op = new llm_kernels::ascend::CastOperation(
         fmt::format("Cast{}To{}Inplace", GetTypeString(tensor.dtype), GetTypeString(target_dtype)), cast_param);
     atb_cast_op_executor.SetOperation(cast_op);
-    int32_t rank = GetBlockManager()->GetDeviceId();
+    int32_t rank;
+    GetDevice(&rank);
     reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
-    int block_id = -1;
-    GetBlockManager()->AllocateContiguous(tensor.GetTotalBytes(), block_id);
-    Tensor tmp_tensor(MemoryDevice::MEMORY_DEVICE, target_dtype, tensor.shape, block_id);
+    Tensor tmp_tensor(MemoryLocation::LOCATION_DEVICE, target_dtype, tensor.shape, rank);
     atb_cast_op_executor.ResetVariantPack();
-    atb_cast_op_executor.SetInputTensor(tensor.GetPtr<void>(), tensor.shape, static_cast<aclDataType>(tensor.dtype));
+    atb_cast_op_executor.SetInputTensor(tensor.GetPtr<void>(), tensor.shape,
+                                        static_cast<aclDataType>(DataType(tensor.dtype)));
     atb_cast_op_executor.SetOutputTensor(tmp_tensor.GetPtr<void>(), tensor.shape,
                                          static_cast<aclDataType>(target_dtype));
     atb_cast_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
     StreamSynchronize(stream);
     Memcpy(tensor.GetPtr<void>(), tmp_tensor.GetPtr<void>(), tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE);
-    GetBlockManager()->FreeContiguous(block_id);
     tensor.dtype = target_dtype;
   } else {
     // NOTE(karlluo): dtype same will skip cast
@@ -82,16 +64,17 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
     output_shape[i] = input_shape[permutation[i]];
   }
   llm_kernels::utils::ATBOperationExecutor atb_op_executor;
-  int32_t rank = GetBlockManager()->GetDeviceId();
+  int32_t rank;
+  GetDevice(&rank);
   atb_op_executor.Init(rank, param);
   output_tensor.dtype = input_tensor.dtype;
   output_tensor.shape = output_shape;
   reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
   atb_op_executor.ResetVariantPack();
   atb_op_executor.SetInputTensor(input_tensor.GetPtr<void>(), input_tensor.shape,
-                                 static_cast<aclDataType>(input_tensor.dtype));
+                                 static_cast<aclDataType>(DataType(input_tensor.dtype)));
   atb_op_executor.SetOutputTensor(output_tensor.GetPtr<void>(), output_tensor.shape,
-                                  static_cast<aclDataType>(output_tensor.dtype));
+                                  static_cast<aclDataType>(DataType(output_tensor.dtype)));
   atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
   StreamSynchronize(stream);
   return Status();
@@ -109,7 +92,7 @@ Status ArgMaxATBExecutor<T>::Init(const int rank, const size_t max_batch_size) {
 
   atb_argmax_op_executor_.SetOperation(argmax_op);
   atb_cast_op_executor_.SetOperation(cast_op);
-  STATUS_CHECK_FAILURE(CreateTensor(internal_tensor_, {max_batch_size}, DataType::TYPE_INT32, rank, MEMORY_DEVICE));
+  internal_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32, {max_batch_size}, rank);
   return Status();
 }
 
@@ -140,7 +123,8 @@ template <typename T>
 Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
               void* buffer_ptr) {
   if (std::is_same<T, float>::value) {
-    int32_t rank = GetBlockManager()->GetDeviceId();
+    int32_t rank;
+    GetDevice(&rank);
     reinterpret_cast<atb::Context*>(GetRuntimeContext(rank))->SetExecuteStream(stream.Get());
     ArgMaxATBExecutor<T>* arg_max_atb_executor_ptr = reinterpret_cast<ArgMaxATBExecutor<T>*>(buffer_ptr);
     return arg_max_atb_executor_ptr->Run(rank, input, batch_size, vocab_size, result, stream);

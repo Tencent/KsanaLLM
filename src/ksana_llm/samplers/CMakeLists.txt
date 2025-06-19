@@ -23,7 +23,7 @@ if(WITH_ACL)
 endif()
 
 add_library(samplers STATIC ${samplers_SRCS})
-target_link_libraries(samplers PUBLIC block_manager utils ${samplers_nvidia_LIBS} ${samplers_ascend_LIBS})
+target_link_libraries(samplers PUBLIC cache_manager utils ${samplers_nvidia_LIBS} ${samplers_ascend_LIBS})
 
 # for test
 file(GLOB_RECURSE samplers_test_SRCS

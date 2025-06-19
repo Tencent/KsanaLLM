@@ -38,7 +38,7 @@ if(WITH_TOPS)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS} ${layers_zixiao_SRCS})
-target_link_libraries(layers PUBLIC kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS})
+target_link_libraries(layers PUBLIC kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS} layer_progress_tracker)
 
 # for test
 set(layers_test_nvidia_SRCS, "")

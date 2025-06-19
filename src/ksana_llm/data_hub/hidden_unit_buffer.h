@@ -8,16 +8,20 @@
 #include <vector>
 
 #include "ksana_llm/distributed/raw_packet.h"
+#include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/blocking_queue.h"
+#include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
+#include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 
 // Describe the hidden_units buffer
 struct HiddenUnitDeviceBuffer {
   // The unique id for one schedule step.
-  size_t schedule_id;
+  size_t schedule_id = DEFAULT_SCHEDULE_ID;
 
   // The device Tensor.
   std::vector<Tensor> tensors;
@@ -28,6 +32,12 @@ struct HiddenUnitDeviceBuffer {
   bool decode_enabled = false;
   std::vector<Tensor> prefill_tensors;
 #endif
+
+  // Can been used for pipeline parallel, expert parallel, data parallel.
+  DistributedCommunicationType comm_type = DistributedCommunicationType::DEFAULT;
+  // In scatter mode, rank 0 is the source of all downstream ranks
+  // TODO(karlluo): support more group communication situation for example multi-to-multi
+  uint32_t scatter_sender_rank = 0;
 };
 
 // Used for distributed mode,
@@ -35,7 +45,7 @@ struct HiddenUnitDeviceBuffer {
 // or hidden units from device bdefore send to network.
 struct HiddenUnitHostBuffer {
   // The unique id for one schedule step.
-  size_t schedule_id;
+  size_t schedule_id = DEFAULT_SCHEDULE_ID;
 
   // hidden unit shape, for one device, [max_token_num, hidden_unit_size]
   size_t shape_dims[2];
@@ -56,6 +66,9 @@ class HiddenUnitBufferPool {
  public:
   HiddenUnitBufferPool();
 
+  // Initialize necessary device buffer, so the block manager could use all left device memory.
+  void PreAllocateDeviceBuffer();
+
   // Get a hidden unit buffer object, do not create any new object.
   HiddenUnitDeviceBuffer* GetDeviceBuffer();
 
@@ -73,11 +86,11 @@ class HiddenUnitBufferPool {
 
   // Put to and get from device received buffer.
   Status PutToDeviceRecvQueue(HiddenUnitDeviceBuffer* hidden_unit);
-  HiddenUnitDeviceBuffer* GetFromDeviceRecvQueue();
+  HiddenUnitDeviceBuffer* GetFromDeviceRecvQueue(size_t schedule_id);
 
   // Put to and get from send buffer.
   Status PutToSendQueue(HiddenUnitDeviceBuffer* hidden_unit);
-  Packet* GetFromSendQueue();
+  HiddenUnitDeviceBuffer* GetFromSendQueue();
 
   Status ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* hidden_unit_dev, HiddenUnitHostBuffer* hidden_unit_host);
   Status ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hidden_unit_host, HiddenUnitDeviceBuffer* hidden_unit_dev);
@@ -88,32 +101,58 @@ class HiddenUnitBufferPool {
   // All blocked queue will be returned immediately.
   Status Stop();
 
+  // Whether current buffer pool is stopped.
+  bool Stopped();
+
+  // Wait until computation finished, and ready to receive data from remote.
+  void WaitUtilReadyToRecv();
+  void NotifySendFinished();
+  void SetCommType(DistributedCommunicationType comm_type) { comm_type_ = comm_type; }
+  size_t GetFreeDeviceBufferSize() { return free_device_buffers_.Size(); }
+  size_t GetSendDeviceBufferSize() { return send_device_buffers_.Size(); }
+  size_t GetRecvDeviceBufferSize() { return recv_device_buffers_.Size(); }
+
  private:
   // Initialize hidden unit device buffer, for max possible memory size.
-  Status InitializeHiddenUnitDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit_buffer);
+  virtual Status InitializeHiddenUnitDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit_buffer);
 
-  void InitializeBufferSize();
+  virtual void InitializeBufferSize();
 
  private:
   DataType weight_type_;
   size_t max_token_num_;
   size_t tensor_para_size_;
   size_t hidden_unit_size_;
+  DistributedCommunicationType comm_type_ = DistributedCommunicationType::DEFAULT;
+
+  // A waiter used to notify data receiving.
+  std::shared_ptr<Waiter> recv_waiter_ = nullptr;
+
+  // Make send operation blocked until finished.
+  std::shared_ptr<Waiter> send_waiter_ = nullptr;
+
+  // Mutex to protect pending_recv_count_
+  std::mutex recv_mutex_;
+
+  // Count of pending receives (GetFromDeviceRecvQueue calls that need matching WaitUtilReadyToRecv calls)
+  int pending_recv_count_ = 0;
 
   // free device buffer, resuable.
   BlockingQueue<HiddenUnitDeviceBuffer*> free_device_buffers_;
 
   // received device buffer.
-  BlockingQueue<HiddenUnitDeviceBuffer*> recv_device_buffers_;
+  BlockingQueueWithId<HiddenUnitDeviceBuffer*, size_t> recv_device_buffers_;
 
   // Recv buffer.
   BlockingQueue<Packet*> recv_host_buffers_;
 
   // Send buffer.
-  BlockingQueue<Packet*> send_host_buffers_;
+  BlockingQueue<HiddenUnitDeviceBuffer*> send_device_buffers_;
 
   // no used buffers.
   BlockingQueue<Packet*> free_host_buffers_;
+
+  bool is_stopped_ = false;
 };
 
 }  // namespace ksana_llm

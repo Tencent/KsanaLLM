@@ -46,7 +46,8 @@ if __name__ == "__main__":
 
     text_list = [
         # "[INST]你好[/INST]",
-        "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您如何向地面控制团队传达您的观察结果和建议？[/INST]",
+        "<｜User｜>你是谁<｜Assistant｜>",
+        #"<｜User｜>你是谁<｜Assistant｜>",
         # "[INST]作为国际空间站上的宇航员，您意外地目睹了外星实体接近空间站。您会做什么？[/INST]",
         # "[INST]想象一下您是夏洛克·福尔摩斯，您被要求解开一个涉及失踪传家宝的谜团。请解释一下您找到该物品的策略。[/INST]"
     ]
@@ -69,12 +70,13 @@ if __name__ == "__main__":
             # },
             # Configure the sampling parameters
             "sampling_config": {
+                "num_return_sequences": 1,
                 "temperature": 0.0,  # temperature for sampling
                 "topk": 1,  # top-k sampling
                 "topp": 0.0,  # top-p sampling
                 "logprobs": 0,  # Return the n token log probabilities for each position.
                 "max_new_tokens":
-                128,  # maximum number of new tokens to generate
+                28,  # maximum number of new tokens to generate
                 "repetition_penalty": 1.0,  # penalty for repetitive responses
                 "stop_token_ids": []  # list of tokens that stop the generation
             },

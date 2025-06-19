@@ -32,8 +32,8 @@ struct DirectCachedRequest {
   // The id of this request, as same as the id of InferRequest.
   int64_t req_id;
 
-  // include input tokens, used to get next step block number.
-  size_t output_token_num = 0;
+  // kvcached token num, used to get next step block number.
+  size_t kvcached_token_num;
 
   // The cached blocks associated with this request, not include root node.
   // Contain all blocks even when request is waiting, or blocks that haved been swapped.
@@ -44,15 +44,18 @@ struct DirectCachedRequest {
 class DirectCacheManager : public CacheManagerInterface,
                            public BaseCacheManager<DirectCachedBlock, DirectCachedRequest> {
  public:
-  explicit DirectCacheManager(const CacheManagerConfig& cache_manager_config);
+  explicit DirectCacheManager(const CacheManagerConfig& cache_manager_config,
+                              std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group = nullptr);
   ~DirectCacheManager();
 
   // Initialize all the memory blocks.
   void InitializeCachedBlocks();
 
+  std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const;
+
   // Get block number that not usable now, but will be usable in future.
   // That is, the blocks used by swapout, but not merged yet.
-  size_t GetFutureBlockNumber();
+  size_t GetFutureFreeBlockNumber();
 
   // Get all usable block number, including free and reusable ones.
   size_t GetUsableBlockNumber();
@@ -60,11 +63,12 @@ class DirectCacheManager : public CacheManagerInterface,
   // The value is from block mamanger.
   size_t GetHostFreeBlockNumber();
 
-  // Get the needed block num for specific request.
-  size_t GetRequestStepBlockNumber(int64_t req_id);
-
-  // Same with GetRequestStepBlockNumber(int64_t req_id)
+  // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
+  // number for the specific request.
   size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens);
+
+  // Get the needed block num for specific request if only one next token.
+  size_t GetRequestStepBlockNumberForOneNextToken(int64_t req_id);
 
   // Get the usable block num for specific request.
   size_t GetRequestUsableBlockNumber(int64_t req_id);
@@ -78,13 +82,14 @@ class DirectCacheManager : public CacheManagerInterface,
   Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<std::vector<int>>& req_block_ids);
 
   // Update the token ids of this request.
-  Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,
-                             std::vector<std::vector<int>>& req_block_ids);
+  Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
+                             size_t shareable_kvcache_token_num, std::vector<std::vector<int>>& req_block_ids);
+
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                            std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) {}
   // Get the freeable/needed block num if swap out/in a request.
   Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num);
-  Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num);
+  Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num);
 
   // Swap out/in specific request async.
   Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
@@ -105,7 +110,7 @@ class DirectCacheManager : public CacheManagerInterface,
   Status MergeSwapinRequest(int64_t req_id, std::vector<std::vector<int>>& req_block_ids);
 
   // Drop a swaped cached request.
-  void DestroySwapedRequest(int64_t req_id);
+  void DestroySwappedRequest(int64_t req_id);
 
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id);

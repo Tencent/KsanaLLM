@@ -3,30 +3,42 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/models/common/common_model.h"
-#include "ksana_llm/models/common/common_weight.h"
-#include "ksana_llm/runtime/forward_request.h"
-#include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/status.h"
-#include "ksana_llm/utils/utils.h"
+#include "ksana_llm/models/common/model_interface.h"
+#include "ksana_llm/models/common/simple_decoder_layer.h"
 
 namespace ksana_llm {
 
 template <typename T>
-class __attribute__((visibility("hidden"))) BaichuanModel : public BaseModel {
+class Baichuan : public ModelInterface<T> {
+ public:
+  Baichuan() {}
+  ~Baichuan() = default;
+
+  Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
+  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+
+ private:
+  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+};
+
+template <typename T>
+class BaichuanModel : public CommonModel<T> {
  public:
   BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
                 std::shared_ptr<BaseWeight> base_weight);
-
-  float* GetLogitsPtr();
-
-  // Forward model.
-  Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
-                 bool epilogue);
+  ~BaichuanModel() = default;
 
  private:
-  // The common model instance.
-  std::shared_ptr<CommonModel<T>> common_model_ = nullptr;
+  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+
+ protected:
+  using CommonModel<T>::GetHiddenUnitBuffer;
+  using CommonModel<T>::SetHiddenUnitBuffer;
+
+ private:
+  Baichuan<T> baichuan_;
 };
 
 }  // namespace ksana_llm

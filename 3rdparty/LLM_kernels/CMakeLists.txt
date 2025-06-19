@@ -16,6 +16,7 @@ option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
 if(WITH_CUDA)
   project(LLMKernels LANGUAGES CXX CUDA)
+  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --threads 16)  # 使用16线程加快CUDA编译
 elseif(WITH_ACL)
   set(ASCEND_PRODUCT_TYPE "ascend910")
   set(ASCEND_CORE_TYPE "AiCore")
@@ -71,15 +72,15 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}    -DWMMA")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -DWMMA")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -DWMMA -gdwarf-4 -gstrict-dwarf")
 
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 
 set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
 if(WITH_TESTING)
   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-arcs -ftest-coverage")
@@ -94,6 +95,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 include(base)
 include(nvidia)
 include(ascend)
+include(flashinfer)
+
+if(WITH_CUDA)
+  include(fmt)
+  include(yaml-cpp)
+endif()
 
 # fetch 3rdparty
 if(GIT_FOUND)
@@ -125,3 +132,7 @@ include(test)
 # add subdirectory
 add_subdirectory(csrc)
 add_subdirectory(tests)
+
+if(WITH_CUDA)
+  add_subdirectory(tools/search_best_gemm_algo)
+endif()

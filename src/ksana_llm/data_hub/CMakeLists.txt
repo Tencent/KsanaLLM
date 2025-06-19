@@ -26,9 +26,24 @@ file(GLOB_RECURSE hidden_unit_buffer_test_SRCS
 message(STATUS "hidden_unit_buffer_test_SRCS: ${hidden_unit_buffer_test_SRCS}")
 cpp_test(data_hub_hidden_unit_buffer_test SRCS ${hidden_unit_buffer_test_SRCS} DEPS utils runtime)
 
+# expert_parallel_hidden_unit_buffer_test
+file(GLOB_RECURSE expert_parallel_hidden_unit_buffer_test_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/data_hub/expert_parallel_hidden_unit_buffer_test.cpp)
+
+message(STATUS "expert_parallel_hidden_unit_buffer_test_SRCS: ${expert_parallel_hidden_unit_buffer_test_SRCS}")
+cpp_test(expert_parallel_hidden_unit_buffer_test SRCS ${expert_parallel_hidden_unit_buffer_test_SRCS} DEPS utils runtime)
+
+
 # data_hub_test
 file(GLOB_RECURSE data_hub_test_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/data_hub/data_hub_test.cpp)
 
 message(STATUS "data_hub_test_SRCS: ${data_hub_test_SRCS}")
 cpp_test(data_hub_test SRCS ${data_hub_test_SRCS} DEPS utils runtime)
+
+# expert_parallel_data_hub_test
+file(GLOB_RECURSE expert_parallel_data_hub_test_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/data_hub/expert_data_hub_test.cpp)
+
+message(STATUS "expert_parallel_data_hub_test: ${expert_parallel_data_hub_test_SRCS}")
+cpp_test(expert_parallel_data_hub_test SRCS ${expert_parallel_data_hub_test_SRCS} DEPS utils runtime)

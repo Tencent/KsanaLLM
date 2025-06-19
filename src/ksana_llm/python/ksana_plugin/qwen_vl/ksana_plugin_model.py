@@ -2,10 +2,8 @@
 #
 # ==============================================================================
 
-import json
 import os
 import sys
-from glob import glob
 from typing import List
 
 import torch
@@ -21,10 +19,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
-from plugin_utils import free_cache, load_safetensors, check_file_dir, get_module
+from plugin_utils import free_cache, load_safetensors, get_module, build_trt, get_weight_map
+from plugin_model import BaseVITModel
 
 
-class VITModel:
+class VITModel(BaseVITModel):
 
     def __init__(self, model_path):
         # read config
@@ -34,6 +33,7 @@ class VITModel:
         self.image_size = self.config.visual.get("image_size")
         self.output_dim = self.config.visual.get("output_dim")
         self.dim = 3
+        self.token_num = 256
 
         # trt build config
         self.min_batch = 1
@@ -59,16 +59,8 @@ class VITModel:
         vision_transformer = get_module("VITTorch", f'{model_path}/visual.py', "VisionTransformer")
         visual = vision_transformer(**self.config.visual)
 
-        # read weight map
-        weight_map_json = glob(os.path.join(model_path, "*index.json"))
-        assert len(weight_map_json) == 1
-        with open(weight_map_json[0]) as file:
-            weight_map_files = json.load(file)
-        weight_map_files = weight_map_files["weight_map"]
-        # get visual weight files
-        filtered_values = {value for key, value in weight_map_files.items() if "transformer.visual" in key}
-        weight_map_files = list(filtered_values)
         # read weight
+        weight_map_files = get_weight_map(model_path, "transformer.visual")
         visual_weights = {}
         for weight_map_file in weight_map_files:
             weight_file = os.path.join(model_path, weight_map_file)
@@ -87,53 +79,6 @@ class VITModel:
 
         free_cache()
         return visual
-
-    def get_onnx_path(self, worker_path):
-        onnx_path = f'{worker_path}/onnx/visual_encoder.onnx'
-        check_file_dir(onnx_path)
-        return onnx_path
-
-    def get_trt_path(self, worker_path):
-        trt_path = f'{worker_path}/trt/visual_encoder_fp16.plan'
-        check_file_dir(trt_path)
-        return trt_path
-
-    def get_input_names(self):
-        return ['input']
-
-    def get_output_names(self):
-        return ['output']
-
-    def get_dynamic_axes(self):
-        # Build onnx config
-        return {
-                'input': {0: 'B'}
-            }
-
-    def get_trt_profile(self):
-        # Build trt config
-        return {
-                'input': [(self.min_batch, self.dim, self.image_size, self.image_size),
-                          (self.opt_batch, self.dim, self.image_size, self.image_size),
-                          (self.max_batch, self.dim, self.image_size, self.image_size)]
-            }
-
-    def get_sample_input(self):
-        
-        return (
-            torch.randn(self.opt_batch, self.dim, self.image_size, self.image_size).to(self.device)
-        )
-
-    def get_infer_shape(self, infer_batch):
-        return {
-                'input': (infer_batch, self.dim, self.image_size, self.image_size),
-                'output': (infer_batch, 256, self.output_dim),
-            }
-    
-    def get_infer_data(self, image):
-        return {
-                'input': image.float()
-            }
 
 
 class Preprocss:
@@ -168,37 +113,8 @@ class Preprocss:
 
 
 if __name__ == '__main__':
-    import sys
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
-    sys.path.append(parent_dir)
-    from trt_engine import Engine
 
     model_path = sys.argv[1]
     model = VITModel(model_path)
 
-    onnx_path = model.get_onnx_path(model_path)
-    trt_path = model.get_trt_path(model_path)
-
-    trt_engine = Engine(trt_path)
-
-    if not os.path.exists(onnx_path):
-        # Start converting ONNX!
-        precision = torch.float16
-        vit = model.get_model(model_path, precision).eval()
-
-        sample_input = model.get_sample_input()
-        input_list = model.get_input_names()
-        output_list = model.get_output_names()
-        dynamic_list = model.get_dynamic_axes()
-
-        trt_engine.export_onnx(vit,
-                                sample_input, onnx_path,
-                                input_list, output_list, dynamic_list)
-
-        del vit
-        free_cache()
-
-    # Start converting TRT engine
-    input_profile = model.get_trt_profile()
-    trt_engine.build_trt(onnx_path, enable_fp16=True, enable_refit=False, input_profile=input_profile)
+    build_trt(model, model_path)

@@ -18,6 +18,8 @@
 #include "3rdparty/half/include/half.hpp"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
+#include "csrc/utils/common.h"
+
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
@@ -132,114 +134,114 @@ struct BufferMeta {
       free(cpu_data);
     }
   }
-};
 
-void ParseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data) {
-  const char magic[] =
-      "\x93"
-      "NUMPY";
-  char magic_test[sizeof(magic)] = "\0";
+  inline void ParseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data) {
+    const char magic[] =
+        "\x93"
+        "NUMPY";
+    char magic_test[sizeof(magic)] = "\0";
 
-  size_t n_elems = fread((void*)magic_test, sizeof(char), sizeof(magic) - 1, f_ptr);
-  if (n_elems != sizeof(magic) - 1 || std::string(magic) != std::string(magic_test)) {
-    throw std::runtime_error("Could read magic token in NPY file");
-  }
-
-  uint8_t npy_major = 0;
-  uint8_t npy_minor = 0;
-  n_elems = fread((void*)&npy_major, sizeof(uint8_t), 1, f_ptr);
-  n_elems += fread((void*)&npy_minor, sizeof(uint8_t), 1, f_ptr);
-
-  if (npy_major == 1) {
-    uint16_t header_len_u16 = 0;
-    n_elems = fread((void*)&header_len_u16, sizeof(uint16_t), 1, f_ptr);
-    header_len = header_len_u16;
-  } else if (npy_major == 2) {
-    uint32_t header_len_u32 = 0;
-    n_elems = fread((void*)&header_len_u32, sizeof(uint32_t), 1, f_ptr);
-    header_len = header_len_u32;
-  } else {
-    throw std::runtime_error("Unsupported npy version: " + std::to_string(npy_major));
-  }
-
-  start_data = 8 + 2 * npy_major + header_len;
-}
-
-template <typename T>
-int32_t ParseNpyHeader(FILE*& f_ptr, uint32_t header_len, std::vector<size_t>& shape) {
-  char* header_c = (char*)malloc(header_len * sizeof(char));
-  size_t n_elems = fread((void*)header_c, sizeof(char), header_len, f_ptr);
-  if (n_elems != header_len) {
-    free(header_c);
-    return -1;
-  }
-  std::string header(header_c, header_len);
-  free(header_c);
-
-  size_t start, end;
-  start = header.find("'descr'") + 7;
-  start = header.find("'", start);
-  end = header.find("'", start + 1);
-
-  start = header.find("'fortran_order'") + 15;
-  start = header.find(":", start);
-  end = header.find(",", start + 1);
-  if (header.substr(start + 1, end - start - 1).find("False") == std::string::npos) {
-    throw std::runtime_error("Unsupported value for fortran_order while reading npy file");
-  }
-
-  start = header.find("'shape'") + 7;
-  start = header.find("(", start);
-  end = header.find(")", start + 1);
-
-  std::istringstream shape_stream(header.substr(start + 1, end - start - 1));
-  std::string token;
-
-  shape.clear();
-  while (std::getline(shape_stream, token, ',')) {
-    if (token.find_first_not_of(' ') == std::string::npos) {
-      break;
+    size_t n_elems = fread((void*)magic_test, sizeof(char), sizeof(magic) - 1, f_ptr);
+    if (n_elems != sizeof(magic) - 1 || std::string(magic) != std::string(magic_test)) {
+      throw std::runtime_error("Could read magic token in NPY file");
     }
-    shape.push_back(std::stoul(token));
+
+    uint8_t npy_major = 0;
+    uint8_t npy_minor = 0;
+    n_elems = fread((void*)&npy_major, sizeof(uint8_t), 1, f_ptr);
+    n_elems += fread((void*)&npy_minor, sizeof(uint8_t), 1, f_ptr);
+
+    if (npy_major == 1) {
+      uint16_t header_len_u16 = 0;
+      n_elems = fread((void*)&header_len_u16, sizeof(uint16_t), 1, f_ptr);
+      header_len = header_len_u16;
+    } else if (npy_major == 2) {
+      uint32_t header_len_u32 = 0;
+      n_elems = fread((void*)&header_len_u32, sizeof(uint32_t), 1, f_ptr);
+      header_len = header_len_u32;
+    } else {
+      throw std::runtime_error("Unsupported npy version: " + std::to_string(npy_major));
+    }
+
+    start_data = 8 + 2 * npy_major + header_len;
   }
 
-  return 0;
-}
+  inline int32_t ParseNpyHeader(FILE*& f_ptr, uint32_t header_len, std::vector<size_t>& shape) {
+    char* header_c = (char*)malloc(header_len * sizeof(char));
+    size_t n_elems = fread((void*)header_c, sizeof(char), header_len, f_ptr);
+    if (n_elems != header_len) {
+      free(header_c);
+      return -1;
+    }
+    std::string header(header_c, header_len);
+    free(header_c);
 
-template <typename T>
-void LoadNpy(const std::string& npy_file, const MemoryType where, BufferMeta& buf_meta) {
-  std::vector<size_t> shape;
+    size_t start, end;
+    start = header.find("'descr'") + 7;
+    start = header.find("'", start);
+    end = header.find("'", start + 1);
 
-  FILE* f_ptr = fopen(npy_file.c_str(), "rb");
-  if (f_ptr == nullptr) {
-    throw std::runtime_error("Could not open file " + npy_file);
+    start = header.find("'fortran_order'") + 15;
+    start = header.find(":", start);
+    end = header.find(",", start + 1);
+    if (header.substr(start + 1, end - start - 1).find("False") == std::string::npos) {
+      throw std::runtime_error("Unsupported value for fortran_order while reading npy file");
+    }
+
+    start = header.find("'shape'") + 7;
+    start = header.find("(", start);
+    end = header.find(")", start + 1);
+
+    std::istringstream shape_stream(header.substr(start + 1, end - start - 1));
+    std::string token;
+
+    shape.clear();
+    while (std::getline(shape_stream, token, ',')) {
+      if (token.find_first_not_of(' ') == std::string::npos) {
+        break;
+      }
+      shape.push_back(std::stoul(token));
+    }
+
+    return 0;
   }
-  uint32_t header_len, start_data;
-  ParseNpyIntro(f_ptr, header_len, start_data);
-  ParseNpyHeader<T>(f_ptr, header_len, shape);
 
-  const size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
-  void* data_cpu = malloc(size * sizeof(T));
-  void* data = data_cpu;
+  template <typename T>
+  inline void LoadNpy(const std::string& npy_file, const MemoryType dst_memory = MEMORY_CPU) {
+    std::vector<size_t> loaded_data_shape;
 
-  size_t n_elems = fread(data_cpu, sizeof(T), size, f_ptr);
-  if (n_elems != size) {
-    throw std::runtime_error("reading tensor failed");
+    FILE* f_ptr = fopen(npy_file.c_str(), "rb");
+    if (f_ptr == nullptr) {
+      throw std::runtime_error("Could not open file " + npy_file);
+    }
+    uint32_t header_len, start_data;
+    ParseNpyIntro(f_ptr, header_len, start_data);
+    ParseNpyHeader(f_ptr, header_len, loaded_data_shape);
+
+    const size_t size =
+        std::accumulate(loaded_data_shape.begin(), loaded_data_shape.end(), 1, std::multiplies<size_t>());
+    void* data_cpu = malloc(size * sizeof(T));
+    void* data = data_cpu;
+
+    size_t n_elems = fread(data_cpu, sizeof(T), size, f_ptr);
+    if (n_elems != size) {
+      throw std::runtime_error("reading tensor failed");
+    }
+    if (dst_memory == MEMORY_GPU) {
+      CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&data, size * sizeof(T)));
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(data, data_cpu, size * sizeof(T), cudaMemcpyHostToDevice));
+      free(data_cpu);
+    }
+
+    fclose(f_ptr);
+
+    data_ptr = data;
+    shape = loaded_data_shape;
+    n_elmts = size;
+    buf_size = size * sizeof(T);
+    memory_type = dst_memory;
   }
-  if (where == MEMORY_GPU) {
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&data, size * sizeof(T)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(data, data_cpu, size * sizeof(T), cudaMemcpyHostToDevice));
-    free(data_cpu);
-  }
-
-  fclose(f_ptr);
-
-  buf_meta.data_ptr = data;
-  buf_meta.shape = shape;
-  buf_meta.n_elmts = size;
-  buf_meta.buf_size = size * sizeof(T);
-  buf_meta.memory_type = where;
-}
+};
 
 class NvidiaTestSuitBase : public testing::Test {
  public:
@@ -296,17 +298,15 @@ class NvidiaTestSuitBase : public testing::Test {
     }
   }
 
-  void PrintMaxMemoryUsed() {
-    std::cout << "========> max cpu memory used: " << max_cpu_mem_used / 1024.0f / 1024.0f << " MByte" << std::endl;
-    std::cout << "========> max gpu memory used: " << max_gpu_mem_used / 1024.0f / 1024.0f << " MByte" << std::endl;
-  }
-
   template <typename T>
   void RandomCPUBuffer(T* data_ptr, size_t n_elems, const float max_val = 1.0f, const float min_val = -1.0f) {
     for (size_t i = 0; i < n_elems; ++i) {
-      float val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-      val *= (max_val - min_val);
-      data_ptr[i] = static_cast<T>(min_val + val);
+      if (max_val == min_val) {
+        data_ptr[i] = static_cast<T>(max_val);
+      } else {
+        data_ptr[i] =
+            static_cast<T>(min_val + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (max_val - min_val))));
+      }
     }
   }
 
@@ -415,45 +415,72 @@ class NvidiaTestSuitBase : public testing::Test {
     return fabs(a - b) <= (atol + rtol * fabs(b));
   }
 
+  inline float CastBFloat16ToFloat32(uint16_t src_val) {
+    unsigned int tmp_vale = src_val << 16;
+    return *reinterpret_cast<float*>(&tmp_vale);
+  }
+
   template <typename T>
   bool CheckResult(std::string name, BufferMeta& out, BufferMeta& ref, float atol, float rtol,
                    float miss_match_rate = 0.01f, bool is_print_case_verbose_result = false) {
-    assert(out.memory_type == ref.memory_type);
-
     size_t out_size = out.n_elmts;
     size_t ref_size = ref.n_elmts;
-    T* h_out = reinterpret_cast<T*>(malloc(sizeof(T) * out_size));
-    T* h_ref = reinterpret_cast<T*>(malloc(sizeof(T) * ref_size));
+    if (out_size != ref_size) {
+      std::cerr << "Target data size: " << out_size << " and refer data size " << ref_size << " is different."
+                << std::endl;
+      return false;
+    }
 
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(h_out, out.data_ptr, sizeof(T) * out_size, cudaMemcpyDeviceToHost));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(h_ref, ref.data_ptr, sizeof(T) * ref_size, cudaMemcpyDeviceToHost));
+    T* h_out = nullptr;
+    T* h_ref = nullptr;
+
+    if (out.memory_type == MemoryType::MEMORY_GPU) {
+      h_out = reinterpret_cast<T*>(malloc(sizeof(T) * out_size));
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(h_out, out.data_ptr, sizeof(T) * out_size, cudaMemcpyDeviceToHost));
+    } else {
+      h_out = reinterpret_cast<T*>(out.data_ptr);
+    }
+
+    if (ref.memory_type == MemoryType::MEMORY_GPU) {
+      h_ref = reinterpret_cast<T*>(malloc(sizeof(T) * ref_size));
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(h_ref, ref.data_ptr, sizeof(T) * ref_size, cudaMemcpyDeviceToHost));
+    } else {
+      h_ref = reinterpret_cast<T*>(ref.data_ptr);
+    }
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
+
+    std::stringstream ss;
 
     size_t failures = 0;
     for (size_t i = 0; i < out_size; ++i) {
+      float a = 0.0f;
+      float b = 0.0f;
       // The values for the output and the reference.
-      float a = (float)h_out[i];
-      float b = (float)h_ref[i];
+      if (std::is_same<T, __nv_bfloat16>::value) {
+        a = CastBFloat16ToFloat32(static_cast<uint16_t>(h_out[i]));
+        b = CastBFloat16ToFloat32(static_cast<uint16_t>(h_ref[i]));
+      } else {
+        a = static_cast<float>(h_out[i]);
+        b = static_cast<float>(h_ref[i]);
+      }
 
-      bool ok = AlmostEqual(a, b, atol, rtol);
+      bool is_almost_equal = AlmostEqual(a, b, atol, rtol);
       // Print the error.
-      if (is_print_case_verbose_result && !ok && failures < 4) {
-        printf(">> invalid result for i=%lu:\n", i);
-        printf(">>    found......: %10.6f\n", a);
-        printf(">>    expected...: %10.6f\n", b);
-        printf(">>    error......: %.6f\n", fabsf(a - b));
-        printf(">>    tol........: %.6f\n", atol + rtol * fabs(b));
+      if (is_print_case_verbose_result && !is_almost_equal) {
+        ss << "invalid result for idx=" << i << ", found: " << a << ", expected: " << b
+           << ", abs error: " << fabsf(a - b) << std::endl;
       }
 
       // Update the number of failures.
-      failures += ok ? 0 : 1;
+      failures += is_almost_equal ? 0 : 1;
     }
 
-    // Allow not matched up to 1% elements.
-    size_t tol_failures = (size_t)(miss_match_rate * out_size);
-    if (is_print_case_verbose_result) {
-      printf("check....... %30s : %s (failures: %.2f%% atol: %.2e rtol: %.2e)\n", name.c_str(),
-             failures <= tol_failures ? "OK" : "FAILED", 100. * failures / out_size, atol, rtol);
+    // Allow not matched up to percent rate of elements.
+    size_t tol_failures = static_cast<size_t>(miss_match_rate * out_size);
+    if (failures > tol_failures && is_print_case_verbose_result) {
+      std::cerr << ss.str();
+      std::cerr << "Test failed in " << name << " by two tensor diff rate: " << 100. * failures / out_size
+                << " with atol: " << atol << ", rtol: " << rtol << std::endl;
     }
     return failures <= tol_failures;
   }

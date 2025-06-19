@@ -25,35 +25,84 @@ if(NOT Python3_EXECUTABLE)
     REQUIRED)
 endif()
 
-execute_process(
-  WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass/python/
-  COMMAND ${Python3_EXECUTABLE} setup_library.py develop --user
-  RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
-
-if(NOT _CUTLASS_LIBRARY_SUCCESS MATCHES 0)
-  message(
-    FATAL_ERROR
-      "Failed to set up the CUTLASS library due to ${_CUTLASS_LIBRARY_SUCCESS}."
-  )
-endif()
-
-set_directory_properties(
-  PROPERTIES CMAKE_CONFIGURE_DEPENDS
-             ${CMAKE_CURRENT_SOURCE_DIR}/python/generate_kernels.py)
+# 获取所有相关目录下的所有文件
+file(GLOB_RECURSE ALL_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/*
+  ${3RDPARTY_DIR}/cutlass/python/*
+  ${CMAKE_CURRENT_SOURCE_DIR}/python/*
+)
 
 set(INSTANTIATION_GENERATION_DIR
     ${CMAKE_CURRENT_BINARY_DIR}/cutlass_instantiations)
-execute_process(
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/
-  COMMAND ${Python3_EXECUTABLE} generate_kernels.py -o
-          ${INSTANTIATION_GENERATION_DIR}
-  RESULT_VARIABLE _KERNEL_GEN_SUCCESS)
+set(MD5_FILE ${INSTANTIATION_GENERATION_DIR}/.md5sums)
 
-if(NOT _KERNEL_GEN_SUCCESS MATCHES 0)
-  message(
-    FATAL_ERROR
-      "Failed to generate CUTLASS kernel instantiations due to ${_KERNEL_GEN_SUCCESS}."
-  )
+# 计算所有文件的组合MD5
+function(calculate_files_md5 files_list output_md5)
+  set(combined_content "")
+  foreach(file ${files_list})
+    if(EXISTS ${file})
+      file(READ ${file} content)
+      string(APPEND combined_content ${content})
+    endif()
+  endforeach()
+  string(MD5 md5sum "${combined_content}")
+  set(${output_md5} ${md5sum} PARENT_SCOPE)
+endfunction()
+
+# 检查是否需要重新生成代码
+set(NEED_REGENERATE TRUE)
+if(EXISTS ${MD5_FILE})
+  # 读取之前保存的MD5值
+  file(READ ${MD5_FILE} PREV_MD5)
+  
+  # 计算当前文件的MD5值
+  calculate_files_md5("${ALL_FILES}" CURRENT_MD5)
+  
+  if(${PREV_MD5} STREQUAL ${CURRENT_MD5})
+    set(NEED_REGENERATE FALSE)
+    message(STATUS "Files MD5 unchanged, skipping regeneration")
+  else()
+    message(STATUS "Files MD5 changed, regenerating")
+    message(STATUS "Previous MD5: ${PREV_MD5}")
+    message(STATUS "Current MD5: ${CURRENT_MD5}")
+  endif()
+endif()
+
+if(NEED_REGENERATE)
+  message(STATUS "Regenerating CUTLASS kernels...")
+  
+  # 设置CUTLASS库
+  execute_process(
+    WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass/python/
+    COMMAND ${Python3_EXECUTABLE} setup_library.py develop --user
+    RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
+
+  if(NOT _CUTLASS_LIBRARY_SUCCESS MATCHES 0)
+    message(
+      FATAL_ERROR
+        "Failed to set up the CUTLASS library due to ${_CUTLASS_LIBRARY_SUCCESS}."
+    )
+  endif()
+
+  # 生成内核代码
+  execute_process(
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/
+    COMMAND ${Python3_EXECUTABLE} generate_kernels.py -o
+            ${INSTANTIATION_GENERATION_DIR}
+    RESULT_VARIABLE _KERNEL_GEN_SUCCESS)
+
+  if(NOT _KERNEL_GEN_SUCCESS MATCHES 0)
+    message(
+      FATAL_ERROR
+        "Failed to generate CUTLASS kernel instantiations due to ${_KERNEL_GEN_SUCCESS}."
+    )
+  endif()
+
+  # 更新MD5值
+  calculate_files_md5("${ALL_FILES}" NEW_MD5)
+  file(WRITE ${MD5_FILE} ${NEW_MD5})
+else()
+  message(STATUS "CUTLASS kernels are up to date, skipping generation")
 endif()
 
 
@@ -98,11 +147,6 @@ message(VERBOSE "All srcs ${ALL_SRCS}")
 
 add_library(llm_kernels_nvidia_kernel_asymmetric_gemm STATIC ${ALL_SRCS} ${GROUPED_CU_INSTANTIATIONS} 
                                                              ${MIXED_CU_INSTANTIATIONS})
-set_property(TARGET llm_kernels_nvidia_kernel_asymmetric_gemm PROPERTY POSITION_INDEPENDENT_CODE ON)
-set_property(TARGET llm_kernels_nvidia_kernel_asymmetric_gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-
-target_link_libraries(llm_kernels_nvidia_kernel_asymmetric_gemm PUBLIC -lcublas -lcudart -lcublasLt
-    llm_kernels_nvidia_utils)
 
 add_library(fpA_intB_gemm_src STATIC ${MIXED_SRC_CPP} ${MIXED_SRC_CU}
                                      ${MIXED_CU_INSTANTIATIONS})
@@ -115,7 +159,7 @@ set(GEMM_SWIGLU_SM90_SRC_CU
     ${CMAKE_CURRENT_SOURCE_DIR}/fused_gated_gemm/gemm_swiglu_e4m3.cu)
 add_library(gemm_swiglu_sm90_src STATIC ${GEMM_SWIGLU_SM90_SRC_CU})
 foreach(target_name
-        fpA_intB_gemm_src;moe_gemm_src;fb_gemm_src;gemm_swiglu_sm90_src)
+        fpA_intB_gemm_src;moe_gemm_src;fb_gemm_src;gemm_swiglu_sm90_src;llm_kernels_nvidia_kernel_asymmetric_gemm)
   set_property(TARGET ${target_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
   set_property(TARGET ${target_name} PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
@@ -124,7 +168,7 @@ foreach(target_name
   # are not forward compatible. As a result, it does not make sense to embed PTX
   # into the binary anyway.
   
-  # TODO(winminkong): define CMAKE_CUDA_ARCHITECTURES_ORIG and support sm90
+  # support sm90(COMPILE_HOPPER_TMA_GEMMS)
   if("90" IN_LIST CMAKE_CUDA_ARCHITECTURES_ORIG
      OR "90-real" IN_LIST CMAKE_CUDA_ARCHITECTURES_ORIG
      OR "90-real" IN_LIST CMAKE_CUDA_ARCHITECTURES_NATIVE)
@@ -137,12 +181,17 @@ foreach(target_name
     find_package(CUDAToolkit REQUIRED)
 
     # Hopper kernels require cuda lib for TMA APIs
-    target_link_libraries(${target_name} PRIVATE CUDA_DRV_LIB)
+    target_link_libraries(${target_name} PRIVATE cuda)
 
     # No kernels should be parsed, unless hopper is specified. This is a build
     # time improvement
     target_compile_definitions(${target_name} PRIVATE COMPILE_HOPPER_TMA_GEMMS)
+
+    # define NDEBUG to skip cutlass brkpt when producer call consumer function
+    # https://github.com/NVIDIA/cutlass/blob/v3.7.0/include/cutlass/pipeline/sm90_pipeline.hpp#L84
+    target_compile_definitions(${target_name} PRIVATE NDEBUG)
   endif()
+  
 
   # Suppress GCC note: the ABI for passing parameters with 64-byte alignment has
   # changed in GCC 4.6 This note appears for kernels using TMA and clutters the
@@ -154,9 +203,23 @@ foreach(target_name
 
 endforeach()
 
+# target_link_libraries must be after set_property
+target_link_libraries(llm_kernels_nvidia_kernel_asymmetric_gemm PUBLIC -lcublas -lcudart -lcublasLt
+    llm_kernels_nvidia_utils)
+
 # for test
-file(GLOB_RECURSE ADD_TEST_SRCS asymmetric_gemm_test.cu)
-cc_test(llm_kernels_nvidia_kernel_asymmetric_gemm_test SRCS ${ADD_TEST_SRCS} DEPS 
+file(GLOB_RECURSE ASYMMETRIC_GEMM_TEST_SRCS asymmetric_gemm_test.cu)
+cc_test(llm_kernels_nvidia_kernel_asymmetric_gemm_test SRCS ${ASYMMETRIC_GEMM_TEST_SRCS} DEPS 
     llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_asymmetric_gemm
-    llm_kernels_nvidia_kernel_weight_only_batched_gemv)
+    llm_kernels_nvidia_kernel_weight_only_batched_gemv
+    llm_kernels_nvidia_kernel_permute
+    llm_kernels_nvidia_kernel_cast
+    llm_kernels_nvidia_kernel_machete
+    llm_kernels_nvidia_kernel_gemm_wrapper)
+
+# for test
+file(GLOB_RECURSE CUTLASS_PREPROCESSORS_TEST_SRCS cutlass_preprocessors_test.cu)
+cc_test(llm_kernels_nvidia_kernel_cutlass_preprocessors_test SRCS ${CUTLASS_PREPROCESSORS_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils
+    llm_kernels_nvidia_kernel_asymmetric_gemm)

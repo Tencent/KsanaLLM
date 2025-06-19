@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <torch/torch.h>
+
 #include <string>
 #include <unordered_map>
 
@@ -49,6 +51,10 @@ namespace ksana_llm {
 typedef half float16;
 #  ifdef ENABLE_BFLOAT16
 typedef __nv_bfloat16 bfloat16;
+#  endif
+#  ifdef ENABLE_FP8
+typedef __nv_fp8_e4m3 fp8e4m3;
+typedef __nv_fp8_e5m2 fp8e5m2;
 #  endif
 #elif defined(ENABLE_ACL)
 typedef aclFloat16 float16;
@@ -119,6 +125,7 @@ enum DataType {
   TYPE_BYTES,
   TYPE_FP8_E4M3,
   TYPE_I4_GROUP,
+  TYPE_BLOCK_FP8_E4M3,
   TYPE_FP8_E5M2,
   TYPE_VOID,
   TYPE_POINTER
@@ -138,11 +145,12 @@ enum DataType {
   TYPE_FP32 = aclDataType::ACL_FLOAT,
   TYPE_FP64 = aclDataType::ACL_DOUBLE,
   TYPE_BYTES = aclDataType::ACL_STRING,
-  TYPE_FP8_E4M3 = aclDataType::ACL_DT_UNDEFINED,
-  TYPE_I4_GROUP = aclDataType::ACL_DT_UNDEFINED,
-  TYPE_FP8_E5M2 = aclDataType::ACL_DT_UNDEFINED,
-  TYPE_VOID = aclDataType::ACL_DT_UNDEFINED,
-  TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED
+  TYPE_FP8_E4M3 = aclDataType::ACL_DT_UNDEFINED - 1,
+  TYPE_FP8_E5M2 = aclDataType::ACL_DT_UNDEFINED - 2,
+  TYPE_I4_GROUP = aclDataType::ACL_DT_UNDEFINED - 3,
+  TYPE_BLOCK_FP8_E4M3 = aclDataType::ACL_DT_UNDEFINED - 4,
+  TYPE_VOID = aclDataType::ACL_DT_UNDEFINED - 5,
+  TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED - 6
 #elif defined(ENABLE_TOPS)
   TYPE_INVALID,
   TYPE_FP32,
@@ -168,16 +176,34 @@ enum DataType {
   TYPE_BYTES,
   TYPE_VOID,
   TYPE_POINTER,
-  TYPE_I4_GROUP
+  TYPE_I4_GROUP,
+  TYPE_BLOCK_FP8_E4M3,
 #endif
 };
 
 __attribute__((unused)) static std::string GetTypeString(DataType dtype) {
-  static const std::unordered_map<DataType, std::string> type_map{
-      {TYPE_INVALID, "invalid"}, {TYPE_BOOL, "bool"},     {TYPE_BYTES, "bytes"},   {TYPE_UINT8, "uint8"},
-      {TYPE_UINT16, "uint16"},   {TYPE_UINT32, "uint32"}, {TYPE_UINT64, "uint64"}, {TYPE_INT8, "int8"},
-      {TYPE_INT16, "int16"},     {TYPE_INT32, "int32"},   {TYPE_INT64, "int64"},   {TYPE_FP16, "float16"},
-      {TYPE_BF16, "bfloat16"},   {TYPE_FP32, "float32"},  {TYPE_FP64, "float64"}};
+  static const std::unordered_map<DataType, std::string> type_map{{TYPE_INVALID, "invalid"},
+                                                                  {TYPE_BOOL, "bool"},
+                                                                  {TYPE_BYTES, "bytes"},
+                                                                  {TYPE_UINT8, "uint8"},
+                                                                  {TYPE_UINT16, "uint16"},
+                                                                  {TYPE_UINT32, "uint32"},
+                                                                  {TYPE_UINT64, "uint64"},
+                                                                  {TYPE_INT8, "int8"},
+                                                                  {TYPE_INT16, "int16"},
+                                                                  {TYPE_INT32, "int32"},
+                                                                  {TYPE_INT64, "int64"},
+                                                                  {TYPE_FP16, "float16"},
+                                                                  {TYPE_BF16, "bfloat16"},
+                                                                  {TYPE_FP32, "float32"},
+                                                                  {TYPE_FP64, "float64"},
+                                                                  {TYPE_BYTES, "bytes"},
+                                                                  {TYPE_FP8_E4M3, "fp8_e4m3"},
+                                                                  {TYPE_I4_GROUP, "int4_group"},
+                                                                  {TYPE_BLOCK_FP8_E4M3, "block_fp8_e4m3"},
+                                                                  {TYPE_FP8_E5M2, "fp8_e5m2"},
+                                                                  {TYPE_VOID, "void"},
+                                                                  {TYPE_POINTER, "pointer"}};
   return type_map.count(dtype) ? type_map.at(dtype) : "invalid";
 }
 
@@ -186,7 +212,12 @@ size_t GetTypeSize(DataType dtype);
 // The memory device.
 enum MemoryDevice { MEMORY_HOST, MEMORY_DEVICE };
 
+// The memory location.
+enum MemoryLocation { LOCATION_UNKNOWN, LOCATION_HOST, LOCATION_DEVICE };
+
 // A dummy class used as a real defined class.
 struct DummyClass {};
+
+c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type);
 
 }  // namespace ksana_llm

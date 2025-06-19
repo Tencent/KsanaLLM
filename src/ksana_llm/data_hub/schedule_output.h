@@ -18,8 +18,10 @@ struct WorkerInferRequest {
   // The name of model instance.
   std::string model_name;
 
-  // The output tokens, always contain input tokens on the left.
-  std::vector<int> output_tokens;
+  // forwarding tokens contains tokens used in forwarding step. There are two parts:
+  // 1. tokens have kv-caches, kv_cached_token_num is the number
+  // 2. tokens need to be processed, their kv-caches are generated during computation
+  std::vector<int> forwarding_tokens;
 
   // context decode or decode stage.
   InferStage infer_stage;
@@ -37,9 +39,6 @@ struct WorkerInferRequest {
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 
-  // The prefix cache blocks number
-  int prefix_cache_blocks_number = 0;
-
   // The number of tokens for which kv caches have been generated.
   int kv_cached_token_num = 0;
 
@@ -50,17 +49,27 @@ struct WorkerInferRequest {
   // The model instance pointer.
   std::shared_ptr<ModelInstance> model_instance = nullptr;
 
+  // Different reqs may have different cache managers.
+  std::shared_ptr<CacheManagerInterface> cache_manager;
+
   // Get addr ptr of blocks.
   std::vector<std::vector<void*>> GetBlockPtrs() {
     std::vector<std::vector<void*>> block_ptrs;
     for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
       std::vector<void*> block_ptr(kv_cache_blocks[rank].size());
-      GetBlockManager()->SetDeviceId(rank);
-      GetBlockManager()->GetBlockPtrs(kv_cache_blocks[rank], block_ptr);
+      cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
+                                                                                           block_ptr);
       block_ptrs.push_back(block_ptr);
     }
     return block_ptrs;
   }
+
+  // current froward request related attention data para group id
+  // NOTE(karlluo): for example: machine has 4 GPUs, Attention Data Parallelism is 2, Tensor Parallelism is 2.
+  // |----Attn DP Group id 0----|----Attn DP Group id 1----|
+  // |     TP 0   |     TP1     |     TP0    |     TP1     |
+  // |     GPU0   |     GPU1    |     GPU2   |     GPU3    |
+  uint32_t attn_dp_group_id = 0;
 
   // Not used.
   std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
@@ -103,7 +112,7 @@ struct ScheduleOutput {
       result += "      {\n";
       result += "        req_id:" + std::to_string(req->req_id) + "\n";
       result += "        model_name:" + req->model_name + "\n";
-      result += "        output_tokens:" + Vector2Str(req->output_tokens) + "\n";
+      result += "        forwarding_tokens:" + Vector2Str(req->forwarding_tokens) + "\n";
       result += "        infer_stage:" + std::to_string(req->infer_stage) + "\n";
       result += "        step:" + std::to_string(req->step) + "\n";
       result += "        kv_cache_blocks:";
@@ -111,11 +120,10 @@ struct ScheduleOutput {
         result += Vector2Str(v) + ", ";
       }
       result += "\n";
-
       result += "        is_use_prefix_cache:" + std::to_string(req->is_use_prefix_cache) + "\n";
-      result += "        prefix_cache_blocks_number:" + std::to_string(req->prefix_cache_blocks_number) + "\n";
       result += "        kv_cached_token_num:" + std::to_string(req->kv_cached_token_num) + "\n";
       result += "        mrotary_embedding_pos_offset:" + std::to_string(req->mrotary_embedding_pos_offset) + "\n";
+      result += "        attn_dp_group_id:" + std::to_string(req->attn_dp_group_id) + "\n";
       result += "      }\n";
     }
     result += "    ]\n";
@@ -124,24 +132,46 @@ struct ScheduleOutput {
   }
 
   // The unique id for one schedule step.
-  size_t schedule_id;
+  size_t schedule_id = DEFAULT_SCHEDULE_ID;
 
-  // finished
-  std::vector<int64_t> finish_req_ids;
+  // NOTE(karlluo): finished req ids, outer vector is for attention data parallelism.
+  std::vector<std::vector<int64_t>> finish_req_ids;
 
-  // merged requests.
-  std::vector<int64_t> merged_swapout_req_ids;
-  std::vector<int64_t> merged_swapin_req_ids;
+  // NOTE(karlluo): merged requests ids, outer vector is for attention data parallelism.
+  std::vector<std::vector<int64_t>> merged_swapout_req_ids;
+  std::vector<std::vector<int64_t>> merged_swapin_req_ids;
 
-  // swapped
-  std::unordered_map<int64_t, std::vector<int>> swapout_req_block_ids;
-  std::unordered_map<int64_t, std::vector<int>> swapin_req_block_ids;
+  // NOTE(karlluo): swapped requests ids, outer vector is for attention data parallelism.
+  std::vector<std::unordered_map<int64_t, std::vector<int>>> swapout_req_block_ids;
+  std::vector<std::unordered_map<int64_t, std::vector<int>>> swapin_req_block_ids;
 
   // running, for master node.
   std::vector<std::shared_ptr<InferRequest>> running_reqs;
 
   // running, for worker node.
   std::vector<std::shared_ptr<WorkerInferRequest>> worker_running_reqs;
+};
+
+struct ScheduleOutputGroup {
+ public:
+  size_t schedule_id = DEFAULT_SCHEDULE_ID;
+  std::vector<ScheduleOutput*> outputs;
+
+ public:
+  explicit ScheduleOutputGroup(size_t dp_num = 1) : schedule_id(DEFAULT_SCHEDULE_ID) {
+    outputs.resize(dp_num, nullptr);
+  }
+
+  size_t RunningSize() const {
+    size_t size = 0;
+    for (auto& output : outputs) {
+      if (output == nullptr) {
+        continue;
+      }
+      size += output->running_reqs.size();
+    }
+    return size;
+  }
 };
 
 class ScheduleOutputParser {
@@ -189,7 +219,7 @@ class ScheduleOutputParser {
     int vec_size = *reinterpret_cast<int*>(data + offset);
     offset += sizeof(int);
 
-    for (size_t i = 0; i < vec_size; ++i) {
+    for (int i = 0; i < vec_size; ++i) {
       T e = *reinterpret_cast<T*>(data + offset);
       vec.push_back(e);
       offset += sizeof(T);
@@ -230,7 +260,7 @@ class ScheduleOutputParser {
     int dict_size = *reinterpret_cast<int*>(data + offset);
     offset += sizeof(int);
 
-    for (size_t i = 0; i < dict_size; ++i) {
+    for (int i = 0; i < dict_size; ++i) {
       K key = *reinterpret_cast<K*>(data + offset);
       offset += sizeof(K);
 

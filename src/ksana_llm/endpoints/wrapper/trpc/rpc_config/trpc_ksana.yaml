@@ -1,0 +1,37 @@
+global:
+  periphery_task_scheduler_thread_num: 0  # 关闭业务定时器
+  inner_periphery_task_scheduler_thread_num: 0  # 关闭内部定时器
+  enable_runtime_report: false  # 关闭运行时信息上报
+  heartbeat:
+    enable_heartbeat: false  # 关闭心跳上报
+  threadmodel:
+    default:
+      - instance_name: merge_instance
+        io_handle_type: merge  # 合并线程模型
+        io_thread_num: 256  # 线程数
+
+server:
+  app: ksana_llm
+  server: ksana_llm.trpc_endpoint
+  admin_idle_time: 3600000  # admin清理空闲连接时间（ms）
+  service:
+    - name: ksana_llm.trpc_service
+      protocol: http  # 应用层协议
+      network: tcp  # 网络监听类型
+      queue_timeout: 3600000  # 请求在接收队列的超时时间（ms）
+      timeout: 3600000  # 会话超时时间（ms）
+      idle_time: 3600000  # 连接空闲超时时间（ms）
+      disable_request_timeout: true  # 关闭全链路超时
+
+plugins:
+  log:
+    default:
+      - name: default
+        min_level: 2  # Level::info by default
+        mode: 2  # 异步模式
+        format: "[%Y-%m-%d %H:%M:%S.%e] [%s:%#] [%^%l%$] %v"
+        sinks:
+          local_file:
+            filename: log/ksana_trpc.log
+          stdout:
+            stderr_level: 4  # Level::error

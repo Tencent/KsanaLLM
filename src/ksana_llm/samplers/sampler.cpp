@@ -5,10 +5,11 @@
 #ifdef ENABLE_CUDA
 #  include <curand_kernel.h>
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/copy_elements.cuh"
-#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/decodingCommon.h"
+#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/decoding_common.h"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
+#include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
@@ -19,63 +20,57 @@ namespace ksana_llm {
 
 static size_t kCudaMemAlignmentSize = alignof(std::max_align_t);
 
-Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context)
-    : beam_search_sampling_(context) {
-  batch_schedule_config_ = batch_scheduler_config;
-  context_ = context;
-  rank_ = rank;
-  auto max_batch_size = batch_scheduler_config.max_batch_size;
+Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context)
+    : batch_schedule_config_(batch_scheduler_config), rank_(rank), context_(context) {
+  KLLM_CHECK_WITH_INFO(sizeof(uint32_t) == sizeof(int),
+                       fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int)));
+
   // need to allocate device buffer for sampling
-  GetBlockManager()->SetDeviceId(rank_);
-  auto allocator = [this](size_t size) -> void* {
-    GetBlockManager()->SetDeviceId(rank_);
-    GetBlockManager()->AllocateContiguous(size, device_buffer_block_id_);
-    GetBlockManager()->GetContiguousPtr(device_buffer_block_id_, device_buffer_);
+  SetDevice(rank_);
+  const size_t max_logits_num =
+      batch_scheduler_config.max_batch_size * batch_schedule_config_.max_decode_tokens_per_req;
+  AlignedMemoryQueue aligned_memory_queue(kCudaMemAlignmentSize, [this](const size_t size) {
+    SetDevice(rank_);
+    Malloc(&device_buffer_, size);
     return device_buffer_;
-  };
-  AlignedMemoryQueue aligned_memory_queue(kCudaMemAlignmentSize, allocator);
-  aligned_memory_queue.Add(device_output_tokens_, max_batch_size);
-  aligned_memory_queue.Add(device_topKs_, max_batch_size);
-  aligned_memory_queue.Add(device_topPs_, max_batch_size);
-  aligned_memory_queue.Add(device_temperatures_, max_batch_size);
-  aligned_memory_queue.Add(device_curandstates_, max_batch_size);
-  aligned_memory_queue.Add(device_output_tokens_ptrs_, max_batch_size);
+  });
+  aligned_memory_queue.Add(device_output_tokens_, max_logits_num);
+  aligned_memory_queue.Add(device_topKs_, max_logits_num);
+  aligned_memory_queue.Add(device_topPs_, max_logits_num);
+  aligned_memory_queue.Add(device_temperatures_, max_logits_num);
+  aligned_memory_queue.Add(device_curandstates_, max_logits_num);
+  aligned_memory_queue.Add(device_output_tokens_ptrs_, max_logits_num);
   aligned_memory_queue.Add(device_repetition_processor_, batch_schedule_config_.max_vocab_size);
-  aligned_memory_queue.Add(device_prob_, max_batch_size);
-  aligned_memory_queue.Add(device_prob_ptrs_, max_batch_size);
+  aligned_memory_queue.Add(device_prob_, max_logits_num);
+  aligned_memory_queue.Add(device_prob_ptrs_, max_logits_num);
   aligned_memory_queue.AllocateAndAlign();
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
   norepeat_ngrams_.resize(batch_schedule_config_.max_vocab_size);
 
-  KLLM_CHECK_WITH_INFO(sizeof(uint32_t) == sizeof(int),
-                       fmt::format("sizeof(uint32_t)({}) != sizeof(int)({})", sizeof(uint32_t), sizeof(int)));
-
-  std::vector<uint32_t*> host_device_output_tokens_ptrs(max_batch_size);
-  for (size_t i = 0; i < max_batch_size; i++) {
-    host_device_output_tokens_ptrs[i] = device_output_tokens_ + i;
-  }
-
-  MemcpyAsync(device_output_tokens_ptrs_, host_device_output_tokens_ptrs.data(), sizeof(uint32_t*) * max_batch_size,
+  std::vector<uint32_t*> output_tokens_ptrs_host(max_logits_num);
+  iota(output_tokens_ptrs_host.begin(), output_tokens_ptrs_host.end(), device_output_tokens_);
+  MemcpyAsync(device_output_tokens_ptrs_, output_tokens_ptrs_host.data(),
+              sizeof(decltype(output_tokens_ptrs_host)::value_type) * output_tokens_ptrs_host.size(),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 
-  host_offset_.resize(max_batch_size);
-  host_topKs_.resize(max_batch_size);
-  host_topPs_.resize(max_batch_size);
-  host_temperatures_.resize(max_batch_size);
-  host_output_tokens_.resize(max_batch_size);
+  host_topKs_.resize(max_logits_num);
+  host_topPs_.resize(max_logits_num);
+  host_temperatures_.resize(max_logits_num);
+  host_output_tokens_.resize(max_logits_num);
 
-  topk_sampling_ = new TopkSampling(max_batch_size, batch_scheduler_config.max_vocab_size, device_curandstates_);
+  topk_sampling_ = new TopkSampling(max_logits_num, batch_scheduler_config.max_vocab_size, device_curandstates_);
 }
 
 Sampler::~Sampler() {
   // free device buffer of output tokens
-  GetBlockManager()->SetDeviceId(rank_);
+  SetDevice(rank_);
   if (topk_sampling_ != nullptr) {
     delete topk_sampling_;
   }
-  if (device_buffer_block_id_ != -1) {
-    GetBlockManager()->FreeContiguous(device_buffer_block_id_);
+  if (device_buffer_ != nullptr) {
+    Free(device_buffer_);
+    device_buffer_ = nullptr;
   }
 }
 
@@ -84,7 +79,7 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
   // inv_repetition_penalties_ is filled with 1.0f
   std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
-  float inv_repetition_penalty = 1.0f / repetition_penalty;
+  const float inv_repetition_penalty = 1.0f / repetition_penalty;
   for (size_t i = 0; i < input_tokens->size(); ++i) {
     inv_repetition_penalties_[input_tokens->at(i)] = inv_repetition_penalty;
   }
@@ -96,19 +91,18 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
               MEMCPY_HOST_TO_DEVICE, stream);
   // logits = mul(logits, device_repetition_processor_)
 #ifdef ENABLE_CUDA
-  Mul(logits, device_repetition_processor_, logits, vocab_size, rank_);
+  InvokeMul(logits, device_repetition_processor_, logits, vocab_size, rank_);
 #endif
 }
 
 void Sampler::GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
                         NgramDict* ngram_dict) {
-  if (ngram_dict == nullptr) {
-    KLLM_THROW("The ngram_dict cannot be nullptr");
-  }
-  std::vector<std::vector<int>> ngrams;
   if (!ngram_dict->empty()) {
     return;
-  }  // for tokens recompute
+  }
+
+  std::vector<std::vector<int>> ngrams;
+  // for tokens recompute
   for (int i = 0; i <= cur_output_size - ngram_size; ++i) {
     std::vector<int> sub_ngram(output_tokens->begin() + i, output_tokens->begin() + i + ngram_size);
     ngrams.push_back(sub_ngram);
@@ -121,9 +115,9 @@ void Sampler::GetNgrams(const int ngram_size, const int cur_output_size, const s
   }
 }
 
-void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int input_tokens_size,
-                              const int cur_output_size, const std::vector<int>* output_tokens, NgramDict* ngram_dict,
-                              const int vocab_size, Stream& stream) {
+void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int cur_output_size,
+                              const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
+                              Stream& stream) {
   std::vector<int> repeat_ids;
   int start_idx = cur_output_size - ngram_size + 1;
   std::vector<int> ngram_idx(output_tokens->begin() + start_idx, output_tokens->begin() + cur_output_size);
@@ -151,9 +145,10 @@ void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const 
                                      Stream& stream) {
   int cur_output_size = output_tokens->size();
   if (ngram_size > cur_output_size) {
-    KLLM_THROW(
-        fmt::format("The no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
-                    ngram_size, cur_output_size));
+    KLLM_LOG_WARNING << fmt::format(
+        "The no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}", ngram_size,
+        cur_output_size);
+    return;
   }
   if (input_tokens_size == cur_output_size) {
     KLLM_LOG_DEBUG << "for input and output tokens no repeat ngram sample";
@@ -165,8 +160,7 @@ void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const 
     int last_elem = sub_ngram.back();
     (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
   }
-  BanRepeatTokens(logits, ngram_size, input_tokens_size, cur_output_size, output_tokens, ngram_dict, vocab_size,
-                  stream);
+  BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
 void Sampler::EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
@@ -174,16 +168,34 @@ void Sampler::EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
                                             const int vocab_size, Stream& stream) {
   int cur_output_size = output_tokens->size();
   if (ngram_size > cur_output_size) {
-    KLLM_THROW(fmt::format(
+    KLLM_LOG_WARNING << fmt::format(
         "The encoder_no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
-        ngram_size, cur_output_size));
+        ngram_size, cur_output_size);
+    return;
   }
   if (input_tokens_size == cur_output_size) {
     KLLM_LOG_DEBUG << "for input tokens no repeat ngram sample";
     GetNgrams(ngram_size, cur_output_size, output_tokens, ngram_dict);
   }
-  BanRepeatTokens(logits, ngram_size, input_tokens_size, cur_output_size, output_tokens, ngram_dict, vocab_size,
-                  stream);
+  BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
+}
+
+void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
+                                            const std::vector<int>* output_tokens, NgramDict* ngram_dict,
+                                            const int vocab_size, Stream& stream) {
+  int cur_output_size = output_tokens->size();
+  if (ngram_size > cur_output_size - input_tokens_size) {
+    KLLM_LOG_WARNING << fmt::format(
+        "The decoder_no_repeat_ngram_size must be less than the number of tokens output by the Forward. {} < {}",
+        ngram_size, cur_output_size - input_tokens_size);
+    return;
+  } else {
+    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
+    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
+    int last_elem = sub_ngram.back();
+    (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+  }
+  BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
 void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
@@ -192,11 +204,20 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
   StreamSynchronize(stream);
   copy_probs_after_synchronize();
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
-    std::unique_lock<std::mutex> lock(*sampling_reqs[i].output_mutex);
-    sampling_reqs[i].output_tokens->push_back(host_output_tokens_[host_offset_[i]]);
-    beam_search_sampling_.Sampling(sampling_reqs[i]);
+    auto& req = sampling_reqs[i];
+    req.sampling_result_tokens->insert(req.sampling_result_tokens->end(),
+                                       host_output_tokens_.begin() + req.logits_offset,
+                                       host_output_tokens_.begin() + req.logits_offset + req.sampling_token_num);
+    if (req.request_target != nullptr) {
+      auto it = req.request_target->find("logits");
+      if (it != req.request_target->end()) {
+        if (it->second.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
+          continue;
+        }
+      }
+    }
     if (!probs_output[i].empty()) {
-      PythonTensor& ret_tensor = (*sampling_reqs[i].response)["logits"];
+      PythonTensor& ret_tensor = (*req.response)["logits"];
       ret_tensor.shape = {probs_output[i].size()};
       ret_tensor.dtype = GetTypeString(TYPE_FP32);
       ret_tensor.data.resize(probs_output[i].size() * sizeof(float));
@@ -206,11 +227,10 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
 }
 
 Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
-                                        SamplingDevideParameter& sampling_devide_parameter, Stream& stream) {
+                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
   for (auto& sampling_req : sampling_reqs) {
     auto& logprobs_num = sampling_req.sampling_config->logprobs_num;
     if (logprobs_num == 0) {
-      std::unique_lock<std::mutex> lock(*sampling_req.output_mutex);
       sampling_req.logprobs->emplace_back();
       continue;
     }
@@ -219,10 +239,10 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
     std::vector<int64_t> token_ids(logprobs_num);
 #ifdef ENABLE_CUDA
     auto& offset = sampling_req.logits_offset;
-    auto& vocab_size = sampling_devide_parameter.vocab_size_padded;
-    float* device_temperatures_ptr = sampling_devide_parameter.device_temperatures == nullptr
+    auto& vocab_size = sampling_device_parameter.vocab_size_padded;
+    float* device_temperatures_ptr = sampling_device_parameter.device_temperatures == nullptr
                                          ? nullptr
-                                         : sampling_devide_parameter.device_temperatures + offset;
+                                         : sampling_device_parameter.device_temperatures + offset;
     CalcLogprobs(device_logits + (offset * vocab_size), device_temperatures_ptr, vocab_size, 1,
                  sampling_req.sampling_config->logprobs_num, logprobs.data(), token_ids.data());
 #endif
@@ -230,7 +250,6 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
     for (int logprobs_index = 0; logprobs_index < sampling_req.sampling_config->logprobs_num; logprobs_index++) {
       logprobs_output.push_back({token_ids[logprobs_index], logprobs[logprobs_index]});
     }
-    std::unique_lock<std::mutex> lock(*sampling_req.output_mutex);
     sampling_req.logprobs->emplace_back(logprobs_output);
   }
   return Status();
@@ -244,6 +263,14 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
   std::vector<float*> dst_ptr_vector;
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
     if (sampling_reqs[i].logits_custom_length > 0) {
+      if (sampling_reqs[i].request_target != nullptr) {
+        auto it = sampling_reqs[i].request_target->find("logits");
+        if (it != sampling_reqs[i].request_target->end()) {
+          if (it->second.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
+            continue;
+          }
+        }
+      }
       probs_output[i].resize(sampling_reqs[i].logits_custom_length);
       auto& input_tokens = *sampling_reqs[i].input_tokens;
       auto& vocab_size = batch_schedule_config_.max_vocab_size;
@@ -279,63 +306,66 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
 }
 
 // Transfer sampling parameters to the device
-void Sampler::SamplingParameterToDevide(bool use_top_k, bool use_top_p, bool use_temperature,
-                                        SamplingDevideParameter& sampling_devide_parameter, Stream& stream) {
+void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
+                                        SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
+  ProfileEvent::PushEvent("SamplingParameterToDevice", rank_);
   if (use_top_k) {
-    MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
+    MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
                 stream);
-    sampling_devide_parameter.device_topKs = device_topKs_;
-    sampling_devide_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
-    sampling_devide_parameter.device_curandstates = device_curandstates_;
+    sampling_device_parameter.device_topKs = device_topKs_;
+    sampling_device_parameter.device_output_tokens_ptrs = device_output_tokens_ptrs_;
+    sampling_device_parameter.device_curandstates = device_curandstates_;
   }
   if (use_top_p) {
-    MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_devide_parameter.bs, MEMCPY_HOST_TO_DEVICE,
+    MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
                 stream);
-    sampling_devide_parameter.device_topPs = device_topPs_;
+    sampling_device_parameter.device_topPs = device_topPs_;
   }
   if (use_temperature) {
-    MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_devide_parameter.bs,
+    MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_device_parameter.bs,
                 MEMCPY_HOST_TO_DEVICE, stream);
-    sampling_devide_parameter.device_temperatures = device_temperatures_;
+    sampling_device_parameter.device_temperatures = device_temperatures_;
   }
+  ProfileEvent::PopEvent();
 }
 
-Status Sampler::PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
-                                                SamplingDevideParameter& sampling_devide_parameter,
+Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
+                                                SamplingDeviceParameter& sampling_device_parameter,
                                                 float*& device_logits, Stream& stream) {
+  ProfileEvent::PushEvent("PrepareDeviceLogitsAndParameter", rank_);
   bool use_top_k = false;
   bool use_top_p = false;
   bool use_temperature = false;
-  sampling_devide_parameter.logits_softmax = false;
-  sampling_devide_parameter.do_sampling = false;
+  sampling_device_parameter.logits_softmax = false;
+  sampling_device_parameter.do_sampling = false;
+  const size_t max_logits_num =
+      batch_schedule_config_.max_batch_size * batch_schedule_config_.max_decode_tokens_per_req;
 
-  int req_index = 0;
-  for (auto& sampling_req : sampling_reqs) {
+  for (size_t req_index = 0; req_index < sampling_reqs.size(); ++req_index) {
+    const auto& sampling_req = sampling_reqs[req_index];
     SamplingConfig* sampling_config = sampling_req.sampling_config;
     STATUS_CHECK_RETURN(sampling_config->VerifyArgs());
-    sampling_devide_parameter.logits_softmax |= sampling_req.logits_custom_length > 0;
-    sampling_devide_parameter.do_sampling |= sampling_req.logits_custom_length == 0;
-    // If logits_custom_length is used, there are logits_custom_length logits that need to be calculated.
-    int sampling_bs = (sampling_req.logits_custom_length > 0 ? sampling_req.logits_custom_length : 1);
-    sampling_devide_parameter.bs += sampling_bs;
+    sampling_device_parameter.logits_softmax |= sampling_req.logits_custom_length > 0;
+    sampling_device_parameter.do_sampling |= sampling_req.logits_custom_length == 0;
+    // In cases of logits_custom_length and speculative decoding, a single request may correspond to multiple logits
+    sampling_device_parameter.bs += sampling_req.sampling_token_num;
     float* logits = sampling_req.logits_buf[rank_];
     if (device_logits != logits && device_logits != nullptr) {
       return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
     }
     device_logits = logits;
-    sampling_devide_parameter.vocab_size_padded = batch_schedule_config_.max_vocab_size;
-    size_t offset = sampling_req.logits_offset;
-    if (offset >= batch_schedule_config_.max_batch_size) {
-      return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_batch_size");
+    sampling_device_parameter.vocab_size_padded = batch_schedule_config_.max_vocab_size;
+    const size_t offset = sampling_req.logits_offset;
+    if (offset >= max_logits_num) {
+      return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_logits_num");
     }
-    host_offset_[req_index] = offset;
-    for (int sampling_index = 0; sampling_index < sampling_bs; sampling_index++) {
+    for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
       host_topKs_[offset + sampling_index] = sampling_config->topk;
       host_topPs_[offset + sampling_index] = sampling_config->topp;
       host_temperatures_[offset + sampling_index] = sampling_config->temperature;
     }
-    if (sampling_devide_parameter.max_topK < sampling_config->topk) {
-      sampling_devide_parameter.max_topK = sampling_config->topk;
+    if (sampling_device_parameter.max_topK < sampling_config->topk) {
+      sampling_device_parameter.max_topK = sampling_config->topk;
     }
     use_top_k |= sampling_config->topk > 1;
     use_top_p |= sampling_config->topp != 1.0f;
@@ -343,26 +373,30 @@ Status Sampler::PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sa
 
     const int vocab_size = batch_schedule_config_.max_vocab_size;
     if (sampling_config->repetition_penalty != 1.0f) {
-      ApplyRepetitionPenalty(logits + req_index * vocab_size, sampling_req.input_tokens, sampling_req.output_tokens,
-                             vocab_size, sampling_config->repetition_penalty, stream);
+      ApplyRepetitionPenalty(logits + req_index * vocab_size, sampling_req.input_tokens,
+                             sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
+                             stream);
     }
 
     const int input_tokens_size = sampling_req.input_tokens->size();
     if (sampling_config->no_repeat_ngram_size > 0) {
       NoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
-                             sampling_req.output_tokens, sampling_req.ngram_dict, vocab_size, stream);
+                             sampling_req.forwarding_tokens, sampling_req.ngram_dict, vocab_size, stream);
     } else if (sampling_config->encoder_no_repeat_ngram_size > 0) {
       EncoderNoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
-                                    input_tokens_size, sampling_req.output_tokens, sampling_req.ngram_dict, vocab_size,
-                                    stream);
+                                    input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
+                                    vocab_size, stream);
+    } else if (sampling_config->decoder_no_repeat_ngram_size > 0) {
+      DecoderNoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->decoder_no_repeat_ngram_size,
+                                    input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
+                                    vocab_size, stream);
     }
-
-    req_index++;
   }
 
   // top_p and temperature are applyed on the logits after softmax.
-  sampling_devide_parameter.logits_softmax |= use_top_p | use_temperature;
-  SamplingParameterToDevide(use_top_k, use_top_p, use_temperature, sampling_devide_parameter, stream);
+  sampling_device_parameter.logits_softmax |= use_top_p | use_temperature;
+  SamplingParameterToDevice(use_top_k, use_top_p, use_temperature, sampling_device_parameter, stream);
+  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -370,32 +404,34 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
   if (rank_ != 0) {
     return Status();
   }
+  ProfileEvent::PushEvent("Sampling", rank_);
 
   float* device_logits = nullptr;
-  SamplingDevideParameter sampling_devide_parameter;
-  STATUS_CHECK_RETURN(PrepareDevideLogitsAndParameter(sampling_reqs, sampling_devide_parameter, device_logits, stream));
+  SamplingDeviceParameter sampling_device_parameter;
+  STATUS_CHECK_RETURN(PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream));
 
-  SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_devide_parameter, stream);
+  SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_device_parameter, stream);
   // Apply softmax on logits.
-  if (sampling_devide_parameter.logits_softmax) {
+  if (sampling_device_parameter.logits_softmax) {
 #ifdef ENABLE_CUDA
-    CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::invokeAddBiasSoftMax<float>(
-        device_logits, nullptr, sampling_devide_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
-        sampling_devide_parameter.bs, 0, 1, sampling_devide_parameter.vocab_size_padded,
-        sampling_devide_parameter.vocab_size_padded, false, true, stream.Get()));
+    CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::InvokeAddBiasSoftMax<float>(
+        device_logits, nullptr, sampling_device_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
+        sampling_device_parameter.bs, 0, 1, sampling_device_parameter.vocab_size_padded,
+        sampling_device_parameter.vocab_size_padded, false, true, stream.Get()));
 #else
     KLLM_THROW("Softmax is not supported on NPU.");
 #endif
   }
   // Get the next tokens based on logits and the sampling parameters.
-  if (sampling_devide_parameter.do_sampling) {
+  if (sampling_device_parameter.do_sampling) {
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, device_output_tokens_, nullptr,
-                                                sampling_devide_parameter, nullptr, stream));
-    MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_devide_parameter.bs,
+                                                sampling_device_parameter, nullptr, stream));
+    MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_device_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
   }
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
+  ProfileEvent::PopEvent();
   return Status();
 }
 

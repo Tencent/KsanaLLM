@@ -14,35 +14,39 @@
 
 namespace ksana_llm {
 
-DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_config)
-    : BaseCacheManager<DirectCachedBlock, DirectCachedRequest>(cache_manager_config) {
+DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_config,
+                                       std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group)
+    : BaseCacheManager<DirectCachedBlock, DirectCachedRequest>(cache_manager_config, block_allocator_group) {
   cache_manager_config_ = cache_manager_config;
 }
 
 DirectCacheManager::~DirectCacheManager() { KLLM_LOG_DEBUG << "DirectCacheManager destroyed."; }
 
 void DirectCacheManager::InitializeCachedBlocks() {
-  size_t total_device_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
+  size_t total_device_block_num = block_allocator_group_->GetDeviceBlockAllocator()->GetFreeBlockNumber();
 
   for (size_t i = 0; i < total_device_block_num; ++i) {
     DirectCachedBlock* cached_block = CreateCachedBlock(i);
 
     // allocate memory block on every device.
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       std::vector<int> blocks;
-      GetBlockManager()->SetDeviceId(j);
-      GetBlockManager()->AllocateBlocks(1, blocks);
+      block_allocator_group_->GetDeviceBlockAllocator(j)->AllocateBlocks(1, blocks);
       cached_block->memory_block_ids[j] = blocks[0];
     }
     free_cached_blocks_.push(cached_block);
   }
-  KLLM_LOG_DEBUG << "DirectCacheManager initialized, device num:" << cache_manager_config_.tensor_para_size
+  KLLM_LOG_DEBUG << "DirectCacheManager initialized, device num:" << block_device_num_
                  << ", device block num:" << free_cached_blocks_.size()
-                 << ", host block num:" << GetBlockManager()->GetHostFreeBlockNumber();
+                 << ", host block num:" << block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber();
 }
 
-size_t DirectCacheManager::GetFutureBlockNumber() {
-  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetFutureBlockNumber();
+std::shared_ptr<BlockAllocatorGroupInterface> DirectCacheManager::GetBlockAllocatorGroup() const {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetBlockAllocatorGroup();
+}
+
+size_t DirectCacheManager::GetFutureFreeBlockNumber() {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetFutureFreeBlockNumber();
 }
 
 size_t DirectCacheManager::GetUsableBlockNumber() { return free_cached_blocks_.size(); }
@@ -53,16 +57,24 @@ size_t DirectCacheManager::GetHostFreeBlockNumber() {
   return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetHostFreeBlockNumber();
 }
 
-size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
+size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    KLLM_THROW(FormatStr("Get step block num of req error, req %d is not exist.", req_id));
+  }
+  const size_t block_token_num = cache_manager_config_.block_token_num;
+  const size_t total_require_block_num = (input_token_lens + block_token_num) / block_token_num;
+  return total_require_block_num <= it->second->cached_blocks.size()
+             ? 0
+             : total_require_block_num - it->second->cached_blocks.size();
+}
+
+size_t DirectCacheManager::GetRequestStepBlockNumberForOneNextToken(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
   }
-  return (it->second->output_token_num % cache_manager_config_.block_token_num == 0) ? 1 : 0;
-}
-
-size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
-  return GetRequestStepBlockNumber(req_id);
+  return ((it->second->kvcached_token_num + 1) % cache_manager_config_.block_token_num == 0) ? 1 : 0;
 }
 
 Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
@@ -82,7 +94,7 @@ Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
 
 DirectCachedBlock* DirectCacheManager::CreateEmptyCachedBlock() {
   DirectCachedBlock* cached_block = new DirectCachedBlock();
-  cached_block->memory_block_ids.resize(cache_manager_config_.tensor_para_size);
+  cached_block->memory_block_ids.resize(block_device_num_);
 
   return cached_block;
 }
@@ -97,13 +109,15 @@ DirectCachedBlock* DirectCacheManager::CreateCachedBlock(size_t block_id) {
 Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_num,
                                                  std::vector<std::vector<int>>& req_block_ids) {
   if (block_num > free_cached_blocks_.size()) {
-    return Status(RET_OUT_OF_MEMORY,
+    return Status(RET_OUT_OF_DEVICE_EMORY,
                   FormatStr("Allocate %d blocks for req %d error, no more free blocks.", block_num, req_id));
   }
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Allocate block for req %d error, req not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in AllocateRequestBlocks for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in AllocateRequestBlocks for req id %d error, is not exist.", req_id));
   }
 
   DirectCachedRequest* cached_request = it->second.get();
@@ -114,7 +128,7 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
     free_cached_blocks_.pop();
 
     // Fill memory block ids,
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       req_block_ids[j].push_back(cached_block->memory_block_ids[j]);
     }
 
@@ -143,37 +157,45 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
   cached_requests_.erase(it);
 }
 
-Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,
+Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
+                                               size_t shareable_kvcache_token_num,
                                                std::vector<std::vector<int>>& req_block_ids) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Update request token error, req %d is not found.", req_id));
+    KLLM_LOG_ERROR << "Error in UpdateRequestTokens for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in UpdateRequestTokens for req id %d error, is not exist.", req_id));
   }
+  it->second->kvcached_token_num = kvcached_token_ids.size();
 
-  it->second->output_token_num = token_ids.size();
   return Status();
 }
 
 Status DirectCacheManager::GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Get freeable block num of req error, req %d is not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in GetRequestFreeableBlockNum for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in GetRequestFreeableBlockNum for req id %d error, is not exist.", req_id));
   }
 
   block_num = it->second->cached_blocks.size();
   return Status();
 }
 
-Status DirectCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& block_num) {
+Status DirectCacheManager::GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Get needed block num of req error, req %d is not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in GetRequestNeededBlockNumForOneNextToken for req id " << req_id << " is not exist.";
+    return Status(
+        RET_RUNTIME_FAILED,
+        FormatStr("Error in GetRequestNeededBlockNumForOneNextToken for req id %d error, is not exist.", req_id));
   }
 
   block_num = it->second->cached_blocks.size();
 
   // Make sure there is enough blocks for next step.
-  block_num += GetRequestStepBlockNumber(req_id);
+  block_num += GetRequestStepBlockNumberForOneNextToken(req_id);
 
   return Status();
 }
@@ -182,13 +204,15 @@ Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
                                                std::vector<int>& swapped_memory_block_ids) {
   {
     if (!swapin_task_queue_.empty() || !swapin_cached_block_buffer_.empty() || !finish_swapin_request_.empty()) {
-      return Status(RET_RUNTIME, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
+      return Status(RET_RUNTIME_FAILED, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
     }
   }
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Swapout req %d error, req is not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in SwapoutRequestAsync for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in SwapoutRequestAsync for req id %d error, is not exist.", req_id));
   }
 
   // Note: here must from tail to head. If swap out failed, do not change anything.
@@ -203,16 +227,17 @@ Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
 
   free_block_num = 0;
   swapped_block_num = dev_swapout_blocks.size();
-  if (GetBlockManager()->GetHostFreeBlockNumber() < cache_manager_config_.tensor_para_size * swapped_block_num) {
-    return Status(RET_OUT_OF_MEMORY, FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.",
-                                               req_id, cache_manager_config_.tensor_para_size * swapped_block_num,
-                                               GetBlockManager()->GetHostFreeBlockNumber()));
+  if (block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber() < block_device_num_ * swapped_block_num) {
+    return Status(RET_OUT_OF_DEVICE_EMORY,
+                  FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.", req_id,
+                            block_device_num_ * swapped_block_num,
+                            block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber()));
   }
 
   std::vector<DirectCachedBlock*> host_swapout_blocks;
   for (size_t i = 0; i < dev_swapout_blocks.size(); ++i) {
     DirectCachedBlock* cached_block = CreateEmptyCachedBlock();
-    GetBlockManager()->AllocateHostBlocks(cache_manager_config_.tensor_para_size, cached_block->memory_block_ids);
+    block_allocator_group_->GetHostBlockAllocator()->AllocateBlocks(block_device_num_, cached_block->memory_block_ids);
     host_swapout_blocks.push_back(cached_block);
 
     // Append new cached block to buffer list.
@@ -232,12 +257,14 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
                                               std::vector<std::vector<int>>& req_block_ids,
                                               std::vector<int>& swapped_memory_block_ids) {
   if (!swapout_task_queue_.empty() || !swapout_cached_block_buffer_.empty() || !finish_swapout_request_.empty()) {
-    return Status(RET_RUNTIME, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
   }
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Swap in req %d error, req is not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in SwapinRequestAsync for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in SwapinRequestAsync for req id %d error, is not exist.", req_id));
   }
 
   std::vector<DirectCachedBlock*> swapin_host_blocks;
@@ -246,12 +273,12 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   }
 
   // Allocate block for next step.
-  size_t step_block_num = GetRequestStepBlockNumber(req_id);
+  size_t step_block_num = GetRequestStepBlockNumberForOneNextToken(req_id);
 
   // Check whether enough memory exist, do not change anything swapin failed.
   size_t swapin_block_num = swapin_host_blocks.size() + step_block_num;
   if (free_cached_blocks_.size() < swapin_block_num) {
-    return Status(RET_OUT_OF_MEMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
+    return Status(RET_OUT_OF_DEVICE_EMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
   }
   block_num = swapin_host_blocks.size();
 
@@ -275,7 +302,7 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
     free_cached_blocks_.pop();
 
     // Fill memory block ids,
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       req_block_ids[j].push_back(cached_block->memory_block_ids[j]);
     }
 
@@ -312,7 +339,9 @@ Status DirectCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Merge swapped req %d error, req is not exist.", req_id));
+    KLLM_LOG_ERROR << "Error in MergeSwapinRequest for req id " << req_id << " is not exist.";
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Error in MergeSwapinRequest for req id %d error, is not exist.", req_id));
   }
 
   // Note: must from begin to end.
@@ -321,7 +350,7 @@ Status DirectCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
     DirectCachedBlock* cb = it->second->cached_blocks[i];
 
     // Update internal memory block ids of unfilled block.
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       req_block_ids[j][i] = cb->memory_block_ids[j];
     }
   }
@@ -335,7 +364,7 @@ Status DirectCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
   return Status();
 }
 
-void DirectCacheManager::DestroySwapedRequest(int64_t req_id) {
+void DirectCacheManager::DestroySwappedRequest(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     return;
@@ -343,7 +372,7 @@ void DirectCacheManager::DestroySwapedRequest(int64_t req_id) {
 
   DirectCachedRequest* cached_request = it->second.get();
   for (DirectCachedBlock* cb : cached_request->cached_blocks) {
-    GetBlockManager()->FreeHostBlocks(cb->memory_block_ids);
+    block_allocator_group_->GetHostBlockAllocator()->FreeBlocks(cb->memory_block_ids);
     delete cb;
   }
 

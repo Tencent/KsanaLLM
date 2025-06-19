@@ -1,31 +1,32 @@
 /*
- * Modified by Neural Magic
- * Copyright (C) Marlin.2024 Elias Frantar
+ * Copyright 2025 vLLM Team
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Adapted from
+ * [vLLM Project]
+ * https://github.com/vllm-project/vllm/tree/65334ef3b9e4fd32ebc5c4e512debc25d5025488/csrc/quantization/gptq_marlin
  */
 
-/*
- * Adapted from https://github.com/vllm-project/vllm
- */
-
-#include "csrc/kernels/nvidia/gptq_marlin/awq_marlin_repack.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin.cuh"
-#include "csrc/kernels/nvidia/gptq_marlin/marlin_params.h"
+#include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
+#include "csrc/utils/nvidia/cuda_utils.h"
+#include "csrc/utils/nvidia/string_utils.h"
+
+using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace nvidia {
-
 namespace marlin {
 
 template <int const num_threads, int const num_bits>
@@ -37,7 +38,7 @@ __global__ void awq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weight
   int n_tiles = size_n / tile_n_size;
   int block_k_tiles = div_ceil(k_tiles, gridDim.x);
 
-  int start_k_tile = blockIdx.x * block_k_tiles;
+  auto start_k_tile = blockIdx.x * block_k_tiles;
   if (start_k_tile >= k_tiles) {
     return;
   }
@@ -74,8 +75,8 @@ __global__ void awq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weight
     int4* sh_ptr = sh + stage_size * pipe;
 
     if (threadIdx.x < stage_size) {
-      int k_id = threadIdx.x / stage_n_threads;
-      int n_id = threadIdx.x % stage_n_threads;
+      auto k_id = threadIdx.x / stage_n_threads;
+      auto n_id = threadIdx.x % stage_n_threads;
 
       int first_k = k_tile_id * tile_k_size;
 
@@ -92,8 +93,8 @@ __global__ void awq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weight
       return;
     }
 
-    int warp_id = threadIdx.x / 32;
-    int th_id = threadIdx.x % 32;
+    auto warp_id = threadIdx.x / 32;
+    auto th_id = threadIdx.x % 32;
 
     if (warp_id >= 4) {
       return;
@@ -194,8 +195,6 @@ __global__ void awq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weight
   }
 }
 
-}  // namespace marlin
-
 #define CALL_IF(NUM_BITS)                                                                                      \
   else if (num_bits == NUM_BITS) {                                                                             \
     cudaFuncSetAttribute(marlin::awq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS>,                   \
@@ -209,14 +208,22 @@ void awq_marlin_repack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, int64_
   int blocks = 0, max_shared_mem = 0;
   cudaDeviceGetAttribute(&blocks, cudaDevAttrMultiProcessorCount, rank);
   cudaDeviceGetAttribute(&max_shared_mem, cudaDevAttrMaxSharedMemoryPerBlockOptin, rank);
+  KLLM_KERNEL_CHECK(max_shared_mem > 0);
 
   if (false) {
   }
   CALL_IF(4)
   CALL_IF(8)
   else {
+    KLLM_KERNEL_CHECK_WITH_INFO(false, fmtstr("Unsupported repack config: num_bits = {}", num_bits));
   }
 }
 
+std::vector<int64_t> awq_marlin_repack_meta(int64_t size_k, int64_t size_n, int64_t num_bits) {
+  int const pack_factor = 32 / num_bits;
+  return {size_k / marlin::tile_size, size_n * marlin::tile_size / pack_factor};
+}
+
+}  // namespace marlin
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -3,7 +3,6 @@
 #pragma once
 
 #include "ksana_llm/runtime/infer_request.h"
-#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
@@ -11,10 +10,9 @@ namespace ksana_llm {
 class StopChecker {
  public:
   // Do increment stop strings check during generation phase to do early stop
-  bool CheckIncrementalStopStrings(const std::shared_ptr<InferRequest> req,
-    const std::shared_ptr<Tokenizer> tokenizer);
+  bool CheckIncrementalStopStrings(const std::shared_ptr<InferRequest> req);
 
-    void CheckCompleteStopStrings(const std::shared_ptr<InferRequest> req, const std::shared_ptr<Tokenizer> tokenizer);
+  void CheckCompleteStopStrings(const std::shared_ptr<InferRequest> req);
 };
 
 }  // namespace ksana_llm

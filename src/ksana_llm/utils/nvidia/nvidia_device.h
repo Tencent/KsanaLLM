@@ -75,6 +75,9 @@ template <>
 void EventRecordT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA> event, StreamT<DEVICE_TYPE_NVIDIA> stream);
 
 template <>
+bool EventQueryT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA> event);
+
+template <>
 void StreamWaitEventT<DEVICE_TYPE_NVIDIA>(StreamT<DEVICE_TYPE_NVIDIA> stream, EventT<DEVICE_TYPE_NVIDIA> event);
 
 template <>

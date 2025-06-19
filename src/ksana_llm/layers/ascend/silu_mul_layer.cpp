@@ -59,6 +59,9 @@ Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, std::share
 
 template <typename T>
 Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (input_tensors.size() != 2) {
+    KLLM_THROW(fmt::format("SiluMulLayer only support 2 input tensors, but got {}", input_tensors.size()));
+  }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
   void* silu_input_buf_ptr = input_tensors[0].GetPtr<void>();
@@ -68,11 +71,11 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
       ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
   atb_op_executor_.SetInputTensor(silu_input_buf_ptr, input_tensors[0].shape,
-                                  static_cast<aclDataType>(input_tensors[0].dtype));
+                                  static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
   atb_op_executor_.SetInputTensor(gated_weight_buf_ptr, input_tensors[1].shape,
-                                  static_cast<aclDataType>(input_tensors[1].dtype));
+                                  static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
   atb_op_executor_.SetOutputTensor(silu_output_buf_ptr, output_tensors[0].shape,
-                                   static_cast<aclDataType>(output_tensors[0].dtype));
+                                   static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }

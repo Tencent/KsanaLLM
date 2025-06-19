@@ -5,7 +5,6 @@
 
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/base/base_sampling.h"
-#include "ksana_llm/samplers/beam_search/beam_search_sampling.h"
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
@@ -15,17 +14,17 @@ namespace ksana_llm {
 
 class Sampler {
  public:
-  Sampler(const BatchSchedulerConfig& batch_scheduler_config, int rank, std::shared_ptr<Context> context);
+  Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context);
   ~Sampler();
   Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
   Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
-                                 SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
+                                 SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
-  void SamplingParameterToDevide(bool use_top_k, bool use_top_p, bool use_temperature,
-                                 SamplingDevideParameter& sampling_devide_parameter, Stream& stream);
+  void SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
+                                 SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
-  Status PrepareDevideLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
-                                         SamplingDevideParameter& sampling_devide_parameter, float*& device_logits,
+  Status PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
+                                         SamplingDeviceParameter& sampling_device_parameter, float*& device_logits,
                                          Stream& stream);
 
   // Copies the probabilities from the logits buffer to the output vector for each sampling request.
@@ -41,7 +40,7 @@ class Sampler {
   void GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
                  NgramDict* ngram_dict);
 
-  void BanRepeatTokens(float* logits, const int ngram_size, const int input_tokens_size, const int cur_output_size,
+  void BanRepeatTokens(float* logits, const int ngram_size, const int cur_output_size,
                        const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
                        Stream& stream);
 
@@ -53,13 +52,15 @@ class Sampler {
                                      const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
                                      Stream& stream);
 
+  void DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
+                                     const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
+                                     Stream& stream);
+
  private:
-  BatchSchedulerConfig batch_schedule_config_;
-  int rank_;
+  const BatchSchedulerConfig batch_schedule_config_;
+  const int rank_;
   TopkSampling* topk_sampling_{nullptr};
-  BeamSearchSampling beam_search_sampling_;
-  int device_buffer_block_id_{-1};
-  void* device_buffer_;
+  void* device_buffer_ = nullptr;
   uint32_t* device_output_tokens_;
   uint32_t* device_offset_;
   int* device_topKs_;
@@ -70,9 +71,7 @@ class Sampler {
   float* device_prob_;
   float** device_prob_ptrs_;
   RandState* device_curandstates_{nullptr};
-
   std::vector<int> host_output_tokens_;
-  std::vector<uint32_t> host_offset_;
   std::vector<int> host_topKs_;
   std::vector<float> host_topPs_;
   std::vector<float> host_temperatures_;

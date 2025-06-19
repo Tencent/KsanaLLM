@@ -66,6 +66,12 @@ void GetDeviceCountT(int* count) {}
 template <int T>
 void EventRecordT(EventT<T> event, StreamT<T> stream) {}
 
+// Query event status
+template <int T>
+bool EventQueryT(EventT<T> event) {
+  return true;
+}
+
 // Block stream until event finished.
 template <int T>
 void StreamWaitEventT(StreamT<T> stream, EventT<T> event);

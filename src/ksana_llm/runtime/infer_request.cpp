@@ -6,8 +6,8 @@
 
 #include <atomic>
 #include <limits>
+#include <sstream>
 #include <vector>
-#include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
@@ -24,7 +24,6 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       input_tokens(request->input_tokens),
       input_refit_embedding(request->input_refit_embedding),
       output_tokens(std::get<0>(request->output_group[index])),
-      complete_output_tokens(request->input_tokens),
       logprobs(std::get<1>(request->output_group[index])),
       request_target(request->request_target),
       response(request->response),
@@ -37,15 +36,52 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       aborted(request->aborted),
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
-      padded_size(request->padded_size),
       beam_search_group(request->beam_search_group),
       is_cudagraph_capture_request(request->is_cudagraph_capture_request),
       span_context(request->span_context),
       timestamp_in_ms(request->timestamp_in_ms),
       req_ctx(request->req_ctx),
-      req_fsm(request->req_fsm) {}
+      req_fsm(request->req_fsm),
+      kv_comm_request_id(request->kv_comm_request_id),
+      kv_comm_group_key(request->kv_comm_group_key) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
+
+std::string InferRequest::PrintKVBlockIds(bool print_details) const {
+  std::ostringstream ss;
+  ss << ", kv_cache_blocks_size:" << kv_cache_blocks.size() << ", kv_cache_blocks: {";
+  for (size_t i = 0; i < kv_cache_blocks.size(); i++) {
+    const auto &blocks = kv_cache_blocks[i];
+    ss << "," << i << "=size(" << kv_cache_blocks[i].size() << ")";
+    if (print_details) {
+      ss << "{ ";
+      for (auto blk_id : blocks) {
+        ss << blk_id << ", ";
+      }
+      ss << "}, ";
+    }
+  }
+  ss << "}";
+  return ss.str();
+}
+
+std::string InferRequest::ToString(bool print_details) const {
+  std::ostringstream oss;
+  oss << " req(req_id:" << req_id << ", step:" << step << ", sampling_token_num:" << sampling_token_num
+      << ", kv_cached_token_num:" << kv_cached_token_num << ", mtp_kv_cached_token_num:" << mtp_kv_cached_token_num
+      << ", prefix_cache_len:" << prefix_cache_len << ", input_tokens_size:" << input_tokens.size()
+      << ", output_tokens_size:" << output_tokens.size() << ", forwarding_tokens_size:" << forwarding_tokens.size()
+      << ", draft_tokens_size:" << draft_tokens.size() << ", accepted_tokens_size:" << accepted_tokens.size()
+      << ", generated_token:" << generated_token << PrintKVBlockIds(print_details) << ", swap_pending:" << swap_pending
+      << ", finished:" << finished << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString()
+      << " ) ";
+  return oss.str();
+}
+
+std::ostream &operator<<(std::ostream &os, const InferRequest &req) {
+  os << req.ToString();
+  return os;
+}
 
 void InferRequest::Notify() {
   for (size_t i = 0; i < req_group.size(); i++) {
@@ -96,14 +132,20 @@ void InferRequest::NotifyStep() {
   }
 }
 
-std::vector<float *> InferRequest::GetLogitsPtr() { return model_instance->GetLogitsPtr(); }
+std::vector<int> InferRequest::GetVerifiedTokens() {
+  std::vector<int> tokens = forwarding_tokens;
+  tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num);
+  tokens.insert(tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+  tokens.emplace_back(generated_token);
+  return tokens;
+}
 
 std::vector<std::vector<void *>> InferRequest::GetBlockPtrs() {
   std::vector<std::vector<void *>> block_ptrs;
   for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
     std::vector<void *> block_ptr(kv_cache_blocks[rank].size());
-    GetBlockManager()->SetDeviceId(rank);
-    GetBlockManager()->GetBlockPtrs(kv_cache_blocks[rank], block_ptr);
+    cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
+                                                                                         block_ptr);
     block_ptrs.push_back(block_ptr);
   }
   return block_ptrs;

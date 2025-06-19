@@ -2,11 +2,9 @@
 #
 # ==============================================================================
 
-import json
 import os
 import sys
 
-from glob import glob
 from transformers import AutoConfig
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel
 
@@ -17,7 +15,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
-from plugin_utils import free_cache, load_safetensors
+from plugin_utils import free_cache, load_safetensors, get_weight_map
 
 
 class VITModel:
@@ -40,16 +38,8 @@ class VITModel:
                                                                     attn_implementation="flash_attention_2",
                                                                     torch_dtype=precision)
 
-        # read weight map
-        weight_map_json = glob(os.path.join(model_path, "*index.json"))
-        assert len(weight_map_json) == 1
-        with open(weight_map_json[0]) as file:
-            weight_map_files = json.load(file)
-        weight_map_files = weight_map_files["weight_map"]
-        # get visual weight files
-        filtered_values = {value for key, value in weight_map_files.items() if "visual." in key}
-        weight_map_files = list(filtered_values)
         # read weight
+        weight_map_files = get_weight_map(model_path, "visual.")
         visual_weights = {}
         for weight_map_file in weight_map_files:
             weight_file = os.path.join(model_path, weight_map_file)

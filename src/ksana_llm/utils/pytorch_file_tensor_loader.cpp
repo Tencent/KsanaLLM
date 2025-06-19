@@ -6,7 +6,8 @@
 
 namespace ksana_llm {
 // Constructor of PytorchFileTensorLoader that takes a file name as input
-PytorchFileTensorLoader::PytorchFileTensorLoader(const std::string& file_name) : BaseFileTensorLoader(file_name) {
+PytorchFileTensorLoader::PytorchFileTensorLoader(const std::string& file_name, const bool load_bias)
+    : BaseFileTensorLoader(file_name, load_bias) {
   // Check if the file name has a ".bin" extension
   if (file_name_.length() > 4) {
     if (file_name_.substr(file_name_.length() - 4) == ".bin") {
@@ -34,8 +35,11 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
 
   for (auto& item : state_dict) {
     std::string tensor_name = py::str(item.first);
+    if (!load_bias_ && tensor_name.find(".bias") != std::string::npos) {
+      continue;
+    }
     tensor_name_list_.push_back(tensor_name);
-    KLLM_LOG_DEBUG << "read " << tensor_name << std::endl;
+    KLLM_LOG_DEBUG << "PytorchFileTensorLoader read: " << tensor_name << " finished.";
     py::object value_obj = py::reinterpret_borrow<py::object>(item.second);
     pytorch_tensor_map_[tensor_name] = THPVariable_Unpack(value_obj.ptr());
   }

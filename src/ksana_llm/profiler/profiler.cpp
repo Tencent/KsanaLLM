@@ -113,8 +113,9 @@ void Profiler::InitMetrics() {
   std::shared_ptr<opentelemetry::metrics::MeterProvider> provider(std::move(u_provider));
   opentelemetry::metrics::Provider::SetMeterProvider(provider);
   // provider = opentelemetry::metrics::Provider::GetMeterProvider();
-  auto meter = opentelemetry::metrics::Provider::GetMeterProvider()->GetMeter("ksana_inference_metrics", "1.2.0");
+  auto meter = opentelemetry::metrics::Provider::GetMeterProvider()->GetMeter("ksana_inference_metrics", SCOPE_VERSION);
 
+  // Step 4: When creating the metrics report, you should consider using a Counter or a Histogram.
   if (metrics_.find(kForwardReqTotalNum) != metrics_.end()) {
     monitor_.call.forward_req_total_num = meter->CreateUInt64Counter(
         opentelemetry::v1::nostd::string_view{kForwardReqTotalNum.data(), kForwardReqTotalNum.size()});
@@ -217,11 +218,16 @@ void Profiler::InitMetrics() {
     monitor_.call.metric_output_token_num = meter->CreateUInt64Histogram(
         opentelemetry::v1::nostd::string_view{kOutputTokenNum.data(), kOutputTokenNum.size()});
   }
+
+  if (metrics_.find(kZeroOutputTokenNum) != metrics_.end()) {
+    monitor_.call.metric_zero_output_token_num = meter->CreateUInt64Counter(
+        opentelemetry::v1::nostd::string_view{kZeroOutputTokenNum.data(), kZeroOutputTokenNum.size()});
+  }
 }
 
 opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> Profiler::GetMeter(std::string meter_name) {
   auto provider = opentelemetry::metrics::Provider::GetMeterProvider();
-  return provider->GetMeter(meter_name, "1.2.0");
+  return provider->GetMeter(meter_name, SCOPE_VERSION);
 }
 
 void Profiler::CleanupMetrics() {

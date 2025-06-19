@@ -8,6 +8,8 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <nvml.h>
+#include <chrono>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,6 +38,8 @@ constexpr int32_t DEFAULT_CUDA_QUARTER_WARP_SIZE = 8;
 constexpr int32_t DEFAULT_CUDA_ONE_EIGHTH_WARP_SIZE = 4;
 constexpr int32_t DEFAULT_CUDA_ONE_SIXTEENTH_WARP_SIZE = 2;
 constexpr int32_t DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE = 1;
+
+static const char* GetErrorCode(nvmlReturn_t error) { return nvmlErrorString(error); }
 
 static const char* GetErrorCode(cudaError_t error) { return cudaGetErrorString(error); }
 
@@ -128,6 +132,10 @@ void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val = 1.0f, co
 template <typename T_INPUT, typename T_STEP>
 void InvokeRange(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step, cudaStream_t stream);
 
+template <typename T>
+void ResetGPUBufferWithStep(T* data_ptr, size_t n_elems, const float max_val = 1.0f, const float min_val = -1.0f,
+                            const float val_step = 0.000001f);
+
 typedef struct __align__(4) {
   half x, y, z, w;
 } half4;
@@ -153,6 +161,37 @@ struct PackTypeAlign<__nv_bfloat16> {
 };
 #endif
 
+#ifdef ENABLE_BF16
+typedef struct __CUDA_ALIGN__(4) {
+  __nv_bfloat16 array[2];
+} __nv_bfloat16_2;
+
+typedef struct __CUDA_ALIGN__(8) {
+  __nv_bfloat162 x, y;
+} __nv_bfloat162_2_xy;
+
+typedef struct __CUDA_ALIGN__(8) {
+  // __nv_bfloat16 array[4];
+  __nv_bfloat16 x, y, z, w;
+} __nv_bfloat164;
+
+typedef struct __CUDA_ALIGN__(8) {
+  __nv_bfloat162 array[2];
+} __nv_bfloat162_2;
+
+typedef struct __CUDA_ALIGN__(16) {
+  __nv_bfloat16 array[8];
+} __nv_bfloat168;
+
+typedef struct __CUDA_ALIGN__(16) {
+  __nv_bfloat162 array[4];
+} __nv_bfloat162_4;
+
+typedef struct __CUDA_ALIGN__(32) {
+  __nv_bfloat16 array[16];
+} __nv_bfloat1616;
+#endif
+
 template <typename T>
 struct ElemsNum;
 template <>
@@ -175,6 +214,10 @@ template <>
 struct ElemsNum<half2> {
   static constexpr int32_t value = 2;
 };
+template <>
+struct ElemsNum<half4> {
+  static constexpr int32_t value = 4;
+};
 #ifdef ENABLE_BF16
 template <>
 struct ElemsNum<__nv_bfloat16> {
@@ -183,6 +226,14 @@ struct ElemsNum<__nv_bfloat16> {
 template <>
 struct ElemsNum<__nv_bfloat162> {
   static constexpr int32_t value = 2;
+};
+template <>
+struct ElemsNum<__nv_bfloat164> {
+  static constexpr int32_t value = 4;
+};
+template <>
+struct ElemsNum<__nv_bfloat168> {
+  static constexpr int32_t value = 8;
 };
 #endif
 
@@ -198,8 +249,16 @@ struct PackType<half, 2> {
   using type = half2;
 };
 template <>
+struct PackType<half, 4> {
+  using type = half4;
+};
+template <>
 struct PackType<float, 2> {
   using type = float2;
+};
+template <>
+struct PackType<float, 4> {
+  using type = float4;
 };
 template <>
 struct PackType<int8_t, 2> {
@@ -286,6 +345,14 @@ inline int getMaxSharedMemoryPerBlockOptin() {
   return max_shared_memory_per_block;
 }
 
+inline int getMaxThreadPerBlock() {
+  int device_id;
+  int max_threads_per_block;
+  CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
+  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&max_threads_per_block, cudaDevAttrMaxThreadsPerBlock, device_id));
+  return max_threads_per_block;
+}
+
 /// Get the memory info
 /// \return The free and total amount of memory in bytes
 inline std::tuple<size_t, size_t> getDeviceMemoryInfo(bool const useUvm) {
@@ -298,6 +365,49 @@ inline int getDeviceCount() {
   int count = 0;
   CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&count));
   return count;
+}
+
+uint32_t GetNvLinkVersion(uint32_t device_id, uint32_t link_idx);
+
+template <typename Func>
+float measureCPUExecutionTime(Func&& func, int warmups = 10, int iterations = 100) {
+  for (int i = 0; i < warmups; ++i) {
+    func();
+  }
+
+  auto start = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < iterations; ++i) {
+    func();
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+
+  return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / iterations;
+}
+
+template <typename Func>
+float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100) {
+  cudaEvent_t begin, end;
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&begin));
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&end));
+
+  for (int i = 0; i < warmups; ++i) {
+    func();
+  }
+
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(begin, stream));
+  for (int i = 0; i < iterations; ++i) {
+    func();
+  }
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(end, stream));
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(end));
+
+  float cost_time;
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&cost_time, begin, end));
+
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(begin));
+  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(end));
+
+  return cost_time / iterations;
 }
 
 }  // namespace utils

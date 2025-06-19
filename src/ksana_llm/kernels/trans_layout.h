@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 

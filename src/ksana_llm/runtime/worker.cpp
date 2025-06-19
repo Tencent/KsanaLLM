@@ -7,26 +7,78 @@
 #include <memory>
 
 #include "ksana_llm/profiler/reporter.h"
-#include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
-Status Worker::Forward(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight, InferStage stage,
-                       std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+Status Worker::Forward(size_t schedule_id, std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
+                       InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue, RunMode run_mode) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
   opentelemetry::trace::StartSpanOptions options;
 
-  return model->Forward(weight, forward_reqs, epilogue);
+  return model->Forward(schedule_id, weight, forward_reqs, epilogue, run_mode);
 }
 
-std::future<Status> Worker::ForwardAsync(std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                                         InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
-  return threadpool_->Submit(
-      [=, &forward_reqs]() -> Status { return Forward(model, weight, stage, forward_reqs, epilogue); });
+// This function is designed to be run by multiple threads in parallel
+void Worker::ThreadLoop() {
+  while (running_) {
+    WorkerTask task;
+
+    {
+      std::unique_lock<std::mutex> lock(task_mutex_);
+      task_cv_.wait(lock, [this] { return !task_queue_.empty(); });
+
+      task = std::move(task_queue_.front());
+      task_queue_.pop();
+    }
+
+    switch (task.type) {
+      case WorkerTask::TaskType::kForward: {
+        Status status = Forward(task.schedule_id, task.model, task.weight, task.stage, *task.forward_reqs,
+                                task.epilogue, task.run_mode);
+        task.promise.set_value(status);
+        break;
+      }
+      case WorkerTask::TaskType::kSampling: {
+        Status status = Sampling(task.sampler, *task.sampling_reqs);
+        task.promise.set_value(status);
+        break;
+      }
+      case WorkerTask::TaskType::kStop: {
+        running_ = false;
+        break;
+      }
+    }
+  }
+}
+
+std::future<Status> Worker::ForwardAsync(size_t schedule_id, std::shared_ptr<BaseModel> model,
+                                         std::shared_ptr<BaseWeight> weight, InferStage stage,
+                                         std::vector<ForwardRequest>& forward_reqs, bool epilogue, RunMode run_mode) {
+  std::promise<Status> promise;
+  std::future<Status> future = promise.get_future();
+
+  WorkerTask task;
+  task.type = WorkerTask::TaskType::kForward;
+  task.promise = std::move(promise);
+  task.schedule_id = schedule_id;
+  task.model = model;
+  task.weight = weight;
+  task.stage = stage;
+  task.forward_reqs = &forward_reqs;
+  task.epilogue = epilogue;
+  task.run_mode = run_mode;
+
+  {
+    std::lock_guard<std::mutex> lock(task_mutex_);
+    task_queue_.push(std::move(task));
+    task_cv_.notify_one();  // Notify one thread is sufficient as we only need one thread to handle this task
+  }
+
+  return future;
 }
 
 Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs) {
@@ -37,21 +89,35 @@ Status Worker::Sampling(std::shared_ptr<Sampler> sampler, std::vector<SamplingRe
 
 std::future<Status> Worker::SamplingAsync(std::shared_ptr<Sampler> sampler,
                                           std::vector<SamplingRequest>& sampling_reqs) {
-  return threadpool_->Submit([=, &sampling_reqs]() -> Status { return Sampling(sampler, sampling_reqs); });
+  std::promise<Status> promise;
+  std::future<Status> future = promise.get_future();
+
+  WorkerTask task;
+  task.type = WorkerTask::TaskType::kSampling;
+  task.promise = std::move(promise);
+  task.sampler = sampler;
+  task.sampling_reqs = &sampling_reqs;
+
+  {
+    std::lock_guard<std::mutex> lock(task_mutex_);
+    task_queue_.push(std::move(task));
+    task_cv_.notify_one();  // Notify one thread is sufficient as we only need one thread to handle this task
+  }
+
+  return future;
 }
 
-WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pipeline_parallel_size, std::shared_ptr<Context> context)
-    : tensor_parallel_size_(tensor_parallel_size), pipeline_parallel_size_(pipeline_parallel_size) {
-  threadpool_ = std::make_shared<ThreadPool>(tensor_parallel_size_ * pipeline_parallel_size_);
-  threadpool_->Start();
-
-  workers_.resize(tensor_parallel_size_ * pipeline_parallel_size_);
+WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pp_batch_num, std::shared_ptr<Context> context)
+    : tensor_parallel_size_(tensor_parallel_size) {
+  workers_.resize(tensor_parallel_size_);
   for (size_t worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
-    workers_[worker_id].reset(new Worker(worker_id, threadpool_, context));
+    workers_[worker_id].reset(new Worker(worker_id, pp_batch_num, context));
   }
 }
 
-WorkerGroup::~WorkerGroup() { threadpool_->Stop(); }
+WorkerGroup::~WorkerGroup() {
+  // Worker destructor will handle thread cleanup
+}
 
 std::shared_ptr<Worker> WorkerGroup::GetWorker(int rank) {
   if (rank < 0 || rank >= static_cast<int>(workers_.size())) {

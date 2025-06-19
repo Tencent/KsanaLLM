@@ -26,9 +26,9 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   //   0: output [token_num, hidden_size]
   // Note: when bias is provided, compute layernorm, otherwise compute rmsnorm.
   const void* bias = input_tensors.size() > 2 ? input_tensors[2].GetPtr<void>() : nullptr;
-  InvokeLayerNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), bias,
-                     rms_norm_eps_, input_tensors[0].shape[0], input_tensors[0].shape[1],
-                     output_tensors[0].GetPtr<void>(), context_->GetComputeStreams()[rank_].Get());
+  InvokeLayerNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), bias, rms_norm_eps_,
+                     input_tensors[0].shape[0], input_tensors[0].shape[1], output_tensors[0].GetPtr<void>(),
+                     context_->GetComputeStreams()[rank_].Get());
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();

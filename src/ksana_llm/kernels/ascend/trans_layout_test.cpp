@@ -1,11 +1,13 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#include "ksana_llm/utils/device_types.h"
 #include "test.h"
 
 #include "3rdparty/half/include/half.hpp"
-#include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/kernels/trans_layout.h"
+#include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/tensor.h"
 
@@ -27,17 +29,12 @@ class TransLayoutTest : public testing::Test {
     Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
-
-    block_manager = new BlockManager(block_manager_config, context);
-    block_manager->PreAllocateBlocks();
-    SetBlockManager(block_manager);
   }
 
-  void TearDown() override { delete block_manager; }
+  void TearDown() override {}
 
  protected:
   ModelConfig model_config;
-  BlockManager* block_manager = nullptr;
 
   std::shared_ptr<Context> context{nullptr};
   int default_rank{0};
@@ -52,8 +49,7 @@ TEST_F(TransLayoutTest, CommonTest) {
   // and format type change from ND to NZ.
   std::vector<std::vector<size_t>> shapes = {{32, 64}, {32, 32, 64}};
   for (const auto& shape : shapes) {
-    Tensor input_dev_tensor;
-    CreateTensor(input_dev_tensor, shape, TYPE_FP16, default_rank, MemoryDevice::MEMORY_DEVICE);
+    Tensor input_dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, shape, default_rank);
     std::vector<half_float::half> input_host(input_dev_tensor.GetElementNumber(), static_cast<half_float::half>(0.f));
     std::vector<half_float::half> output_host(input_dev_tensor.GetElementNumber(), static_cast<half_float::half>(0.f));
 

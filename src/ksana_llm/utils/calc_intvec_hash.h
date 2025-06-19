@@ -20,9 +20,7 @@ inline size_t CalcIntVecHash(const int* start, size_t len) {
 
 // Custom hash function
 struct TokensHash {
-  size_t operator()(const std::vector<int>& tokens) const {
-    return CalcIntVecHash(tokens.data(), tokens.size());
-  }
+  size_t operator()(const std::vector<int>& tokens) const { return CalcIntVecHash(tokens.data(), tokens.size()); }
 };
 
 // Custom comparison function

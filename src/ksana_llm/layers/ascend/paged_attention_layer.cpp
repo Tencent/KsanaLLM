@@ -5,7 +5,6 @@
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/ascend/common.h"
 
 namespace ksana_llm {
@@ -41,7 +40,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   //   0: paged_attention_output shape: [std::max(max_batch_size * vocab_size, max_token_num * hidden_units * 3)]
   void* output = output_tensors[0].GetPtr<void>();
   void* qkv_tensor = input_tensors[0].GetPtr<void>();
-  int64_t hidden_units = input_tensors[0].shape[1] / 3;
+  int64_t hidden_units = this->num_heads_ * this->head_size_;
   int64_t batch_size = input_tensors[7].shape[0];
   output_tensors[0].shape = {static_cast<uint64_t>(batch_size), static_cast<uint64_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[0].dtype;

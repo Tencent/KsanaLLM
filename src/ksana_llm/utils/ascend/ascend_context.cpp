@@ -39,7 +39,7 @@ void AscendContextExtension<T>::Initialize() {
   InitHcclParam();
 
   // reset device id
-  ACL_CHECK(aclrtSetDevice(base_ptr_->defalt_device_num_));
+  ACL_CHECK(aclrtSetDevice(base_ptr_->defalt_device_id_));
 }
 
 template <int T>

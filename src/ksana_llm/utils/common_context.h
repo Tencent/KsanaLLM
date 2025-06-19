@@ -5,6 +5,7 @@
 
 #include <set>
 #include <vector>
+
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/environment.h"
 
@@ -20,12 +21,11 @@ struct ExtensionTypeTraits {
 template <int T>
 class ContextT {
  public:
-  ContextT(const int tensor_parallel_size, const int pipeline_parallel_size);
+  explicit ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size);
   ~ContextT();
 
-  int GetTensorParallelSize() { return tensor_parallel_size_; }
-
-  int GetPipeLineParallelSize() { return pipeline_parallel_size_; }
+  size_t GetTensorParallelSize() { return tensor_parallel_size_; }
+  size_t GetAttnDataParallelSize() { return attn_data_parallel_size_; }
 
   inline bool IsRunContextDecodeAndDecodeSerially() { return is_contextdecode_and_decode_run_serially_; }
 
@@ -51,6 +51,11 @@ class ContextT {
   // Whether current node is master node.
   bool IsChief() const;
 
+  bool IsExpertParallelStandalone() const;
+  bool IsExpertParallelChief() const;
+  size_t GetExpertParallelWorldSize() { return expert_parallel_config_.expert_world_size; }
+  size_t GetExpertParallelExpertNodeRank() { return expert_parallel_config_.expert_node_rank; }
+
  public:
   friend class ExtensionTypeTraits<T>::value_type;
   typename ExtensionTypeTraits<T>::value_type* ext = nullptr;
@@ -61,9 +66,9 @@ class ContextT {
 
  private:
   int device_num_{0};
-  int tensor_parallel_size_{0};
-  int pipeline_parallel_size_{0};
-  const int defalt_device_num_{0};
+  size_t tensor_parallel_size_{0};
+  size_t attn_data_parallel_size_{0};
+  const int defalt_device_id_{0};
   int driver_version_;
   // if true, only one thread execute context_decode/decode and context_decode decode run in sync
   // TODO(karlluo): load from environment
@@ -81,12 +86,17 @@ class ContextT {
 
   // pipeline config.
   PipelineConfig pipeline_config_;
+  ExpertParallelConfig expert_parallel_config_;
 
   // single node.
   bool is_standalone_ = false;
+  bool is_expert_standalone_ = false;
 
   // Single node or master node of distributed model
   bool is_chief_ = false;
+
+  // Single node or master node of expert parallel mode.
+  bool is_expert_chief_ = false;
 
  private:
   // Initialize and destroy extension, implemented by device.

@@ -8,6 +8,7 @@
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/data_hub/schedule_output.h"
+#include "ksana_llm/runtime/draft_generator/draft_generator_interface.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
@@ -28,25 +29,42 @@ class LlmRuntime {
   }
 
   // Set cache manager, used to operate the kv cache block.
-  void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
+  void SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers);
+
+  // Set draft generator
+  void SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator);
+
+  void SetMtpForward(const bool is_enable) { mtp_forward_ = is_enable; }
 
   // Execute one schedule output in parallel.
   // epilogue is used only for distributed master node, to process lm head and sampler.
   Status Step(ScheduleOutput *schedule_output, bool epilogue);
 
+  // TODO(robertyuan): move static funtions to other place
+  static void BuildForwardRequestFromInferRequest(ForwardRequest &forward_req, std::shared_ptr<InferRequest> &infer_req,
+                                                  uint32_t layer_num, std::vector<float *> logits_buf);
+
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+  // Build ATB KV cache block ids
+  static void BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<std::vector<int>> &device_block_ids,
+                                     std::vector<std::vector<int32_t>> &atb_block_ids,
+                                     std::shared_ptr<CacheManagerInterface> cache_manager);
+#endif
+
  private:
   // Execute the forward.
-  Status Forward(std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue);
+  Status Forward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
+                 RunMode run_mode = RunMode::kMain);
 
   // Execute the forward, for distributed worker node.
-  Status Forward(std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
+  Status Forward(size_t schedule_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
 
   // Execute the sampling.
-  Status Sampling(std::vector<std::shared_ptr<InferRequest>> &reqs);
+  Status Sampling(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs);
 
   // Build forward request, group by model name and stage.
   void BuildForwardRequests(
-      std::vector<std::shared_ptr<InferRequest>> &reqs,
+      size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
   // Build forward request, group by model name and stage, for distributed worker node.
@@ -55,32 +73,40 @@ class LlmRuntime {
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
   // Build sampling request.
-  void BuildSamplingRequest(std::vector<std::shared_ptr<InferRequest>> &reqs,
+  void BuildSamplingRequest(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
                             std::vector<SamplingRequest> &sampling_reqs);
 
   // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
   // and the requests from the Single-Token Forwarding at the back.
-  void ReorderInferRequests(std::vector<std::shared_ptr<InferRequest>> &reqs);
-  void ReorderInferRequests(std::vector<std::shared_ptr<WorkerInferRequest>> &reqs);
-
-  // Update Request's kv_cached_token_num.
-  void UpdateRequestKVCachedTokenNum(std::vector<std::shared_ptr<InferRequest>> &reqs);
+  template <typename T>
+  void ReorderInferRequests(std::vector<std::shared_ptr<T>> &reqs);
 
   // Run multi-token and single-token serially in single thread.
   Status RunSerially(
+      size_t schedule_id,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs,
-      bool epilogue);
+      bool epilogue, RunMode run_mode = RunMode::kMain);
 
   // A assisant of forward.
   Status AuxForward(
+      size_t schedule_id,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs,
-      bool epilogue);
+      bool epilogue, RunMode run_mode = RunMode::kMain);
+
+  void DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+  Status MTPForward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue);
+
+  void GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+  Status StepOnChief(ScheduleOutput *schedule_output, bool epilogue);
+  Status StepOnWorker(ScheduleOutput *schedule_output, bool epilogue);
 
  private:
-  BatchSchedulerConfig batch_schedule_config_;
+  bool mtp_forward_ = false;
 
   // The cache manager inference used for inference engine.
-  std::shared_ptr<CacheManagerInterface> cache_manager_ = nullptr;
+  std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;
 
   // The runtime context.
   std::shared_ptr<Context> context_ = nullptr;
@@ -90,6 +116,8 @@ class LlmRuntime {
 
   // The sampler instance on every device.
   std::vector<std::shared_ptr<Sampler>> samplers_;
+
+  std::shared_ptr<DraftGeneratorInterface> draft_generator_ = nullptr;
 
   // Threadpool used to metrics report.
   std::shared_ptr<ThreadPool> threadpool_ = nullptr;

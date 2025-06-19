@@ -1,0 +1,58 @@
+model_spec:
+  base_model:
+    model_dir: /model/DeepSeek-V2-Lite-Chat-17868
+  plugin_model:
+    enable_tensorrt: true
+    plugin_thread_pool_size: 1
+setting:
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: true
+  batch_scheduler:
+    enable_auto_prefix_cache: true
+    enable_speculative_decoding: false
+    launch_block_threshold: 2.0
+    max_batch_size: 128
+    max_step_tokens: 4096
+    max_token_len: 2048
+    max_waiting_queue_len: 1200
+    min_flexible_cache_num: 0
+    preempt_mode: 0
+    schedule_strategy: 0
+    split_fuse_token_num: 0
+    swap_threadpool_size: 8
+    swapin_block_threshold: 2.0
+    swapout_block_threshold: 1.0
+    waiting_timeout_in_ms: 3600000
+  block_manager:
+    block_device_memory_ratio: 0.1
+    block_host_memory_factor: 0.0
+    block_token_num: 16
+    lora_deivce_memory_ratio: 0.0
+    lora_host_memory_factor: 10.0
+    reserved_device_memory_ratio: 0.05
+  endpoint_type: python
+  global:
+    embed_tokens_use_cpu: false
+    enable_cuda_graph: false
+    enable_lora_adapter: false
+    pipeline_para_comm_type: default
+    pipeline_para_size: 1
+    tensor_para_size: 2
+    attn_data_para_size: 2
+  profiler:
+    attributes:
+      container_name: container_name_001
+      instance: 1.1.1.1
+      version: '1.1'
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+  quantization_config:
+    gptq_backend: cutlass
+    kv_cache:
+      dtype: auto
+    weight:
+      quant_method: auto
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+

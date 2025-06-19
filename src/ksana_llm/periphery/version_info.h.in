@@ -1,0 +1,10 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#pragma once
+
+// 版本相关的宏定义
+#define GIT_VERSION "@GIT_VERSION@"
+#define GIT_COMMIT_HASH "@GIT_COMMIT_HASH@"
+#define GIT_BRANCH "@GIT_BRANCH@"

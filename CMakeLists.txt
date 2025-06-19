@@ -18,6 +18,7 @@ option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
 option(WITH_VLLM_FLASH_ATTN "Enable vllm-flash-attn" OFF)
 option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
+option(WITH_LIGHTLY_CI_TEST "Enable lightly ci test" ON)
 
 if(WITH_CLEAR_CACHE)
   add_definitions("-DCLEAR_CACHE")
@@ -80,6 +81,22 @@ endif()
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
+
+# Set TritonKernel Path
+set(TRITON_KERNEL_DIRNAME "triton_kernel_files")
+if(DEFINED ENV{KSANA_TRITON_KERNEL_PATH})
+  set(TRITON_KERNEL_PATH "$ENV{KSANA_TRITON_KERNEL_PATH}/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
+  message(STATUS "Using KSANA_TRITON_KERNEL_PATH from environment: ${TRITON_KERNEL_PATH}")
+else()
+  if(DEFINED ENV{HOME})
+    set(TRITON_KERNEL_PATH "$ENV{HOME}/.cache/KsanaLLM/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
+  else()
+    set(TRITON_KERNEL_PATH "${CMAKE_BINARY_DIR}/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
+    message(WARNING "Cannot get HOME environment variable, using build directory: ${TRITON_KERNEL_PATH}")
+  endif()
+endif()
+message(STATUS "Setting TRITON_KERNEL_PATH: ${TRITON_KERNEL_PATH}")
+execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${TRITON_KERNEL_PATH})
 
 find_package(Git REQUIRED)
 
@@ -182,6 +199,9 @@ execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_functi
 
 if(TORCH_VERSION VERSION_LESS "1.5.0")
   message(FATAL_ERROR "PyTorch >= 1.5.0 is needed for TorchScript mode.")
+endif()
+if(TORCH_VERSION VERSION_GREATER_EQUAL "2.2.0")
+    add_definitions("-DENABLE_FP8_TORCH")
 endif()
 
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import os; import torch;

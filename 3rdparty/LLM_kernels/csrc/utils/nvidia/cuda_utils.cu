@@ -8,18 +8,25 @@ namespace llm_kernels {
 namespace utils {
 
 template <typename T>
-__global__ void RunCUDARandomUniformKernel(T* buffer, const size_t size, const int32_t seq_offset) {
+__global__ void RunCUDARandomUniformKernel(T* buffer, const size_t size, const int32_t seq_offset, const float max_val,
+                                           const float min_val) {
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t local_state;
-  curand_init(1337ul, idx + seq_offset, 0, &local_state);
+  constexpr uint64_t SEED = 1337ul;
+  curand_init(SEED, idx + seq_offset, 0, &local_state);
   for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
     // NOTE(karlluo): some cuda's kernel has not static_cast for half
-    buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+    if (max_val == min_val) {
+      buffer[index] = (T)(max_val);
+    } else {
+      buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+    }
   }
 }
 
 template <>
-__global__ void RunCUDARandomUniformKernel<int32_t>(int32_t* buffer, const size_t size, const int32_t seq_offset) {
+__global__ void RunCUDARandomUniformKernel<int32_t>(int32_t* buffer, const size_t size, const int32_t seq_offset,
+                                                    const float max_val, const float min_val) {
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t local_state;
   curand_init(1337.0f, idx + seq_offset, 0, &local_state);
@@ -29,7 +36,8 @@ __global__ void RunCUDARandomUniformKernel<int32_t>(int32_t* buffer, const size_
 }
 
 template <>
-__global__ void RunCUDARandomUniformKernel<bool>(bool* buffer, const size_t size, const int32_t seq_offset) {
+__global__ void RunCUDARandomUniformKernel<bool>(bool* buffer, const size_t size, const int32_t seq_offset,
+                                                 const float max_val, const float min_val) {
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t local_state;
   curand_init(1337.f, idx + seq_offset, 0, &local_state);
@@ -39,7 +47,8 @@ __global__ void RunCUDARandomUniformKernel<bool>(bool* buffer, const size_t size
 }
 
 template <>
-__global__ void RunCUDARandomUniformKernel<char>(char* buffer, const size_t size, const int32_t seq_offset) {
+__global__ void RunCUDARandomUniformKernel<char>(char* buffer, const size_t size, const int32_t seq_offset,
+                                                 const float max_val, const float min_val) {
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t local_state;
   curand_init(1337.f, idx + seq_offset, 0, &local_state);
@@ -52,7 +61,8 @@ template <typename T>
 void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val, const float min_val) {
   static int32_t seq_offset = 0;
   constexpr int32_t random_tile_size = DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM;
-  RunCUDARandomUniformKernel<T><<<random_tile_size, random_tile_size>>>(data_ptr, n_elems, seq_offset);
+  RunCUDARandomUniformKernel<T>
+      <<<random_tile_size, random_tile_size>>>(data_ptr, n_elems, seq_offset, max_val, min_val);
 }
 
 template void RandomGPUBuffer(float* data_ptr, const size_t n_elems, const float max_val, const float min_val);
@@ -71,6 +81,38 @@ template void RandomGPUBuffer(uint16_t* data_ptr, const size_t n_elems, const fl
 template void RandomGPUBuffer(unsigned long* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(uint32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 
+template <typename T>
+__global__ void ResetGPUBufferWithStepKernel(T* buffer, const size_t size,
+                                             const float max_val,
+                                             const float min_val,
+                                             const float val_step) {
+  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
+    float val = fmodf(index * val_step, (max_val - min_val)) + min_val;
+    buffer[index] = (T)(val);
+  }
+}
+
+template <typename T>
+void ResetGPUBufferWithStep(T* data_ptr, size_t n_elems, const float max_val,
+                            const float min_val, const float val_step) {
+  constexpr int32_t random_tile_size = DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM;
+  ResetGPUBufferWithStepKernel<T><<<random_tile_size, random_tile_size>>>(
+      data_ptr, n_elems, max_val, min_val, val_step);
+}
+
+template void ResetGPUBufferWithStep(float* data_ptr, const size_t n_elems,
+                                     const float max_val, const float min_val,
+                                     const float step);
+template void ResetGPUBufferWithStep(half* data_ptr, const size_t n_elems,
+                                     const float max_val, const float min_val,
+                                     const float step);
+#ifdef ENABLE_BF16
+template void ResetGPUBufferWithStep(__nv_bfloat16* data_ptr,
+                                     const size_t n_elems, const float max_val,
+                                     const float min_val, const float step);
+#endif
+
 template <typename T_INPUT, typename T_STEP>
 __global__ void InvokeRangeKernel(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step) {
   int32_t istep = blockIdx.x * blockDim.x + threadIdx.x;
@@ -88,6 +130,18 @@ void InvokeRange(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step, cud
 
 template void InvokeRange(uint16_t** output, uint16_t* start, int32_t nstep, int32_t step, cudaStream_t stream);
 template void InvokeRange(int32_t* output, int32_t start, int32_t nstep, int32_t step, cudaStream_t stream);
+
+uint32_t GetNvLinkVersion(uint32_t device_id, uint32_t link_idx) {
+  uint32_t version = 0;
+  CHECK_NVIDIA_CUDA_ERROR(nvmlInit());
+  nvmlDevice_t device;
+  CHECK_NVIDIA_CUDA_ERROR(nvmlDeviceGetHandleByIndex(device_id, &device));
+  if (nvmlDeviceGetNvLinkVersion(device, link_idx, &version) == NVML_ERROR_NOT_SUPPORTED) {
+    return 0;
+  }
+  CHECK_NVIDIA_CUDA_ERROR(nvmlShutdown());
+  return version;
+}
 
 }  // namespace utils
 }  // namespace llm_kernels

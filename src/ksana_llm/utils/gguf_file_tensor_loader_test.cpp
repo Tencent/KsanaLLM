@@ -25,7 +25,7 @@ class GGUFLoadTest : public ::testing::Test {
     CreateTestGGUFFile();
 
     // Initialize the GGUFFileTensorLoader with the test file
-    tensor_loader_ = std::make_unique<ksana::GGUFFileTensorLoader>(test_file_name_);
+    tensor_loader_ = std::make_unique<ksana::GGUFFileTensorLoader>(test_file_name_, true);
   }
 
   // This function will be called after each test is run.
@@ -187,7 +187,7 @@ TEST_F(GGUFLoadTest, MissingFileTest) {
   std::filesystem::remove(test_file_name_);
 
   // Expect the constructor to throw an exception
-  EXPECT_THROW({ ksana::GGUFFileTensorLoader loader("nonexistent_file.gguf"); }, std::runtime_error);
+  EXPECT_THROW({ ksana::GGUFFileTensorLoader loader("nonexistent_file.gguf", true); }, std::runtime_error);
 }
 
 // Test case to check alignment handling
@@ -230,7 +230,7 @@ TEST_F(GGUFLoadTest, ZeroTensorCountTest) {
   }
 
   // Load the zero-tensor GGUF file
-  ksana::GGUFFileTensorLoader loader(zero_tensor_file);
+  ksana::GGUFFileTensorLoader loader(zero_tensor_file, true);
 
   // Check that the tensor name list is empty
   const std::vector<std::string>& tensor_names = loader.GetTensorNameList();

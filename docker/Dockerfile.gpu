@@ -1,0 +1,25 @@
+# NOTE(karlluo): this image is base on Ubuntu 24.04, you can change apt sources under /etc/apt/sources.list.d
+FROM nvcr.io/nvidia/pytorch:25.01-py3
+
+LABEL MAINTAINER="ksana-llm-developer"
+
+RUN apt update -y
+RUN apt install -y libpython3-all-dev git-lfs
+
+RUN git clone  http://github.com/vllm-project/flash-attention.git \
+    && cd flash-attention \
+    && git checkout v2.6.2 \
+    && awk '/PYTORCH_VERSION="2.4.0"/{print "PYTORCH_VERSION=\"2.6.0a0+ecf3bae40a.nv25.01\""; print "MAIN_CUDA_VERSION=\"12.8\""; next} {print}' build.sh > output_file.sh && mv output_file.sh build.sh \
+    && bash build.sh \
+    && pip install dist/vllm_flash_attn-2.6.2+cu128-cp312-cp312-linux_x86_64.whl --no-deps \
+    && cd .. && rm -rf flash-attention
+
+RUN git clone https://github.com/protocolbuffers/utf8_range.git \
+    && cd utf8-range \
+    && cmake -Dutf8_range_ENABLE_TESTS=off -DCMAKE_INSTALL_PREFIX=/usr . -B build \
+    && cd build \
+    && make -j \
+    && make install -j \
+    && cd ../.. && rm -rf utf8-range \
+    && ln -s /usr/lib/x86_64-linux-gnu/libutf8_validity.a /usr/lib/libutf8_validity.a \
+    && ln -s /usr/lib/x86_64-linux-gnu/libutf8_range.a /usr/lib/libutf8_range.a

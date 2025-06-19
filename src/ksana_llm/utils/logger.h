@@ -82,7 +82,7 @@ inline void InitLoguru() {
 
 #define NO_CC_IF if  // For CodeCC compatibility.
 
-#define KLLM_LOG_DEBUG LOG_S(1)
+#define KLLM_LOG_DEBUG LOG_S(1) << __FUNCTION__ << "| "
 #define KLLM_LOG_INFO LOG_S(INFO)
 #define KLLM_LOG_WARNING LOG_S(WARNING)
 #define KLLM_LOG_ERROR LOG_S(ERROR)

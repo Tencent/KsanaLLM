@@ -13,20 +13,7 @@ namespace ksana_llm {
 
 LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
                              Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
-    : endpoint_config_(endpoint_config), request_queue_(request_queue) {
-  ModelConfig model_config;
-  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
-  try {
-    request_packer_.InitTokenizer(model_config.tokenizer_path);
-  } catch (const py::error_already_set &e) {
-    PyErr_Clear();
-    if (model_config.model_file_format == GGUF) {
-      // TODO(shawnding): Load tokenizer from GGUF model file.
-      KLLM_LOG_ERROR << "GGUF model, should set tokenizer path in python.";
-    }
-    KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
-  }
-}
+    : endpoint_config_(endpoint_config), request_queue_(request_queue) {}
 
 Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                              const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
@@ -84,7 +71,11 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
 
   // Unpack requests into ksana_python_input objects.
   std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
-  STATUS_CHECK_RETURN_AND_REPORT(request_packer_.Unpack(request_bytes, ksana_python_inputs), span);
+  Status status = request_packer_.Unpack(request_bytes, ksana_python_inputs);
+  if (!status.OK()) {
+    // Ignore all the inputs since unpack failed.
+    ksana_python_inputs.clear();
+  }
 
   // Construct the batch of forward requests.
   const size_t batch_size = ksana_python_inputs.size();
@@ -107,7 +98,6 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
   waiter->Wait();
   KLLM_LOG_DEBUG << "LocalEndpoint::HandleForward Wait finished.";
 
-  Status status = Status();
   std::vector<KsanaPythonOutput> ksana_python_outputs;
   ksana_python_outputs.reserve(batch_size);
   for (const auto &[finish_status, req] : reqs) {

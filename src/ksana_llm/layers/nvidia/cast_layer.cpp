@@ -19,6 +19,7 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
                          input_tensors[0].GetElementNumber(), input_tensors[1].shape[1], input_tensors[1].shape[2],
                          output_ptr, context_->GetComputeStreams()[rank_].Get());
   output_tensors[0].dtype = DataType::TYPE_FP32;
+  output_tensors[0].shape = input_tensors[0].shape;
   return Status();
 }
 

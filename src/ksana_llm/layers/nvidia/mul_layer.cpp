@@ -22,8 +22,8 @@ Status MulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
         fmt::format("The size of first tensor {} must match the size of second tensor {} at non-singleton dimension 1",
                     input_0_n, input_1_n));
   }
-  Mul<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), input_0_m,
-         input_0_n, input_1_m, input_1_n, rank_);
+  InvokeMul<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(),
+               input_0_m, input_0_n, input_1_m, input_1_n, rank_);
   size_t output_m = static_cast<size_t>((input_0_m >= input_1_m) ? input_0_m : input_1_m);
   size_t output_n = static_cast<size_t>((input_0_n >= input_1_n) ? input_0_n : input_1_n);
   output_tensors[0].shape = {output_m, output_n};

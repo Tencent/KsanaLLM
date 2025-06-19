@@ -1,6 +1,9 @@
 // Copyright 2024 Tencent Inc.  All rights reserved.
 #include "finite_state_machine.h"
+
+#include <codecvt>
 #include <iostream>
+#include <locale>
 #include <queue>
 
 #include "absl/strings/str_join.h"
@@ -9,9 +12,9 @@
 #include "re2/regexp.h"
 
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/request_packer.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/string_utils.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
@@ -31,9 +34,10 @@ size_t FiniteStateNode::GetNextStateId(const int& token) {
 
 size_t FiniteStateNode::GetNextStateId() {
   if (edges_map_.find(kDefaultToken) == edges_map_.end()) {
-    KLLM_LOG_ERROR << fmt::format("S{} do not has an edge with the default token {}", state_id_, kDefaultToken);
+    KLLM_LOG_DEBUG << fmt::format("S{} do not has an edge with the default token {}", state_id_, kDefaultToken);
     return state_id_;
   }
+  KLLM_LOG_DEBUG << fmt::format("S{} + token {} = S{}", state_id_, -1, edges_map_[kDefaultToken].second);
   return edges_map_[kDefaultToken].second;
 }
 
@@ -56,8 +60,24 @@ void FiniteStateMachine::TokenizeString2Tokens(const std::string& str, std::vect
   }
 
   tokens.clear();
-  Singleton<RequestPacker>::GetInstance()->Tokenize(str, tokens, false);
-  string_tokens_map_[str] = tokens;
+  if (IsUTF8Supported(str)) {
+    Singleton<Tokenizer>::GetInstance()->Encode(str, tokens, /* add_special_tokens */ false);
+    string_tokens_map_[str] = tokens;
+  }
+}
+
+bool FiniteStateMachine::IsUTF8Supported(const std::string& str) {
+  // Some complex regular expressions, such as [^"], indicate that any character except double quotes is acceptable.
+  // When constructing a state machine, these characters are concatenated as strings, which may result in the presence
+  // of UTF-8 characters that cannot be parsed, such as 0xc2, causing program exceptions and interruptions.
+  std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
+  try {
+    std::wstring wstr = converter.from_bytes(str);
+    return true;
+  } catch (...) {
+    // range_error or other errors.
+    return false;
+  }
 }
 
 void FiniteStateInstNode::InsertEdge(std::string& str, size_t next_state_id) {
@@ -69,7 +89,7 @@ void FiniteStateInstNode::InsertEdge(size_t next_state_id) {
   // Add a conversion edge without a constant string, which means these two nodes can be collapsed in the subsequent
   // compression step.
   merge_id = std::min(merge_id, next_state_id);
-  edges.push_back(std::make_pair("", next_state_id));
+  edges.emplace_back("", next_state_id);
 }
 
 void FiniteStateMachine::TokenizeWithSpecialSymbols(const std::string& str, std::vector<int>& token_list) {
@@ -132,15 +152,15 @@ void FiniteStateMachine::DumpFiniteStateNodeGraph(const size_t& current_id, std:
   if (str.empty()) {
     str = fmt::format("stateDiagram-v2\n    [*] --> S{}\n", current_id);
   }
-  std::unordered_map<size_t, std::string> tmp_edge_map;
+  std::unordered_set<std::string> tmp_edge_set;
   for (auto& edge : state_map_[current_id]->edges_map_) {
     std::string edge_str = edge.second.first;
     ReplaceSpecialCharacters(edge_str);
-    if (tmp_edge_map.find(edge.second.second) != tmp_edge_map.end() && tmp_edge_map[edge.second.second] == edge_str) {
-      continue;
+    std::string edge_format = fmt::format("    S{} --> S{} : {}\n", current_id, edge.second.second, edge_str);
+    if (tmp_edge_set.find(edge_format) == tmp_edge_set.end()) {
+      str += edge_format;
+      tmp_edge_set.insert(edge_format);
     }
-    tmp_edge_map[edge.second.second] = edge_str;
-    str += fmt::format("    S{} --> S{} : {}\n", current_id, edge.second.second, edge_str);
   }
   for (auto& edge : state_map_[current_id]->edges_map_) {
     DumpFiniteStateNodeGraph(edge.second.second, node_set, str);
@@ -232,7 +252,7 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
     }
   }
   KLLM_LOG_DEBUG << fmt::format("BuildFiniteStateMachine Step 2.1: Valid Node Size = {}", valid_node_set.size());
-  // DumpFiniteStateInstNodeGraph(node_list, valid_node_set);
+  DumpFiniteStateInstNodeGraph(node_list, valid_node_set);
 
   // Step 2.2: Delete all empty edges and mergeable nodes.
   // Use merge_id to mark the root node to which each node belongs.
@@ -251,6 +271,9 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
     for (auto& child : node_list[id]->edges) {
       if (node_list[id]->merge_id == node_list[child.second]->merge_id) {
         // Ignore edges that point to the node itself.
+        continue;
+      }
+      if (valid_node_set.find(child.second) == valid_node_set.end()) {
         continue;
       }
       size_t src_id = node_list[id]->merge_id;
@@ -274,7 +297,7 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
   invalid_node_list.clear();
   KLLM_LOG_DEBUG << fmt::format("BuildFiniteStateMachine Step 2.2: Empty Node Merge. Valid Node Size = {}",
                                 valid_node_set.size());
-  // DumpFiniteStateInstNodeGraph(node_list, valid_node_set);
+  DumpFiniteStateInstNodeGraph(node_list, valid_node_set);
 
   // Step 2.3: Merge all equivalent edges.
   for (size_t id : valid_node_set) {
@@ -353,7 +376,6 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
   }
   for (size_t id : valid_node_set) {
     size_t current_id = state_id_trans_map[id];
-
     // Step 3.2: Create A Finite State Node
     FiniteStateType state_type = FiniteStateType::NON_GENERATION_STATE;
     if (node_list[id]->edges.empty()) {
@@ -374,11 +396,12 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
           if (node_list[child.second]->edges.empty()) {
             KLLM_LOG_WARNING << fmt::format(
                 "Finite State Machine build warning: generation state {} does not have next state.", current_id);
+            state_map_[current_id]->edges_map_[kDefaultToken] = std::make_pair("*", current_id);
             continue;
           }
           /* The word '*' represents that the current state can generate any character. To exit this state, the
            * beginning of the next state must be hit. For example, "name": "[*]", When in the generation state of "*",
-           * only when the output is ",  it will transition to the next state. Therefore, all possible ending states
+           * only when the output is ", it will transition to the next state. Therefore, all possible ending states
            * need to be enumerated.*/
           const std::string& next_string = node_list[child.second]->edges[0].first;
           size_t next_state_id = node_list[child.second]->edges[0].second;
@@ -435,9 +458,6 @@ void FiniteStateMachine::BuildFiniteStateMachine(const std::string& str) {
           state_map_[current_id]->edges_map_[token] = std::make_pair(child.first, child_id);
         }
       }
-    } else if (state_type == FiniteStateType::FINAL_STATE) {
-      // stop state does not include child edges.
-      continue;
     } else if (state_type == NON_GENERATION_STATE) {
       std::string edge = node_list[id]->edges[0].first;
       size_t child_id = state_id_trans_map[node_list[id]->edges[0].second];

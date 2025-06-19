@@ -9,21 +9,36 @@
 #include "base_strategy.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/profiler/reporter.h"
-#include "ksana_llm/profiler/trace_event_recorder.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/transfer/transfer_engine.h"
+#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
-#include "ksana_llm/utils/request_packer.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/stop_checker.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
-ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
-                                                       std::shared_ptr<BatchState> batch_state)
-    : BaseScheduleStrategy(batch_scheduler_config, tp_num, batch_state) {}
+ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num)
+    : BaseScheduleStrategy(batch_scheduler_config, tp_num) {
+  auto env = Singleton<Environment>::GetInstance();
+
+  env->GetConnectorConfigs(connector_config_);
+  if (connector_config_.group_role != GroupRole::NONE) {
+    TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
+  }
+
+  if (env->IsFlashMlaEnable() && IsAbsorbWeightsEnabled()) {
+    decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
+  }
+
+  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num / env->GetAttnDataParallelSize();
+  dp_max_batch_size_ = batch_scheduler_config_.max_batch_size / env->GetAttnDataParallelSize();
+  dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
+}
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
   return batch_state_->schedule_time_in_ms >= req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms;
@@ -46,19 +61,18 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
        req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
       req->output_tokens.size() >= batch_scheduler_config_.max_token_len ||
       (req->req_fsm != nullptr && req->req_fsm->IsStopState(req->fsm_state_id))) {
-    stop_checker_->CheckCompleteStopStrings(req, tokenizer_);
+    stop_checker_->CheckCompleteStopStrings(req);
     return true;
   }
 
   // When stop strings are checked and matched, stop early
-  return stop_checker_->CheckIncrementalStopStrings(req, tokenizer_);
+  return stop_checker_->CheckIncrementalStopStrings(req);
 }
 
 void ContinuousBatchingStrategy::ExtendTokensWithRetokenization(std::shared_ptr<InferRequest> req) {
   // First, convert the output_tokens into a string A (excluding the input_tokens part).
   // Then, concatenate the original prompt, the string A, and the fixed string defined in the structured output regex.
   // Finally, the combined string is encoded using a tokenizer to obtain the new output_tokens.
-  std::shared_ptr<RequestPacker> request_packer = Singleton<RequestPacker>::GetInstance();
   std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
 
   // detokenize the newly generated token sequence to obtain the corresponding string.
@@ -66,7 +80,7 @@ void ContinuousBatchingStrategy::ExtendTokensWithRetokenization(std::shared_ptr<
   std::vector<int> new_tokens;
   if (req->output_tokens.size() > req->input_tokens.size()) {
     new_tokens = std::vector<int>(req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end());
-    request_packer->DeTokenize(new_tokens, structure_text);
+    Singleton<Tokenizer>::GetInstance()->Decode(new_tokens, structure_text);
   }
 
   // collapse consecutive non-generation states into one.
@@ -80,9 +94,13 @@ void ContinuousBatchingStrategy::ExtendTokensWithRetokenization(std::shared_ptr<
   new_tokens.clear();
 
   // Assign values.
-  request_packer->Tokenize(structure_text, new_tokens, false);
+  Singleton<Tokenizer>::GetInstance()->Encode(structure_text, new_tokens, /* add_special_tokens */ false);
+  // TODO(robertyuan): if tokens have kv-caches are replaced, kv_cached_token_num should be adjusted.
   req->output_tokens.insert(req->output_tokens.end(), new_tokens.begin(), new_tokens.end());
-  req->complete_output_tokens = req->output_tokens;
+
+  // add new tokens to forwarding_tokens, their kv-cache will be generated.
+  req->forwarding_tokens = req->output_tokens;
+
   req->NotifyStep();
 
   // State transition.
@@ -101,131 +119,203 @@ void ContinuousBatchingStrategy::ExtendTokensWithoutRetokenization(std::shared_p
     state = req->req_fsm->GetState(state->GetNextStateId());
   }
 
-  req->complete_output_tokens = req->output_tokens;
+  // add new tokens to forwarding_tokens, their kv-cache will be generated.
+  req->forwarding_tokens = req->output_tokens;
 
   req->NotifyStep();
   req->fsm_state_id = state->state_id_;
 }
 
-void ContinuousBatchingStrategy::CheckJumpForwardRequest(std::shared_ptr<InferRequest> req) {
+void ContinuousBatchingStrategy::JumpForwardRequest(std::shared_ptr<InferRequest> req) {
+  // When the request is in a Non-Generatrion state, perform a Jump-Forward using a constant string.
   if (req->req_fsm.get() == nullptr) {
     return;
   }
-  std::string output_text = "";
   std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
   if (state->state_type_ == FiniteStateType::NON_GENERATION_STATE) {
-    // non-generation states
     // Refer to https://lmsys.org/blog/2024-02-05-compressed-fsm/#tokenization-boundary-handling
     // We use retokenizer to avoid issues related to tokenization boundaries during constrained decoding.
     ExtendTokensWithRetokenization(req);
-    // ExtendTokensWithoutRetokenization(req);
-  } else if (state->state_type_ == FiniteStateType::GENERATION_STATE) {
-    // generation states
-    size_t next_state_id = state->GetNextStateId(req->output_tokens.back());
-    if (next_state_id != req->fsm_state_id) {
-      req->prefix_cache_len = req->output_tokens.size() - 1;
-      req->req_fsm->CheckFSMPopToken(req->fsm_state_id, req->output_tokens);
-      req->fsm_state_id = next_state_id;
-      CheckJumpForwardRequest(req);
-    }
-  } else if (state->state_type_ == FiniteStateType::FINAL_STATE) {
-    // stop states
-    KLLM_LOG_DEBUG << fmt::format("Req {} got an EOF status, will stop soon.", req->req_id);
-  } else {
-    KLLM_LOG_ERROR << fmt::format("Status {} got an invalid status type : {}", req->fsm_state_id, state->state_type_);
   }
-  return;
 }
 
-void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> req) {
+void ContinuousBatchingStrategy::ProcessStructuredOutput(std::shared_ptr<InferRequest> req) {
+  // Determine that whether the request can transition to the next state and perform a Jump-Forward
+  if (req->req_fsm.get() == nullptr) {
+    return;
+  }
+  std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
+  if (state->state_type_ == FiniteStateType::GENERATION_STATE) {
+    size_t next_state_id = state->GetNextStateId(req->output_tokens.back());
+    if (next_state_id != req->fsm_state_id) {
+      // The requested end token satisfies the jump condition, and the request will transition to the next state.
+      if (Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled()) {
+        req->prefix_cache_len = req->output_tokens.size() - 1;
+      }
+      req->req_fsm->CheckFSMPopToken(req->fsm_state_id, req->output_tokens);
+      req->fsm_state_id = next_state_id;
+      JumpForwardRequest(req);
+    }
+  }
+}
+
+void ContinuousBatchingStrategy::DetermineDraftNum(std::shared_ptr<InferRequest> req) {
+  // Determine the number of draft_tokens to generate in the current step based on the scheduling status.
+  req->suggested_draft_num = 0;
+  constexpr size_t kDraftBatchSizeThreshold = 16;
+  const size_t running_bs = batch_state_->schedule_output->running_reqs.size();
+  if (running_bs >= kDraftBatchSizeThreshold) {
+    return;
+  }
+  const size_t draft_num_per_req = (kDraftBatchSizeThreshold - running_bs) / running_bs;
+  req->suggested_draft_num = draft_num_per_req;
+}
+
+std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy::RecomputeRequest(
+    std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req) {
+  auto req = *it;
+  KLLM_LOG_DEBUG << "RecomputeRequest " << req;
+
   // Add request to the begining of waiting queue.
   req->kv_cache_blocks.clear();
-  req->kv_cache_blocks.resize(tp_num_);
+  req->kv_cache_blocks.resize(Singleton<Environment>::GetInstance()->GetAttentionTensorParallel());
   req->infer_stage = InferStage::STAGE_CONTEXT;
   req->step = 0;
   req->kv_cached_token_num = 0;
-  req->complete_output_tokens = req->output_tokens;
+  req->suggested_draft_num = 0;
+  req->prefix_cache_len = 0;
+
+  static constexpr bool terminate = false;
+  ResetRequest(req, Status(RET_SUCCESS, "RecomputeRequest"), is_swap_req, terminate);
+
+  batch_state_->waiting_queue.emplace_front(req);
+  return batch_state_->schedule_output->running_reqs.erase(it);
 }
 
-void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status) {
+void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req) {
+  ResetRequest(req, req_status, is_swap_req, true);
+}
+
+void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req,
+                                              bool terminate) {
+  KLLM_LOG_DEBUG << "ResetRequest " << *req << ", req_status:" << req_status.ToString()
+                 << ", is_swap_req:" << is_swap_req << ", terminate:" << terminate;
+
   req->finish_status = req_status;
-  req->finished = true;
+  req->finished = terminate;
 
-#ifdef ENABLE_RECORD_EVENT
-  if (req_status.GetCode() == RET_SUCCESS) {
-    RECORD_TRACE_EVENT_TAG("FinishReq", TraceEventType::FinishReq, std::to_string(req->req_id),
-                           TRACE_THREAD_NAME_PREFILL_DECODE);
+  if (is_swap_req) {
+    cache_manager_->DestroySwappedRequest(req->req_id);
   } else {
-    RECORD_TRACE_EVENT_TAG(req_status.GetMessage(), TraceEventType::DropReq, std::to_string(req->req_id),
-                           TRACE_THREAD_NAME_PREFILL_DECODE);
+    cache_manager_->DestroyFinishedRequest(req->req_id);
   }
-#endif
 
-  req->Notify();
+  if (terminate) {
+    req->Notify();
+  }
 }
 
-void ContinuousBatchingStrategy::CheckRunningQueueStepTokens(size_t &step_token_num) {
+std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepTokens() {
+  // step_token_num: Controls the maximum total tokens in a batch (max_step_token_num), related to buffer allocation and
+  // GPU memory management
+  // step_not_kv_cached_token_num: Total count of tokens without KV caching, directly affecting computational workload
+  // requirements
+  size_t step_token_num = 0, step_not_kv_cached_token_num = 0;
+  size_t total_sampling_token_num = 0, req_num = 0;
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
-    auto req = *it;
-    bool is_multi_token_forward = req->output_tokens.size() > req->kv_cached_token_num + 1;
-    size_t current_token_num = is_multi_token_forward ? req->output_tokens.size() : 1;
-    if (step_token_num + current_token_num > batch_scheduler_config_.max_step_tokens) {
-      RecomputeRequest(req);
-      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      it = batch_state_->schedule_output->running_reqs.erase(it);
-      KLLM_LOG_WARNING << fmt::format(
-          "The Running Queue has exceeded the max_step_tokens limit. Remove the req {} from the queue.", req->req_id);
+    const auto &req = *it;
+    const size_t not_kv_cached_token_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+    const size_t req_token_num = not_kv_cached_token_num <= decode_token_num_threshold_ ? not_kv_cached_token_num
+                                                                                        : req->forwarding_tokens.size();
+    if (step_token_num + req_token_num > dp_max_step_token_num_ ||
+        total_sampling_token_num + req->sampling_token_num > dp_max_logits_num_ || req_num >= dp_max_batch_size_) {
+      it = RecomputeRequest(it);
       continue;
     }
-    step_token_num += current_token_num;
+    step_token_num += req_token_num;
+    step_not_kv_cached_token_num += not_kv_cached_token_num;
+    total_sampling_token_num += req->sampling_token_num;
+    ++req_num;
     ++it;
   }
+  return {step_token_num, step_not_kv_cached_token_num};
 }
 
-void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_block_num) {
+void ContinuousBatchingStrategy::UpdateRunningRequests() {
+  batch_state_->ResetInfoBeforeSchedule();
+  KLLM_LOG_DEBUG << "update running requests size:" << batch_state_->schedule_output->running_reqs.size();
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
     auto req = *it;
     // All req here should be decode now.
     req->infer_stage = InferStage::STATE_DECODE;
-    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(*req->req_ctx);
+
+    // remove rejected draft token
+    req->forwarding_tokens.resize(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num +
+                                  req->accepted_tokens.size());
+    // current token has kv_cache
+    req->kv_cached_token_num = req->forwarding_tokens.size();
+    req->prefix_cache_len = req->kv_cached_token_num;
 
     // Always update cache manager, even if request is finished.
-    Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->output_tokens, req->kv_cache_blocks);
-    if (req->output_tokens.size() <= req->complete_output_tokens.size()) {
+    Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->forwarding_tokens, req->kv_cached_token_num,
+                                                        req->kv_cache_blocks);
+
+    if (req->forwarding_tokens.size() - req->accepted_tokens.size() < req->output_tokens.size()) {
+      // When the request actually needs to calculate Multi-Token, insert the request into the waiting queue.
+      // This is primarily used for the split-fuse feature.
       req->infer_stage = InferStage::STAGE_CONTEXT;
-      req->output_tokens = req->complete_output_tokens;
-      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
+      req->forwarding_tokens = req->output_tokens;
+      req->draft_tokens.clear();
+      req->forwarding_tokens_draft_num = req->draft_tokens.size();
+      req->sampling_token_num = kStepGenerateTokenNum;
+      batch_state_->waiting_queue.emplace_front(req);
       it = batch_state_->schedule_output->running_reqs.erase(it);
+      KLLM_LOG_DEBUG << "splitfuse cal multi-token" << req;
       continue;
     }
 
+    // append generated token
+    req->forwarding_tokens.emplace_back(req->generated_token);
+    req->sampling_token_num = kStepGenerateTokenNum;
+
+    // append new tokens to output_tokens
+    req->output_mutex.lock();
+    req->output_tokens.insert(req->output_tokens.end(),
+                              req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
+                              req->forwarding_tokens.end());
+    req->output_mutex.unlock();
+
+    req->req_ctx->emplace("status_code", std::to_string(static_cast<int>(req->finish_status.GetCode())));
+    std::unordered_map<std::string, std::string> filtered_ctx = *req->req_ctx;
+    filtered_ctx.erase("kv-comm-request-id");
+    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(filtered_ctx);
     if (!status.OK()) {
-      KLLM_LOG_ERROR << "UpdateRequestTokens req " << req->req_id
-                     << " error, recompute it, info: " << status.GetMessage();
-
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
-      RecomputeRequest(req);
-
-      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      it = batch_state_->schedule_output->running_reqs.erase(it);
-
+      KLLM_LOG_ERROR << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
+      req->draft_tokens.clear();
+      req->forwarding_tokens_draft_num = req->draft_tokens.size();
+      it = RecomputeRequest(it);
       continue;
     }
 
-    CheckJumpForwardRequest(req);
+    // Checking if the request can perform a StructuredOutput optimization.
+    ProcessStructuredOutput(req);
 
     // Check if finished.
     if (CheckRequestFinish(req)) {
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-      auto end_time = ProfileTimer::GetCurrentTimeInMs();
-      size_t output_token_num = req->output_tokens.size();
-      uint64_t duration = end_time - req->timestamp_in_ms;
-
-      REPORT_METRIC(forward_cost_time_ms, duration, attributes);
-      REPORT_METRIC(metric_output_token_num, output_token_num, attributes);
+      const auto end_time = ProfileTimer::GetCurrentTimeInMs();
+      const size_t output_token_num = req->output_tokens.size();
+      const uint64_t duration = end_time - req->timestamp_in_ms;
+      if (req->finish_status.GetCode() == RET_SUCCESS) {
+        REPORT_METRIC(forward_cost_time_ms, duration, attributes);
+        REPORT_METRIC(metric_output_token_num, output_token_num, attributes);
+        if (output_token_num == 0) {
+          REPORT_COUNTER(metric_zero_output_token_num, static_cast<size_t>(1), attributes);
+        }
+      } else {
+        REPORT_COUNTER(forward_req_error_num, static_cast<size_t>(1), attributes);
+      }
 
       // TODO(shawnding): Adjust to microsecond precision
       if (duration != 0) {
@@ -239,9 +329,18 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
       }
 
       // Record finish req_id
-      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id >= batch_state_->schedule_output->finish_req_ids.size()) {
+        size_t needed_push_size = req->attn_dp_group_id - batch_state_->schedule_output->finish_req_ids.size() + 1;
+        for (size_t idx = 0; idx < needed_push_size; ++idx) {
+          batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{});
+        }
+      }
+      batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
 
-      StopRequest(req, Status(RET_SUCCESS));
+      StopRequest(req, Status(RET_SUCCESS), false);
+      if (connector_config_.group_role == GroupRole::PREFILL) {
+        batch_state_->transfer_queue.emplace_back(req);
+      }
       it = batch_state_->schedule_output->running_reqs.erase(it);
 
       continue;
@@ -249,31 +348,36 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
 
     // Check timeout
     if (CheckRequestTimeout(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in running.";
+      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
+      KLLM_LOG_ERROR << "req timeout in running:" << req;
 
-      cache_manager_->DestroyFinishedRequest(req->req_id);
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."), false);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
 
       // Record finish req_id
-      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
-
-      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
-      it = batch_state_->schedule_output->running_reqs.erase(it);
-      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->finish_req_ids.size()) {
+        batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
       continue;
     }
 
     // Check abort.
     if (req->aborted) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in running.";
+      KLLM_LOG_WARNING << "req aborted in running: " << req;
 
-      cache_manager_->DestroyFinishedRequest(req->req_id);
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in running."), false);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
 
       // Record finish req_id
-      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->finish_req_ids.size()) {
+        batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
-      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
-      it = batch_state_->schedule_output->running_reqs.erase(it);
       REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), attributes);
 
       continue;
@@ -282,10 +386,26 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(size_t &total_needed_bloc
     // Not finished, notify streaming iterator.
     req->NotifyStep();
 
-    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id, req->output_tokens.size());
+    // append draft tokens
+    std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
+    req->forwarding_tokens.insert(req->forwarding_tokens.end(), draft_tokens.begin(), draft_tokens.end());
+    req->forwarding_tokens_draft_num = req->draft_tokens.size();
+    req->sampling_token_num =
+        req->logits_custom_length > 0 ? req->logits_custom_length : req->draft_tokens.size() + kStepGenerateTokenNum;
 
+    KLLM_LOG_DEBUG << *req << "forwarding_tokens: " << req->forwarding_tokens
+                   << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                   << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
     ++it;
   }
+}
+
+size_t ContinuousBatchingStrategy::GetRunningRequestsBlockNeed() {
+  size_t total_needed_block_num = 0;
+  for (auto &req : batch_state_->schedule_output->running_reqs) {
+    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
+  }
+  return total_needed_block_num;
 }
 
 Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_ptr<InferRequest> req,
@@ -295,7 +415,6 @@ Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_pt
   Status status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
   if (!status.OK()) {
     KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
-    KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and retry.";
     MergePendingSwapoutRequests(true, false);
 
     // Try the allocation again after all swapout finished.
@@ -315,10 +434,9 @@ Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_pt
 }
 
 void ContinuousBatchingStrategy::ProcessRunningQueue() {
-  KLLM_LOG_DEBUG << "ProcessRunningQueue invoked, running queue size:"
-                 << batch_state_->schedule_output->running_reqs.size()
-                 << ", free block num:" << cache_manager_->GetUsableBlockNumber()
-                 << ", future block num:" << cache_manager_->GetFutureBlockNumber();
+  KLLM_LOG_DEBUG << "ProcessRunningQueue invoked: " << *batch_state_
+                 << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                 << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
 
   // Merge pending swapin requests, continue running.
   Status status = MergePendingSwapinRequests(false, true);
@@ -326,13 +444,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     KLLM_LOG_ERROR << "ProcessRunningQueue error, info: " << status.GetMessage();
   }
 
-  size_t total_needed_block_num = 0;
-
-  // The requests that should be recomputed.
-  std::vector<std::shared_ptr<InferRequest>> recompute_requests;
-
-  // Update cache manager, process finished and timeout requests.
-  UpdateRunningRequests(total_needed_block_num);
+  size_t total_needed_block_num = GetRunningRequestsBlockNeed();
 
   if (batch_state_->schedule_output->running_reqs.empty() && batch_state_->waiting_queue.empty()) {
     // If running & waiting queue in current step is empty, wait all swapin jobs done if existed.
@@ -345,14 +457,13 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
 
       KLLM_LOG_DEBUG << "ProcessRunningQueue update, running queue size:"
                      << batch_state_->schedule_output->running_reqs.size()
-                     << ", free block num:" << cache_manager_->GetUsableBlockNumber()
-                     << ", future block num:" << cache_manager_->GetFutureBlockNumber();
+                     << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                     << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
     }
   }
 
-  // Check Running Queue to determine whether it exceeds the max_step_tokens.
-  size_t step_token_num = 0;
-  CheckRunningQueueStepTokens(step_token_num);
+  // Check Running Queue to determine whether it exceeds the max_step_token_num.
+  CheckRunningQueueStepTokens();
 
   // Swapout necessary blocks.
   bool skip_swapout_check = false;
@@ -361,38 +472,44 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     auto it = batch_state_->schedule_output->running_reqs.begin() + running_batch_size - 1;
     auto req = *it;
 
-    // No need to check max_batch_size and max_step_tokens here.
+    // No need to check max_batch_size and max_step_token_num here.
     size_t swapout_block_threshold = std::ceil(running_batch_size * batch_scheduler_config_.swapout_block_threshold);
 
     // Whether the allocation operation is successful.
     bool allocate_block_succ = true;
 
-    size_t step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, req->output_tokens.size());
+    size_t step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
     size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
-    size_t future_free_block_num = cache_manager_->GetFutureBlockNumber();
+    size_t future_free_block_num = cache_manager_->GetFutureFreeBlockNumber();
 
     // If last request have not enough blocks, wait all swapout done.
     if (running_batch_size == 1 && step_block_num > total_free_block_num) {
-      KLLM_LOG_DEBUG << "Not enough blocks for last req " << req->req_id
-                     << ", waiting all pending swapout requests done.";
+      KLLM_LOG_DEBUG << "Not enough blocks for last " << req << ", waiting all pending swapout requests done.";
       MergePendingSwapoutRequests(true, false);
 
       // Update block num.
       total_free_block_num = cache_manager_->GetUsableBlockNumber();
-      future_free_block_num = cache_manager_->GetFutureBlockNumber();
+      future_free_block_num = cache_manager_->GetFutureFreeBlockNumber();
     }
 
     // never swap out last request.
     if (skip_swapout_check ||
         (step_block_num <= total_free_block_num && total_needed_block_num <= total_free_block_num &&
          total_needed_block_num + swapout_block_threshold <= total_free_block_num + future_free_block_num)) {
-      KLLM_LOG_DEBUG << "running req " << req->req_id << " continue running, step_block_num:" << step_block_num
-                     << ", current_block_num:" << req->kv_cache_blocks[0].size()
-                     << ", current_token_size:" << req->output_tokens.size();
+      KLLM_LOG_DEBUG << "continue running " << *req << *batch_state_ << ", running_batch_size:" << running_batch_size
+                     << ", skip_swapout_check:" << skip_swapout_check << ",step_block_num:" << step_block_num
+                     << ", total_free_block_num:" << total_free_block_num
+                     << ", total_needed_block_num:" << total_needed_block_num
+                     << ", configed_swapout_block_threshold:" << batch_scheduler_config_.swapout_block_threshold
+                     << ", swapout_block_threshold:" << swapout_block_threshold
+                     << ", future_free_block_num:" << future_free_block_num
+                     << ", allocate_block_succ:" << allocate_block_succ
+                     << ", current_block_num:" << req->kv_cache_blocks[0].size();
 
       status = AllocateRequestBlocksWithRetry(req, total_needed_block_num, step_block_num, allocate_block_succ,
                                               skip_swapout_check);
       if (status.OK()) {
+        DetermineDraftNum(req);
         continue;
       }
     }
@@ -402,9 +519,10 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end(); it++) {
         auto req = *it;
         if (req->kv_cache_blocks[0].size() > 0) {
+          // Note(TJ): maybe cloud use StopRequest
           cache_manager_->DestroyFinishedRequest(req->req_id);
           req->kv_cache_blocks.clear();
-          req->kv_cache_blocks.resize(tp_num_);
+          req->kv_cache_blocks.resize(Singleton<Environment>::GetInstance()->GetAttentionTensorParallel());
           KLLM_LOG_WARNING << fmt::format("Split fuse disabled due to allocation failure for request ID {}",
                                           req->req_id);
         }
@@ -417,19 +535,18 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     if (allocate_block_succ) {
       // No more blocks, skip swap in and waiting launch.
       batch_state_->step_sched_finish = true;
-      KLLM_LOG_DEBUG << "No more free blocks, skip swapped and waiting queue.";
+      KLLM_LOG_DEBUG << "No more free blocks, skip swapped and waiting queue." << *batch_state_;
 
       if (batch_scheduler_config_.preempt_mode == PreemptMode::SWAP) {
-        KLLM_LOG_DEBUG << "running req " << req->req_id << " swapout async"
+        KLLM_LOG_DEBUG << "running " << *req << " swapout async"
                        << ", current_block_num:" << req->kv_cache_blocks[0].size()
-                       << ", current_token_size:" << req->output_tokens.size();
+                       << ", current_forwarding_token_size:" << req->forwarding_tokens.size();
 
         // Merge all swapin request before swapout.
         if (!batch_state_->swapin_pending_requests_.empty()) {
           KLLM_LOG_DEBUG << "Pending swapin requests exists, merge it first.";
           MergePendingSwapinRequests(true, false);
         }
-        RECORD_TRACE_EVENT_BEGIN("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
         size_t free_block_num = 0;
         size_t swapped_block_num = 0;
         std::vector<int> swapout_memory_blocks;
@@ -442,7 +559,13 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
           total_needed_block_num -= step_block_num;
 
           // Record swapout operation.
-          batch_state_->schedule_output->swapout_req_block_ids[req->req_id] = swapout_memory_blocks;
+          if (req->attn_dp_group_id == batch_state_->schedule_output->swapout_req_block_ids.size()) {
+            batch_state_->schedule_output->swapout_req_block_ids.push_back(
+                std::unordered_map<int64_t, std::vector<int>>());
+          }
+          batch_state_->schedule_output->swapout_req_block_ids[req->attn_dp_group_id][req->req_id] =
+              swapout_memory_blocks;
+
           continue;
         }
         KLLM_LOG_ERROR << "Swap out request error, recompute it. info: " << status.GetMessage();
@@ -450,31 +573,26 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     }
 
     if (!status.OK() || batch_scheduler_config_.preempt_mode == PreemptMode::RECOMPUTE) {
-      KLLM_LOG_DEBUG << "running req " << req->req_id << " recompute.";
+      KLLM_LOG_DEBUG << "running " << *req << " recompute.";
 
       size_t freeable_block_num = 0;
       cache_manager_->GetRequestFreeableBlockNum(req->req_id, freeable_block_num);
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-
       // Add recomputed request to the begining of waiting queue.
-      RecomputeRequest(req);
-      batch_state_->waiting_queue.insert(batch_state_->waiting_queue.begin(), req);
-      batch_state_->schedule_output->running_reqs.erase(it);
-
+      RecomputeRequest(it);
       total_needed_block_num -= step_block_num;
       continue;
     }
 
-    KLLM_LOG_DEBUG << "running req " << req->req_id << " should not arrive here.";
+    KLLM_LOG_DEBUG << "running " << *req << " should not arrive here.";
   }
 
-  batch_state_->MergeRunningBufferQueue();
+  batch_state_->MergeRunningPendingReqs();
 }
 
 void ContinuousBatchingStrategy::ProcessSwappedQueue() {
-  KLLM_LOG_DEBUG << "ProcessSwappedQueue invoked, swap queue size:" << batch_state_->swapped_queue.size()
-                 << ", free block num:" << cache_manager_->GetUsableBlockNumber()
-                 << ", future block num:" << cache_manager_->GetFutureBlockNumber();
+  KLLM_LOG_DEBUG << "ProcessSwappedQueue invoked:" << *batch_state_
+                 << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                 << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
 
   if (batch_scheduler_config_.preempt_mode != SWAP) {
     return;
@@ -491,77 +609,87 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
   }
 
   if (batch_state_->step_sched_finish) {
-    KLLM_LOG_DEBUG << "Skip swapped queue.";
+    KLLM_LOG_DEBUG << "Skip swapped queue." << *batch_state_;
     return;
   }
 
   size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
-  size_t step_token_num = 0;
-  CheckRunningQueueStepTokens(step_token_num);
+  size_t step_logits_num = 0;
+  for (const auto &req : batch_state_->schedule_output->running_reqs) {
+    step_logits_num += req->sampling_token_num;
+  }
+  auto [step_token_num, step_not_kv_cached_token_num] = CheckRunningQueueStepTokens();
   for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
     auto req = it->second;
 
     // Check timeout, no finished req in swapped queue.
     if (CheckRequestTimeout(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in swapped.";
+      KLLM_LOG_DEBUG << "req timeout in swapped: " << req;
 
-      cache_manager_->DestroySwapedRequest(req->req_id);
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in swapped."), true);
+      it = batch_state_->swapped_queue.erase(it);
 
       // Record finish req_id
-      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->finish_req_ids.size()) {
+        batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
-      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
-      it = batch_state_->swapped_queue.erase(it);
       continue;
     }
 
     // Check abort.
     if (req->aborted) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in swapped.";
+      KLLM_LOG_DEBUG << "req aborted in swapped:" << req;
 
-      cache_manager_->DestroySwapedRequest(req->req_id);
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in swapped."), true);
+      it = batch_state_->swapped_queue.erase(it);
 
       // Record finish req_id
-      batch_state_->schedule_output->finish_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->finish_req_ids.size()) {
+        batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
-      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
-      it = batch_state_->swapped_queue.erase(it);
       continue;
     }
 
     size_t swapin_needed_block_num = 0;
-    cache_manager_->GetRequestNeededBlockNum(req->req_id, swapin_needed_block_num);
+    cache_manager_->GetRequestNeededBlockNumForOneNextToken(req->req_id, swapin_needed_block_num);
 
-    size_t swapin_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.swapin_block_threshold);
+    const size_t swapin_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.swapin_block_threshold);
 
-    size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
-    size_t step_needed_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, req->output_tokens.size());
+    const size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
+    const size_t step_needed_block_num =
+        cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
 
-    if (step_batch_size + 1 <= batch_scheduler_config_.max_batch_size &&
-        step_token_num + 1 <= batch_scheduler_config_.max_step_tokens &&
+    if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
+        step_token_num + req->draft_tokens.size() + kStepGenerateTokenNum <= dp_max_step_token_num_ &&
         swapin_needed_block_num + step_needed_block_num + swapin_block_threshold <= total_free_block_num) {
-      KLLM_LOG_DEBUG << "swapped req " << req->req_id << " swapin async"
-                     << ", current_block_num:" << req->kv_cache_blocks[0].size()
-                     << ", current_token_size:" << req->output_tokens.size();
-
       // Merge pending swapout requests before swap in.
       if (!batch_state_->swapout_pending_requests_.empty()) {
         KLLM_LOG_DEBUG << "Pending swapout requests exists, merge it first.";
         MergePendingSwapoutRequests(true, false);
       }
-      RECORD_TRACE_EVENT_BEGIN("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
       std::vector<int> swapin_memory_blocks;
       status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks,
                                                   swapin_memory_blocks);
       if (status.OK()) {
-        step_batch_size += 1;
-        step_token_num += 1;
+        ++step_batch_size;
+        step_logits_num += req->sampling_token_num;
+        step_token_num += req->draft_tokens.size() + kStepGenerateTokenNum;
 
         batch_state_->swapin_pending_requests_[req->req_id] = req;
         it = batch_state_->swapped_queue.erase(it);
 
         // Record swapin operation.
-        batch_state_->schedule_output->swapin_req_block_ids[req->req_id] = swapin_memory_blocks;
+        if (req->attn_dp_group_id == batch_state_->schedule_output->swapin_req_block_ids.size()) {
+          batch_state_->schedule_output->swapin_req_block_ids.push_back(
+              std::unordered_map<int64_t, std::vector<int>>());
+        }
+        batch_state_->schedule_output->swapin_req_block_ids[req->attn_dp_group_id][req->req_id] = swapin_memory_blocks;
 
         continue;
       }
@@ -571,7 +699,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
 
     // Swapped job still existed, skip launch waiting.
     batch_state_->step_sched_finish = true;
-    KLLM_LOG_DEBUG << "Swapped queue not empty, skip waiting queue.";
+    KLLM_LOG_DEBUG << "Swapped queue not empty, skip processing waiting_queue." << *batch_state_;
     break;
   }
 }
@@ -587,62 +715,72 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
  */
 bool ContinuousBatchingStrategy::ProcessSplitFuseToken(std::shared_ptr<InferRequest> req, size_t &shared_block_num,
                                                        size_t &unique_block_num, size_t &shared_token_num,
-                                                       size_t step_token_num, size_t decode_request_num) {
-  size_t split_fuse_token_num = batch_scheduler_config_.split_fuse_token_num;
-  size_t current_token_num = req->output_tokens.size();
-  size_t tokens_to_split = 0;
-  if (step_token_num < split_fuse_token_num) {
-    tokens_to_split = std::min((current_token_num - shared_token_num + req->block_token_num - 1),
-                               (split_fuse_token_num - step_token_num)) /
-                      req->block_token_num * req->block_token_num;
+                                                       const size_t step_not_kv_cached_token_num,
+                                                       const size_t decode_request_num) {
+  const size_t kSplitFuseTokenNum = batch_scheduler_config_.split_fuse_token_num;
+  const size_t not_kv_cached_token_num = req->forwarding_tokens.size() - shared_token_num;
+  const size_t split_fuse_remain_token_num = kSplitFuseTokenNum - step_not_kv_cached_token_num;  // allow overflow
+  // Skip under these conditions:
+  // 1. Split fuse is disable (kSplitFuseTokenNum == 0)
+  // 2. Current step already meets quota (step_not_kv_cached_token_num >= kSplitFuseTokenNum)
+  // 3. No decode requests (running queue empty), add complete request directly
+  // 4. Enough space for the complete request (not_kv_cached_token_num <= split_fuse_remain_token_num)
+  if (step_not_kv_cached_token_num >= kSplitFuseTokenNum || decode_request_num == 0 ||
+      not_kv_cached_token_num <= split_fuse_remain_token_num) {
+    return false;
+  }
+  // If remain space less than one block, skip processing this request and halt further scheduling.
+  if (split_fuse_remain_token_num < req->block_token_num) {
+    return true;
   }
 
-  if (split_fuse_token_num > 0 && decode_request_num != 0 && tokens_to_split < current_token_num - shared_token_num) {
-    if (tokens_to_split == 0) {
-      // End the scheduling of context decode.
-      return true;
-    }
-    KLLM_LOG_DEBUG << "req " << req->req_id << " shared_block_num " << shared_block_num << " unique_block_num "
-                   << unique_block_num << " shared_token_num " << shared_token_num << " current_token_num "
-                   << current_token_num << " tokens_to_split " << tokens_to_split;
-    req->output_tokens.resize(shared_token_num + tokens_to_split);
-    cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->output_tokens, shared_block_num, unique_block_num,
-                                                shared_token_num);
-    // The `unique_block_num` is decremented here because, during split_fuse operations,
-    // there is no need to pre-allocate a block for decoding purposes.
-    unique_block_num--;
-  }
+  // token num is align to block_token_num. (split_fuse_remain_token_num < not_kv_cached_token_num now)
+  const size_t tokens_to_split = split_fuse_remain_token_num / req->block_token_num * req->block_token_num;
+  KLLM_LOG_DEBUG << *req << " shared_block_num " << shared_block_num << " unique_block_num " << unique_block_num
+                 << " shared_token_num " << shared_token_num << " current_token_num " << req->forwarding_tokens.size()
+                 << " tokens_to_split " << tokens_to_split;
+
+  // split forwarding_tokens
+  req->forwarding_tokens.resize(shared_token_num + tokens_to_split);
+  cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num, unique_block_num,
+                                              shared_token_num);
+  // The `unique_block_num` is decremented here because, during split_fuse operations,
+  // there is no need to pre-allocate a block for decoding purposes.
+  --unique_block_num;
   return false;
 }
 
 void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   KLLM_LOG_DEBUG << "ProcessWaitingQueue invoked, waiting queue size:" << batch_state_->waiting_queue.size()
-                 << ", free block num:" << cache_manager_->GetUsableBlockNumber()
-                 << ", future block num:" << cache_manager_->GetFutureBlockNumber();
+                 << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                 << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
 
   if (batch_state_->waiting_queue.empty()) {
     return;
   }
 
   if (batch_state_->step_sched_finish) {
-    KLLM_LOG_DEBUG << "Skip waiting queue.";
+    KLLM_LOG_DEBUG << "Skip processing waiting_queue." << *batch_state_;
     return;
   }
 
-  size_t total_logits_extra_length = 0;
-  size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
+  const size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
+  auto [step_token_num, step_not_kv_cached_token_num] = CheckRunningQueueStepTokens();
 
   size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
-  size_t step_token_num = 0;
-  CheckRunningQueueStepTokens(step_token_num);
+  size_t step_logits_num = 0;
+  for (const auto &req : batch_state_->schedule_output->running_reqs) {
+    step_logits_num += req->sampling_token_num;
+  }
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
-    CheckJumpForwardRequest(req);
+    req->cache_manager = cache_manager_;
+    JumpForwardRequest(req);
 
     if (req->req_fsm != nullptr && CheckRequestFinish(req)) {
-      cache_manager_->DestroyFinishedRequest(req->req_id);
-      StopRequest(req, Status(RET_SUCCESS));
+      KLLM_LOG_DEBUG << "stop req_id:" << req->req_id << " finished.";
+      StopRequest(req, Status(RET_SUCCESS), false);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
@@ -651,28 +789,28 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
-    req->output_tokens = req->complete_output_tokens;
+    if (req->forwarding_tokens.empty()) {  // new request
+      req->forwarding_tokens = req->output_tokens;
+    }
 
     // When the logits_custom_length is greater than 0, the size of logits to be calculated is logits_custom_length.
-    auto logits_extra_length = (req->logits_custom_length - 1);
     if (req->logits_custom_length > 0) {
-      total_logits_extra_length += logits_extra_length;
+      req->sampling_token_num = req->logits_custom_length;
     }
 
     // Check timeout, no finished req in waiting queue.
     if (CheckRequestTimeout(req)) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " timeout in waiting.";
+      KLLM_LOG_DEBUG << "req timeout in waiting:" << req;
 
-      StopRequest(req, Status(RET_TIMEOUT, "running timeout."));
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), false);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
 
     // Check abort.
     if (req->aborted) {
-      KLLM_LOG_DEBUG << "req " << req->req_id << " aborted in waiting.";
-
-      StopRequest(req, Status(RET_TERMINATED, "client aborted."));
+      KLLM_LOG_DEBUG << "req aborted in waiting:" << req;
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in waiting."), false);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
@@ -680,15 +818,14 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     size_t shared_block_num = 0;
     size_t unique_block_num = 0;
     size_t shared_token_num = 0;
-    cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->output_tokens, shared_block_num, unique_block_num,
+    cache_manager_->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num, unique_block_num,
                                                 shared_token_num);
-    if (ProcessSplitFuseToken(req, shared_block_num, unique_block_num, shared_token_num, step_token_num,
+    if (ProcessSplitFuseToken(req, shared_block_num, unique_block_num, shared_token_num, step_not_kv_cached_token_num,
                               decode_request_num)) {
       break;
     }
 
     req->prefix_cache_len = shared_token_num;
-    req->prefix_cache_blocks_number = shared_block_num;
     req->is_use_prefix_cache = shared_token_num > 0;
 
     if (req->is_use_prefix_cache) {
@@ -697,66 +834,80 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       REPORT_COUNTER(prefix_cache_hit_block_num, shared_block_num);
     }
 
-    size_t current_token_num = req->output_tokens.size();
-    size_t launch_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.launch_block_threshold);
+    const size_t current_token_num = req->forwarding_tokens.size();
+    const size_t launch_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.launch_block_threshold);
 
     // Get usable block number every time, the blocks matched by req are not reusable here.
-    size_t total_free_block_num = cache_manager_->GetRequestUsableBlockNumber(req->req_id);
-    if (step_batch_size + 1 + total_logits_extra_length <= batch_scheduler_config_.max_batch_size &&
-        step_token_num + current_token_num <= batch_scheduler_config_.max_step_tokens &&
+    const size_t total_free_block_num = cache_manager_->GetRequestUsableBlockNumber(req->req_id);
+    if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
+        step_token_num + current_token_num <= dp_max_step_token_num_ &&
         unique_block_num + launch_block_threshold <= total_free_block_num) {
       Status status = cache_manager_->AllocateRequestBlocks(req->req_id, unique_block_num, req->kv_cache_blocks);
-      KLLM_LOG_DEBUG << "waiting req " << req->req_id << " launch, prefix_len:" << req->prefix_cache_len
-                     << ", share_block_num:" << req->prefix_cache_blocks_number
-                     << ", unique_block_num:" << unique_block_num << ", free_block_num:" << total_free_block_num
-                     << ", step_token_num:" << step_token_num << ", current_token_num:" << current_token_num
-                     << ", max_step_tokens:" << batch_scheduler_config_.max_step_tokens;
       if (status.OK()) {
-        step_batch_size += 1;
+        ++step_batch_size;
+        step_logits_num += req->sampling_token_num;
         step_token_num += current_token_num;
+        step_not_kv_cached_token_num += current_token_num - shared_token_num;
 
         // if full matched, skip decode and put it to the end of decode list.
-        if (shared_token_num == req->output_tokens.size()) {
-          KLLM_LOG_DEBUG << "Full matched, skip prefill, req " << req->req_id;
+        if (shared_token_num == req->forwarding_tokens.size()) {
+          KLLM_LOG_DEBUG << "Full matched, skip prefill, " << *req;
           REPORT_COUNTER(full_prompt_matched_req_num, static_cast<size_t>(1));
           REPORT_COUNTER(full_prompt_matched_block_num, shared_block_num);
           REPORT_METRIC(time_to_first_token_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms);
 
           req->infer_stage = InferStage::STATE_DECODE;
-          req->prefix_cache_len = 0;
-          req->prefix_cache_blocks_number = 0;
+          req->kv_cached_token_num = shared_token_num - kStepGenerateTokenNum;
+          req->prefix_cache_len = req->kv_cached_token_num;
           req->is_use_prefix_cache = false;
           batch_state_->schedule_output->running_reqs.insert(
               batch_state_->schedule_output->running_reqs.begin() + decode_request_num, req);
         } else {
-          batch_state_->schedule_output->running_reqs.push_back(req);
+          KLLM_LOG_DEBUG << "shared token not equal forwaing size, " << req;
+          req->kv_cached_token_num = shared_token_num;
+          req->mtp_kv_cached_token_num = req->kv_cached_token_num;
+          if (connector_config_.group_role == GroupRole::DECODE) {
+            batch_state_->transfer_queue.emplace_back(req);
+            it = batch_state_->waiting_queue.erase(it);
+            continue;
+          } else {
+            batch_state_->schedule_output->running_reqs.emplace_back(req);
+            DetermineDraftNum(req);
+          }
         }
 
         it = batch_state_->waiting_queue.erase(it);
         if (batch_scheduler_config_.split_fuse_token_num > 0 &&
-            step_token_num >= batch_scheduler_config_.split_fuse_token_num) {
+            step_not_kv_cached_token_num >= batch_scheduler_config_.split_fuse_token_num) {
           break;
         }
-        cache_manager_->UpdateFlexibleCache(req->req_id, req->output_tokens, shared_token_num,
+        // The flexible cache handling could be placed prior to the split_fuse break. Try moving it after testing.
+        cache_manager_->UpdateFlexibleCache(req->req_id, req->forwarding_tokens, shared_token_num,
                                             req->flexible_cached_copy_tasks);
         continue;
+      } else {
+        KLLM_LOG_ERROR << "Alllocate blocks error, waiting req can not be launched, " << *req << status.GetMessage();
       }
-      KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
       KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and stay in waiting.";
       MergePendingSwapoutRequests(true, false);
     }
+    KLLM_LOG_DEBUG << "total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                   << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
     break;
   }
 }
 
 Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, bool early_stop) {
-  KLLM_LOG_DEBUG << "MergePendingSwapinRequests invoked.";
+  KLLM_LOG_DEBUG << "MergePendingSwapinRequests invoked. " << *batch_state_ << ", blocking:" << blocking
+                 << ", early_stop:" << early_stop;
   // Wait all requests done.
   size_t swapin_left_req_num = 0;
   do {
     std::vector<int64_t> swapin_req_ids;
     Status status = cache_manager_->WaitSwapinRequests(swapin_req_ids, swapin_left_req_num, blocking);
     if (!status.OK()) {
+      KLLM_LOG_ERROR << "Error MergePendingSwapinRequests WaitSwapinRequests failed. swapin_req_ids:" << swapin_req_ids
+                     << ", info: " << status.GetMessage();
       return status;
     }
 
@@ -764,24 +915,28 @@ Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, boo
     for (int64_t req_id : swapin_req_ids) {
       auto it = batch_state_->swapin_pending_requests_.find(req_id);
       if (it == batch_state_->swapin_pending_requests_.end()) {
-        KLLM_LOG_ERROR << "The cached swapin req " << req_id << " is not found in pending queue.";
+        KLLM_LOG_ERROR << "The cached swapin req_id:" << req_id << " is not found in pending queue.";
         continue;
       }
 
       auto &req = it->second;
       status = cache_manager_->MergeSwapinRequest(req->req_id, req->kv_cache_blocks);
       if (!status.OK()) {
+        KLLM_LOG_DEBUG << "Error MergeSwapinRequest " << *req << ", info: " << status.GetMessage();
         return status;
       }
 
       // Record merged swapin request.
-      batch_state_->schedule_output->merged_swapin_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->merged_swapin_req_ids.size()) {
+        batch_state_->schedule_output->merged_swapin_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->merged_swapin_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
-      RECORD_TRACE_EVENT_END("SI", TraceEventType::SwapIn, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
-      KLLM_LOG_DEBUG << "MergePendingSwapinRequests swap in req " << req->req_id
+      KLLM_LOG_DEBUG << "MergePendingSwapinRequests swap in " << req
                      << ", current_block_num:" << req->kv_cache_blocks[0].size()
-                     << ", current_token_size:" << req->output_tokens.size();
-      batch_state_->running_buffer_queue.push_back(req);
+                     << ", current_forwarding_token_num:" << req->forwarding_tokens.size();
+      batch_state_->running_pending_reqs.push_back(req);
       batch_state_->swapin_pending_requests_.erase(it);
     }
   } while (!early_stop && swapin_left_req_num > 0);
@@ -790,7 +945,8 @@ Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, boo
 }
 
 Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bool early_stop) {
-  KLLM_LOG_DEBUG << "MergePendingSwapoutRequests invoked.";
+  KLLM_LOG_DEBUG << "MergePendingSwapoutRequests invoked. " << *batch_state_ << ", blocking:" << blocking
+                 << ", early_stop:" << early_stop;
 
   // Wait all requests done.
   size_t swapout_left_req_num = 0;
@@ -798,43 +954,62 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
     std::vector<int64_t> swapout_req_ids;
     Status status = cache_manager_->WaitSwapoutRequests(swapout_req_ids, swapout_left_req_num, blocking);
     if (!status.OK()) {
+      KLLM_LOG_DEBUG << "Error MergePendingSwapoutRequests WaitSwapoutRequests failed. swapout_req_ids:"
+                     << swapout_req_ids << ", info: " << status.GetMessage();
       return status;
     }
 
+    KLLM_LOG_DEBUG << "finished swapout request size:" << swapout_req_ids.size();
     for (int64_t req_id : swapout_req_ids) {
       auto it = batch_state_->swapout_pending_requests_.find(req_id);
       if (it == batch_state_->swapout_pending_requests_.end()) {
-        KLLM_LOG_ERROR << "The cached swapout req " << req_id << " is not found in pending queue.";
+        KLLM_LOG_ERROR << "The cached swapout req_id:" << req_id << " is not found in pending queue.";
         continue;
       }
 
       auto &req = it->second;
       status = cache_manager_->MergeSwapoutRequest(req->req_id);
       if (!status.OK()) {
+        KLLM_LOG_ERROR << "The cached swapout :" << *req << " failed.";
         return status;
       }
 
       // Record merged swapout request.
-      batch_state_->schedule_output->merged_swapout_req_ids.push_back(req->req_id);
+      if (req->attn_dp_group_id == batch_state_->schedule_output->merged_swapout_req_ids.size()) {
+        batch_state_->schedule_output->merged_swapout_req_ids.push_back(std::vector<int64_t>{req->req_id});
+      } else {
+        batch_state_->schedule_output->merged_swapout_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+      }
 
-      RECORD_TRACE_EVENT_END("SO", TraceEventType::SwapOut, std::to_string(req->req_id), TRACE_THREAD_NAME_SWAP);
-      KLLM_LOG_DEBUG << "MergePendingSwapinRequests swapout req " << req->req_id
-                     << ", current_block_num:" << req->kv_cache_blocks[0].size()
-                     << ", current_token_size:" << req->output_tokens.size();
+      KLLM_LOG_DEBUG << "after finish swapout " << *req << ", current_block_num:" << req->kv_cache_blocks[0].size()
+                     << batch_state_;
+
       batch_state_->swapped_queue[req->req_id] = req;
       batch_state_->swapout_pending_requests_.erase(it);
+      KLLM_LOG_DEBUG << "after finish swapout " << *req << *batch_state_;
     }
   } while (!early_stop && swapout_left_req_num > 0);
 
   return Status();
 }
 
-void ContinuousBatchingStrategy::Schedule() {
-  batch_state_->ResetInfoBeforeSchedule();
-  batch_state_->MergeWaitingBufferQueue();
+void ContinuousBatchingStrategy::ProcessTransferQueue() {
+  if (connector_config_.group_role == GroupRole::DECODE) {
+    ProcessDecodeTransferQueue();
+    AddTransferMeta(batch_state_->transfer_queue);
+  }
+  if (connector_config_.group_role == GroupRole::PREFILL) {
+    ProcessPrefillTransferQueue();
+    AddTransferMeta(batch_state_->schedule_output->running_reqs);
+  }
+}
+
+void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) {
+  batch_state_->MergeWaitingReqs(waiting_reqs);
   ProcessRunningQueue();
   ProcessSwappedQueue();
   ProcessWaitingQueue();
+  ProcessTransferQueue();
 
   REPORT_COUNTER(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
   REPORT_COUNTER(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());

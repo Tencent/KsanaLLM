@@ -15,8 +15,8 @@
 
 namespace ksana_llm {
 
-GGUFFileTensorLoader::GGUFFileTensorLoader(const std::string& file_name)
-    : BaseFileTensorLoader(file_name), gguf_file_(file_name, std::ios::binary | std::ios::ate) {
+GGUFFileTensorLoader::GGUFFileTensorLoader(const std::string& file_name, const bool load_bias)
+    : BaseFileTensorLoader(file_name, load_bias), gguf_file_(file_name, std::ios::binary | std::ios::ate) {
   // Check if the file name has a ".gguf" extension
   if (file_name_.length() > 5) {
     if (file_name_.substr(file_name_.length() - 5) == ".gguf") {
@@ -273,6 +273,9 @@ void GGUFFileTensorLoader::LoadGGUFData() {
 
   for (const auto& item : context_->tensor_info_map) {
     const GGUFTensorInfo& tensor_info = item.second;
+    if (!load_bias_ && tensor_info.name.find(".bias") != std::string::npos) {
+      continue;
+    }
     tensor_ptr_map_[tensor_info.name] = weights_buffer_ + tensor_info.offset;
   }
 }

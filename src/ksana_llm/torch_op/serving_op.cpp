@@ -33,7 +33,6 @@ void SignalHandler(int signal_num) { GetServiceLifetimeManager()->ShutdownServic
 ServingOp::ServingOp() {}
 
 ServingOp::~ServingOp() {
-  Singleton<RequestPacker>::GetInstance()->DestroyTokenizer();
   inference_server_->Stop();
 
   // unreferenced inference_server.
@@ -45,15 +44,6 @@ void ServingOp::InitServing(const std::string &config_file) {
 
   inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
   STATUS_CHECK_FAILURE(inference_server_->Start());
-
-  ModelConfig model_config;
-  STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetModelConfig("", model_config));
-  try {
-    Singleton<RequestPacker>::GetInstance()->InitTokenizer(model_config.path);
-  } catch (const py::error_already_set &e) {
-    PyErr_Clear();
-    KLLM_THROW(fmt::format("Failed to init the tokenizer from {}.", model_config.path));
-  }
 
   // Create lifetime manager.
   SetServiceLifetimeManager(std::make_shared<KsanaServiceLifetimeManager>(inference_server_));
@@ -122,6 +112,7 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("repetition_penalty", &ksana_llm::SamplingConfig::repetition_penalty)
       .def_readwrite("no_repeat_ngram_size", &ksana_llm::SamplingConfig::no_repeat_ngram_size)
       .def_readwrite("encoder_no_repeat_ngram_size", &ksana_llm::SamplingConfig::encoder_no_repeat_ngram_size)
+      .def_readwrite("decoder_no_repeat_ngram_size", &ksana_llm::SamplingConfig::decoder_no_repeat_ngram_size)
       .def_readwrite("num_beams", &ksana_llm::SamplingConfig::num_beams)
       .def_readwrite("num_return_sequences", &ksana_llm::SamplingConfig::num_return_sequences)
       .def_readwrite("length_penalty", &ksana_llm::SamplingConfig::length_penalty)
@@ -179,7 +170,8 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("output_tokens", &ksana_llm::KsanaPythonOutput::output_tokens)
       .def_readwrite("logprobs", &ksana_llm::KsanaPythonOutput::logprobs)
       .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)
-      .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding);
+      .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding)
+      .def_readwrite("finish_status", &ksana_llm::KsanaPythonOutput::finish_status);
 
   // Export `StreamingIterator` to python.
   pybind11::class_<ksana_llm::StreamingIterator, std::shared_ptr<ksana_llm::StreamingIterator>>(m, "StreamingIterator")

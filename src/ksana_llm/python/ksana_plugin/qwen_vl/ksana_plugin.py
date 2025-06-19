@@ -13,7 +13,7 @@ parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
 from qwen_vl.ksana_plugin_model import VITModel
-from plugin_utils import free_cache, adjust_device_memory_ratio
+from plugin_utils import free_cache, adjust_device_memory_ratio, build_trt_process
 
 
 class KsanaPlugin:
@@ -112,31 +112,7 @@ class KsanaPlugin:
 
         # If there is no TRT engine, Start model convert
         if not os.path.exists(trt_path):
-            print(f"[I] Start converting Model!")
-
-            # If there are multiple devices, only one process is needed to convert
-            from filelock import FileLock, Timeout
-            import subprocess
-            lock_file = "build_model.lock"
-            try:
-                with FileLock(lock_file, timeout=1):
-                    print("[W] Lock acquired, running ksana_plugin_model.py")
-                    script = os.path.join(current_dir, "ksana_plugin_model.py")
-                    py_command = f"python {script} {model_path}"
-
-                    # Out of memory: can be converted locally, serving load
-                    result = subprocess.run(py_command, shell=True, stdout=subprocess.PIPE)
-                    log = result.stdout.decode('utf-8')
-                    print(log)
-
-                    if result.returncode != 0:
-                        raise Exception(f"[E] ksana_plugin_model.py failed with error: {result.stderr}")
-
-                    print("[E] ksana_plugin_model.py finished successfully")
-            except Timeout:
-                print("Another instance of ksana_plugin_model.py is running, waiting...")
-                with FileLock(lock_file):
-                    print("Lock acquired after waiting, continuing execution")
+            build_trt_process(current_dir, model_path)
 
         # Load trt
         trt_engine.load()

@@ -22,6 +22,12 @@ class Fp8MatMulLayer : public BaseLayer {
  private:
   int max_m_;
   int max_k_;
+
+#  ifdef ENABLE_CUDA
+  void* cublas_workspace_ptr_{nullptr};
+  int cublas_workspace_block_id_{-1};
+  cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
+#  endif
 };
 
 }  // namespace ksana_llm

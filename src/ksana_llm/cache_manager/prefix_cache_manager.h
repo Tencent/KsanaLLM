@@ -85,15 +85,18 @@ struct PrefixCachedRequest {
 class PrefixCacheManager : public CacheManagerInterface,
                            public BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest> {
  public:
-  explicit PrefixCacheManager(const CacheManagerConfig& cache_manager_config);
+  explicit PrefixCacheManager(const CacheManagerConfig& cache_manager_config,
+                              std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group = nullptr);
   virtual ~PrefixCacheManager();
 
   // Initialize all the memory blocks.
   void InitializeCachedBlocks();
 
+  std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const;
+
   // Get block number that not usable now, but will be usable in future.
   // That is, the blocks used by swapout, but not merged yet.
-  size_t GetFutureBlockNumber();
+  size_t GetFutureFreeBlockNumber();
 
   // Get all usable block number, including free and reusable ones.
   size_t GetUsableBlockNumber();
@@ -101,12 +104,12 @@ class PrefixCacheManager : public CacheManagerInterface,
   // The value is from block mamanger.
   size_t GetHostFreeBlockNumber();
 
-  // Get the needed block num for specific request.
-  size_t GetRequestStepBlockNumber(int64_t req_id);
-
   // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
   // number for the specific request.
   size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens);
+
+  // Get the needed block num for specific request if only one next token.
+  size_t GetRequestStepBlockNumberForOneNextToken(int64_t req_id);
 
   // Get the usable block num for specific request.
   // The method will exclude the cached blocks of this request.
@@ -122,12 +125,12 @@ class PrefixCacheManager : public CacheManagerInterface,
 
   // Update the token ids of this request.
   // This method will update request memory blocks if the origin block is merged.
-  Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,
-                             std::vector<std::vector<int>>& req_block_ids);
+  Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
+                             size_t shareable_kvcache_token_num, std::vector<std::vector<int>>& req_block_ids);
 
   // Get the freeable/needed block num if swap out/in a request.
   Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num);
-  Status GetRequestNeededBlockNum(int64_t req_id, size_t& block_num);
+  Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num);
 
   // Swap out/in specific request async.
   Status SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
@@ -148,7 +151,7 @@ class PrefixCacheManager : public CacheManagerInterface,
   Status MergeSwapinRequest(int64_t req_id, std::vector<std::vector<int>>& req_block_ids);
 
   // Drop a swaped cached request.
-  void DestroySwapedRequest(int64_t req_id);
+  void DestroySwappedRequest(int64_t req_id);
 
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id);

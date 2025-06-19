@@ -4,20 +4,12 @@
 #include "ksana_llm/utils/request_packer.h"
 
 #include "base64.hpp"
+
 #include "ksana_llm/utils/request_serial.h"
+#include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
-
-void RequestPacker::InitTokenizer(const std::string& tokenizer_path) {
-  py::module transformers = py::module::import("transformers");
-  py::object auto_tokenizer = transformers.attr("AutoTokenizer");
-  tokenizer_ = auto_tokenizer.attr("from_pretrained")(tokenizer_path, py::arg("trust_remote_code") = true);
-}
-
-void RequestPacker::DestroyTokenizer() {
-  py::gil_scoped_acquire acquire;
-  tokenizer_ = py::none();
-}
 
 Status RequestPacker::Unpack(const std::string& request_bytes,
                              std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
@@ -30,7 +22,7 @@ Status RequestPacker::Unpack(const std::string& request_bytes,
   auto GetKsanaPythonInput = [this](const RequestSerial& req) -> KsanaPythonInput {
     KsanaPythonInput ksana_python_input;
     if (req.input_tokens.empty()) {  // If input tokens are empty, tokenize the prompt.
-      Tokenize(req.prompt, ksana_python_input.input_tokens);
+      Singleton<Tokenizer>::GetInstance()->Encode(req.prompt, ksana_python_input.input_tokens);
     } else {
       ksana_python_input.input_tokens = req.input_tokens;
     }
@@ -64,7 +56,7 @@ Status RequestPacker::Unpack(const std::string& request_bytes,
     return Status(RET_INVALID_ARGUMENT, "Failed to parse the request.");
   } catch (const py::error_already_set& e) {
     PyErr_Clear();
-    return Status(RET_INVALID_ARGUMENT, fmt::format("Failed to decode the input prompt."));
+    return Status(RET_INVALID_ARGUMENT, "Failed to decode the input prompt.");
   } catch (const std::runtime_error& e) {  // The request specifies invalid target.
     return Status(RET_INVALID_ARGUMENT, e.what());
   } catch (...) {
@@ -105,19 +97,6 @@ Status RequestPacker::Pack(const std::vector<std::shared_ptr<KsanaPythonInput>>&
   msgpack::pack(sbuf, batch_rsp);
 
   response_bytes.assign(sbuf.data(), sbuf.size());
-  return Status();
-}
-
-Status RequestPacker::DeTokenize(const std::vector<int>& input_tokens, std::string& prompt) {
-  pybind11::gil_scoped_acquire acquire;
-  prompt = tokenizer_.attr("decode")(input_tokens, py::arg("skip_special_tokens") = true).cast<std::string>();
-  return Status();
-}
-
-Status RequestPacker::Tokenize(const std::string& prompt, std::vector<int>& input_tokens, bool add_special_tokens) {
-  pybind11::gil_scoped_acquire acquire;
-  py::object tokens = tokenizer_.attr("encode")(prompt, py::arg("add_special_tokens") = add_special_tokens);
-  input_tokens = tokens.cast<std::vector<int>>();
   return Status();
 }
 

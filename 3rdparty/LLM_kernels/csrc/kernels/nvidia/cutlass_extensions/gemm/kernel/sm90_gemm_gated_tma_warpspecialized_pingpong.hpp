@@ -275,7 +275,8 @@ class GemmUniversalGated<ProblemShape_, CollectiveMainloop_, CollectiveEpilogue_
     args.raster_order = params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN
                             ? TileScheduler::RasterOrderOptions::AlongN
                             : TileScheduler::RasterOrderOptions::AlongM;
-    return TileScheduler::get_grid_shape(params.problem_shape, TileShape{}, ClusterShape{}, params.hw_info, args);
+    return TileScheduler::get_grid_shape(params.scheduler, params.problem_shape, TileShape{}, ClusterShape{},
+                                         params.hw_info, args);
   }
 
   static dim3 get_block_shape() { return dim3(MaxThreadsPerBlock, 1, 1); }
@@ -494,7 +495,7 @@ class GemmUniversalGated<ProblemShape_, CollectiveMainloop_, CollectiveEpilogue_
         // Make sure all Consumer Warp Groups have been waited upon
         collective_epilogue.load_tail(epi_load_pipeline, epi_load_pipe_producer_state);
       }  // Epilogue Producer Warp End
-    }    // Producer Warp Group End
+    }  // Producer Warp Group End
 
     else if (warp_group_role == WarpGroupRole::Consumer0 || warp_group_role == WarpGroupRole::Consumer1) {
       cutlass::arch::warpgroup_reg_alloc<MmaRegisterRequirement>();
@@ -562,7 +563,7 @@ class GemmUniversalGated<ProblemShape_, CollectiveMainloop_, CollectiveEpilogue_
         scheduler.advance_to_next_work(NumMmaWarpGroups);
         work_tile_info = scheduler.get_current_work();
       }  // Scheduler work fetch loop
-    }    // Consumer Warp Groups End
+    }  // Consumer Warp Groups End
 #endif
   }
 };

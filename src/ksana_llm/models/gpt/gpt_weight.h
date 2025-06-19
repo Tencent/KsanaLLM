@@ -17,13 +17,13 @@ class GPTWeight : public CommonWeight<T> {
   void ProcessWeights() override;
 
  protected:
-  using CommonWeight<T>::context_;
-  using CommonWeight<T>::rank_;
+  using BaseWeight::context_;
+  using BaseWeight::rank_;
 
-  using CommonWeight<T>::weights_map_;
-  using CommonWeight<T>::weights_data_type_map_;
+  using BaseWeight::weights_data_type_map_;
+  using BaseWeight::weights_map_;
 
-  using CommonWeight<T>::model_config_;
+  using BaseWeight::model_config_;
 
   using CommonWeight<T>::tensor_manager_;
 };

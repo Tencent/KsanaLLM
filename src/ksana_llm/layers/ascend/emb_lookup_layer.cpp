@@ -5,8 +5,6 @@
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/embedding/embedding.h"
-
 namespace ksana_llm {
 
 template <typename T>
@@ -50,11 +48,11 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
         ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
     atb_op_executor_.ResetVariantPack();
     atb_op_executor_.SetInputTensor(embedding_table.GetPtr<void>(), embedding_table.shape,
-                                    static_cast<aclDataType>(embedding_table.dtype));
+                                    static_cast<aclDataType>(DataType(embedding_table.dtype)));
     atb_op_executor_.SetInputTensor(input_ids.GetPtr<void>(), input_ids.shape,
-                                    static_cast<aclDataType>(input_ids.dtype));
+                                    static_cast<aclDataType>(DataType(input_ids.dtype)));
     atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                     static_cast<aclDataType>(output_tensors[0].dtype));
+                                     static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
     atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   }
 

@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
 
@@ -17,7 +18,7 @@ typedef int RandState;
 #endif
 
 namespace ksana_llm {
-struct SamplingDevideParameter {
+struct SamplingDeviceParameter {
   int* device_topKs = nullptr;
   float* device_topPs = nullptr;
   float* device_temperatures = nullptr;
@@ -37,12 +38,12 @@ class BaseSampling {
   BaseSampling(size_t max_batch_size, size_t max_vocab_size)
       : max_batch_size_(max_batch_size), max_vocab_size_(max_vocab_size) {}
   Status Forward(float* logits, uint32_t* output_token, const SamplingConfig* sampling_config,
-                 SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config, Stream& stream);
+                 SamplingDeviceParameter sampling_device_parameter, const ModelConfig* model_config, Stream& stream);
   virtual ~BaseSampling() {}
 
  protected:
   virtual Status RunSampling(float* logits, uint32_t* output_token, const SamplingConfig* sampling_config,
-                             SamplingDevideParameter sampling_devide_parameter, const ModelConfig* model_config,
+                             SamplingDeviceParameter sampling_device_parameter, const ModelConfig* model_config,
                              Stream& stream) = 0;
 
   // The max batch size.

@@ -64,23 +64,22 @@ Status TransLayout(Tensor& tensor, Stream& stream) {
     transdata_param.outCrops[1] = tensor.shape[in_tensor_shape.size() - 1] * tensor.shape[in_tensor_shape.size() - 3];
   }
   void* workspace_ptr;
-  int workspace_block_id;
-  GetBlockManager()->AllocateContiguous(tensor.GetTotalBytes(), workspace_block_id);
-  GetBlockManager()->GetContiguousPtr(workspace_block_id, workspace_ptr);
+  Malloc(&workspace_ptr, tensor.GetTotalBytes());
   transdata_param.transdataType = transdata_type;
   llm_kernels::utils::ATBOperationExecutor atb_op_executor;
-  int32_t rank = GetBlockManager()->GetDeviceId();
+  int32_t rank;
+  GetDevice(&rank);
   atb_op_executor.Init(rank, transdata_param);
-  atb_op_executor.SetInputTensor(tensor.GetPtr<void>(), in_tensor_shape, static_cast<aclDataType>(tensor.dtype),
-                                 src_format);
-  atb_op_executor.SetOutputTensor(workspace_ptr, out_tensor_shape, static_cast<aclDataType>(tensor.dtype),
+  atb_op_executor.SetInputTensor(tensor.GetPtr<void>(), in_tensor_shape,
+                                 static_cast<aclDataType>(DataType(tensor.dtype)), src_format);
+  atb_op_executor.SetOutputTensor(workspace_ptr, out_tensor_shape, static_cast<aclDataType>(DataType(tensor.dtype)),
                                   target_format);
   atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank)), GetWorkSpaceFunc());
   tensor.data_format = GetTensorFormat(target_format);
   tensor.shape = out_tensor_shape;
   MemcpyAsync(tensor.GetPtr<void>(), workspace_ptr, tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE, stream);
   StreamSynchronize(stream);
-  GetBlockManager()->FreeContiguous(workspace_block_id);
+  Free(workspace_ptr);
   return Status();
 }
 }  // namespace ksana_llm

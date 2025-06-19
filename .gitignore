@@ -90,8 +90,10 @@ cmake-build-debug
 *.run
 *.gz
 d.*
+*.ptx
+*.cubin
+
 !CMakeLists.txt
-src/ksana_llm/python/*
 !src/ksana_llm/python/ksana_llm
 !src/ksana_llm/python/ksana_plugin
 !src/ksana_llm/python/kv_scale_files

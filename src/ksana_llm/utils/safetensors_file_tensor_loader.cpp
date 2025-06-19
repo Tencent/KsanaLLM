@@ -10,7 +10,8 @@ using json = nlohmann::json;
 
 namespace ksana_llm {
 // Constructor of SafeTensorsLoader that takes a file name as input
-SafeTensorsLoader::SafeTensorsLoader(const std::string& file_name) : BaseFileTensorLoader(file_name) {
+SafeTensorsLoader::SafeTensorsLoader(const std::string& file_name, const bool load_bias)
+    : BaseFileTensorLoader(file_name, load_bias) {
   // Check if the file name has a ".bin" extension
   if (file_name_.length() > 12) {
     if (file_name_.substr(file_name_.length() - 12) == ".safetensors") {
@@ -33,6 +34,8 @@ DataType SafeTensorsLoader::ConvertDtypeToDataType(const std::string& safetensor
     return TYPE_INT32;
   } else if (safetensors_dtype == "F8_E4M3") {
     return TYPE_FP8_E4M3;
+  } else if (safetensors_dtype == "UI8") {
+    return TYPE_UINT8;
   }
   return TYPE_INVALID;
 }
@@ -66,6 +69,9 @@ void SafeTensorsLoader::LoadSafeTensors() {
   for (const auto& tensor_iter : tensor_dict.items()) {
     // tensor name
     const std::string& tensor_name = tensor_iter.key();
+    if (!load_bias_ && tensor_name.find(".bias") != std::string::npos) {
+      continue;
+    }
     tensor_name_list_.emplace_back(tensor_name);
     json tensor_data = tensor_iter.value();
     if (!tensor_data.contains("data_offsets")) {
@@ -109,9 +115,7 @@ DataType SafeTensorsLoader::GetTensorDataType(const std::string& tensor_name) {
   return tensor_data_type_map_[tensor_name];
 }
 
-std::string SafeTensorsLoader::GetTensorFileName() {
-  return file_name_;
-}
+std::string SafeTensorsLoader::GetTensorFileName() { return file_name_; }
 
 std::vector<size_t> SafeTensorsLoader::GetTensorShape(const std::string& tensor_name) {
   if (!tensor_data_type_map_.count(tensor_name)) {

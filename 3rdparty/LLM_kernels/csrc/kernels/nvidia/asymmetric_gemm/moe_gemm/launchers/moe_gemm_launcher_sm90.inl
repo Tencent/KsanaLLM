@@ -176,6 +176,7 @@ struct HopperGroupedGemmInfo
 
     // Epilogue For Fused Finalize
     using CollectiveEpilogueFinalize = typename cutlass::epilogue::collective::EpilogueMoeFusedFinalizeBuilder< //
+        Arch,                                                                                                   //
         TileShape,                                                                                              //
         ElementCNoVoid, StrideC*,                                                                               //
         ElementFinalOutput, HopperGroupedGemmInput::FusedFinalizeEpilogue::StrideFinalOutput,                   //
@@ -279,7 +280,7 @@ void sm90_generic_moe_gemm_kernelLauncher(HopperGroupedGemmInput hopper_input, i
             if constexpr (FUSION == EpilogueFusion::NONE)
             {
                 auto epi_params = hopper_input.default_epilogue;
-                return EpilogueArguments{epilogue_scalars, reinterpret_cast<ElementCNoVoid const**>(hopper_input.ptr_c),
+                return EpilogueArguments{epilogue_scalars, reinterpret_cast<void const**>(hopper_input.ptr_c),
                     hopper_input.stride_c, reinterpret_cast<ElementD**>(epi_params.ptr_d), epi_params.stride_d};
             }
             else if constexpr (FUSION == EpilogueFusion::FINALIZE)

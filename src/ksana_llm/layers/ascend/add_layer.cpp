@@ -4,6 +4,8 @@
 
 #include "ksana_llm/layers/add_layer.h"
 
+#include <algorithm>
+
 #include "csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 
@@ -21,24 +23,30 @@ Status AddLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
 
 template <typename T>
 Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  output_tensors[0].shape = input_tensors[0].shape;
-  output_tensors[0].dtype = input_tensors[0].dtype;
+  const auto& a = input_tensors[0];
+  const auto& b = input_tensors[1];
+  auto& output = output_tensors[0];
+  output.shape = a.shape;
+  output.dtype = a.dtype;
 
-  if (input_tensors[0].shape[0] == input_tensors[1].shape[0]) {
-    void* out_ptr = output_tensors[0].GetPtr<void>();
-    void* a_ptr = reinterpret_cast<void*>(input_tensors[0].GetPtr<void>());
-    void* b_ptr = reinterpret_cast<void*>(input_tensors[1].GetPtr<void>());
-    reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
-        ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
-    atb_op_executor_.ResetVariantPack();
-    atb_op_executor_.SetInputTensor(a_ptr, input_tensors[0].shape, static_cast<aclDataType>(input_tensors[0].dtype));
-    atb_op_executor_.SetInputTensor(b_ptr, input_tensors[1].shape, static_cast<aclDataType>(input_tensors[1].dtype));
-    atb_op_executor_.SetOutputTensor(out_ptr, output_tensors[0].shape,
-                                     static_cast<aclDataType>(output_tensors[0].dtype));
-    atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
+  void* const out_ptr = output.GetPtr<void>();
+  void* const a_ptr = a.GetPtr<void>();
+  void* const b_ptr = b.GetPtr<void>();
+  reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
+      ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
+  atb_op_executor_.ResetVariantPack();
+  atb_op_executor_.SetInputTensor(a_ptr, a.shape, static_cast<aclDataType>(DataType(a.dtype)));
+
+  // only bias and decode scenarios are involved, a more accurate broadcast check is required in the future.
+  if (a.shape.size() == b.shape.size()) {
+    atb_op_executor_.SetInputTensor(b_ptr, b.shape, static_cast<aclDataType>(DataType(b.dtype)));
   } else {
-    return Status(RET_SEGMENT_FAULT, "add bias not implemented");
+    const std::vector<size_t> reshape({b.shape[0], b.GetElementNumber() / b.shape[0]});
+    atb_op_executor_.SetInputTensor(b_ptr, reshape, static_cast<aclDataType>(DataType(b.dtype)));
   }
+
+  atb_op_executor_.SetOutputTensor(out_ptr, output.shape, static_cast<aclDataType>(DataType(output.dtype)));
+  atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
 
   return Status();
 }

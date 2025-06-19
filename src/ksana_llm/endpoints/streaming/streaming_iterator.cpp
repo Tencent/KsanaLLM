@@ -70,8 +70,8 @@ bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_out
   for (size_t i = 0; i < request_->output_group.size(); i++) {
     OutputTuple& output = request_->output_group[i];
     const auto& output_tokens = std::get<0>(output);
-    ksana_python_output.output_tokens.emplace_back(
-        output_tokens.begin() + request_->input_tokens.size() + request_->padded_size, output_tokens.end());
+    ksana_python_output.output_tokens.emplace_back(output_tokens.begin() + request_->input_tokens.size(),
+                                                   output_tokens.end());
     if (return_logprobs_) ksana_python_output.logprobs.push_back(std::get<1>(output));
   }
   return true;

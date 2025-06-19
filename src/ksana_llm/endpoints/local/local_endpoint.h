@@ -17,8 +17,6 @@ class LocalEndpoint {
   LocalEndpoint(const EndpointConfig& endpoint_config,
                 Channel<std::pair<Status, std::shared_ptr<Request>>>& request_queue);
 
-  virtual ~LocalEndpoint() {}
-
   // Handle a request.
   virtual Status Handle(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                         const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx,

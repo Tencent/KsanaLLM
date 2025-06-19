@@ -1,0 +1,239 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 977eb935c..6ad08da46 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -22,7 +22,7 @@ endif()
+ # GCC 版本大于等于 11.2.0 时，则启动编译选项 TRPC_BUILD_WITH_CPP20
+ #---------------------------------------------------------------------------------------
+ set(GCC_SUPPORT_CPP20_COROUTINES_VERSION 11.2.0)
+-if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL GCC_SUPPORT_CPP20_COROUTINES_VERSION)
++if(NOT DEFINED TRPC_BUILD_WITH_CPP20 AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL GCC_SUPPORT_CPP20_COROUTINES_VERSION)
+     set(TRPC_BUILD_WITH_CPP20 ON)
+ endif()
+ 
+diff --git a/cmake/atta_api.cmake b/cmake/atta_api.cmake
+index 9885da4fc..12f2948f1 100644
+--- a/cmake/atta_api.cmake
++++ b/cmake/atta_api.cmake
+@@ -4,10 +4,6 @@
+ # 下载外部依赖源文件需要使用到cmake的FetchContent命令
+ include(FetchContent)
+ 
+-# 编译yaml-cpp需要c++17
+-add_definitions(-std=c++17)
+-
+-
+ # 定义外部库的版本
+ set(ATTA_API_VER v1.1.3)
+ set(ATTA_GIT_URL http://git.woa.com/atta/attaapi_cplus.git)
+@@ -41,4 +37,4 @@ set_target_properties(
+ add_library(trpc_atta_api ALIAS attaapi)
+ 
+ set(TARGET_INCLUDE_PATHS    ${TARGET_INCLUDE_PATHS}
+-                            ${TRPC_ROOT_PATH}/cmake_third_party/atta_api)
+\ No newline at end of file
++                            ${TRPC_ROOT_PATH}/cmake_third_party/atta_api)
+diff --git a/cmake/cls_api.cmake b/cmake/cls_api.cmake
+index 1c1d65335..0ed5dd282 100644
+--- a/cmake/cls_api.cmake
++++ b/cmake/cls_api.cmake
+@@ -4,9 +4,6 @@
+ # 下载外部依赖源文件需要使用到cmake的FetchContent命令
+ include(FetchContent)
+ 
+-# 编译yaml-cpp需要c++17
+-add_definitions(-std=c++17)
+-
+ # 定义外部库的版本
+ set(CLS_API_VER v1.0.1)
+ set(CLS_GIT_URL https://github.com/TencentCloud/tencentcloud-cls-sdk-cpp.git)
+@@ -44,4 +41,4 @@ target_link_libraries(clssdk libprotobuf)
+ add_library(trpc_cls_api ALIAS clssdk)
+ 
+ set(TARGET_INCLUDE_PATHS    ${TARGET_INCLUDE_PATHS}
+-                            ${TRPC_ROOT_PATH}/cmake_third_party/cls_api/cpp/)
+\ No newline at end of file
++                            ${TRPC_ROOT_PATH}/cmake_third_party/cls_api/cpp/)
+diff --git a/cmake/polaris_api.cmake b/cmake/polaris_api.cmake
+index 1f55f7a5c..0652a84ea 100644
+--- a/cmake/polaris_api.cmake
++++ b/cmake/polaris_api.cmake
+@@ -4,8 +4,6 @@
+ # 下载外部依赖源文件需要使用到cmake的FetchContent命令
+ include(FetchContent)
+ 
+-add_definitions(-DREVISION="trpc-cpp")
+-
+ # 定义外部库的版本
+ set(POLARIS_API_GIT_TAG v0.15.16)
+ set(POLARIS_API_GIT_URL http://git.woa.com/polaris/polaris-cpp.git)
+@@ -38,11 +36,11 @@ if(NOT DEFINED GRPC_NGHTTP2 OR GRPC_NGHTTP2 STREQUAL "")
+     # 使用polaris sdk中自带的nghttp2
+     message(STATUS "Use nghttp2 existing in polaris")
+ else()
+-    # 使用polaris sdk中自带的nghttp2
+-    message(STATUS "Use nghttp2 existing in GRPC")
+-    execute_process(COMMAND rm ${TRPC_ROOT_PATH}/cmake_third_party/polaris_api/third_party/nghttp2 -rf
++    # 使用GRPC中存在的nghttp2
++    message(STATUS "Use nghttp2 existed in GRPC")
++    execute_process(COMMAND rm ${polaris_api_SOURCE_DIR}/third_party/nghttp2 -rf
+             WORKING_DIRECTORY ${polaris_api_SOURCE_DIR})
+-    execute_process(COMMAND cp -rfp ${TRPC_ROOT_PATH}/cmake_third_party/nghttp2 .
++    execute_process(COMMAND cp -rfp ${nghttp2_SOURCE_DIR} .
+             WORKING_DIRECTORY ${polaris_api_SOURCE_DIR}/third_party/)
+ endif()
+ 
+@@ -53,10 +51,22 @@ else()
+     set(PROTO_LIB ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libprotobuf.a)
+ endif()
+ 
++# 将CMake定义的全局编译定义传递给Makefile
++set(CMAKE_COMPILE_DEFINITIONS)
++get_directory_property(CMAKE_DEFINITIONS COMPILE_DEFINITIONS)
++if(CMAKE_DEFINITIONS)
++    foreach(item ${CMAKE_DEFINITIONS})
++      list(APPEND CMAKE_COMPILE_DEFINITIONS "-D${item}")
++    endforeach()
++endif()
++list(JOIN CMAKE_COMPILE_DEFINITIONS " " CMAKE_COMPILE_DEFINITIONS)
++
++set(PROTO_DIR ${com_google_protobuf_SOURCE_DIR})
+ set(PROTOBUF_PROTOC_EXECUTABLE protoc)
+ add_custom_command(
+     OUTPUT ${polaris_api_SOURCE_DIR}/build64/lib/libpolaris_api.a
+-    COMMAND make PROTOBUF_DIR=${TRPC_ROOT_PATH}/cmake_third_party/protobuf/ PROTOBUF_LIB=${PROTO_LIB} PROTOC=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/protoc -j8
++    COMMAND make CMAKE_COMPILE_DEFINITIONS=${CMAKE_COMPILE_DEFINITIONS}
++            PROTOBUF_DIR=${PROTO_DIR} PROTOBUF_LIB=${PROTO_LIB} PROTOC=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/protoc -j8
+     WORKING_DIRECTORY ${polaris_api_SOURCE_DIR}
+     COMMENT "build libpolaris_api"
+     DEPENDS ${PROTOBUF_PROTOC_EXECUTABLE} ${PROTO_LIB}
+diff --git a/cmake/tools/fbs_cpp_plugin_CMakeLists.txt b/cmake/tools/fbs_cpp_plugin_CMakeLists.txt
+index e45f3785b..16a7cc27f 100644
+--- a/cmake/tools/fbs_cpp_plugin_CMakeLists.txt
++++ b/cmake/tools/fbs_cpp_plugin_CMakeLists.txt
+@@ -1,7 +1,5 @@
+ cmake_minimum_required(VERSION 3.14)
+ 
+-add_definitions(-std=c++17)
+-
+ project(fbs_utils)
+ 
+ set(TARGET_NAME fbs_cpp_plugin)
+@@ -44,4 +42,4 @@ add_executable(fbs_cpp_plugin ${FBS_TOOL_SRC_FILES})
+ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+             COMPONENT DEVEL
+             DESTINATION include/
+-            FILES_MATCHING PATTERN "*.h")
+\ No newline at end of file
++            FILES_MATCHING PATTERN "*.h")
+diff --git a/cmake/tools/fbs_tools_CMakeLists.txt b/cmake/tools/fbs_tools_CMakeLists.txt
+index 75767c481..65d92bf15 100644
+--- a/cmake/tools/fbs_tools_CMakeLists.txt
++++ b/cmake/tools/fbs_tools_CMakeLists.txt
+@@ -1,7 +1,5 @@
+ cmake_minimum_required(VERSION 3.14)
+ 
+-add_definitions(-std=c++17)
+-
+ project(fbs_utils)
+ 
+ set(TARGET_NAME fbs_tool_utils)
+@@ -29,4 +27,4 @@ target_link_libraries(fbs_tool_utils)
+ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+             COMPONENT DEVEL
+             DESTINATION include/
+-            FILES_MATCHING PATTERN "*.h")
+\ No newline at end of file
++            FILES_MATCHING PATTERN "*.h")
+diff --git a/cmake/tools/opentelemetry_proto_CMakeLists.txt b/cmake/tools/opentelemetry_proto_CMakeLists.txt
+index 81ab68ebb..df9b549b4 100644
+--- a/cmake/tools/opentelemetry_proto_CMakeLists.txt
++++ b/cmake/tools/opentelemetry_proto_CMakeLists.txt
+@@ -1,7 +1,5 @@
+ cmake_minimum_required(VERSION 3.14)
+ 
+-add_definitions(-std=c++17)
+-
+ project(tps_sdk)
+ 
+ set(TARGET_NAME open_tps_proto)
+diff --git a/cmake/tools/polaris_Makefile b/cmake/tools/polaris_Makefile
+index 97a61bb81..1ea34ff21 100644
+--- a/cmake/tools/polaris_Makefile
++++ b/cmake/tools/polaris_Makefile
+@@ -18,7 +18,7 @@ GEN_DIR = polaris/proto/
+ TEST_DIR = $(BUILD)/test
+ 
+ CXXFLAGS += $(M32_FLAGS) -fPIC -pipe -fno-ident -D_REENTRANT -g -O2 -DREVISION=\"$(REVISION)\" \
+-						-W -Wall
++						-W -Wall $(CMAKE_COMPILE_DEFINITIONS)
+ LDFLAGS = -shared $(M32_FLAGS)
+ ARFLAGS = -rcs
+ 
+@@ -61,7 +61,8 @@ all: $(POLARIS_SLIB)
+ # yaml-cpp
+ YAML_DIR = third_party/yaml-cpp
+ YAML_INC_DIR = $(YAML_DIR)/include
+-YAML_LIB = $(YAML_DIR)/build$(BIT)/libyaml-cpp.a
++# Polaris使用命名空间为YAML_0_3的yaml-cpp，将产出的libyaml-cpp.a添加前缀polaris
++YAML_LIB = $(YAML_DIR)/build$(BIT)/libpolaris-yaml-cpp.a
+ YAML_SRC = $(wildcard $(YAML_DIR)/src/*.cpp)
+ YAML_OBJECTS = $(YAML_SRC:$(YAML_DIR)/src/%.cpp=$(YAML_DIR)/build$(BIT)/%.o)
+ 
+@@ -70,7 +71,7 @@ $(YAML_LIB): $(YAML_OBJECTS)
+ 	@mkdir -p $(@D)
+ 	$(AR) $(ARFLAGS) $@ $(YAML_OBJECTS)
+ 
+-YAML_CXXFLAGS = $(M32_FLAGS) -DNDEBUG -fPIC -pipe -fno-ident -D_REENTRANT -Wall
++YAML_CXXFLAGS = $(M32_FLAGS) -DNDEBUG -fPIC -pipe -fno-ident -D_REENTRANT -Wall $(CMAKE_COMPILE_DEFINITIONS)
+ $(YAML_DIR)/build$(BIT)/%.o: $(YAML_DIR)/src/%.cpp
+ 	@mkdir -p $(@D)
+ 	@$(CXX) $(YAML_CXXFLAGS) -I$(YAML_INC_DIR) -o $@ -c $<
+@@ -88,7 +89,7 @@ $(NGHTTP2_LIB): $(NGHTTP2_OBJECTS)
+ 	@mkdir -p $(@D)
+ 	$(AR) $(ARFLAGS) $@ $(NGHTTP2_OBJECTS)
+ 
+-NGHTTP2_CFLAGS = $(M32_FLAGS) -DNDEBUG -fPIC -pipe -fno-ident -D_REENTRANT
++NGHTTP2_CFLAGS = $(M32_FLAGS) -DNDEBUG -fPIC -pipe -fno-ident -D_REENTRANT $(CMAKE_COMPILE_DEFINITIONS)
+ $(NGHTTP2_DIR)/build$(BIT)/%.o: $(NGHTTP2_DIR)/%.c
+ 	@mkdir -p $(@D)
+ 	$(CC) $(NGHTTP2_CFLAGS) -I$(NGHTTP2_DIR)/includes -o $@ -c $<
+@@ -128,7 +129,7 @@ $(RE2_LIB): $(RE2_OBJECTS)
+ 	$(AR) $(ARFLAGS) $@ $(RE2_OBJECTS)
+ 
+ RE2_CXXFLAGS = $(M32_FLAGS) -fPIC -O3 -pthread -DNDEBUG -Wall -Wextra\
+-  -Wno-implicit-fallthrough -Wno-unused-parameter -Wno-missing-field-initializers
++  -Wno-implicit-fallthrough -Wno-unused-parameter -Wno-missing-field-initializers $(CMAKE_COMPILE_DEFINITIONS)
+ $(RE2_DIR)/build$(BIT)/%.o: $(RE2_DIR)/%.cc
+ 	@mkdir -p $(@D)
+ 	$(CXX) $(RE2_CXXFLAGS) -I$(RE2_INC_DIR) -o $@ -c $<
+diff --git a/cmake/tools/static_lib_pack.sh b/cmake/tools/static_lib_pack.sh
+index 20b8de570..f7ec4432e 100644
+--- a/cmake/tools/static_lib_pack.sh
++++ b/cmake/tools/static_lib_pack.sh
+@@ -14,7 +14,7 @@ fi
+ if [ -d "${project_path}/build/" ]; then
+     cd ${project_path}/build
+ 
+-    find ./* -name '*.a' |xargs -I param sh -c "cp param ${target_path}"
++    find ./* -name '*.a' -path ${target_path} -prune |xargs -I param sh -c "cp param ${target_path}"
+ 
+     if [ -f "${rootpath}/cmake_third_party/teg_monitor_api/agentsdk/c++/build/lib/libmonitor_api.a" ]; then
+         find ${rootpath}/cmake_third_party/teg_monitor_api/agentsdk/c++/build/lib/* -name '*.a' | xargs -I param sh -c "cp param ${target_path}"
+diff --git a/trpc/tools/rpc_press/main.cc b/trpc/tools/rpc_press/main.cc
+index ee78aeaa8..d9d948d7c 100644
+--- a/trpc/tools/rpc_press/main.cc
++++ b/trpc/tools/rpc_press/main.cc
+@@ -74,8 +74,10 @@ int main(int argc, char* argv[]) {
+ 
+   std::cout << "FLAGS_config:" << FLAGS_config << std::endl;
+ 
+-  int ret = ::trpc::TrpcConfig::GetInstance()->Init(FLAGS_config);
+-  assert(ret == 0);
++  if(::trpc::TrpcConfig::GetInstance()->Init(FLAGS_config) != 0) {
++    std::cerr << "Load config failed." << std::endl;
++    return -1;
++  }
+ 
+   ::trpc::InitFrameworkRuntime();
+ 

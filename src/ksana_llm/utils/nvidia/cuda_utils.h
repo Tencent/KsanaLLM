@@ -12,6 +12,7 @@
 
 #include <cublasLt.h>
 #include <cudaTypedefs.h>
+#include <nvToolsExt.h>
 
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
@@ -83,5 +84,31 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
   if (status != CUDA_SUCCESS) {   \
     return status;                \
   }
+
+template <typename Func>
+float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100) {
+  cudaEvent_t begin, end;
+  cudaEventCreate(&begin);
+  cudaEventCreate(&end);
+
+  for (int i = 0; i < warmups; ++i) {
+    func();
+  }
+
+  cudaEventRecord(begin, stream);
+  for (int i = 0; i < iterations; ++i) {
+    func();
+  }
+  cudaEventRecord(end, stream);
+  cudaEventSynchronize(end);
+
+  float cost_time;
+  cudaEventElapsedTime(&cost_time, begin, end);
+
+  cudaEventDestroy(begin);
+  cudaEventDestroy(end);
+
+  return cost_time / iterations;
+}
 
 }  // namespace ksana_llm

@@ -3,9 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/cuda_graph_runner.h"
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include <algorithm>
 #include <thread>
+#include "ksana_llm/utils/nvidia/cuda_utils.h"
 namespace ksana_llm {
 
 void CudaGraphRunner::BeginCapture(cudaStream_t stream, int rank_) {
@@ -54,8 +54,8 @@ size_t CudaGraphBuilder::GetMaxGraphBatchSize(size_t max_num_seqs) {
   if (batch_sizes_to_catpure_list.empty()) {
     GenerateBatchSizesConfig(batch_sizes_to_catpure_list);
   }
-  if (std::find(batch_sizes_to_catpure_list.begin(), batch_sizes_to_catpure_list.end(), padded_size)
-    != batch_sizes_to_catpure_list.end()) {
+  if (std::find(batch_sizes_to_catpure_list.begin(), batch_sizes_to_catpure_list.end(), padded_size) !=
+      batch_sizes_to_catpure_list.end()) {
     return padded_size;
   }
   return batch_sizes_to_catpure_list.back();

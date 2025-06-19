@@ -1,0 +1,14 @@
+{
+    "language_model.model.tok_embeddings.weight": "model.embed_tokens.weight",
+    "language_model.model.layers.(\\d+).attention.wo.weight": "model.layers.$1.self_attn.o_proj.weight",
+    "language_model.model.layers.(\\d+).feed_forward.w3.weight": "model.layers.$1.mlp.up_proj.weight",
+    "language_model.model.layers.(\\d+).feed_forward.w1.weight": "model.layers.$1.mlp.gate_proj.weight",
+    "language_model.model.layers.(\\d+).feed_forward.w2.weight": "model.layers.$1.mlp.down_proj.weight",
+    "language_model.model.layers.(\\d+).attention_norm.weight": "model.layers.$1.input_layernorm.weight",
+    "language_model.model.layers.(\\d+).ffn_norm.weight": "model.layers.$1.post_attention_layernorm.weight",
+    "language_model.output.weight":"lm_head.weight",
+    "language_model.model.layers.(\\d+).attention.wqkv.weight": "model.layers.$1.self_attn.W_rqkv_pack.weight",
+    "language_model.model.norm.weight": "model.norm.weight",
+    "vision_model.*": "deprecated",
+    "mlp1.*": "deprecated"
+}

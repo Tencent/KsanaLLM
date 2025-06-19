@@ -32,27 +32,44 @@ template <typename T, int32_t RESIDUAL_NUM, typename T2 = T>
 __global__ void AddBiasResidualKernel(T* output, const T2* __restrict__ input, const T* __restrict__ residual1,
                                       const T* __restrict__ residual2, const T* __restrict__ bias,
                                       const float* __restrict__ scale_inter, const float* __restrict__ scale_out,
-                                      const int32_t m, const int32_t n) {
-  const int32_t col_index = blockIdx.y * blockDim.x + threadIdx.x;
-  if (col_index < n) {
-    T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[col_index];
+                                      const int32_t total_element_num, const int32_t n) {
+  const int32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index < total_element_num) {
+    T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[index % n];
     T in;
     if (std::is_same<T, T2>::value) {
-      in = CastCudaDataType<T>(input[blockIdx.x * n + col_index]);  // cast required for compilation when T != T2
+      in = CastCudaDataType<T>(input[index]);  // cast required for compilation when T != T2
     } else {
-      in = CastCudaDataType<float>(input[blockIdx.x * n + col_index]) * (*scale_inter) * (*scale_out);
+      in = CastCudaDataType<float>(input[index]) * (*scale_inter) * (*scale_out);
     }
 
     if (RESIDUAL_NUM == 1) {
       if (residual1) {
-        output[blockIdx.x * n + col_index] = in + residual1[blockIdx.x * n + col_index] + bias_val;
+        output[index] = in + residual1[index] + bias_val;
       } else {
-        output[blockIdx.x * n + col_index] = in + bias_val;
+        output[index] = in + bias_val;
       }
     } else if (RESIDUAL_NUM == 2) {
-      output[blockIdx.x * n + col_index] =
-          in + residual1[blockIdx.x * n + col_index] + residual2[blockIdx.x * n + col_index] + bias_val;
+      output[index] = in + residual1[index] + residual2[index] + bias_val;
     }
+  }
+}
+
+template <typename T>
+__global__ void AddResidualKernel(T* output, const T* __restrict__ input, const T* __restrict__ residual,
+                                  const int32_t total_element_num) {
+  const int32_t index = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
+  if (index < total_element_num) {
+    const int32_t idx = index / 4;
+    T input_val = input[idx];
+    T residual_val = residual[idx];
+    T output_val_tmp;
+
+    output_val_tmp.x = input_val.x + residual_val.x;
+    output_val_tmp.y = input_val.y + residual_val.y;
+    output_val_tmp.z = input_val.z + residual_val.z;
+    output_val_tmp.w = input_val.w + residual_val.w;
+    output[idx] = output_val_tmp;
   }
 }
 
@@ -63,26 +80,43 @@ void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const 
   if (((scale_inter == nullptr) ^ (scale_out == nullptr))) {
     throw std::runtime_error("Cannot use `scale_inter` without `scale_out`");
   }
-
+  constexpr int32_t BLOCK_SIZE = 256;
+  int32_t total_element_num = m * n;
   const bool should_scale_input = scale_inter != nullptr;
-  int32_t blocks_per_row = ceil(float(n) / ADD_BIAS_RES_BLOCK_SIZE);
-  dim3 grid(m, blocks_per_row);
-  dim3 block(min(n, ADD_BIAS_RES_BLOCK_SIZE));
-  if (residual2 == nullptr) {
-    if (should_scale_input) {
+  if (should_scale_input) {
+    int32_t block_num = ceil(float(m * n) / BLOCK_SIZE);
+    dim3 grid(block_num);
+    dim3 block(BLOCK_SIZE);
+    if (residual2 == nullptr) {
       AddBiasResidualKernel<T, 1><<<grid, block, 0, stream>>>(output, reinterpret_cast<const int32_t*>(input),
-                                                              residual1, residual2, bias, scale_inter, scale_out, m, n);
+                                                              residual1, residual2, bias, scale_inter, scale_out,
+                                                              total_element_num, n);
     } else {
-      AddBiasResidualKernel<T, 1>
-          <<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr, nullptr, m, n);
+      AddBiasResidualKernel<T, 2><<<grid, block, 0, stream>>>(output, reinterpret_cast<const int32_t*>(input),
+                                                              residual1, residual2, bias, scale_inter, scale_out,
+                                                              total_element_num, n);
     }
   } else {
-    if (should_scale_input) {
-      AddBiasResidualKernel<T, 2><<<grid, block, 0, stream>>>(output, reinterpret_cast<const int32_t*>(input),
-                                                              residual1, residual2, bias, scale_inter, scale_out, m, n);
+    const size_t kVecSize = 4;
+    int32_t block_num = ceil(float(total_element_num) / BLOCK_SIZE);
+    if (bias == nullptr && residual2 == nullptr && total_element_num % kVecSize == 0) {
+      block_num = ceil(float(block_num) / kVecSize);
+      dim3 grid(block_num);
+      dim3 block(BLOCK_SIZE);
+      using VecType = typename utils::PackType<T, kVecSize>::type;
+      AddResidualKernel<VecType>
+          <<<grid, block, 0, stream>>>(reinterpret_cast<VecType*>(output), reinterpret_cast<const VecType*>(input),
+                                       reinterpret_cast<const VecType*>(residual1), total_element_num);
     } else {
-      AddBiasResidualKernel<T, 2>
-          <<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr, nullptr, m, n);
+      dim3 grid(block_num);
+      dim3 block(BLOCK_SIZE);
+      if (residual2 == nullptr) {
+        AddBiasResidualKernel<T, 1><<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr,
+                                                                nullptr, total_element_num, n);
+      } else {
+        AddBiasResidualKernel<T, 2><<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr,
+                                                                nullptr, total_element_num, n);
+      }
     }
   }
 }

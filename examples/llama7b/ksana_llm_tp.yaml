@@ -1,0 +1,24 @@
+setting:
+  global:
+    tensor_para_size: 2
+    pipeline_para_size: 1
+    enable_lora_adapter: false
+  batch_scheduler:
+    waiting_timeout_in_ms: 600000
+    max_waiting_queue_len: 100
+    max_step_tokens: 4096
+    max_batch_size: 40
+    max_token_len: 1024
+  block_manager:
+    block_token_num: 16
+    reserved_device_memory_ratio: 0.05
+    lora_deivce_memory_ratio: 0.0
+    lora_host_memory_factor: 10.0
+    block_device_memory_ratio: -1.0
+    block_host_memory_factor: 0.0
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+model_spec:
+  base_model:
+    model_dir: /model/llama-hf/7B/

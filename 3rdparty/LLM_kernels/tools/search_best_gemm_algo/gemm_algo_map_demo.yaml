@@ -1,0 +1,23 @@
+86:
+  - 11080:
+      - batch_size: 1
+        m: 1024
+        n: 33
+        k: 33
+        a_data_type: 2
+        b_data_type: 2
+        c_data_type: 2
+        compute_type: 0
+        trans_a: 1
+        trans_b: 1
+        op_type: 0
+        gpu_elapsed_ms: 0.027776
+        blas_algo_id:
+          - 64424509464
+          - 4294967296
+          - 0
+          - 0
+          - 477186931097601
+          - 8589934594
+          - 292057907202
+          - 309237645312

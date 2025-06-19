@@ -11,9 +11,17 @@ message(STATUS "torch_op_SRCS: ${torch_op_SRCS}")
 add_library(torch_serving SHARED ${torch_op_SRCS} ${host_stub_SRCS})
 
 if(WITH_CUDA OR WITH_TOPS)
-  target_link_libraries(torch_serving PRIVATE "${TORCH_LIBRARIES}" ksana_llm_libs)
+  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs)
 endif()
 
 if(WITH_ACL)
-  target_link_libraries(torch_serving PRIVATE "${TORCH_LIBRARIES}" ksana_llm_libs layers kernels)
+  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs layers kernels)
+endif()
+
+# for test
+if(WITH_STANDALONE_TEST)
+  file(GLOB_RECURSE serving_op_test_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/torch_op/*test.cpp)
+  message(STATUS "serving_op_test_SRCS: ${serving_op_test_SRCS}")
+  cpp_test(serving_op_test SRCS ${serving_op_test_SRCS} DEPS torch_serving runtime utils data_hub)
 endif()

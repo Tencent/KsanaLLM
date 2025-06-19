@@ -10,11 +10,12 @@
 namespace ksana_llm {
 
 std::shared_ptr<CacheManagerInterface> CacheManagerFactory::CreateCacheManager(
-    const CacheManagerConfig& cache_manager_config) {
+    const CacheManagerConfig& cache_manager_config,
+    std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group) {
   if (cache_manager_config.enable_prefix_caching) {
-    return std::make_shared<PrefixCacheManager>(cache_manager_config);
+    return std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
   } else {
-    return std::make_shared<DirectCacheManager>(cache_manager_config);
+    return std::make_shared<DirectCacheManager>(cache_manager_config, block_allocator_group);
   }
 }
 

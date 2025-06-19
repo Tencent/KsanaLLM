@@ -51,6 +51,8 @@
 #include "opentelemetry/trace/semantic_conventions.h"
 
 namespace ksana_llm {
+const char SCOPE_VERSION[] = "1.2.0";
+
 class NullBuffer : public std::streambuf {
   virtual int overflow(int c) { return c; }
 };
@@ -76,6 +78,7 @@ class HttpTextMapCarrier : public opentelemetry::context::propagation::TextMapCa
 class Profiler {
  public:
   struct Monitor {
+    // Step 1: Define the metrics object, should consider using a Counter or a Histogram.
     struct Call {
       std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_total_num;
       std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> forward_req_error_num;
@@ -88,6 +91,7 @@ class Profiler {
       std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> prefix_cache_hit_block_num;
       std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> full_prompt_matched_req_num;
       std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> full_prompt_matched_block_num;
+      std::unique_ptr<opentelemetry::metrics::Counter<uint64_t>> metric_zero_output_token_num;
 
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_batch_size;
       std::unique_ptr<opentelemetry::metrics::Histogram<uint64_t>> batch_scheduler_waiting_size;
@@ -134,6 +138,7 @@ class Profiler {
   uint64_t export_timeout_millis_;
   opentelemetry::sdk::common::AttributeMap attr_;
 
+  // Step 2: Define the metrics key name.
   static constexpr std::string_view kForwardReqTotalNum = "forward_req_total_num";
   static constexpr std::string_view kForwardReqErrorNum = "forward_req_error_num";
   static constexpr std::string_view kForwardReqTimeoutNum = "forward_req_timeout_num";
@@ -163,7 +168,9 @@ class Profiler {
 
   static constexpr std::string_view kInputTokensNum = "metric_input_tokens_num";
   static constexpr std::string_view kOutputTokenNum = "metric_output_token_num";
+  static constexpr std::string_view kZeroOutputTokenNum = "metric_zero_output_token_num";
 
+  // Step 3: Add the metrics key name to the metrics_ set.
   std::unordered_set<std::string_view> metrics_ = {kForwardReqTotalNum,
                                                    kForwardReqErrorNum,
                                                    kForwardReqTimeoutNum,
@@ -188,6 +195,7 @@ class Profiler {
                                                    kTimeToFirstTokenMs,
                                                    kTimeToPerOutputTokenMs,
                                                    kInputTokensNum,
-                                                   kOutputTokenNum};
+                                                   kOutputTokenNum,
+                                                   kZeroOutputTokenNum};
 };
 }  // namespace ksana_llm

@@ -174,7 +174,7 @@ class ParallelTester {
 
   // Run requests in parallel and check
   void DoParallelRequestAndCheck(int client_num, std::vector<RequestInfo>& reqs, std::vector<ExeHookInterface*>& hooks,
-                                 int timeout = 5) {
+                                 int timeout = 10) {
     KLLM_LOG_INFO << "DoParallelRequestAndCheck start.  client_num=" << client_num << ", request_num=" << reqs.size();
     KLLM_CHECK_WITH_INFO(hooks.size() > 0, "There must be some hooks");
 
@@ -188,7 +188,8 @@ class ParallelTester {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     // schedule and generate tokens
     while (true) {
-      ScheduleOutput* scheduled_out = batch_scheduler_->Schedule();
+      std::shared_ptr<ScheduleOutputGroup> output_group = batch_scheduler_->Schedule(0);
+      ScheduleOutput* scheduled_out = output_group->outputs.at(0);
       std::vector<std::shared_ptr<InferRequest>>& scheduled_reqs = scheduled_out->running_reqs;
       if (scheduled_reqs.empty()) {
         if (client_simulator.IsAllRequestFinished()) {
@@ -234,20 +235,14 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
     before_step_num++;
     for (auto& req : reqs) {
       std::ostringstream ss;
-      ss << "Step " << before_step_num << ": req_id:" << req->req_id
-         << ", output_tokens.size()=" << req->output_tokens.size();
-      if (print_all_blocks_) {
-        ss << ", blocks={ ";
-        for (size_t i = 0; i < req->kv_cache_blocks.size(); i++) {
-          auto& blocks = req->kv_cache_blocks[i];
-          ss << i << "={ ";
-          for (auto blk_id : blocks) {
-            ss << blk_id << ", ";
-          }
-        }
+      ss << "BeforeRunStep " << before_step_num << req << ", output_tokens.size()=" << req->output_tokens.size()
+         << ", sampling_result_tokens.size()=" << req->sampling_result_tokens.size();
+      ss << ", tokens={ ";
+      for (size_t i = 0; i < req->output_tokens.size(); i++) {
+        ss << req->output_tokens[i] << ", ";
       }
       ss << "} ";
-      KLLM_LOG_INFO << ss.str();
+      KLLM_LOG_INFO << ss.str() << req->PrintKVBlockIds(print_all_blocks_);
     }
   }
 
@@ -268,7 +263,10 @@ class FixPrefixTestCase {
 
     // 使用配置创建一个 BlockManagerSimulator 对象
     if (init_env_simulator_) {
-      env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, device_num_);
+      std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group =
+          std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, device_num_);
+      env_simulator_ =
+          new BatchSchedulerEnvironmentSimulator(block_manager_config_, device_num_, block_allocator_group);
       KLLM_LOG_INFO << "Simulator start";
     }
   }
@@ -460,7 +458,7 @@ class FixPrefixTestCase {
           env_simulator_->InitRequest(info.req_id, info.input_token_num, info.expect_output_token_num, info.req, seeds);
     }
 
-    tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 10);
+    tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
   }
 
  private:

@@ -30,7 +30,6 @@ class LlamaWeight : public BaseWeight {
  private:
   // the common weight instance.
   std::shared_ptr<CommonWeight<T>> common_weight_ = nullptr;
-  ModelConfig model_config_;
 };
 
 }  // namespace ksana_llm

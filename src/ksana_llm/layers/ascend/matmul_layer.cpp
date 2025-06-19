@@ -29,21 +29,21 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   // TODO(karlluo): support bias
   int64_t m = input_tensors[0].shape[0];
   int64_t n = (GetACLFormat(input_tensors[1].data_format) == aclFormat::ACL_FORMAT_FRACTAL_NZ)
-                  ? input_tensors[1].shape[1] * input_tensors[1].shape[3]
-                  : input_tensors[1].shape[1];
+                  ? size_t(input_tensors[1].shape[1]) * size_t(input_tensors[1].shape[3])
+                  : size_t(input_tensors[1].shape[1]);
   output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
   output_tensors[0].dtype = input_tensors[0].dtype;
   reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_))
       ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
   atb_op_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
-                                  static_cast<aclDataType>(input_tensors[0].dtype),
+                                  static_cast<aclDataType>(DataType(input_tensors[0].dtype)),
                                   GetACLFormat(input_tensors[0].data_format));
   atb_op_executor_.SetInputTensor(input_tensors[1].GetPtr<void>(), input_tensors[1].shape,
-                                  static_cast<aclDataType>(input_tensors[1].dtype),
+                                  static_cast<aclDataType>(DataType(input_tensors[1].dtype)),
                                   GetACLFormat(input_tensors[1].data_format));
   atb_op_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                   static_cast<aclDataType>(output_tensors[0].dtype),
+                                   static_cast<aclDataType>(DataType(output_tensors[0].dtype)),
                                    GetACLFormat(output_tensors[0].data_format));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();

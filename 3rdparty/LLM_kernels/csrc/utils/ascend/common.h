@@ -50,12 +50,10 @@ void InnerCheckACLError(T result, const char* func, const char* file, const int 
 
 #define ACL_CHECK_RET(val) llm_kernels::utils::InnerCheckACLError((val), #val, __FILE__, __LINE__)
 
-static const std::unordered_map<aclDataType, size_t> SizeOfAclDataType = {{aclDataType::ACL_FLOAT16, sizeof(uint16_t)},
-                                                                          {aclDataType::ACL_INT64, sizeof(int64_t)},
-                                                                          {aclDataType::ACL_FLOAT, sizeof(float)},
-                                                                          {aclDataType::ACL_BOOL, sizeof(bool)},
-                                                                          {aclDataType::ACL_UINT8, sizeof(uint8_t)},
-                                                                          {aclDataType::ACL_BF16, sizeof(uint16_t)}};
+static const std::unordered_map<aclDataType, size_t> SizeOfAclDataType = {
+    {aclDataType::ACL_FLOAT16, sizeof(uint16_t)}, {aclDataType::ACL_INT64, sizeof(int64_t)},
+    {aclDataType::ACL_FLOAT, sizeof(float)},      {aclDataType::ACL_BOOL, sizeof(bool)},
+    {aclDataType::ACL_UINT8, sizeof(uint8_t)},    {aclDataType::ACL_BF16, sizeof(uint16_t)}};
 
 int64_t GetShapeSize(const std::vector<int64_t>& shape);
 
@@ -79,10 +77,6 @@ void SaveNpy(const aclTensor* tensor, const void* tensor_workspace_ptr, const st
 template <typename T>
 void SaveNpyFromPtr(const std::string& numpy_type, const std::vector<T>& tensor_shape, const size_t dtype_size,
                     void* data_ptr, const std::string& filename);
-
-void ParseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data);
-
-int32_t ParseNpyHeader(FILE*& f_ptr, uint32_t header_len, std::vector<size_t>& shape);
 
 template <typename T>
 void LoadNpyToPtr(const std::string& filename, T* data_ptr, std::vector<size_t>& tensor_shape, bool is_on_host = true);

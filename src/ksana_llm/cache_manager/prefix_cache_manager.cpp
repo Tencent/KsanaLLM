@@ -9,7 +9,6 @@
 #include <string>
 
 #include "ksana_llm/cache_manager/base_cache_manager.h"
-#include "ksana_llm/cache_manager/prefix_cache_manager_test_helper.h"
 #include "ksana_llm/runtime/request_state.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/ret_code.h"
@@ -18,8 +17,9 @@
 
 namespace ksana_llm {
 
-PrefixCacheManager::PrefixCacheManager(const CacheManagerConfig& cache_manager_config)
-    : BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>(cache_manager_config) {
+PrefixCacheManager::PrefixCacheManager(const CacheManagerConfig& cache_manager_config,
+                                       std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group)
+    : BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>(cache_manager_config, block_allocator_group) {
   cache_manager_config_ = cache_manager_config;
 
   root_cached_block_ = new PrefixCachedBlock();
@@ -32,28 +32,31 @@ PrefixCacheManager::~PrefixCacheManager() {
 }
 
 void PrefixCacheManager::InitializeCachedBlocks() {
-  size_t total_device_block_num = GetBlockManager()->GetDeviceFreeBlockNumber();
+  size_t total_device_block_num = block_allocator_group_->GetDeviceBlockAllocator()->GetFreeBlockNumber();
 
   // block id 0 is root, so here start with block id 1.
   for (size_t i = 1; i <= total_device_block_num; ++i) {
     PrefixCachedBlock* cached_block = CreateCachedBlock(i);
 
     // allocate memory block on every device.
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       std::vector<int> blocks;
-      GetBlockManager()->SetDeviceId(j);
-      GetBlockManager()->AllocateBlocks(1, blocks);
+      block_allocator_group_->GetDeviceBlockAllocator(j)->AllocateBlocks(1, blocks);
       cached_block->memory_block_ids[j] = blocks[0];
     }
     free_cached_blocks_.push(cached_block);
   }
-  KLLM_LOG_DEBUG << "PrefixCacheManager initialized, device num:" << cache_manager_config_.tensor_para_size
+  KLLM_LOG_DEBUG << "PrefixCacheManager initialized, device num:" << block_device_num_
                  << ", device block num:" << free_cached_blocks_.size()
-                 << ", host block num:" << GetBlockManager()->GetHostFreeBlockNumber();
+                 << ", host block num:" << block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber();
 }
 
-size_t PrefixCacheManager::GetFutureBlockNumber() {
-  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetFutureBlockNumber();
+std::shared_ptr<BlockAllocatorGroupInterface> PrefixCacheManager::GetBlockAllocatorGroup() const {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetBlockAllocatorGroup();
+}
+
+size_t PrefixCacheManager::GetFutureFreeBlockNumber() {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetFutureFreeBlockNumber();
 }
 
 size_t PrefixCacheManager::GetUsableBlockNumber() {
@@ -82,20 +85,16 @@ size_t PrefixCacheManager::GetHostFreeBlockNumber() {
 }
 
 size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
-  auto it = cached_requests_.find(req_id);
+  const auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
   }
-  size_t block_token_num = cache_manager_config_.block_token_num;
-  if (input_token_lens + block_token_num <= it->second->cached_blocks.size() * block_token_num) {
-    KLLM_LOG_ERROR << fmt::format(
-        "GetError RequestStepBlockNumber req_id:{}, input_token_lens:{}, cached_blocks_size:{}", req_id,
-        input_token_lens, it->second->cached_blocks.size());
-  }
-  return (input_token_lens + block_token_num) / block_token_num - it->second->cached_blocks.size();
+  const size_t block_token_num = cache_manager_config_.block_token_num;
+  const size_t total_require_block_num = (input_token_lens + block_token_num) / block_token_num;
+  return total_require_block_num - std::min(total_require_block_num, it->second->cached_blocks.size());
 }
 
-size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id) {
+size_t PrefixCacheManager::GetRequestStepBlockNumberForOneNextToken(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_THROW(FormatStr("Get step block number for req %d error, req not exist.", req_id));
@@ -169,7 +168,7 @@ PrefixCachedBlock* PrefixCacheManager::FindChildCacheBlock(PrefixCachedBlock* bl
 
 PrefixCachedBlock* PrefixCacheManager::CreateEmptyCachedBlock() {
   PrefixCachedBlock* cached_block = new PrefixCachedBlock();
-  cached_block->memory_block_ids.resize(cache_manager_config_.tensor_para_size);
+  cached_block->memory_block_ids.resize(block_device_num_);
   cached_block->token_ids.resize(cache_manager_config_.block_token_num);
 
   cached_block->is_shareable = false;
@@ -277,7 +276,7 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   auto new_shared_token_num = shared_token_num + prefix_append_len;
 
   // Iterate through the token_ids to find the best matching block for flexible caching
-  for (int offset = new_shared_token_num; offset < new_shared_token_num + block_token_num; offset++) {
+  for (uint32_t offset = new_shared_token_num; offset < new_shared_token_num + block_token_num; offset++) {
     if (min_flexible_cache_num + offset > token_ids.size()) {
       break;
     }
@@ -286,8 +285,8 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
     auto map_it = flexible_cache_map_.find(dst_token_ids);
     if (map_it != flexible_cache_map_.end()) {
       for (auto block : map_it->second) {
-        int hit_num = block_token_num;
-        int start_idx = block_token_num - (offset - new_shared_token_num);
+        size_t hit_num = block_token_num;
+        uint32_t start_idx = block_token_num - (offset - new_shared_token_num);
         cached_block = block;
         if (!cached_block->inactive_requests.empty()) {
           continue;
@@ -351,9 +350,9 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   }
 
   // Calculate the number of flexible cached tokens to resize the tasks vector
-  int new_flexible_cached_tokens = flexible_cache_len + prefix_append_len;
+  size_t new_flexible_cached_tokens = flexible_cache_len + prefix_append_len;
   flexible_cached_copy_tasks.resize(new_flexible_cached_tokens);
-  int idx = 0;
+  size_t idx = 0;
   int src_shared_token_num = GetPrefixLen(prefix_append_block);
   // Copy the prefix append block tokens to the flexible cache tasks
   for (; idx < prefix_append_len; idx++) {
@@ -466,7 +465,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
                                                  std::vector<std::vector<int>>& req_block_ids) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Allocate block for req %d error, req not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Allocate block for req %d error, req not exist.", req_id));
   }
   PrefixCachedRequest* cached_request = it->second.get();
 
@@ -485,30 +484,37 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   // Reuse some unreferenced blocks.
   size_t free_block_num = 0;
   if (needed_blocks > 0 && !FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks)) {
-    return Status(RET_OUT_OF_MEMORY, FormatStr("Allocate %d blocks for req %d error, no more usable blocks, free:%d.",
-                                               block_num, req_id, free_cached_blocks_.size()));
+    return Status(RET_OUT_OF_DEVICE_EMORY,
+                  FormatStr("Allocate %d blocks for req %d error, no more usable blocks, free:%d.", block_num, req_id,
+                            free_cached_blocks_.size()));
   }
 
   // I donot want to check req block size here, because caller should guard this.
-  if (req_block_ids[0].empty()) {
+  const size_t req_block_num = req_block_ids[0].size();
+  if (req_block_num == 0) {
     cached_request->req_state = RequestState::REQUEST_STATE_RUNNING;
+  }
 
-    for (size_t i = 0; i < cached_request->cached_blocks.size(); ++i) {
-      PrefixCachedBlock* cb = cached_request->cached_blocks[i];
+  // The prefix cache may be invalid. Refer to cached_request for the authoritative data and clean up the invalid parts.
+  for (auto& req_block_ids_tp : req_block_ids) {
+    req_block_ids_tp.resize(std::min(req_block_ids_tp.size(), cached_request->cached_blocks.size()));
+  }
 
-      // Fill prefix memory blocks.
-      for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
-        req_block_ids[j].push_back(cb->memory_block_ids[j]);
-      }
+  for (size_t i = req_block_num; i < cached_request->cached_blocks.size(); ++i) {
+    PrefixCachedBlock* cb = cached_request->cached_blocks[i];
 
-      // Not reusable if no request associated with it.
-      if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
-        reusable_cached_blocks_.erase(cb);
-      }
-
-      // Associate request to prefill cached block.
-      cb->active_requests[req_id] = std::make_pair(i, cached_request);
+    // Fill prefix memory blocks.
+    for (size_t j = 0; j < block_device_num_; ++j) {
+      req_block_ids[j].push_back(cb->memory_block_ids[j]);
     }
+
+    // Not reusable if no request associated with it.
+    if (cb->active_requests.empty() && cb->inactive_requests.empty()) {
+      reusable_cached_blocks_.erase(cb);
+    }
+
+    // Associate request to prefill cached block.
+    cb->active_requests[req_id] = std::make_pair(i, cached_request);
   }
 
   // Try to allocate from free list.
@@ -517,7 +523,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
     free_cached_blocks_.pop();
 
     // Fill memory block ids,
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       req_block_ids[j].push_back(cached_block->memory_block_ids[j]);
     }
 
@@ -586,7 +592,7 @@ Status PrefixCacheManager::MergeFilledCachedBlocks(PrefixCachedRequest* cached_r
   cached_request->cached_blocks[block_index] = dst_cached_block;
 
   // Update internal memory block ids of the request.
-  for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
+  for (size_t i = 0; i < block_device_num_; ++i) {
     req_block_ids[i][block_index] = dst_cached_block->memory_block_ids[i];
   }
 
@@ -643,7 +649,7 @@ Status PrefixCacheManager::MergeSwapinCachedBlocks(PrefixCachedRequest* cached_r
 
   // Update internal memory block ids of current request.
   // Other request's memory blocks will be updated in its self merge progress.
-  for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
+  for (size_t i = 0; i < block_device_num_; ++i) {
     req_block_ids[i][block_index] = dst_cached_block->memory_block_ids[i];
   }
 
@@ -674,7 +680,7 @@ Status PrefixCacheManager::AppendSwapinCachedBlock(PrefixCachedRequest* cached_r
   InsertFlexibleCacheMap(cached_block);
 
   // Update internal memory block ids of current request.
-  for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
+  for (size_t i = 0; i < block_device_num_; ++i) {
     req_block_ids[i][block_index] = cached_block->memory_block_ids[i];
   }
 
@@ -685,23 +691,30 @@ Status PrefixCacheManager::AppendSwapinCachedBlock(PrefixCachedRequest* cached_r
   return Status();
 }
 
-Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& token_ids,
+Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
+                                               size_t shareable_kvcache_token_num,
                                                std::vector<std::vector<int>>& req_block_ids) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Update request token error, req %d is not found.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Update request token error, req %d is not found.", req_id));
   }
 
   PrefixCachedRequest* cached_request = it->second.get();
 
+  if (kvcached_token_ids.size() < shareable_kvcache_token_num) {
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Update request token error,  kvcached_token_ids.size=%d < shareable_kvcache_token_num=%d.",
+                            kvcached_token_ids.size(), shareable_kvcache_token_num));
+  }
+
   // Return if block is not full.
-  size_t filled_block_num = (token_ids.size() - 1) / cache_manager_config_.block_token_num;
+  size_t filled_block_num = shareable_kvcache_token_num / cache_manager_config_.block_token_num;
   if (filled_block_num <= cached_request->shared_block_num) {
     return Status();
   }
 
   if (cached_request->cached_blocks.size() < filled_block_num) {
-    return Status(RET_RUNTIME,
+    return Status(RET_RUNTIME_FAILED,
                   FormatStr("Update request token error,  req %d block size %d less than filled block num %d.", req_id,
                             cached_request->cached_blocks.size(), filled_block_num));
   }
@@ -710,7 +723,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
   for (size_t i = cached_request->shared_block_num; i < filled_block_num; ++i) {
     // Fill token ids
     memcpy(cached_request->cached_blocks[i]->token_ids.data(),
-           token_ids.data() + (i * cache_manager_config_.block_token_num),
+           kvcached_token_ids.data() + (i * cache_manager_config_.block_token_num),
            cache_manager_config_.block_token_num * sizeof(int));
 
     // Append new filled block to tree.
@@ -724,7 +737,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
 Status PrefixCacheManager::UpdateCachedRequestState(int64_t req_id, RequestState req_state) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Update request state error, req %d is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Update request state error, req %d is not exist.", req_id));
   }
 
   // Only swap out/in should call this.
@@ -780,7 +793,7 @@ void PrefixCacheManager::RemoveCachedBlockFromTimedList(PrefixCachedBlock* cache
 Status PrefixCacheManager::GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Get freeable block num of req error, req %d is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Get freeable block num of req error, req %d is not exist.", req_id));
   }
 
   block_num = 0;
@@ -795,10 +808,10 @@ Status PrefixCacheManager::GetRequestFreeableBlockNum(int64_t req_id, size_t& bl
   return Status();
 }
 
-Status PrefixCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& block_num) {
+Status PrefixCacheManager::GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Get needed block num of req error, req %d is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Get needed block num of req error, req %d is not exist.", req_id));
   }
 
   block_num = 0;
@@ -810,7 +823,7 @@ Status PrefixCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& bloc
   }
 
   // Make sure there is enough blocks for next step.
-  block_num += GetRequestStepBlockNumber(req_id);
+  block_num += GetRequestStepBlockNumberForOneNextToken(req_id);
 
   return Status();
 }
@@ -818,12 +831,12 @@ Status PrefixCacheManager::GetRequestNeededBlockNum(int64_t req_id, size_t& bloc
 Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_block_num, size_t& free_block_num,
                                                std::vector<int>& swapped_memory_block_ids) {
   if (!swapin_task_queue_.empty() || !swapin_cached_block_buffer_.empty() || !finish_swapin_request_.empty()) {
-    return Status(RET_RUNTIME, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Cannot swapout req %d, some swapin jobs is in progress.", req_id));
   }
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Swapout req %d error, req is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Swapout req %d error, req is not exist.", req_id));
   }
 
   // Note: here must from tail to head. If swap out failed, do not change anything.
@@ -852,10 +865,11 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   }
 
   swapped_block_num = dev_swapout_blocks.size();
-  if (GetBlockManager()->GetHostFreeBlockNumber() < cache_manager_config_.tensor_para_size * swapped_block_num) {
-    return Status(RET_OUT_OF_MEMORY, FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.",
-                                               req_id, cache_manager_config_.tensor_para_size * swapped_block_num,
-                                               GetBlockManager()->GetHostFreeBlockNumber()));
+  if (block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber() < block_device_num_ * swapped_block_num) {
+    return Status(RET_OUT_OF_DEVICE_EMORY,
+                  FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.", req_id,
+                            block_device_num_ * swapped_block_num,
+                            block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber()));
   }
 
   // Update request state from all associated blocks.
@@ -894,7 +908,7 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   std::vector<PrefixCachedBlock*> host_swapout_blocks;
   for (size_t i = 0; i < dev_swapout_blocks.size(); ++i) {
     PrefixCachedBlock* cached_block = CreateEmptyCachedBlock();
-    GetBlockManager()->AllocateHostBlocks(cache_manager_config_.tensor_para_size, cached_block->memory_block_ids);
+    block_allocator_group_->GetHostBlockAllocator()->AllocateBlocks(block_device_num_, cached_block->memory_block_ids);
     host_swapout_blocks.push_back(cached_block);
 
     // Append new cached block to buffer list.
@@ -914,12 +928,12 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
                                               std::vector<std::vector<int>>& req_block_ids,
                                               std::vector<int>& swapped_memory_block_ids) {
   if (!swapout_task_queue_.empty() || !swapout_cached_block_buffer_.empty() || !finish_swapout_request_.empty()) {
-    return Status(RET_RUNTIME, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
   }
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Swap in req %d error, req is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Swap in req %d error, req is not exist.", req_id));
   }
 
   std::vector<PrefixCachedBlock*> swapin_host_blocks;
@@ -931,14 +945,14 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   }
 
   // Allocate block for next step.
-  size_t step_block_num = GetRequestStepBlockNumber(req_id);
+  size_t step_block_num = GetRequestStepBlockNumberForOneNextToken(req_id);
 
   // Check whether enough memory exist, do not change anything swapin failed.
   size_t free_block_num = 0;
   size_t swapin_block_num = swapin_host_blocks.size() + step_block_num;
   if (free_cached_blocks_.size() < swapin_block_num &&
       !FreeCachedBlocks(swapin_block_num - free_cached_blocks_.size(), free_block_num)) {
-    return Status(RET_OUT_OF_MEMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
+    return Status(RET_OUT_OF_DEVICE_EMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
   }
   block_num = swapin_block_num;
 
@@ -962,7 +976,7 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
     free_cached_blocks_.pop();
 
     // Fill memory block ids,
-    for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+    for (size_t j = 0; j < block_device_num_; ++j) {
       req_block_ids[j].push_back(cached_block->memory_block_ids[j]);
     }
 
@@ -1003,7 +1017,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
 
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
-    return Status(RET_RUNTIME, FormatStr("Merge swapped req %d error, req is not exist.", req_id));
+    return Status(RET_RUNTIME_FAILED, FormatStr("Merge swapped req %d error, req is not exist.", req_id));
   }
 
   // Note: must from begin to end.
@@ -1014,7 +1028,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
     // Already on the tree, this node maybe merged by other request.
     if (cb->parent != nullptr) {
       // Update internal memory block ids of merged block.
-      for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+      for (size_t j = 0; j < block_device_num_; ++j) {
         req_block_ids[j][i] = cb->memory_block_ids[j];
       }
       continue;
@@ -1025,7 +1039,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
       AppendSwapinCachedBlock(it->second.get(), i, cb, req_block_ids);
     } else {
       // Update internal memory block ids of unfilled block.
-      for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
+      for (size_t j = 0; j < block_device_num_; ++j) {
         req_block_ids[j][i] = cb->memory_block_ids[j];
       }
     }
@@ -1043,7 +1057,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
   return Status();
 }
 
-void PrefixCacheManager::DestroySwapedRequest(int64_t req_id) {
+void PrefixCacheManager::DestroySwappedRequest(int64_t req_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_LOG_ERROR << "DestroyFinishedRequest error, req " << req_id << " is not found in cached queue.";
@@ -1056,7 +1070,7 @@ void PrefixCacheManager::DestroySwapedRequest(int64_t req_id) {
     if (!cb->is_device_location) {
       // free unique block directly, may be filled or unfilled.
       if (cb->active_requests.empty() && cb->inactive_requests.size() <= 1) {
-        GetBlockManager()->FreeHostBlocks(cb->memory_block_ids);
+        block_allocator_group_->GetHostBlockAllocator()->FreeBlocks(cb->memory_block_ids);
         delete cb;
         continue;
       }

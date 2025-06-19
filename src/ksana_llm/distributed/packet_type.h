@@ -38,6 +38,10 @@ enum PacketType {
   CONTROL_REQ_SHUTDOWN = 14,
   CONTROL_RSP_SHUTDOWN = 15,
 
+  // expert parallel.
+  CONTROL_REQ_EXPERT_PARALLEL = 16,
+  CONTROL_RSP_EXPERT_PARALLEL = 17,
+
   // unknown type.
   PACKET_TYPE_UNKNOWN = 255
 };

@@ -16,7 +16,8 @@ include(external/base64)
 include(external/msgpack)
 include(external/opentelemetry)
 include(external/re2)
+include(external/cppzmq)
+include(external/libzmq)
 
 # import subprojects
 add_subdirectory(ksana_llm)
-add_subdirectory(endpoints_impl)

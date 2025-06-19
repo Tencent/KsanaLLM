@@ -2,10 +2,11 @@
 
 ==============================================================================*/
 #pragma once
-
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/distributed/control_message.h"
 #include "ksana_llm/distributed/node_info.h"
@@ -25,54 +26,61 @@ class ControlChannel {
   ~ControlChannel();
 
   // For master node only.
-  Status Listen();
+  virtual Status Listen();
 
   // Close open port.
-  Status Close();
+  virtual Status Close();
 
   // For slave node only.
-  Status Connect();
+  virtual Status Connect();
 
   // disconnect from master.
-  Status Disconnect();
+  virtual Status Disconnect();
 
   // Wait until all nodes arrive same location.
-  Status Barrier();
+  virtual Status Barrier();
 
   // Add node to cluster.
-  Status AddNode();
+  virtual Status AddNode();
 
   // Synchronize model layers for every node.
-  Status SynchronizeNodeLayers();
+  // If master_offload_layer_num > 0, offload that many layers from master node to other nodes evenly
+  Status SynchronizeNodeLayers(size_t master_offload_layer_num);
 
   // Synchronize block num.
   Status SynchronizeCacheBlockNum();
 
   // Shutdown the pipeline cluster.
-  Status ShutdownCluster();
+  virtual Status ShutdownCluster();
 
- private:
+  size_t GetWorldSize() { return world_size_; }
+  int GetNodeRank() { return node_rank_; }
+  std::string GetMasterHost() { return master_host_; }
+  uint16_t GetMasterPort() { return master_port_; }
+
+ protected:
   // worker to master.
   Status HandleServerPacket(NodeInfo* node_info, Packet* packet);
 
   // master to woker
   Status HandleClientPacket(NodeInfo* node_info, Packet* packet);
 
+ private:
   // Add node.
-  Status ProcessAddNodeRequest(NodeInfo* node_info, Packet* req_packet);
-  Status ProcessAddNodeResponse(NodeInfo* node_info, Packet* rsp_packet);
+  virtual Status ProcessAddNodeRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessAddNodeResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // heartbeat
-  Status ProcessHeartbeatRequest(NodeInfo* node_info, Packet* req_packet);
-  Status ProcessHeartbeatResponse(NodeInfo* node_info, Packet* rsp_packet);
+  virtual Status ProcessHeartbeatRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessHeartbeatResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // Barrier
-  Status ProcessBarrierRequest(NodeInfo* node_info, Packet* req_packet);
-  Status ProcessBarrierResponse(NodeInfo* node_info, Packet* rsp_packet);
+  virtual Status ProcessBarrierRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessBarrierResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // Layers
-  Status ProcessLayerRequest(NodeInfo* node_info, Packet* req_packet);
-  Status ProcessLayerResponse(NodeInfo* node_info, Packet* rsp_packet);
+  virtual Status ProcessLayerRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessLayerResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // cache block num
   Status ProcessBlockNumRequest(NodeInfo* node_info, Packet* req_packet);
@@ -87,10 +95,17 @@ class ControlChannel {
   Status ProcessShutdownResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // heartbeat thread handle.
-  Status ProcessHeartbeatLoop();
+  virtual Status ProcessHeartbeatLoop();
 
   // send schedule output to workers.
-  Status ProcessSendScheduleOutputLoop();
+  virtual Status ProcessSendScheduleOutputLoop();
+
+  virtual Status ProcessExpertParallelResponse(NodeInfo* node_info, Packet* req_packet) { return Status(); }
+  virtual Status ProcessExpertParallelRequest(NodeInfo* node_info, Packet* req_packet) { return Status(); }
+
+  // Generate layer distribution for all nodes
+  // If master_offload_layer_num > 0, offload that many layers from master node to other nodes evenly
+  std::map<int, std::pair<int, int>> GenerateLayerDistribution(int num_layer, size_t master_offload_layer_num);
 
  private:
   std::shared_ptr<RawSocket> raw_socket_ = nullptr;

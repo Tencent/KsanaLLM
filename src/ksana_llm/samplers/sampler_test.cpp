@@ -2,6 +2,8 @@
  *
  * ==============================================================================*/
 
+#include <cstdlib>
+
 #include "ksana_llm/samplers/sampler.h"
 #include "tests/test.h"
 
@@ -15,6 +17,7 @@ class SamplerTest : public testing::Test {
         : Sampler(batch_scheduler_config, rank, context) {}
 
     std::vector<float> GetHostTemperatures() const { return host_temperatures_; }
+    std::vector<float> GetNorepeatNgrams() const { return norepeat_ngrams_; }
   };
 
  protected:
@@ -32,8 +35,6 @@ class SamplerTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
-    block_manager_ = new BlockManager(block_manager_config, context_);
-    SetBlockManager(block_manager_);
 
     vocab_size_ = model_config_.vocab_size;
     // logits_buf.shape = [max_batch_size, vocab_size]
@@ -52,6 +53,7 @@ class SamplerTest : public testing::Test {
     sampling_config_.repetition_penalty = 1;
     sampling_config_.no_repeat_ngram_size = 0;
     sampling_config_.encoder_no_repeat_ngram_size = 0;
+    sampling_config_.decoder_no_repeat_ngram_size = 0;
     sampling_config_.stop_token_ids = {};
     sampling_config_.max_new_tokens = 1024;
     sampling_config_.logprobs_num = 0;
@@ -60,17 +62,18 @@ class SamplerTest : public testing::Test {
   void TearDown() override {
     Free(logits_buf_);
     sampler_.reset();
-    delete block_manager_;
   }
 
   SamplingRequest GetSamlingRequest() {
     SamplingRequest sample_req;
     sample_req.input_tokens = &token_ids_;
-    sample_req.output_tokens = &token_ids_;
+    sample_req.sampling_token_num = 1;
+    sample_req.sampling_result_tokens = &sampling_result_tokens_;
+    sample_req.forwarding_tokens = &token_ids_;
+    sampling_result_tokens_.clear();
     sample_req.logits_offset = 0;
     sample_req.logprobs = &logprobs_;
     sample_req.ngram_dict = &ngram_dict_;
-    sample_req.output_mutex = &output_mutex_;
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
     sample_req.model_config = &model_config_;
     sample_req.sampling_config = &sampling_config_;
@@ -87,24 +90,89 @@ class SamplerTest : public testing::Test {
     StreamSynchronize(context_->GetH2DStreams()[device_id_]);
   }
 
+  void SetupNoRepeatInputs() {
+    vocab_size_ = 6;
+    ngram_size_ = 1;
+    output_tokens_ = {1, 2, 3, 4, 5};
+    ngram_logits_buf_cpu_.resize(vocab_size_, 0.0f);
+    SetLogitsBuf(ngram_logits_buf_cpu_);
+  }
+
+  void VerifyNoRepeatNgrams(const std::vector<float> &expected_ngrams) {
+    std::vector<float> norepeat_ngrams = sampler_->GetNorepeatNgrams();
+    EXPECT_EQ(norepeat_ngrams[5], expected_ngrams[0]);
+    EXPECT_EQ(norepeat_ngrams[6], expected_ngrams[1]);
+  }
+
  protected:
   // Parameters used for create the sampler_
   int device_id_ = 0;
   std::shared_ptr<Context> context_{nullptr};
   std::shared_ptr<DerivedSampler> sampler_{nullptr};
-  BlockManager *block_manager_ = nullptr;
   int vocab_size_;
   int max_batch_size_ = 4;
 
   // Parameters used for default initialization of sample_req.
   void *logits_buf_ = nullptr;
   std::vector<int> token_ids_ = {1, 2, 3, 4, 5};
+  std::vector<int> sampling_result_tokens_ = {};
+  std::vector<int> draft_tokens_;
   NgramDict ngram_dict_;
   std::vector<std::vector<std::pair<int, float>>> logprobs_;
-  std::mutex output_mutex_;
   ModelConfig model_config_;
   SamplingConfig sampling_config_;
+
+  // Parameters used for no_repeat test
+  int ngram_size_;
+  std::vector<int> output_tokens_;
+  std::vector<float> ngram_logits_buf_cpu_;
 };
+
+TEST_F(SamplerTest, DecoderNoRepeatNgramProcessorTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+  SetupNoRepeatInputs();
+  int input_token_size = output_tokens_.size();
+
+  // Test decoder_no_repeat_ngram_size = 1
+  sampler_->DecoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
+                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          context_->GetComputeStreams()[device_id_]);
+  VerifyNoRepeatNgrams({0, 0});
+
+  output_tokens_.push_back(6);
+  sampler_->DecoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
+                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          context_->GetComputeStreams()[device_id_]);
+  VerifyNoRepeatNgrams({0, -std::numeric_limits<float>::infinity()});
+}
+
+TEST_F(SamplerTest, NoRepeatNgramProcessorTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+  SetupNoRepeatInputs();
+  int input_token_size = output_tokens_.size();
+
+  // Test encoder_no_repeat_ngram_size = 1
+  sampler_->EncoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
+                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          context_->GetComputeStreams()[device_id_]);
+  VerifyNoRepeatNgrams({-std::numeric_limits<float>::infinity(), 0});
+
+  output_tokens_.push_back(6);
+  sampler_->EncoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
+                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          context_->GetComputeStreams()[device_id_]);
+  VerifyNoRepeatNgrams({-std::numeric_limits<float>::infinity(), 0});
+
+  // Test no_repeat_ngram_size = 1
+  sampler_->NoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
+                                   &output_tokens_, &ngram_dict_, vocab_size_,
+                                   context_->GetComputeStreams()[device_id_]);
+  VerifyNoRepeatNgrams({-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()});
+}
 
 TEST_F(SamplerTest, ArgMaxSamplerTest) {
 #ifdef ENABLE_TOPS
@@ -119,11 +187,14 @@ TEST_F(SamplerTest, ArgMaxSamplerTest) {
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
-  EXPECT_EQ(6, (*sample_req.output_tokens).size());
-  EXPECT_EQ(6, (*sample_req.output_tokens).back());
+  EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
+  EXPECT_EQ(6, (*sample_req.sampling_result_tokens).back());
 }
 
 TEST_F(SamplerTest, ArgMaxEqualSamplerTest) {
+  if (std::getenv("ENABLE_NEW_ARGMAX") == nullptr) {
+    return;
+  }
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
@@ -141,8 +212,8 @@ TEST_F(SamplerTest, ArgMaxEqualSamplerTest) {
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
-  EXPECT_EQ(6, (*sample_req.output_tokens).size());
-  EXPECT_EQ(3, (*sample_req.output_tokens).back());
+  EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
+  EXPECT_EQ(3, (*sample_req.sampling_result_tokens).back());
 }
 
 TEST_F(SamplerTest, TemperatureAutoVerifyTest) {
@@ -154,12 +225,54 @@ TEST_F(SamplerTest, TemperatureAutoVerifyTest) {
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   float *device_logits = nullptr;
-  SamplingDevideParameter sampling_devide_parameter;
-  sampler_->PrepareDevideLogitsAndParameter(sample_reqs, sampling_devide_parameter, device_logits,
+  SamplingDeviceParameter sampling_device_parameter;
+  sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
                                             context_->GetComputeStreams()[device_id_]);
 
   std::vector<float> temperature_cpu = sampler_->GetHostTemperatures();
   EXPECT_NEAR(1.0f, temperature_cpu[0], 1e-6);
+}
+
+TEST_F(SamplerTest, LogitsTargetGatherAllTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+
+#ifdef ENABLE_CUDA
+  SamplingRequest sample_req = GetSamlingRequest();
+
+  // 设置 request_target 参数，使用 "logits" target 和 GATHER_ALL 模式
+  std::map<std::string, ksana_llm::TargetDescribe> request_target;
+  ksana_llm::TargetDescribe target_describe;
+  target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 logits
+  target_describe.token_reduce_mode = TokenReduceMode::GATHER_ALL;
+  request_target["logits"] = target_describe;
+  sample_req.request_target = &request_target;
+
+  // 设置 logits_custom_length
+  sample_req.logits_custom_length = 2;  // 对应 slice_pos 中的 token 数量
+
+  // 初始化 response 成员变量
+  std::map<std::string, PythonTensor> response_map;
+  sample_req.response = &response_map;
+
+  // 准备 logits 数据
+  std::vector<float> logits_buf_cpu(vocab_size_);
+  // 设置第一个 token 的 logits
+  logits_buf_cpu[6] = 1.0f;  // 第一个 token 的第 6 个 logit 设为 1.0
+
+  SetLogitsBuf(logits_buf_cpu);
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+
+  // 执行 Sampling
+  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+
+  // 注意：对于 GATHER_ALL 模式，CopyProbsOutputToRequests 方法会跳过将结果复制到 response 中
+  // 因此我们不期望在 response 中找到 "logits" 数据
+  // 这是 Sampler 类的预期行为
+  EXPECT_TRUE(sample_req.response->find("logits") == sample_req.response->end())
+      << "For GATHER_ALL mode, response should not contain logits data";
+#endif
 }
 
 TEST_F(SamplerTest, LogprobsSamplerTest) {

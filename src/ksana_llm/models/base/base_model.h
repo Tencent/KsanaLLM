@@ -4,8 +4,11 @@
 #pragma once
 
 #include "ksana_llm/models/base/base_weight.h"
+#include "ksana_llm/models/base/buffer_manager.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 #ifdef ENABLE_CUDA
@@ -14,32 +17,41 @@
 
 namespace ksana_llm {
 
+enum class RunMode {
+  kMain,   // default
+  kNextN,  // run MTP next n
+};
+
 class BaseModel {
  public:
   // Disable a default constructor
-  BaseModel() {}
+  BaseModel();
 
   virtual ~BaseModel();
 
   // Forward model.
-  virtual Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         std::vector<ForwardRequest>& forward_reqs,
-                         bool epilogue) = 0;
+  virtual Status Forward(size_t schedule_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                         std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                         RunMode run_mode = RunMode::kMain) = 0;
+
+  // Manage resources for different schedule_id because Forward is invoked multiple times to serve a schedule_id
+  virtual Status AllocResources(size_t schedule_id) = 0;
+  virtual Status FreeResources(size_t schedule_id) = 0;
 
   // The output logits pointer on device, used by sampler to avoid memory copy.
-  virtual float* GetLogitsPtr() = 0;
+  virtual float* GetLogitsPtr(size_t schedule_id) = 0;
 
   // Implement this method if cuda graph is used.
   virtual Status WarmUpCudaGraph() { return Status(); }
+
+  BufferManager* GetBufferManager() { return &buffer_mgr_; }
 
  protected:
   std::shared_ptr<Context> context_{nullptr};
 
   int rank_{0};
-  size_t total_buffer_size_{0ul};
 
-  // Record all buffer used
-  std::vector<Tensor> buffer_tensor_heap_;
+  BufferManager buffer_mgr_;
 
   // Whether cuda graph is enabled.
   bool enable_cuda_graph_ = true;
@@ -50,15 +62,8 @@ class BaseModel {
 #endif
 
  protected:
-  // Create Buffer tensor
-  Status CreateBufferTensor(Tensor& buf_tensor, const std::vector<size_t> shape, const DataType dtype,
-                            const MemoryDevice memory_device = MEMORY_DEVICE);
-
-  // Release all buffer tensors
-  Status ReleaseBufferTensors();
-
   // Log total buffer tensors memory used
-  const size_t GetBufferTensorsMemoryUsed();
+  const size_t GetBufferTensorsMemoryUsed() { return buffer_mgr_.GetBufferTensorsMemoryUsed(); }
 };
 
 }  // namespace ksana_llm

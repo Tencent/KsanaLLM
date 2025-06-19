@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
+#include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
+
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 namespace llm_kernels {
@@ -218,19 +220,6 @@ TEST(CacheCopyTest, CacheCopyTest) {
     cudaMemcpy(h_dst.data() + i * block_size * token_data_size, h_k_list_ptrs[i],
                block_size * token_data_size * sizeof(float), cudaMemcpyDeviceToHost);
   }
-  // for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
-  //     for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
-  //             for (int i = 0; i < block_size; i++ ){
-  //                 for (int j = 0; j < x; j++) {
-  //                     int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + i *
-  //                     x + j; printf("%f ", *(h_dst.data() + k_dst_index));
-  //                 }
-  //                 printf("\n");
-  //             }
-  //             printf("\n");
-  //     }
-  //     printf("\n");
-  // }
 
   // 验证结果
   int cache_offset_indx = 0;
@@ -277,6 +266,111 @@ TEST(CacheCopyTest, CacheCopyTest) {
   for (auto ptr : h_v_list_ptrs) {
     cudaFree(ptr);
   }
+}
+
+TEST(ConvertToScalarTest, ConvertToScalarPerformanceTest) {
+  // 测试参数设置
+  int table_len = 15;
+  int layer_num = 61;
+  size_t data_num = 2248704 / layer_num;
+  float k_scale = 1.0f;
+  float v_scale = 1.0f;
+
+  // 创建源表和目标表
+  std::vector<int> h_src_table(table_len);
+  std::vector<int> h_dst_table(table_len);
+
+  // 初始化源表和目标表（简单映射关系：源索引i映射到目标索引i）
+  for (int i = 0; i < table_len; ++i) {
+    h_src_table[i] = rand() % table_len * layer_num;
+    h_dst_table[i] = rand() % table_len;
+  }
+
+  // 分配设备内存
+  float* d_src;
+  float* d_dst;
+  int* d_src_table;
+  int* d_dst_table;
+
+  cudaMalloc(&d_src, size_t(table_len) * data_num * layer_num);
+  cudaMalloc(&d_dst, size_t(table_len) * data_num * sizeof(int16_t));
+  std::cout << size_t(table_len) * data_num * layer_num << std::endl;
+  std::cout << size_t(table_len) * data_num * sizeof(int16_t) << std::endl;
+  cudaMalloc(&d_src_table, size_t(table_len) * sizeof(int));
+  cudaMalloc(&d_dst_table, size_t(table_len) * sizeof(int));
+
+  // 初始化源数据（初始化一个block）
+  std::vector<int8_t> h_src(data_num);
+  for (int i = 0; i < data_num; ++i) {
+    h_src[i] = 54;
+  }
+  // 保证第一个block一定被转换用与校验结果
+  h_src_table[0] = 0;
+  h_dst_table[0] = 0;
+
+  // 将数据从主机复制到设备
+  cudaMemcpy(d_src, h_src.data(), data_num * sizeof(int8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_src_table, h_src_table.data(), size_t(table_len) * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_dst_table, h_dst_table.data(), size_t(table_len) * sizeof(int), cudaMemcpyHostToDevice);
+
+  // 创建CUDA事件用于计时
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+
+  // 创建CUDA流
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
+  // 预热运行
+  llm_kernels::nvidia::ConvertToScalar<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+      reinterpret_cast<u_int8_t*>(d_src), reinterpret_cast<__nv_bfloat16*>(d_dst), d_src_table, d_dst_table, table_len,
+      data_num, k_scale, v_scale, stream);
+  cudaStreamSynchronize(stream);
+
+  // 多次运行并计时
+  const int num_runs = 1000;
+  float total_time = 0.0f;
+
+  cudaEventRecord(start, stream);
+  for (int run = 0; run < num_runs; ++run) {
+    llm_kernels::nvidia::ConvertToScalar<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+        reinterpret_cast<u_int8_t*>(d_src), reinterpret_cast<__nv_bfloat16*>(d_dst), d_src_table, d_dst_table,
+        table_len, data_num, k_scale, v_scale, stream);
+  }
+  cudaEventRecord(stop, stream);
+  cudaEventSynchronize(stop);
+
+  cudaEventElapsedTime(&total_time, start, stop);
+
+  // 计算平均运行时间
+  float avg_time = total_time / num_runs;
+  printf("ConvertToScalar cost: %.6f ms\n", avg_time);
+
+  // 验证结果的正确性
+  std::vector<int16_t> h_dst(data_num);
+  cudaMemcpy(h_dst.data(), d_dst, data_num * sizeof(int16_t), cudaMemcpyDeviceToHost);
+
+  // 检查结果（由于是简单映射，源数据应该与目标数据相同）
+  bool correct = true;
+  for (int i = 0; i < data_num; ++i) {
+    if (h_dst[i] != 16224) {
+      printf("%d ", h_dst[i]);
+      correct = false;
+      break;
+    }
+  }
+
+  EXPECT_TRUE(correct);
+
+  // 释放资源
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+  cudaStreamDestroy(stream);
+  cudaFree(d_src);
+  cudaFree(d_dst);
+  cudaFree(d_src_table);
+  cudaFree(d_dst_table);
 }
 
 }  // namespace test

@@ -10,6 +10,8 @@
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
 
+#include "3rdparty/LLM_kernels/csrc/kernels/nvidia/gemm_wrapper/gemm_algo_map.h"
+
 namespace ksana_llm {
 
 // The class used for nvidia extension.
@@ -28,11 +30,16 @@ class NvidiaContextExtension {
 
   std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
 
-  void** GetCustomAllReduceBuffers() { return static_cast<void**>(reduce_buffers_.data()); }
+  void** GetCustomAllReduceSignals() { return static_cast<void**>(reduce_signals_.data()); }
 
-  void** GetCustomAllReduceMetas() { return static_cast<void**>(reduce_metas_.data()); }
+  void** GetCustomAllReduceInputs() { return static_cast<void**>(reduce_inputs_.data()); }
 
-  void** GetCustomAllReduceInputs(int input_index) { return static_cast<void**>(reduce_inputs_[input_index].data()); }
+  bool IsFullNvLink() { return is_full_nvlink_; }
+
+  uint32_t GetComputeCapacity() { return sm_; }
+  uint32_t GetCudaVersion() { return cuda_ver_; }
+
+  llm_kernels::nvidia::GPUGemmAlgoHelper& GetGPUGemmAlgoHelper() { return gpu_gemm_algo_helper_; }
 
   // Initialize and destroy extension.
   void Initialize();
@@ -51,6 +58,8 @@ class NvidiaContextExtension {
  private:
   ContextT<T>* base_ptr_ = nullptr;
 
+  bool is_full_nvlink_ = true;
+
   // The cuda driver version.
   int cuda_driver_version_;
 
@@ -66,15 +75,20 @@ class NvidiaContextExtension {
   std::vector<cublasHandle_t> cublas_handles_;
   std::vector<cublasLtHandle_t> cublaslt_handles_;
 
-  // The custom reduce buffers and metas.
-  std::vector<void*> reduce_buffers_;
-  std::vector<void*> reduce_metas_;
-
   // The max reduce inputs num for custom reduce.
-  int max_reduce_inputs_num_{2};
+  int max_reduce_inputs_num_{8};
 
-  // The reduce inputs used for nccl.
-  std::vector<std::vector<void*>> reduce_inputs_;
+  // Stores the intermediate results for each gpu of custom all reduce.
+  std::vector<void*> reduce_signals_;
+
+  // Maintain the input tensor required by each gpu of custom all reduce.
+  std::vector<void*> reduce_inputs_;
+
+  uint32_t sm_{0};
+  uint32_t cuda_ver_{0};
+  std::vector<void*> cublaslt_workspace_ptrs_;
+  // The helper for providing the best performance gemm algo
+  llm_kernels::nvidia::GPUGemmAlgoHelper gpu_gemm_algo_helper_;
 };
 
 template <>

@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/fpA_intB_gemm/fpA_intB_gemm_template.h"
+#include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels {
 namespace nvidia {
@@ -19,6 +20,26 @@ template <>
 struct WeightTypeSelector<INT8> {
   using type = uint8_t;
 };
+
+__global__ void packInt4x2ToInt8Kernel(const int8_t* unpacked, int8_t* packed, size_t len) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < len) {
+    int8_t packed_int4s = 0;
+    int8_t elt_0 = unpacked[2 * idx + 0];
+    int8_t elt_1 = unpacked[2 * idx + 1];
+
+    packed_int4s |= ((elt_0 & 0x0F));
+    packed_int4s |= int8_t(elt_1 << 4);
+
+    packed[idx] = packed_int4s;
+  }
+}
+
+void packInt4x2ToInt8(cudaStream_t stream, const int8_t* unpacked, int8_t* packed, const size_t len) {
+  int threadsPerBlock = 128;
+  int blocksPerGrid = (len + threadsPerBlock - 1) / threadsPerBlock;
+  packInt4x2ToInt8Kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(unpacked, packed, len);
+}
 
 // The config consists of “tile_config, SplitKStyle, split_k_factor, and stages”.
 // For details, refer to cutlass_heuristic.cc
@@ -96,10 +117,6 @@ size_t FpAIntBGroupCutlassGemmWrapper<T, WT>::GetBestConfigIndex(size_t warmup, 
       configs = gemm->getConfigs();
     }
 
-    cudaEvent_t begin, end;
-    cudaEventCreate(&begin);
-    cudaEventCreate(&end);
-
     float fast_time = std::numeric_limits<float>::max();
     int best_config_index = 0;
 
@@ -111,28 +128,16 @@ size_t FpAIntBGroupCutlassGemmWrapper<T, WT>::GetBestConfigIndex(size_t warmup, 
         continue;
       }
 
-      // warm up
-      for (size_t i = 0; i < warmup; ++i) {
+      auto cuda_run = [&]() {
         Gemm(output, input, weight, scales, zeros, ws, m, n, k, groupsize, config_index, stream);
-      }
-
-      // record time
-      cudaEventRecord(begin, stream);
-      for (size_t i = 0; i < iter; ++i) {
-        Gemm(output, input, weight, scales, zeros, ws, m, n, k, groupsize, config_index, stream);
-      }
-      cudaEventRecord(end, stream);
-      cudaEventSynchronize(end);
-      float time;
-      cudaEventElapsedTime(&time, begin, end);
+      };
+      float time = MeasureCudaExecutionTime(cuda_run, stream, warmup, iter);
 
       if (time < fast_time) {
         fast_time = time;
         best_config_index = config_index;
       }
     }
-    cudaEventDestroy(begin);
-    cudaEventDestroy(end);
 
     return best_config_index;
   } else {

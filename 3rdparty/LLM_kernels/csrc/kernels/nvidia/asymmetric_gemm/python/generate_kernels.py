@@ -172,16 +172,6 @@ def instantiate_operation_sm90(operation):
     epi_sched = EpilogueScheduleTag[operation.epi_schedule]
 
     if operation.gemm_kind == GemmKind.Gemm:
-        if operation.mainloop_schedule in [
-                KernelScheduleType.TmaWarpSpecializedCooperative,
-                KernelScheduleType.TmaWarpSpecializedPingpong,
-                KernelScheduleType.TmaWarpSpecialized
-        ] and DataTypeSize[operation.act_type] != DataTypeSize[
-                operation.weight_type]:
-            # Here, we must append MixedInput depending on the schedule, since we know the types are different.
-            # It is a work around since the CUTLASS library did not have the MixedInput schedules at the time of writing.
-            kernel_sched += "MixedInput"
-
         weight_tag = DataTypeTag[operation.weight_type]
         instantiation = f"""
 template void sm90_generic_mixed_gemm_kernelLauncher<{act_tag}, {weight_tag}, {scale_zero_tag}, {bias_tag}, {out_tag},

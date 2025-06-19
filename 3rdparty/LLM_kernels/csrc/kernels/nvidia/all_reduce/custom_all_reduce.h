@@ -1,6 +1,6 @@
 /*
  * Adapted from
- * https://github.com/vllm-project/vllm/blob/v0.3.1/csrc/custom_all_reduce.cuh
+ * https://github.com/vllm-project/vllm/blob/main/csrc/custom_all_reduce.cuh
  * Copyright (c) 2024, Tencent Inc.
  * Copyright (c) 2024, The vLLM team.
  *
@@ -33,34 +33,25 @@
 namespace llm_kernels {
 namespace nvidia {
 
+constexpr int kMaxBlocks = 36;
+constexpr int maxDeviceCount = 8;
+
+// Counter may overflow, but it's fine since unsigned int overflow is
+// well-defined behavior.
+using FlagType = uint32_t;
 struct Signal {
-  alignas(64) union {
-    uint64_t flag;
-    unsigned char data[8];
-  } start;
-  alignas(64) union {
-    uint64_t flag;
-    unsigned char data[8];
-  } end;
+  alignas(128) FlagType self_counter[kMaxBlocks][maxDeviceCount];
+  // Two sets of peer counters are needed for two syncs. The reason is that
+  // it's possible for peer GPU block to arrive at the second sync point while
+  // the current GPU block haven't passed the first sync point. Thus, peer GPU
+  // may write counter+1 while current GPU is busy waiting for counter. We use
+  // alternating counter array to avoid this possibility.
+  alignas(128) FlagType peer_counter[2][kMaxBlocks][maxDeviceCount];
 };
 
-struct Metadata {
-  alignas(128) Signal sg;
-  alignas(128) int counter;
-};
-static_assert(offsetof(Metadata, counter) == 128);
-static_assert(sizeof(Metadata) == 256);
+struct __align__(16) RankData { const void *__restrict__ ptrs[maxDeviceCount]; };
 
-struct __align__(16) RankData { const void *__restrict__ ptrs[8]; };
-
-struct Buffer {
-  alignas(16) int data;
-};
-
-struct RankSignals {
-  volatile Signal *signals[8];
-  volatile Signal *buffers[8];
-};
+struct __align__(16) RankSignals { Signal *signals[maxDeviceCount]; };
 
 // like std::array, but aligned
 template <typename T, int sz>
@@ -85,39 +76,50 @@ class CustomAllreduce {
   int rank_;
   int world_size_;
   bool full_nvlink_;
+  uint32_t root_rank_;
 
-  // below are device pointers
   RankSignals sg_;
   std::unordered_map<void *, RankData *> buffers_;
-  Metadata *meta_;
+  Signal *self_sg_;
 
-  // stores the registered device pointers from all ranks
+  // Stores rank data from all ranks. This is mainly for cuda graph purposes.
+  // For cuda graph to work, all kernel arguments must be fixed during graph
+  // capture time. However, the peer pointers are not known during graph capture
+  // time. Therefore, during capture, we increment the rank data pointer and use
+  // that as the argument to the kernel. The kernel arguments are stored in
+  // graph_unreg_buffers_. The actual peer pointers will be filled in at the
+  // memory pointed to by the pointers in graph_unreg_buffers_ when
+  // the IPC handles are exchanged between ranks.
+  //
+  // The overall process looks like this:
+  // 1. Graph capture.
+  // 2. Each rank obtains the IPC handles for each addresses used during cuda
+  // graph capture using get_graph_buffer_ipc_meta.
+  // 3. (In Python) all gather the IPC handles.
+  // 4. Obtain the peer pointers by opening the IPC handles, and store them in
+  // the rank data array at corresponding positions.
   RankData *d_rank_data_base_, *d_rank_data_end_;
+  std::vector<void *> graph_unreg_buffers_;
 
-  /**
-   * meta is a pointer to device metadata and temporary buffer for allreduce.
-   *
-   * There's a total of sizeof(Metadata) of prefix before the actual data,
-   * so meta + 1 points to actual temporary buffer.
-   *
-   * note: this class does not own any device memory. Any required buffers
-   * are passed in from the constructor
-   */
-  CustomAllreduce(void **meta, void *rank_data, size_t rank_data_sz, void **handles,
-                  const std::vector<int64_t> &offsets, int rank, bool full_nvlink = true);
+  // Signals are an array of ipc-enabled buffers from all ranks.
+  // For each of the buffer, the layout is as follows:
+  // | -- sizeof(Signal) -- | ------ a few MB ----- |
+  // The first section is for allreduce synchronization, and the second section
+  // is for storing the intermediate results required by some allreduce algos.
+  //
+  // Note: this class does not own any device memory. Any required buffersare passed in from the constructor.
+  CustomAllreduce(Signal **signals, void *rank_data, size_t rank_data_sz, int rank, int world_size,
+                  bool full_nvlink = true, uint32_t root_rank = 0);
 
   void CheckRankDataCapacity(size_t num = 1);
 
-  void RegisterBuffer(const std::vector<std::string> &handles, const std::vector<int64_t> &offsets, void *self,
-                      cudaStream_t &stream);
+  void RegisterBuffer(void **ptrs, cudaStream_t &stream);
 
-  /**
-   * This is the result after careful grid search. Using 36 blocks give the best
-   * or close to the best runtime on the devices I tried: A100, A10, A30, T4,
-   * V100. You'll notice that NCCL kernels also only take a small amount of SMs.
-   * Not quite sure the underlying reason, but my guess is that too many SMs
-   * will cause contention on NVLink bus.
-   */
+  // This is the result after careful grid search. Using 36 blocks give the best
+  // or close to the best runtime on the devices I tried: A100, A10, A30, T4,
+  // V100. You'll notice that NCCL kernels also only take a small amount of SMs.
+  // Not quite sure the underlying reason, but my guess is that too many SMs
+  // will cause contention on NVLink bus.
   template <typename T>
   void AllReduce(cudaStream_t stream, T *input, T *output, int size, int threads = 512, int block_limit = 36);
 

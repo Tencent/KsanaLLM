@@ -97,38 +97,36 @@ class KsanaPlugin:
         vision_end = [int(pos - 1) for pos, id in enumerate(input_tokens) if id == config.vision_end_token_id]
 
         # Used to reassemble image embeddings and video embeddings in the order of visual tokens
-        permute = []
+        permute = {}
 
-        image_embeds = ()
-        image_grid_thw = []
-        if "pixel_values" in inputs:
-            pixel_values = inputs["pixel_values"].type(self.visual.get_dtype())
-            image_grid_thw = inputs["image_grid_thw"]
-            image_embeds = self._infer_torch(pixel_values, image_grid_thw)
-            sections = []
-            for i, srt in enumerate(vision_srt):
-                if input_tokens[srt] == config.image_token_id:
-                    sections.append(vision_end[i] - srt + 1)
-                    permute.append(i)
-            image_embeds = torch.split(image_embeds, sections, dim=0)
+        def infer_embeds(permute, tag="image"):
+            pixel_values_tag = "pixel_values_videos" if tag == "video" else "pixel_values"
+            grid_thw_tag = "video_grid_thw" if tag == "video" else "image_grid_thw"
+            token_id = config.video_token_id if tag == "video" else config.image_token_id
 
-        video_embeds = ()
-        video_grid_thw = []
-        if "pixel_values_videos" in inputs:
-            pixel_values_videos = inputs["pixel_values_videos"].type(self.visual.get_dtype())
-            video_grid_thw = inputs["video_grid_thw"]
-            video_embeds = self._infer_torch(pixel_values_videos, video_grid_thw)
-            sections = []
-            for i, srt in enumerate(vision_srt):
-                if input_tokens[srt] == config.video_token_id:
-                    sections.append(vision_end[i] - srt + 1)
-                    permute.append(i)
-            video_embeds = torch.split(video_embeds, sections, dim=0)
+            grid_thw = []
+            if pixel_values_tag in inputs:
+                pixel_values = inputs[pixel_values_tag].type(self.visual.get_dtype())
+                grid_thw = inputs[grid_thw_tag]
+                embeds = self._infer_torch(pixel_values, grid_thw)
+                sections, idx = [], []
+                for i, srt in enumerate(vision_srt):
+                    if input_tokens[srt] == token_id:
+                        sections.append(vision_end[i] - srt + 1)
+                        idx.append(i)
+                embeds = torch.split(embeds, sections, dim=0)
+                for i in range(len(embeds)):
+                    permute[idx[i]] = embeds[i]
+            return grid_thw
 
+        image_grid_thw = infer_embeds(permute, tag="image")
+        video_grid_thw = infer_embeds(permute, tag="video")
+
+        embeds = []
+        for i in range(len(permute)):
+            embeds.append(permute[i].cpu().float())
         ksana_python_input.input_refit_embedding.pos = vision_srt
-        if image_embeds or video_embeds:
-            embeds = torch.stack(image_embeds + video_embeds, dim=0)[permute].float().cpu()
-            ksana_python_input.input_refit_embedding.embedding_tensors = torch.unbind(embeds)
+        ksana_python_input.input_refit_embedding.embedding_tensors = embeds
 
         position_ids, mrope_position_deltas = self._get_input_positions(input_tokens, image_grid_thw, video_grid_thw)
         ksana_python_input.input_refit_embedding.additional_tensors = [
@@ -273,4 +271,11 @@ class KsanaPlugin:
                         if param in additional_params:
                             messages[i]["content"][j][param] = additional_params[param]
                     messages[i]["content"][j].pop("video_url")
+        
+        for message in messages:
+            if message['role'] == 'user' and 'content' in message:
+                multi_modal_elements = [elem for elem in message['content'] if elem['type'] != 'text']
+                text_elements = [elem for elem in message['content'] if elem['type'] == 'text']
+                # 重组列表：非text元素在前，text元素在后, 保证顺序与LLMPT服务一致
+                message['content'] = multi_modal_elements + text_elements
         return messages

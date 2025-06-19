@@ -131,7 +131,7 @@ void sm90_generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType 
                 RoundStyle>,                                                    // alpha * acc + bias
             cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementAccumulator>, // alpha
             cutlass::epilogue::fusion::Sm90AccFetch,                            // acc
-            cutlass::epilogue::fusion::Sm90ColBroadcast<0, TileShape, CutlassBiasType, Stride<_1, _0, _0>,
+            cutlass::epilogue::fusion::Sm90ColBroadcast<0, TileShape, CutlassBiasType, CutlassBiasType, Stride<_1, _0, _0>,
                 AlignmentBias>                                                  // bias
             >;
 

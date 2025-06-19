@@ -70,6 +70,12 @@ void EventRecordT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA> event, StreamT<
 }
 
 template <>
+bool EventQueryT<DEVICE_TYPE_NVIDIA>(EventT<DEVICE_TYPE_NVIDIA> event) {
+  cudaError_t status = cudaEventQuery(event.Get());
+  return (status == cudaSuccess);
+}
+
+template <>
 void StreamWaitEventT<DEVICE_TYPE_NVIDIA>(StreamT<DEVICE_TYPE_NVIDIA> stream, EventT<DEVICE_TYPE_NVIDIA> event) {
   CUDA_CHECK(cudaStreamWaitEvent(stream.Get(), event.Get()));
 }

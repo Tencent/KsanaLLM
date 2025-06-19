@@ -44,6 +44,7 @@ constexpr auto GetDeviceCount = GetDeviceCountT<ACTIVE_DEVICE_TYPE>;
 
 // The event function.
 constexpr auto EventRecord = EventRecordT<ACTIVE_DEVICE_TYPE>;
+constexpr auto EventQuery = EventQueryT<ACTIVE_DEVICE_TYPE>;
 constexpr auto StreamWaitEvent = StreamWaitEventT<ACTIVE_DEVICE_TYPE>;
 
 constexpr auto EventSynchronize = EventSynchronizeT<ACTIVE_DEVICE_TYPE>;
@@ -57,7 +58,7 @@ constexpr auto Free = FreeT<ACTIVE_DEVICE_TYPE>;
 
 // The alloc/free host memory.
 constexpr auto HostAlloc = HostAllocT<ACTIVE_DEVICE_TYPE>;
-constexpr auto FreeHost = FreeHostT<ACTIVE_DEVICE_TYPE>;
+constexpr auto HostFree = FreeHostT<ACTIVE_DEVICE_TYPE>;
 
 // The malloc/free device memory.
 constexpr auto MallocAsync = MallocAsyncT<ACTIVE_DEVICE_TYPE>;

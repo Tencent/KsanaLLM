@@ -23,23 +23,39 @@
 #include <cuda_runtime.h>
 #include <stdlib.h>
 
+#if defined(ENABLE_FP8)
+#  include <cuda_fp8.h>
+#endif
+
 namespace llm_kernels {
 namespace nvidia {
 
-void HalfToFloat(const half* input, int32_t input_length, float* output, cudaStream_t& stream,
+// For float to [half, bfloat16]
+void FloatToHalf(const float* input, size_t input_length, half* output, cudaStream_t stream);
+void FloatToBFloat16(const float* input, size_t input_length, __nv_bfloat16* output, cudaStream_t stream);
+
+// For half to [float, bfloat16]
+void HalfToFloat(const half* input, size_t input_length, float* output, cudaStream_t stream,
                  const size_t input_stride = 1ul, const size_t output_stride = 1ul);
+void HalfToBFloat16(void* data_ptr, size_t input_length, cudaStream_t stream);
 
-void FloatToHalf(const float* input, int32_t input_length, half* output, cudaStream_t& stream);
-void FloatToBFloat16(const float* input, int32_t input_length, __nv_bfloat16* output, cudaStream_t& stream);
-
-void BFloat16ToFloat(const __nv_bfloat16* input, int32_t input_length, float* output, cudaStream_t& stream,
+// For bfloat16 to [float, half]
+void BFloat16ToFloat(const __nv_bfloat16* input, size_t input_length, float* output, cudaStream_t stream,
                      const size_t input_stride = 1ul, const size_t output_stride = 1ul);
+void BFloat16ToHalf(void* data_ptr, size_t input_length, cudaStream_t stream);
 
-void FP16ToBFP16(void* data_ptr, int32_t input_length, cudaStream_t& stream);
+#if defined(ENABLE_FP8)
+// For FP8E4M3 to [float, half, bfloat16]
+void FloatToFp8E4M3(const float* input, size_t input_length, __nv_fp8_e4m3* output, cudaStream_t stream);
+void Fp8E4M3ToFloat(const __nv_fp8_e4m3* input, size_t input_length, float* output, cudaStream_t stream);
+void HalfToFp8E4M3(const half* input, size_t input_length, __nv_fp8_e4m3* output, cudaStream_t stream);
+void Fp8E4M3ToHalf(const __nv_fp8_e4m3* input, size_t input_length, half* output, cudaStream_t stream);
+void BFloat16ToFp8E4M3(const __nv_bfloat16* input, size_t input_length, __nv_fp8_e4m3* output, cudaStream_t stream);
+void Fp8E4M3ToBFloat16(const __nv_fp8_e4m3* input, size_t input_length, __nv_bfloat16* output, cudaStream_t stream);
+#endif
 
-void BFP16ToFP16(void* data_ptr, int32_t input_length, cudaStream_t& stream);
-
-void ConvertHalfToFloatVectorize(float* output, const half* input, const size_t data_size, cudaStream_t& stream);
+// Int64 to int
+void Int64ToInt(const int64_t* input, size_t input_length, int* output, cudaStream_t& stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -9,13 +9,12 @@
 #include "acl/acl.h"
 #include "acl/acl_op_compiler.h"
 
-#include "csrc/kernels/ascend/permute/permute.h"
-#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
-#include "csrc/kernels/ascend/slice/slice.h"
 #include "csrc/utils/ascend/atb_executor.h"
 
 namespace llm_kernels {
 namespace ascend {
+
+enum RotaryEmbeddingType { DEFAULT, LINEAR_SCALING, DYNAMIC_NTK_SCALING };
 
 template <typename DTYPE>
 class ATBAttention {

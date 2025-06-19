@@ -639,5 +639,82 @@ template void InvokeAddResPreLayerNorm(__nv_bfloat16* output, __nv_bfloat16* nor
                                        cudaStream_t stream);
 #endif
 
+template <typename T>
+__global__ void InvokeRmsNorm3DKernel(const T* __restrict input, const T* __restrict gamma, T* output,
+                                      const float layernorm_eps, int32_t len, int32_t m, int32_t n, int32_t start,
+                                      int32_t end, const int64_t* __restrict__ mask) {
+  const int32_t tid = threadIdx.x;
+  const int token_idx = blockIdx.x;
+  // Filter out some unnecessary 2D matrices.
+  int64_t mask_i = mask[token_idx];
+  if (mask_i == 0) {
+    return;
+  }
+  __shared__ float s_variance;
+  float variance = 0.0f;
+  // The starting index of each row in a 2D matrix
+  int32_t matrix_offset = blockIdx.x * m * n + blockIdx.y * n;
+
+  // Set start and end rows
+  if (blockIdx.y >= start && blockIdx.y < end) {
+    float local_var_sum = 0.0f;
+    for (int32_t i = tid; i < n; i += blockDim.x) {
+      float diff = (float)(ldg(&input[matrix_offset + i]));
+      local_var_sum += diff * diff;
+    }
+    variance = BlockReduceSum(local_var_sum);
+
+    if (threadIdx.x == 0) {
+      s_variance = rsqrtf(variance / (float)n + layernorm_eps);
+    }
+    __syncthreads();
+
+    if (gamma != nullptr) {
+      for (int32_t i = tid; i < n; i += blockDim.x) {
+        output[matrix_offset + i] =
+            ClampInfForHalf<T>((((float)input[matrix_offset + i]) * s_variance) * (float)(ldg(&gamma[i])));
+      }
+    } else {
+      for (int32_t i = tid; i < n; i += blockDim.x) {
+        output[matrix_offset + i] = ClampInfForHalf<T>((((float)input[matrix_offset + i]) * s_variance));
+      }
+    }
+  }
+}
+
+// For 3dim rmsnorm. The input shape is [len, m, n], performs rmsnorm on the last dimension 'n' of the input matrix.
+// param 'mask': Allowing for the filtering of certain l-dimension 2D matrices based on a custom 'mask' 1D array.
+// param 'start' 'end': For each 2D matrix, defined 'start' and 'end' params to apply rmsnorm to a specific range of
+// consecutive rows.
+template <typename T>
+void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t len,
+                     const int32_t m, const int32_t n, const int32_t start, const int32_t end, const int64_t* mask,
+                     cudaStream_t stream) {
+  dim3 grid(len, m);
+  dim3 block(min(n, 1024));
+
+  // For general cases, n is equal to hidden_units, e.g., 512/1024.
+  // Since we have warp shuffle inside the code, block.x % 32 should be 0.
+  if (n % 32 != 0) {
+    block.x = 1024;
+  }
+  block.x = block.x / (4 / sizeof(T));  // if using half, only need half of block.x
+
+  InvokeRmsNorm3DKernel<T>
+      <<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, len, m, n, start, end, mask);  // For gpt-3
+}
+
+template void InvokeRmsNorm3D(float* out, const float* input, const float* gamma, const float layernorm_eps,
+                              const int32_t len, const int32_t m, const int32_t n, const int32_t start,
+                              const int32_t end, const int64_t* mask, cudaStream_t stream);
+template void InvokeRmsNorm3D(half* out, const half* input, const half* gamma, const float layernorm_eps,
+                              const int32_t len, const int32_t m, const int32_t n, const int32_t start,
+                              const int32_t end, const int64_t* mask, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void InvokeRmsNorm3D(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
+                              const float layernorm_eps, const int32_t len, const int32_t m, const int32_t n,
+                              const int32_t start, const int32_t end, const int64_t* mask, cudaStream_t stream);
+#endif
+
 }  // namespace nvidia
 }  // namespace llm_kernels

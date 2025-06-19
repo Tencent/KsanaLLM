@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include "ksana_llm/kernels/ascend/kernel_wrapper.h"
 
-#include "csrc/kernels/ascend/rotary_embedding/rotary_embedding.h"
 #include "csrc/utils/ascend/common.h"
 
 namespace ksana_llm {

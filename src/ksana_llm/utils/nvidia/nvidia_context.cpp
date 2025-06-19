@@ -3,6 +3,11 @@
 ==============================================================================*/
 #include "ksana_llm/utils/nvidia/nvidia_context.h"
 
+#include <cuda_profiler_api.h>
+
+#include <csignal>
+#include "3rdparty/LLM_kernels/csrc/utils/nvidia/cuda_utils.h"
+
 namespace ksana_llm {
 
 // The minimum cuda version that support mempool.
@@ -64,11 +69,19 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
 template <int T>
 void NvidiaContextExtension<T>::InitNcclParam() {
   KLLM_LOG_DEBUG << "Init nvidia nccl param.";
-  reduce_metas_.resize(max_reduce_inputs_num_);
-  reduce_buffers_.resize(base_ptr_->tensor_parallel_size_);
+  reduce_signals_.resize(max_reduce_inputs_num_);
   reduce_inputs_.resize(max_reduce_inputs_num_);
-  for (int i = 0; i < max_reduce_inputs_num_; ++i) {
-    reduce_inputs_[i].resize(base_ptr_->tensor_parallel_size_);
+
+  for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
+    CUDA_CHECK(cudaSetDevice(worker_id));
+    for (int i = 0; i < base_ptr_->tensor_parallel_size_; i++) {
+      if (i != worker_id) {
+        auto err = cudaDeviceEnablePeerAccess(i, 0);
+        if (err != cudaErrorPeerAccessAlreadyEnabled) {
+          CUDA_CHECK(err);
+        }
+      }
+    }
   }
 
   nccl_uid_ = GenerateNCCLUniqueID();
@@ -88,6 +101,18 @@ void NvidiaContextExtension<T>::InitNcclParam() {
 template <int T>
 void NvidiaContextExtension<T>::Initialize() {
   CUDA_CHECK(cudaDriverGetVersion(&base_ptr_->driver_version_));
+  cudaDeviceProp prop;
+  int device_count;
+  CUDA_CHECK(cudaGetDeviceCount(&device_count));
+  if (device_count <= 0) {
+    KLLM_THROW("There is not GPU on you machine.");
+  }
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+  sm_ = prop.major * 10 + prop.minor;
+  int cuda_ver_tmp;
+  CUDA_CHECK(cudaRuntimeGetVersion(&cuda_ver_tmp));
+  cuda_ver_ = static_cast<uint32_t>(cuda_ver_tmp);
+  KLLM_LOG_INFO << fmt::format("Get sm: {}, cuda version: {}", sm_, cuda_ver_);
 
   for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
     KLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
@@ -97,12 +122,16 @@ void NvidiaContextExtension<T>::Initialize() {
     InitGpuMemoryPool(worker_id);
 
     InitCublasHandle(worker_id);
+
+    if (worker_id != 0 && llm_kernels::utils::GetNvLinkVersion(0, worker_id) == 0) {
+      is_full_nvlink_ = false;
+    }
   }
 
   InitNcclParam();
 
   // reset device id
-  CUDA_CHECK(cudaSetDevice(base_ptr_->defalt_device_num_));
+  CUDA_CHECK(cudaSetDevice(base_ptr_->defalt_device_id_));
 }
 
 template <int T>

@@ -5,9 +5,10 @@ cmake_minimum_required(VERSION 3.13)
 
 set(nvidia_kernels_LIBS "")
 set(nvidia_kernels_SRCS "")
-set(nvidia_kernels_test_SRCS "")
 
 if(WITH_CUDA)
+  add_subdirectory(nvidia)
+
   file(GLOB_RECURSE nvidia_kernels_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/nvidia/*.cpp)
   list(FILTER nvidia_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
@@ -16,15 +17,21 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_embedding flash_attn_kernels
     llm_kernels_nvidia_kernel_layernorm llm_kernels_nvidia_kernel_gemm_wrapper
     llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation
-    llm_kernels_nvidia_kernel_assemble_last_token llm_kernels_nvidia_kernel_cast
+    llm_kernels_nvidia_kernel_assemble_tokens_hidden llm_kernels_nvidia_kernel_cast
+    llm_kernels_nvidia_kernel_concat
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce
     llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi
     llm_kernels_nvidia_kernel_samplers llm_kernels_nvidia_kernel_asymmetric_gemm
     llm_kernels_nvidia_kernel_gptq_marlin llm_kernels_nvidia_kernel_weight_only_batched_gemv
-    llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_utils)
-
-  file(GLOB_RECURSE nvidia_kernels_test_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/kernels/nvidia/*test.cpp)
+    llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_kernel_moe
+    llm_kernels_nvidia_kernel_blockwise_gemm llm_kernels_nvidia_utils
+    llm_kernels_nvidia_kernel_flash_mla llm_kernels_nvidia_kernel_expand
+    llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_machete
+    llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant
+    llm_kernels_nvidia_kernel_per_token_group_quant llm_kernels_nvidia_kernel_fused_add_norm
+    llm_kernels_nvidia_kernel_deepgemm_aot_wrapper)
 endif()
+
 
 message(STATUS "nvidia_kernels_SRCS: ${nvidia_kernels_SRCS}")
 
@@ -54,7 +61,7 @@ if(WITH_TOPS)
 endif()
 
 add_library(kernels STATIC ${nvidia_kernels_SRCS} ${ascend_kernels_SRCS} ${zixiao_kernels_SRCS})
-target_link_libraries(kernels PUBLIC utils block_manager ${Python3_LIBRARIES} ${nvidia_kernels_LIBS} ${ascend_kernels_LIBS})
+target_link_libraries(kernels PUBLIC utils cache_manager ${Python3_LIBRARIES} ${nvidia_kernels_LIBS} ${ascend_kernels_LIBS})
 
 if(WITH_CUDA)
   set(KERNELS_TEST_PREPARE_CODE ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py)
@@ -69,9 +76,6 @@ if(WITH_CUDA)
   if(NOT _CP_SUCCESS EQUAL 0)
     message(FATAL_ERROR "run cp ${PROJECT_SOURCE_DIR}/tests/triton_wrapper_test.py to /tmp/ failed.")
   endif()
-
-  message(STATUS "nvidia_kernels_test_SRCS: ${nvidia_kernels_test_SRCS}")
-  cpp_test(kernels_test SRCS ${nvidia_kernels_test_SRCS} DEPS kernels)
 endif()
 
 if(WITH_ACL AND WITH_STANDALONE_TEST)

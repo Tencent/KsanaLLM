@@ -3,273 +3,129 @@
 ==============================================================================*/
 #pragma once
 
+#include <algorithm>
 #include <list>
 #include <unordered_map>
 #include <vector>
 
-#include "ksana_llm/block_manager/block_manager_interface.h"
+#include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
+#include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/memory_allocator_interface.h"
+#include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
-// A faked block manger, used for test only.
-class FakedBlockManager : public BlockManagerInterface {
+class FakedMemoryAllocator : public MemoryAllocatorInterface {
  public:
-  FakedBlockManager(const BlockManagerConfig& block_manager_config, size_t device_num) {
-    block_manager_config_ = block_manager_config;
+  virtual ~FakedMemoryAllocator() {}
 
-    device_num_ = device_num;
-    workspace_metas_.resize(device_num_);
-    cur_device_id_ = 0;
+  virtual void SetDevice(int device_id) override {}
+  virtual void GetDevice(int* device_id) override {}
+
+  virtual void Malloc(void** dev_ptr, size_t size) override {}
+  virtual void MallocAsync(void** dev_ptr, size_t size, Stream stream) override {}
+
+  virtual void MemsetAsync(void* dev_ptr, int value, size_t count, Stream stream) override {}
+  virtual void Memset(void* dev_ptr, int value, size_t count) override {}
+
+  virtual void MemcpyAsync(void* dst, const void* src, size_t count, enum MemcpyKind kind, Stream stream) override {}
+  virtual void Memcpy(void* dst, const void* src, size_t count, enum MemcpyKind kind) override {}
+
+  virtual void Free(void* dev_ptr) override {}
+  virtual void FreeAsync(void* dev_ptr, Stream stream) override {}
+
+  virtual void HostAlloc(void** host_ptr, size_t size) override {}
+
+  virtual void HostFree(void* host_ptr) override {}
+};
+
+class FakedBlockAllocator : public BlockAllocatorInterface {
+ public:
+  FakedBlockAllocator(MemoryLocation location, size_t block_num, size_t block_size, int rank = 0,
+                      std::shared_ptr<MemoryAllocatorInterface> memory_allocator = nullptr,
+                      std::shared_ptr<Context> context = nullptr, size_t convert_size = 0) {
+    location_ = location;
+    block_num_ = block_num;
+    block_size_ = block_size;
+    convert_size_ = convert_size;
+    rank_ = rank;
+    memory_allocator_ = memory_allocator;
+    context_ = context;
   }
 
-  ~FakedBlockManager() {}
+  virtual ~FakedBlockAllocator() {}
 
-  // Preallocate blocks.
-  Status PreAllocateBlocks() {
-    for (size_t i = 0; i < block_manager_config_.host_allocator_config.blocks_num; ++i) {
-      free_host_blocks_.push_back(i);
+  virtual void PreAllocateBlocks() override {
+    for (size_t i = 0; i < block_num_; ++i) {
+      free_blocks_.push_back(i);
     }
-
-    for (size_t i = 0; i < device_num_; ++i) {
-      for (size_t j = 0; j < block_manager_config_.device_allocator_config.blocks_num; ++j) {
-        free_device_blocks_[i].push_back(j);
-      }
-    }
-
-    return Status();
   }
 
-  // Reset the preallocated blocks for device & host.
-  Status ResetPreAllocatedBlocks() {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::ResetPreAllocatedBlocks not implemented");
-    return Status();
+  virtual void Clear() override {
+    free_blocks_.clear();
+    used_blocks_.clear();
   }
 
-  // This function maybe called concurrently from different threads.
-  // DO NOT store the device id in variable.
-  void SetDeviceId(int device_id) { cur_device_id_ = device_id; }
-
-  // This function maybe called concurrently from different threads.
-  int GetDeviceId() { return cur_device_id_; }
-
-  DataType GetDtype() {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetDtype not implemented");
-    return TYPE_INVALID;
-  }
-
-  // Allocate blocked memory on devicen
-  Status AllocateBlocks(int64_t block_num, std::vector<int>& blocks) {
+  virtual Status AllocateBlocks(size_t block_num, std::vector<int>& blocks) override {
     blocks.clear();
     size_t needed_block_num = block_num;
-    while (needed_block_num > 0 && !free_device_blocks_[cur_device_id_].empty()) {
-      int block_id = free_device_blocks_[cur_device_id_].front();
+    while (needed_block_num > 0 && !free_blocks_.empty()) {
+      int block_id = free_blocks_.front();
       blocks.push_back(block_id);
 
-      free_device_blocks_[cur_device_id_].pop_front();
-      used_device_blocks_[cur_device_id_].push_back(block_id);
+      free_blocks_.pop_front();
+      used_blocks_.push_back(block_id);
 
       --needed_block_num;
     }
 
-    return needed_block_num == 0 ? Status() : Status(RET_OUT_OF_MEMORY, "No more device blocks.");
+    RetCode ret_code = (location_ == LOCATION_HOST) ? RET_OUT_OF_HOST_MEMORY : RET_OUT_OF_DEVICE_EMORY;
+    return (needed_block_num == 0) ? Status() : Status(ret_code, "No more blocks.");
   }
 
-  // Allocate contiguous memory on device.
-  Status AllocateContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::AllocateContiguous not implemented");
-    return Status();
-  }
-
-  // Free blocked memory on device.
-  Status FreeBlocks(const std::vector<int>& blocks) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeBlocks not implemented");
-    return Status();
-  }
-
-  // Free contiguous memory on device.
-  Status FreeContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeContiguous not implemented");
-    return Status();
-  }
-
-  // Check contiguous memory is in used.
-  bool IsContiguousUsed(const int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::IsContiguousUsed not implemented");
-    return false;
-  }
-
-  // Get memory addresses of blocked memory on device.
-  Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetBlockPtrs not implemented");
-    return Status();
-  }
-
-  // Get memory address of contiguous memory on device.
-  Status GetContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetContiguousPtr not implemented");
-    return Status();
-  }
-
-  // Get number of free blocked memory on device.
-  size_t GetDeviceFreeBlockNumber() { return free_device_blocks_[cur_device_id_].size(); }
-
-  // Get number of used blocked memory on device.
-  size_t GetDeviceUsedBlockNumber() { return used_device_blocks_[cur_device_id_].size(); }
-
-  // Allocate blocked memory on host.
-  Status AllocateHostBlocks(int64_t block_num, std::vector<int>& blocks) {
-    blocks.clear();
-    size_t needed_block_num = block_num;
-    while (needed_block_num > 0 && !free_host_blocks_.empty()) {
-      int block_id = free_host_blocks_.front();
-      blocks.push_back(block_id);
-
-      free_host_blocks_.pop_front();
-      used_host_blocks_.push_back(block_id);
-
-      --needed_block_num;
-    }
-
-    return needed_block_num == 0 ? Status() : Status(RET_OUT_OF_MEMORY, "No more device blocks.");
-  }
-
-  // Allocate contiguous memory on host.
-  Status AllocateHostContiguous(int64_t size, int& block_id) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::AllocateHostContiguous not implemented");
-    return Status();
-  }
-
-  // Free blocked memory on host.
-  Status FreeHostBlocks(const std::vector<int>& blocks) {
+  virtual Status FreeBlocks(const std::vector<int>& blocks) override {
     for (int block_id : blocks) {
-      auto it = std::find(used_host_blocks_.begin(), used_host_blocks_.end(), block_id);
-      if (it != used_host_blocks_.end()) {
-        used_host_blocks_.erase(it);
+      auto it = std::find(used_blocks_.begin(), used_blocks_.end(), block_id);
+      if (it != used_blocks_.end()) {
+        used_blocks_.erase(it);
       }
-      free_host_blocks_.push_back(block_id);
+      free_blocks_.push_back(block_id);
     }
 
     return Status();
   }
 
-  // Free contiguous memory on host.
-  Status FreeHostContiguous(int block_id) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FreeHostContiguous not implemented");
+  virtual Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override {
+    addrs.resize(blocks.size(), nullptr);
     return Status();
   }
 
-  // Get memory addresses of blocked memory on host.
-  Status GetHostBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetHostBlockPtrs not implemented");
-    return Status();
-  }
+  virtual void* GetBlocksBasePtr() override { return nullptr; }
 
-  // Get memory address of contiguous memory on host.
-  Status GetHostContiguousPtr(int block_id, void*& addr) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetHostContiguousPtr not implemented");
-    return Status();
-  }
+  virtual int GetBlocksBaseId() override { return 0; }
 
-  // Get number of free blocked memory on host.
-  size_t GetHostFreeBlockNumber() { return free_host_blocks_.size(); }
+  virtual size_t GetFreeBlockNumber() override { return free_blocks_.size(); }
 
-  // Get number of used blocked memory on host.
-  size_t GetHostUsedBlockNumber() { return used_host_blocks_.size(); }
-
-  // Swap out blocks from device to host,
-  Status SwapOut(const std::vector<int>& device_blocks, std::vector<int>& host_blocks,
-                 const int host_block_num_to_add) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::SwapOut not implemented");
-    return Status();
-  }
-
-  // Swap in blocks from host to device.
-  Status SwapIn(const std::vector<int>& host_blocks, std::vector<int>& device_blocks) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::SwapIn not implemented");
-    return Status();
-  }
-
-  // The swap out/in for single block.
-  Status SwapOut(int host_block_id, int device_block_id) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    return Status();
-  }
-
-  // The swap out/in for single block.
-  Status SwapIn(int device_block_id, int host_block_id) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    return Status();
-  }
-
-  // Drop the swapped blocks on host, and the block ids could be resued.
-  Status SwapDrop(const std::vector<int>& host_blocks) {
-    FreeHostBlocks(host_blocks);
-    return Status();
-  }
-
-  // Get the size in bytes for one block.
-  size_t GetBlockSize() const {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetBlockSize not implemented");
-    return 0;
-  }
-
-  // Get the token number for one block.
-  size_t GetBlockTokenNum() const { return block_manager_config_.device_allocator_config.block_token_num; }
-
-  // Prepare blocks for prefix cache
-  Status PreparePrefixCacheBlocks() {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::PreparePrefixCacheBlocks not implemented");
-    return Status();
-  }
-
-  // Get the prefix cache tokens numbers
-  int GetPrefixCacheTokensNumber() const {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetPrefixCacheTokensNumber not implemented");
-    return 0;
-  }
-
-  // Get the prefix cache blocks numbers
-  size_t GetPrefixCacheBlocksNumber() const {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::GetPrefixCacheBlocksNumber not implemented");
-    return 0;
-  }
-
-  // Check the input token is valid for prefix cache
-  bool CheckReqIsValidForPrefixCache(const std::vector<int>& input_tokens) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::CheckReqIsValidForPrefixCache not implemented");
-    return false;
-  }
-
-  // Fill prefix kv cache to input blocks vector
-  Status FillPrefixCacheBlocks(std::vector<std::vector<int>>& kv_cache_blocks) {
-    KLLM_CHECK_WITH_INFO(false, "FakedBlockManager::FillPrefixCacheBlocks not implemented");
-    return Status();
-  }
-
-  // Get block manager config
-  const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
-
-  void* GetBlockBasePtr() { return nullptr; }
-
-  const AllocatorConfig& GetAllocatorConfig() { return block_manager_config_.device_allocator_config; }
-
-  int GetBlocksBaseId() { return 0; }
-
-  WorkspaceMeta& GetWorkspaceMeta() { return workspace_metas_[0]; }
+  virtual size_t GetUsedBlockNumber() override { return used_blocks_.size(); }
 
  private:
-  BlockManagerConfig block_manager_config_;
+  MemoryLocation location_ = MemoryLocation::LOCATION_HOST;
 
-  std::vector<WorkspaceMeta> workspace_metas_;
-  size_t device_num_;
-  int cur_device_id_ = 0;
+  size_t block_num_;
+  size_t block_size_;
+  size_t convert_size_ = 0;
 
-  std::unordered_map<int, std::list<int>> free_device_blocks_;
-  std::unordered_map<int, std::list<int>> used_device_blocks_;
+  int rank_ = -1;
 
-  std::list<int> free_host_blocks_;
-  std::list<int> used_host_blocks_;
+  std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
+
+  // The global context.
+  std::shared_ptr<Context> context_ = nullptr;
+
+  std::list<int> free_blocks_;
+  std::list<int> used_blocks_;
 };
 
 // A faked token generator.

@@ -43,7 +43,6 @@ class ScheduleOutputTest : public testing::Test {
     infer_req->kv_cache_blocks = {{101, 103, 105}, {101, 103, 105}};
     infer_req->is_use_prefix_cache = false;
     infer_req->prefix_cache_len = 10;
-    infer_req->prefix_cache_blocks_number = 12;
   }
 
   bool CheckInferRequest(std::shared_ptr<InferRequest> infer_req,
@@ -56,7 +55,7 @@ class ScheduleOutputTest : public testing::Test {
       return false;
     }
 
-    if (infer_req->output_tokens != worker_infer_req->output_tokens) {
+    if (infer_req->forwarding_tokens != worker_infer_req->forwarding_tokens) {
       return false;
     }
 
@@ -80,10 +79,6 @@ class ScheduleOutputTest : public testing::Test {
       return false;
     }
 
-    if (infer_req->prefix_cache_blocks_number != worker_infer_req->prefix_cache_blocks_number) {
-      return false;
-    }
-
     return true;
   }
 
@@ -92,23 +87,25 @@ class ScheduleOutputTest : public testing::Test {
       return false;
     }
 
-    if (!CheckVector(src_schedule_output->finish_req_ids, dst_schedule_output->finish_req_ids)) {
+    if (!CheckVectorsVector(src_schedule_output->finish_req_ids, dst_schedule_output->finish_req_ids)) {
       return false;
     }
 
-    if (!CheckVector(src_schedule_output->merged_swapout_req_ids, dst_schedule_output->merged_swapout_req_ids)) {
+    if (!CheckVectorsVector(src_schedule_output->merged_swapout_req_ids, dst_schedule_output->merged_swapout_req_ids)) {
       return false;
     }
 
-    if (!CheckVector(src_schedule_output->merged_swapin_req_ids, dst_schedule_output->merged_swapin_req_ids)) {
+    if (!CheckVectorsVector(src_schedule_output->merged_swapin_req_ids, dst_schedule_output->merged_swapin_req_ids)) {
       return false;
     }
 
-    if (!CheckKeyToVector(src_schedule_output->swapout_req_block_ids, dst_schedule_output->swapout_req_block_ids)) {
+    if (!CheckVectorsKeyToVector(src_schedule_output->swapout_req_block_ids,
+                                 dst_schedule_output->swapout_req_block_ids)) {
       return false;
     }
 
-    if (!CheckKeyToVector(src_schedule_output->swapin_req_block_ids, dst_schedule_output->swapin_req_block_ids)) {
+    if (!CheckVectorsKeyToVector(src_schedule_output->swapin_req_block_ids,
+                                 dst_schedule_output->swapin_req_block_ids)) {
       return false;
     }
 
@@ -125,6 +122,22 @@ class ScheduleOutputTest : public testing::Test {
     return true;
   }
 
+  // Check whether two vector<vector> is equal.
+  template <typename T>
+  bool CheckVectorsVector(const std::vector<std::vector<T>>& src_vec, const std::vector<std::vector<T>>& dst_vec) {
+    if (src_vec.size() != dst_vec.size()) {
+      return false;
+    }
+
+    for (size_t i = 0; i < src_vec.size(); ++i) {
+      if (!CheckVector(src_vec[i], dst_vec[i])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // Check whether two vector is equal.
   template <typename T>
   bool CheckVector(const std::vector<T>& src_vec, const std::vector<T>& dst_vec) {
@@ -134,6 +147,21 @@ class ScheduleOutputTest : public testing::Test {
 
     for (size_t i = 0; i < src_vec.size(); ++i) {
       if (src_vec[i] != dst_vec[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool CheckVectorsKeyToVector(const std::vector<std::unordered_map<int64_t, std::vector<int>>>& src_dict,
+                               const std::vector<std::unordered_map<int64_t, std::vector<int>>>& dst_dict) {
+    if (src_dict.size() != dst_dict.size()) {
+      return false;
+    }
+
+    for (size_t i = 0; i < src_dict.size(); ++i) {
+      if (!CheckKeyToVector(src_dict[i], dst_dict[i])) {
         return false;
       }
     }
@@ -184,13 +212,17 @@ class ScheduleOutputTest : public testing::Test {
 
     schedule_output->schedule_id = 5;
 
-    schedule_output->finish_req_ids = {1, 3, 5, 7};
+    schedule_output->finish_req_ids = {{1, 3, 5, 7}};
 
-    schedule_output->merged_swapout_req_ids = {11, 13, 15};
-    schedule_output->merged_swapin_req_ids = {12, 14, 16};
+    schedule_output->merged_swapout_req_ids = {{11, 13, 15}};
+    schedule_output->merged_swapin_req_ids = {{12, 14, 16}};
 
-    schedule_output->swapout_req_block_ids[101] = {111, 113, 115};
-    schedule_output->swapin_req_block_ids[102] = {112, 114, 116};
+    std::unordered_map<int64_t, std::vector<int>> dp_swapout_req_block_ids;
+    dp_swapout_req_block_ids[101] = {111, 113, 115};
+    schedule_output->swapout_req_block_ids.push_back(dp_swapout_req_block_ids);
+    std::unordered_map<int64_t, std::vector<int>> dp_swapin_req_block_ids;
+    dp_swapin_req_block_ids[102] = {112, 114, 116};
+    schedule_output->swapin_req_block_ids.push_back(dp_swapin_req_block_ids);
 
     schedule_output->running_reqs = {infer_req};
   }
@@ -278,14 +310,17 @@ TEST_F(ScheduleOutputTest, SerializeScheduleOutput) {
   GenerateScheduleOutput();
 
   size_t bytes = ScheduleOutputParser::GetSerializedSize(schedule_output);
-
   void* memory = malloc(bytes);
+
   ScheduleOutputParser::SerializeScheduleOutput(schedule_output, memory);
 
   ScheduleOutput* new_schedule_output = new ScheduleOutput();
   ScheduleOutputParser::DeserializeScheduleOutput(memory, new_schedule_output);
 
   EXPECT_TRUE(CheckScheduleOutput(schedule_output, new_schedule_output));
+
+  free(memory);
+  delete new_schedule_output;
 }
 
 TEST_F(ScheduleOutputTest, ScheduleOutputPool) {

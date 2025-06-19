@@ -40,11 +40,11 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
       ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_op_executor_.ResetVariantPack();
   atb_op_executor_.SetInputTensor(lm_input_tensor_buf_ptr, input_tensors[0].shape,
-                                  static_cast<aclDataType>(input_tensors[0].dtype));
+                                  static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
   atb_op_executor_.SetInputTensor(lm_weight_tensor_buf_ptr, input_tensors[1].shape,
-                                  static_cast<aclDataType>(input_tensors[1].dtype));
+                                  static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
   atb_op_executor_.SetOutputTensor(lm_output_tensor_buf_ptr, output_tensors[0].shape,
-                                   static_cast<aclDataType>(output_tensors[0].dtype));
+                                   static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }

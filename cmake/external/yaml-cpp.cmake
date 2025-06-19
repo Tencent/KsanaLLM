@@ -6,9 +6,7 @@ include(FetchContent)
 
 set(YAML_INSTALL_DIR ${THIRD_PARTY_PATH}/install/yaml-cpp)
 
-if(NOT DEFINED YAML_VER)
-    set(YAML_VER 0.7.0)
-endif()
+set(YAML_VER 0.7.0)
 set(YAML_GIT_URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/yaml-cpp-${YAML_VER}.tar.gz)
 
 FetchContent_Declare(

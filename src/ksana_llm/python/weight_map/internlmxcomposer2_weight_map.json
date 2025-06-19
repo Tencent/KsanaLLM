@@ -1,0 +1,36 @@
+{
+    "plora_glb_GN": "deprecated",
+    "plora_sub_GN": "deprecated",
+
+    "model.tok_embeddings.weight": "model.embed_tokens.weight",
+    "model.layers.(\\d+).attention.wo.weight": "model.layers.$1.self_attn.o_proj.weight",
+    "model.layers.(\\d+).feed_forward.w3.weight": "model.layers.$1.mlp.up_proj.weight",
+    "model.layers.(\\d+).feed_forward.w1.weight": "model.layers.$1.mlp.gate_proj.weight",
+    "model.layers.(\\d+).feed_forward.w2.weight": "model.layers.$1.mlp.down_proj.weight",
+    "model.layers.(\\d+).attention_norm.weight": "model.layers.$1.input_layernorm.weight",
+    "model.layers.(\\d+).ffn_norm.weight": "model.layers.$1.post_attention_layernorm.weight",
+    "output.weight":"lm_head.weight",
+    
+    "model.layers.(\\d+).attention.wqkv.weight": "model.layers.$1.self_attn.W_rqkv_pack.weight",
+
+    "model.layers.(\\d+).attention.wqkv.Plora_A.weight": "model.layers.$1.self_attn.qkv_proj.Plora_A.weight",
+    "model.layers.(\\d+).attention.wqkv.Plora_B.weight": "model.layers.$1.self_attn.qkv_rproj.Plora_B.weight",
+    "model.layers.(\\d+).attention.wo.Plora_A.weight": "model.layers.$1.self_attn.o_proj.Plora_A.weight",
+    "model.layers.(\\d+).attention.wo.Plora_B.weight": "model.layers.$1.self_attn.o_proj.Plora_B.weight",
+    "model.layers.(\\d+).feed_forward.w3.Plora_A.weight": "model.layers.$1.mlp.up_proj.Plora_A.weight",
+    "model.layers.(\\d+).feed_forward.w3.Plora_B.weight": "model.layers.$1.mlp.up_proj.Plora_B.weight",
+    "model.layers.(\\d+).feed_forward.w1.Plora_A.weight": "model.layers.$1.mlp.gate_proj.Plora_A.weight",
+    "model.layers.(\\d+).feed_forward.w1.Plora_B.weight": "model.layers.$1.mlp.gate_proj.Plora_B.weight",
+    "model.layers.(\\d+).feed_forward.w2.Plora_A.weight": "model.layers.$1.mlp.down_proj.Plora_A.weight",
+    "model.layers.(\\d+).feed_forward.w2.Plora_B.weight": "model.layers.$1.mlp.down_proj.Plora_B.weight",
+
+    ".*lora_web_A.*": "deprecated",
+    ".*lora_web_B.*": "deprecated",
+    ".*lora_dpo_A.*": "deprecated",
+    ".*lora_dpo_B.*": "deprecated",
+    ".*lora_sft_A.*": "deprecated",
+    ".*lora_sft_B.*": "deprecated",
+ 
+    "vision_proj.*": "deprecated",
+    "vit.*": "deprecated"
+}

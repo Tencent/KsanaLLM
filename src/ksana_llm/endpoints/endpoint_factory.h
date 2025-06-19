@@ -15,8 +15,8 @@ class EndpointFactory {
       const EndpointConfig &endpoint_config, Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue);
 
   // Create a rpc endpoint instance via the input config.
-  static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(
-      const EndpointConfig &endpoint_config, const std::shared_ptr<LocalEndpoint>& local_endpoint);
+  static std::shared_ptr<RpcEndpoint> CreateRpcEndpoint(const EndpointConfig &endpoint_config,
+                                                        const std::shared_ptr<LocalEndpoint> &local_endpoint);
 };
 
 }  // namespace ksana_llm

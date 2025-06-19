@@ -25,7 +25,7 @@ namespace llm_kernels {
 namespace ascend {
 
 // The max seq_len
-#define MAX_SEQ_LEN 4096
+static constexpr size_t kMaxSeqLen = 4096;
 
 template <typename DTYPE>
 ATBAttention<DTYPE>::~ATBAttention() {}
@@ -60,7 +60,7 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
   atb_op_executor_.SetInputTensor(rope_sin_workspace_ptr_, {max_position_embeddings_, head_dim_}, acl_dtype);
   if (is_multi_token_forward) {
     // mask_input_tensor_id
-    atb_op_executor_.SetInputTensor(attn_mask_ptr_, {MAX_SEQ_LEN, MAX_SEQ_LEN}, acl_dtype);
+    atb_op_executor_.SetInputTensor(attn_mask_ptr_, {kMaxSeqLen, kMaxSeqLen}, acl_dtype);
   }
   // k_cache_input_tensor_id
   atb_op_executor_.SetInputTensor(k_cache, {total_block_num, block_token_num, kv_head_size_, head_dim_}, acl_dtype);
@@ -117,7 +117,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   // shape: (ntokens, head_dim)
   uint32_t rope_sin_input_tensor_id = tensor_id++;
   // is_multi_token_forward == true:
-  //   shape: (MAX_SEQ_LEN, MAX_SEQ_LEN)
+  //   shape: (kMaxSeqLen, kMaxSeqLen)
   uint32_t mask_input_tensor_id = is_multi_token_forward ? tensor_id++ : 0;
   // shape: (num_blocks, block_size, k_head_num, head_size)
   uint32_t k_cache_input_tensor_id = tensor_id++;
@@ -220,6 +220,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
     op_param.qkScale = 1.0f / sqrt(head_dim);
     op_param.calcType = atb::infer::SelfAttentionParam::CalcType::PA_ENCODER;
     op_param.maskType = atb::infer::SelfAttentionParam::MASK_TYPE_NORM;
+    op_param.kernelType = atb::infer::SelfAttentionParam::KernelType::KERNELTYPE_HIGH_PRECISION;
     op_param.isTriuMask = 1;
     atb::CreateOperation(op_param, &op_node.operation);
     op_node.inTensorIds = {emb_q_inner_tensor_id, emb_k_inner_tensor_id, v_inner_tensor_id, mask_input_tensor_id,
@@ -241,7 +242,7 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
     op_node.inTensorReshapeFuncs[0] = [=](const atb::Dims& old_shape, atb::Dims& new_shape) {
       new_shape.dimNum = 3;
       new_shape.dims[0] = old_shape.dims[0];
-      new_shape.dims[1] = kv_head_size;
+      new_shape.dims[1] = head_size;
       new_shape.dims[2] = head_dim;
     };
   }
@@ -321,19 +322,15 @@ void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embe
 
 template <typename DTYPE>
 void ATBAttention<DTYPE>::InitAttnMask() {
-  uint16_t min_value = 0xFBFF;
-  std::vector<uint16_t> mask(MAX_SEQ_LEN * MAX_SEQ_LEN, 0);
-  for (size_t i = 0; i < MAX_SEQ_LEN; ++i) {
-    for (size_t j = 0; j < MAX_SEQ_LEN; ++j) {
-      if (j > i) {
-        mask[i * MAX_SEQ_LEN + j] = min_value;
-      }
-    }
+  constexpr uint16_t kMaskValue = 1;  // KERNELTYPE_HIGH_PRECISION: 1; KERNELTYPE_DEFAULT: -inf(0xFBFF)
+  std::vector<uint16_t> mask(kMaxSeqLen * kMaxSeqLen, 0);
+  for (size_t i = 0; i < kMaxSeqLen; ++i) {
+    std::fill_n(mask.begin() + i * kMaxSeqLen + i + 1, kMaxSeqLen - i - 1, kMaskValue);
   }
 
-  ACL_CHECK_RET(aclrtMalloc(&attn_mask_ptr_, MAX_SEQ_LEN * MAX_SEQ_LEN * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
-  ACL_CHECK_RET(aclrtMemcpy(attn_mask_ptr_, MAX_SEQ_LEN * MAX_SEQ_LEN * sizeof(DTYPE), mask.data(),
-                            MAX_SEQ_LEN * MAX_SEQ_LEN * sizeof(DTYPE), aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE));
+  ACL_CHECK_RET(aclrtMalloc(&attn_mask_ptr_, kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
+  ACL_CHECK_RET(aclrtMemcpy(attn_mask_ptr_, kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), mask.data(),
+                            kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE));
 }
 
 template <typename DTYPE>

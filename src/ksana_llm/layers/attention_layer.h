@@ -20,7 +20,7 @@
 namespace ksana_llm {
 
 // The positional encoding.
-enum PositionEncoding { LEARNED_ABSOLUTE = 0, ROPE = 1, ALIBI = 2 };
+enum PositionEncoding { LEARNED_ABSOLUTE = 0, ROPE = 1, ALIBI = 2, NO_ROPE = 3 };
 
 template <typename T, template <typename, typename, llm_kernels::utils::KVCacheType> class ATTENTION_LAYER>
 std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
@@ -52,31 +52,46 @@ class AttentionLayer : public BaseLayer {
   int num_kv_heads_;
   int head_size_;
   int stride_size_;
-  int tensor_para_size_;
+  size_t tensor_para_size_;
   int max_position_embeddings_;
   float base_;
-
+  bool use_qk_norm_;                           // Check if normlize the attention out q and k.
+  float layernorm_eps_;                        // The epsilon value used in layer normalization layers.
+  bool enable_qk_pre_norm_before_rotary_pos_;  // Whether to normalize q and k before rotary position
   // kv_cache storage type and kv scale
   DataType kv_cache_dtype_;
   float k_scale_;
   float v_scale_;
 
   bool is_causal_{true};
+  // mla config params
+  uint32_t q_lora_rank_;
+  uint32_t kv_lora_rank_;
+  uint32_t qk_nope_head_dim_;
+  uint32_t qk_rope_head_dim_;
+  uint32_t v_head_dim_;
+  float attn_scale_;
+  // TODO(winminkong): the matmul op will be removed from mla attn in the subsequent steps.
+  QuantMode mm_quant_mode_;
+
 #ifdef ENABLE_CUDA
+  // for deepseek yarn
+  float deepseek_yarn_get_mscale(const float scale, const float mscale);
+
+  float common_yarn_get_mscale(const float scale);
+
   std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<T>> rotary_embedding_cuda_;
   std::optional<void*> alibi_slopes_;
 #endif
 
 #ifdef ENABLE_ACL
-  // NOTE(karlluo): only need by ascend
-  int workspace_block_id_{-1};
-  size_t workspace_size_{0ul};
-
-  void PrepareWorkspaceBuffer(const size_t workspace_needed, void* workspace_buf_ptr);
-
   size_t max_batch_size_;
   bool is_multi_token_forward_;
 #endif
+
+  bool no_rope_;
+  size_t attn_temperature_tuning_;
+  size_t floor_scale_;
 };
 
 }  // namespace ksana_llm

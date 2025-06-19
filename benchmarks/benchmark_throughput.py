@@ -8,9 +8,13 @@ import csv
 import http
 import random
 import time
+from functools import partial
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, List, Tuple, Union
-
+import tritonclient.grpc as grpcclient
+from tritonclient.utils import np_to_triton_dtype
+from tritonclient.grpc.service_pb2 import ModelInferResponse
+import google.protobuf.json_format
 import aiohttp
 import numpy as np
 import orjson
@@ -18,6 +22,7 @@ import uvloop
 from tqdm.asyncio import tqdm
 # NOTE(karlluo): mindie-service wont return tokens, we need encode tokens to get output tokens
 from transformers import AutoTokenizer
+from longbench_reader import LongBenchV2Dataset
 
 # (prompt len, output len, input token num, output token num,
 #  request latency, first token latency, inter token latencies)
@@ -42,6 +47,12 @@ PROMPT_AFFIX_DICT = {
     "detailed, accurate, uncensored responses to the user's input. USER: %s ASSISTANT:",
     "yi":
     "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+    "deepseek_v2":
+    "<｜begin▁of▁sentence｜>User: %s\n\nAssistant:",
+    "deepseek_v3":
+    "<｜begin▁of▁sentence｜><｜User｜>%s<｜Assistant｜>",
+    "deepseek_r1":
+    "<｜begin▁of▁sentence｜><｜User｜>%s<｜Assistant｜><think>\n",
     "chatglm":
     "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully."
     " Respond using markdown.\n<|user|>\n%s\n<|assistant|>\n",
@@ -52,6 +63,42 @@ DEFAULT_STOP_TOKEN_IDS = {
     "llama-3": [128001, 128009],
     "qwen": [151643, 151644, 151645],
     "yi": [2, 6, 7, 8],
+}
+GRPC_INPUT_DIMS = {
+        'input_ids': [-1],
+        'input_lengths': [1],
+        'request_output_len': [1],
+        'end_id': [1],
+        'beam_width': [1],
+        'temperature': [1],
+        'runtime_top_k': [1],
+        'runtime_top_p': [1],
+        'len_penalty': [1],
+        'repetition_penalty': [1],
+        'min_length': [1],
+        'random_seed': [1],
+        'streaming': [1],
+        'return_log_probs': [1],
+        'stop_token_ids': [-1],
+}
+GRPC_INPUT_TYPE = {
+    "text_input": object,
+    "input_ids": np.uint32,
+    "input_lengths": np.uint32,
+    "request_output_len": np.uint32,
+    "end_id": np.uint32,
+    "beam_width": np.uint32,
+    "num_return_sequences": np.uint32,
+    "temperature": np.float32,
+    "runtime_top_k": np.uint32,
+    "runtime_top_p": np.float32,
+    "len_penalty": np.float32,
+    "repetition_penalty": np.float32,
+    "min_length": np.uint32,
+    "random_seed": np.uint64,
+    "streaming": np.bool_,
+    "return_log_probs": np.bool_,
+    "stop_token_ids": np.uint32,
 }
 
 
@@ -111,13 +158,13 @@ class BenchmarkStreamMetrics:
              f"Median TTFT: {self.median_first_token_latency:.3f} s"] +
             [f"P{percentile} TTFT: {percentile_ttft:.3f} s"
              for [percentile, percentile_ttft] in self.percentiles_first_token_latency] +
-            [f"Average ITL: {self.avg_inter_token_latency:.3f} s",
-             f"Median ITL: {self.median_inter_token_latency:.3f} s"] +
-            [f"P{percentile} ITL: {percentile_itl:.3f} s"
+            [f"Average ITL: {self.avg_inter_token_latency:.5f} s",
+             f"Median ITL: {self.median_inter_token_latency:.5f} s"] +
+            [f"P{percentile} ITL: {percentile_itl:.5f} s"
              for [percentile, percentile_itl] in self.percentiles_inter_token_latency] +
-            [f"Average TPOT: {self.avg_latency_per_out_token:.3f} s",
-             f"Median TPOT: {self.median_latency_per_out_token:.3f} s"] +
-            [f"P{percentile} TPOT: {percentile_tpot:.3f} s"
+            [f"Average TPOT: {self.avg_latency_per_out_token:.5f} s",
+             f"Median TPOT: {self.median_latency_per_out_token:.5f} s"] +
+            [f"P{percentile} TPOT: {percentile_tpot:.5f} s"
              for [percentile, percentile_tpot] in self.percentiles_latency_per_out_token]
         )
 
@@ -126,13 +173,23 @@ def args_config():
     parser = argparse.ArgumentParser()
     parser.add_argument('--host',
                         type=str,
-                        default="0.0.0.0",
+                        default="localhost",
                         help='server host address')
     parser.add_argument('--port', type=int, default=8080, help='server port')
-    parser.add_argument('--input_csv',
+    parser.add_argument('--input_csv', '--dataset_path',
+                        dest='dataset_path',
                         type=str,
                         default="benchmark_input.csv",
                         help='input data for benchmark')
+    parser.add_argument('--dataset_name', 
+                        type=str,
+                        default="customize",
+                        choices=[
+                            'customize', 'sharegpt500', 
+                            'longbenchV2withCtx', 'longbenchV2noCtx' 
+                            # LongBench V2 dataset (questions with/no long text contexts)
+                        ],
+                        help='Name of the data to benchmark on.')
     parser.add_argument('--col_idx',
                         type=int,
                         default=0,
@@ -209,9 +266,13 @@ def args_config():
                         default="ksana",
                         choices=[
                             'ksana', 'vllm', 'ksana-server', 'vllm-server', 'trt-llm',
-                            'evart', 'mindie-service', 'sglang'
+                            'evart', 'mindie-service', 'sglang', 'triton-grpc'
                         ],
                         help='serving backend')
+    parser.add_argument('--triton_model_name',
+                    type=str,
+                    default="ksana_llm",
+                    help='triton_model_name example  ksana_llm, vllm, hunyuan13b_trt_llm, ...')
     parser.add_argument('--prompt_num',
                         type=int,
                         default=0,
@@ -221,7 +282,7 @@ def args_config():
                         default="llama",
                         choices=[
                             'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi',
-                            'chatglm', 'empty'
+                            'chatglm', 'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1'
                         ],
                         help="serving model type, used to add prefixes and suffixes"
                              " to the prompt.")
@@ -256,8 +317,17 @@ def args_config():
     parser.add_argument('--encoder_no_repeat_ngram_size',
                         type=int,
                         default=0,
-                        help="If set to int > 0, all ngrams of that size that occur in the \
-                             `encoder_input_ids` cannot occur in the `decoder_input_ids`")
+                        help="If set to int > 0, all ngrams of that size that occur in the               \
+                             `encoder_input_ids` cannot occur in the `decoder_input_ids`.                \
+                              if encoder_no_repeat_ngram_size > input_token_size + generated_token_size, \
+                              the argument will be ignored.")
+    parser.add_argument('--decoder_no_repeat_ngram_size',
+                        type=int,
+                        default=0,
+                        help="If set to int > 0, all ngrams of that size that occur in the  \
+                             `decoder_input_ids` cannot occur in the next generated tokens. \
+                              if decoder_no_repeat_ngram_size > generated_token_size,       \
+                              the argument will be ignored.")
     parser.add_argument('--length_penalty',
                         type=float,
                         default=1.0,
@@ -309,9 +379,35 @@ def args_config():
                         nargs='*',
                         type=str,
                         default=None,
-                        help="A list of strings which will be used as stop string in token generation phase")
+                        help="A list of strings which will be used as stop string in"
+                             " token generation phase")
+    parser.add_argument('--clear_cache',
+                        action="store_true",
+                        help="Clear all the prefix cache blocks. This feature is specific"
+                             " to the KsanaLLM engine and only takes effect when compiled"
+                             " with -DCLEAR_CACHE=ON.")
+    parser.add_argument('--random_input_len',
+                        type=int,
+                        default=0,
+                        help="the length of random input_tokens")
+    parser.add_argument('--show_decode_token_throughput',
+                        action='store_true',
+                        help="Whether to show only decode token throughput,"
+                            " which will override the default total token throughput")
     args = parser.parse_args()
     return args
+
+
+def check_args(args):
+    if args.chat_template or args.random_input_len > 0:
+        if args.tokenizer_path is None:
+            raise ValueError(
+                "When chat_template is enabled or random_input_len > 0, tokenizer_path cannot be None.")
+
+    if args.dataset_name.startswith("longbenchV2"):
+        if args.tokenizer_path is None:
+            raise ValueError(
+                "When using the LongBench V2, tokenizer_path cannot be None.")
 
 
 def read_from_csv(csv_file, col_idx=0, remove_head=True):
@@ -320,6 +416,14 @@ def read_from_csv(csv_file, col_idx=0, remove_head=True):
     if remove_head:
         next(csv_reader)
     return [row[col_idx] for row in csv_reader]
+
+
+def prepare_tensor(client, name, input, binary_data=True):
+    t = client.InferInput(
+        name, input.shape, np_to_triton_dtype(input.dtype))
+    t.set_data_from_numpy(input)
+
+    return t
 
 
 async def generate_req_data_async(
@@ -376,20 +480,12 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
 
     if not args.stop_token_ids:
         args.stop_token_ids = DEFAULT_STOP_TOKEN_IDS.get(args.model_type, [])
-    if args.chat_template:
-        # If chat template is enabled, apply the chat template to the prompt
-        prompt = tokenizer.apply_chat_template(
-            orjson.loads(prompt),
-            tokenize=False,
-            add_generation_prompt=True
-        )
-    else:
-        # If chat template is not enabled,
-        # replace the placeholder in the prompt affix dictionary
-        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
+    input_tokens = None
+    if args.random_input_len > 0:
+        input_tokens = [random.randint(0, tokenizer.vocab_size - 1) for _ in range(args.random_input_len)]
+        
     if args.backend == "ksana":
         data = {
-            "prompt": prompt,
             "sampling_config": {
                 "temperature": args.temperature,
                 "topk": args.topk,
@@ -400,6 +496,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
                 "repetition_penalty": args.repetition_penalty,
                 "no_repeat_ngram_size": args.no_repeat_ngram_size,
                 "encoder_no_repeat_ngram_size": args.encoder_no_repeat_ngram_size,
+                "decoder_no_repeat_ngram_size": args.decoder_no_repeat_ngram_size,
                 "logprobs": args.logprobs,
                 "max_new_tokens": args.max_new_tokens,
                 "stop_token_ids": args.stop_token_ids,
@@ -408,7 +505,13 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             },
             "structured_output_regex": args.structured_output_regex,
             "stream": args.stream,
+            "model_type": args.model_type,
+            "use_chat_template": args.chat_template,
         }
+        if input_tokens:
+            data["input_tokens"] = input_tokens
+        else:
+            data["prompt"] = prompt
     elif args.backend == "trt-llm":
         data = {
             "accumulate_tokens": True,
@@ -423,6 +526,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "stream": args.stream,
         }
     elif args.backend in ["vllm", "evart", "mindie-service"]:
+        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         data = {
             "prompt": prompt,
             "n": 1,
@@ -459,7 +563,11 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
     elif args.backend in ["ksana-server", "vllm-server"]:
         data = {
             "model": "default_model",
-            "prompt": prompt,
+            **(
+                {"messages": [{"role": "user", "content": f"{prompt}"}]}
+                if args.model_type == "deepseek_r1"
+                else {"prompt": prompt}
+            ),
             "top_p": args.topp,
             "temperature": args.temperature,
             "top_k": args.topk,
@@ -474,7 +582,196 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "ignore_eos": args.ignore_eos,
             "structured_output_regex": args.structured_output_regex,
         }
+    elif args.backend == "triton-grpc":
+        data = {
+            "input_ids": tokenizer.encode(prompt,  add_special_tokens=True) if tokenizer else [],
+            "input_lengths": len(prompt),
+            "request_output_len": args.max_new_tokens,
+            "end_id": tokenizer.eos_token_id if tokenizer else [2],
+            "beam_width": args.num_beams,
+            "temperature": args.temperature,
+            "runtime_top_k": args.topk,
+            "runtime_top_p": args.topp,
+            "len_penalty": args.length_penalty,
+            "repetition_penalty": args.repetition_penalty,
+            "min_length": 0,
+            "random_seed": args.seed,
+            "streaming": args.stream,
+            "return_log_probs": bool(args.logprobs) if args.logprobs else False
+        }
     return prompt, orjson.dumps(data)
+
+
+class GrpcClientPool:
+    def __init__(self, grpc_url: str, max_concurrency: int):
+        self.grpc_url = grpc_url
+        self.max_concurrency = max_concurrency
+        self.pool = asyncio.Queue(maxsize=max_concurrency)
+        self._init_lock = asyncio.Lock()
+        self._initialized = False
+
+    async def initialize(self):
+        async with self._init_lock:
+            if self._initialized:
+                return
+            for _ in range(self.max_concurrency):
+                client = grpcclient.InferenceServerClient(
+                    url=self.grpc_url,
+                    verbose=False
+                )
+                await self.pool.put(client)
+            self._initialized = True
+
+    async def acquire(self):
+        client = await self.pool.get()
+        return client
+
+    async def release(self, client):
+        await self.pool.put(client)
+
+    async def close(self):
+        while not self.pool.empty():
+            client = await self.pool.get()
+            await client.close()
+
+
+# Assuming GRPC_INPUT_TYPE and prepare_tensor are defined elsewhere
+async def send_grpc_request_async(
+    args: argparse.Namespace,
+    prompt: str,
+    req_data: bytes,
+    req_id: int,
+    result_list: List,
+    pbar: tqdm,
+    tokenizer: Union[None, AutoTokenizer],
+    client_pool: GrpcClientPool,
+):
+    try:
+        # Create a gRPC inference client
+        client = await client_pool.acquire()
+        data = orjson.loads(req_data)
+
+        # Prepare input tensors
+        inputs = []
+        for key, value in data.items():
+            if key not in GRPC_INPUT_TYPE or key not in GRPC_INPUT_DIMS:
+                continue
+
+            expected_dtype = GRPC_INPUT_TYPE[key]
+            expected_dims = GRPC_INPUT_DIMS[key]
+
+            if expected_dims == [-1]:
+                if isinstance(value, list):
+                    tensor = np.array([value], dtype=expected_dtype)
+                else:
+                    tensor = np.array([[value]], dtype=expected_dtype)
+            elif expected_dims == [1]:
+                tensor = np.array([[value]], dtype=expected_dtype)
+            else:
+                tensor = np.array([value], dtype=expected_dtype)
+
+            input_tensor = prepare_tensor(grpcclient, key, tensor)
+            inputs.append(input_tensor)
+
+        # Start streaming and send async inference request
+        request_start_time = time.perf_counter()
+        request_completed = asyncio.Event()
+        loop = asyncio.get_event_loop()
+        class StreamState:
+            def __init__(self):
+                self.first_token_latency = 0
+                self.inter_token_latencies = []
+                self.most_recent_timestamp = 0
+                self.start_index = 0
+                self.accumulated_token = []
+                self.accumulated_text = ""
+                self.is_first_token = True
+
+        stream_state = StreamState()
+
+        def stream_callback(state, request_completed, loop, request_start_time, result, error):
+            if error:
+                print(error)
+                # Set the event in case of error
+                loop.call_soon_threadsafe(request_completed.set)
+                return
+            try:
+                current_time = time.perf_counter()
+
+                # Prepare result format
+                result_json = result.get_response(as_json=True)
+                message = ModelInferResponse()
+                google.protobuf.json_format.Parse(orjson.dumps(result_json), message)
+                infer_result = grpcclient.InferResult(message)
+
+                output_ids = infer_result.as_numpy("output_ids")
+                sequence_length = infer_result.as_numpy("sequence_length")
+
+                if sequence_length is not None and output_ids is not None:
+                    end_index = sequence_length[0, 0]
+                    current_ids = output_ids[0, 0, state.start_index:end_index].tolist()
+
+                    state.accumulated_token.extend(current_ids)
+                    if current_ids:
+                        # 处理首个token的延迟
+                        if state.is_first_token:
+                            state.first_token_latency = current_time - request_start_time
+                            state.most_recent_timestamp = current_time
+                            state.is_first_token = False
+                        else:
+                            state.inter_token_latencies.append(current_time - state.most_recent_timestamp)
+                            state.most_recent_timestamp = current_time
+                        current_text = tokenizer.decode(
+                            current_ids, skip_special_tokens=True).rstrip("\ufffd")
+                        state.accumulated_text += current_text
+                        state.start_index = end_index
+                        if args.stream and args.triton_model_name not in ['ksana_llm', 'vllm']:
+                            state.start_index = 0
+                if output_ids[0, 0, -1 ] == tokenizer.eos_token_id or sequence_length >= args.max_new_tokens:
+                    loop.call_soon_threadsafe(request_completed.set)
+                    return
+
+            except Exception as e:
+                print(f"Error in gRPC callback: {e}")
+                loop.call_soon_threadsafe(request_completed.set)
+                raise
+
+        client.start_stream(
+            callback=partial(
+                stream_callback,
+                state=stream_state,
+                request_completed=request_completed,
+                loop=loop,
+                request_start_time=request_start_time)
+        )
+        client.async_stream_infer(
+            args.triton_model_name,
+            inputs,
+            request_id=str(req_id)
+        )
+
+        # 等待请求完成
+        await request_completed.wait()
+        request_end_time = time.perf_counter()
+
+            # Append results to latency tracking
+        REQUEST_LATENCY.append((
+                len(prompt),
+                len(stream_state.accumulated_text),
+                len(data["input_ids"]),
+                len(stream_state.accumulated_token),
+                request_end_time - request_start_time,
+                stream_state.first_token_latency,
+                stream_state.inter_token_latencies
+            ))
+
+        # Append the output to result_list
+        result_list[req_id] = stream_state.accumulated_text
+        pbar.update(1)
+
+    except Exception as e:
+        print(f"Error in gRPC request: {e}")
+        raise
 
 
 async def send_request_async(args: argparse.Namespace, prompt: int,
@@ -560,10 +857,16 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
 
     output_token_num = len(output.get("output_token_ids", [""])[0])
     input_token_num = len(output.get("input_token_ids", ""))
+    out_tokens = None
+    in_tokens = None
+    show_tokens = False
 
     server_map_idx = "delta" if args.stream else "message"
     if args.backend == "ksana":
         output_text = output.get("texts", [""])[0].strip()
+        if show_tokens:
+            out_tokens = output.get("output_token_ids", [""])[0]
+            in_tokens = output.get("input_token_ids", "")
     elif args.backend == "trt-llm":
         prompt_len = len(prompt)
         output_text = output.get("text_output", "").strip()
@@ -575,13 +878,15 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
             output_token_num = len(tokenizer.encode(output_text))
     elif args.backend == "vllm":
         prompt_len = len(prompt)
-        output_text = output["text"][0][prompt_len:].strip()
+        output_text = output["text"][0].strip()
         if tokenizer is None:
             input_token_num = 0
             output_token_num = 0
         else:
-            input_token_num = len(tokenizer.encode(prompt))
-            output_token_num = len(tokenizer.encode(output_text))
+            out_tokens = tokenizer.encode(output_text)
+            in_tokens = tokenizer.encode(prompt)
+            input_token_num = len(in_tokens)
+            output_token_num = len(out_tokens)
     elif args.backend == "sglang":
         prompt_len = len(prompt)
         output_text = output["text"].strip()
@@ -613,6 +918,9 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         "req_id : {} input_token_num={}, output_token_num={}, output_text_len={}, output_text=\n{}"
         .format(req_id, input_token_num, output_token_num, output_len,
                 output_text))
+    if show_tokens:
+        print(f"input_tokens: {in_tokens}, output_tokens: {out_tokens}")
+
     REQUEST_LATENCY.append(
         (len(prompt), output_len if output_len > 0 else 1, input_token_num,
          output_token_num, request_latency,
@@ -634,15 +942,26 @@ async def benchmark_async(args: argparse.Namespace, api_url: str,
                                                                     args.request_rate,
                                                                     args.concurrency,
                                                                     args.random):
+        # Create an asynchronous grpc task to send the request
+        if args.backend == "triton-grpc":
+            # Initialize the client pool
+            client_pool = GrpcClientPool(api_url, args.concurrency)
+            await client_pool.initialize()
 
-        # Create an asynchronous task to send the request
-        task = asyncio.create_task(
-            send_request_async(args, prompt, req_data, api_url, req_id, result_list, pbar,
-                               tokenizer))
+            task = asyncio.create_task(
+                send_grpc_request_async(args, prompt, req_data,
+                                    req_id, result_list, pbar, tokenizer, client_pool))
+        else:
+            # Create an asynchronous task to send the request
+            task = asyncio.create_task(
+                send_request_async(args, prompt, req_data, api_url, req_id, result_list, pbar,
+                                tokenizer))
         # Add the task to the list of tasks
         tasks.append(task)
     # Wait for all tasks to complete
     await asyncio.gather(*tasks)
+    if args.backend == "triton-grpc":
+        client_pool.close()
     # Close the progress bar
     pbar.close()
     # Return the result list
@@ -728,12 +1047,14 @@ def search_request_rate(args: argparse.Namespace, request_rate_list: List[Tuple[
 
 def main(args: argparse.Namespace):
     global REQUEST_LATENCY
-
+    check_args(args)
+    
     np.random.seed(args.seed)
     random.seed(args.seed)
 
     tokenizer = None
     api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
+
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(
             args.port) + "/v2/models/ensemble/generate"
@@ -741,13 +1062,14 @@ def main(args: argparse.Namespace):
             api_url += "_stream"  # generate_stream
     elif args.backend in ["ksana-server", "vllm-server"]:
         api_url = "http://" + args.host + ":" + str(args.port) + "/v1/chat"
-        args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
+        if args.model_type != "deepseek_r1":
+            args.model_type = "empty"  # 在线服务不需要手动拼接前后缀
+    elif args.backend == "triton-grpc":
+        api_url = f"{args.host}:{args.port}"
 
-    if args.chat_template and args.tokenizer_path is None:
-        raise ValueError(
-            "When chat_template is enabled, tokenizer_path cannot be None.")
     # NOTE: mindie-service/TensorRT-LLM wont return tokens, we need encode tokens to get output tokens
-    if args.backend in ["mindie-service", "trt-llm", "vllm"] or args.chat_template:
+    if args.backend in ["mindie-service", "trt-llm", "vllm", "triton-grpc"] \
+       or args.chat_template or args.random_input_len:
         if args.tokenizer_path is not None:
             tokenizer = AutoTokenizer.from_pretrained(
                 args.tokenizer_path,
@@ -758,8 +1080,20 @@ def main(args: argparse.Namespace):
                 use_fast=True
             )
 
-    # Read inputs from the input CSV file
-    inputs = read_from_csv(args.input_csv, args.col_idx)
+    # Read data from the dataset_path
+    if args.dataset_name == "sharegpt500":
+        import os
+        inputs = read_from_csv(os.path.join(os.path.dirname(__file__), "share_gpt_500.csv"),
+                                args.col_idx)
+    elif args.dataset_name.startswith("longbenchV2"):
+        with_ctx = True if "withCtx" in args.dataset_name else False
+        # we need encode tokens to check and truncate the long-context prompts
+        longbench_dataset = LongBenchV2Dataset(file_path=args.dataset_path, with_context=with_ctx, 
+                                               tokenizer_path=args.tokenizer_path)
+        inputs = longbench_dataset.get_all_prompts()
+    else:
+        inputs = read_from_csv(args.dataset_path, args.col_idx)
+
     # Adjust the length of the input list based on the provided arguments
     if args.shuffle:
         random.shuffle(inputs)
@@ -774,18 +1108,21 @@ def main(args: argparse.Namespace):
     # requst_rate_list: List[Tuple[request_rate, avg_latency, avg_TTFT]]
     request_rate_list: List[Tuple[float, float, float]] = []
     while True:
-        # cmake -DWITH_CLEAR_CACHE=ON
-        clear_cache_data = {
-            "input_tokens": [0, 0],
-            "sampling_config": {
-                "max_new_tokens": 1
+        if args.clear_cache:
+            # cmake -DWITH_CLEAR_CACHE=ON
+            clear_cache_data = {
+                "input_tokens": [0, 0],
+                "sampling_config": {
+                    "max_new_tokens": 1
+                }
             }
-        }
-        conn = http.client.HTTPConnection(args.host + ":" + str(args.port))
-        conn.request("POST", '/generate',
-                     body=orjson.dumps(clear_cache_data),
-                     headers={'Content-Type': 'application/json'})
-        conn.getresponse()
+
+            conn = http.client.HTTPConnection(args.host + ":" + str(args.port))
+            conn.request("POST", '/generate',
+                         body=orjson.dumps(clear_cache_data),
+                         headers={'Content-Type': 'application/json'})
+
+            conn.getresponse()
         metrics = BenchmarkMetrics()
         metrics.request_rate = search_request_rate(args, request_rate_list)
         args.request_rate = metrics.request_rate
@@ -833,7 +1170,10 @@ def main(args: argparse.Namespace):
         )
 
         # Calculate the token throughput
-        metrics.avg_tokens_per_sec = (metrics.avg_input_tokens + metrics.avg_output_tokens
+        summary_token = metrics.avg_input_tokens + metrics.avg_output_tokens
+        if args.show_decode_token_throughput:
+            summary_token = metrics.avg_output_tokens - 1  # 只统计decode，删掉一个prefill的token
+        metrics.avg_tokens_per_sec = (summary_token
             ) * len(REQUEST_LATENCY) / metrics.total_latency / args.repeat_num_iters
 
         print(metrics)
@@ -909,9 +1249,9 @@ def main(args: argparse.Namespace):
                 def process_metrics(metrics_values, row):
                     for value in metrics_values:
                         if isinstance(value, list):
-                            row.extend([f"{percentile_value[1]:.3f}" for percentile_value in value])
+                            row.extend([f"{percentile_value[1]:.5f}" for percentile_value in value])
                         else:
-                            row.append(f"{value:.3f}")
+                            row.append(f"{value:.5f}")
 
                 row = []
                 process_metrics(metrics.__dict__.values(), row)

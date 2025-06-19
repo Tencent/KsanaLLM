@@ -54,16 +54,32 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
-                                cudaStream_t& stream, void* workspace_ptr = nullptr);
+                                cudaStream_t& stream, void* workspace_ptr = nullptr, size_t workspace_size = 0);
 
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
                                 cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
-                                const int32_t ldc, cudaDataType_t c_type, float f_alpha, float f_beta,
-                                cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
-                                cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale = nullptr,
-                                const void* b_scale = nullptr);
+                                const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
+                                cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,
+                                cublasLtMatmulAlgo_t* cublaslt_algo);
+
+cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
+                                cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
+                                const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
+                                const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
+                                const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
+                                const int32_t batch_count, cudaStream_t& stream, void* workspace_ptr,
+                                size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo);
+
+cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
+                                cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
+                                const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
+                                const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
+                                const int32_t ldc, cudaDataType_t c_type, const int32_t batch_count, float f_alpha,
+                                float f_beta, cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
+                                size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo,
+                                const void* a_scale = nullptr, const void* b_scale = nullptr);
 
 cublasStatus_t InvokeCublasStridedBatchedGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
                                               cublasOperation_t transa, cublasOperation_t transb, const int32_t m,
@@ -89,6 +105,11 @@ cublasStatus_t InvokeCublasBatchedGemm(cublasHandle_t cublas_handle, cublasLtHan
                                        cudaDataType_t AType, const void* const* B, const int32_t ldb,
                                        cudaDataType_t BType, void* const* C, const int32_t ldc, cudaDataType_t CType,
                                        cudaDataType_t compute_type, const int32_t batch_count);
+
+cudaError_t InvokeCustomGemm(cudaStream_t stream, cublasOperation_t transa, cublasOperation_t transb, const int32_t m,
+                             const int32_t n, const int32_t k, void const* A, const int32_t lda, cudaDataType_t AType,
+                             void const* B, const int32_t ldb, cudaDataType_t BType, void* C, const int32_t ldc,
+                             cudaDataType_t CType, cudaDataType_t compute_type, const float alpha);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

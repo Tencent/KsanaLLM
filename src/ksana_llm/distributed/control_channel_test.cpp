@@ -15,12 +15,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "ksana_llm/block_manager/block_manager_interface.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/distributed/control_channel.h"
 
-#include "ksana_llm/distributed/distributed_test_helper.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
@@ -44,6 +42,20 @@ class ControlChannelTest : public testing::Test {
 
     master_env_->ParseConfig(config_file);
     worker_env_->ParseConfig(config_file);
+
+    BlockManagerConfig master_block_manager_config;
+    master_env_->InitializeBlockManagerConfig();
+    master_env_->GetBlockManagerConfig(master_block_manager_config);
+    master_block_manager_config.device_allocator_config.blocks_num = 10;
+    master_block_manager_config.host_allocator_config.blocks_num = 8;
+    master_env_->SetBlockManagerConfig(master_block_manager_config);
+
+    BlockManagerConfig worker_block_manager_config;
+    worker_env_->InitializeBlockManagerConfig();
+    worker_env_->GetBlockManagerConfig(worker_block_manager_config);
+    worker_block_manager_config.device_allocator_config.blocks_num = 6;
+    worker_block_manager_config.host_allocator_config.blocks_num = 4;
+    worker_env_->SetBlockManagerConfig(worker_block_manager_config);
 
     master_schedule_output_pool_ = new ScheduleOutputPool();
     worker_schedule_output_pool_ = new ScheduleOutputPool();
@@ -79,36 +91,31 @@ class ControlChannelTest : public testing::Test {
 
   std::string master_host_;
   uint16_t master_port_;
+
   size_t world_size_ = 2;
 };
 
 TEST_F(ControlChannelTest, TestControlChannel) {
-  FakedTestBlockManager* test_block_manager = new FakedTestBlockManager();
-  SetBlockManager(test_block_manager);
-
   size_t master_device_block_num;
   size_t master_host_block_num;
   size_t worker_device_block_num;
   size_t worker_host_block_num;
 
-  uint16_t master_lower_layer_idx;
-  uint16_t master_upper_layer_idx;
-  uint16_t worker_lower_layer_idx;
-  uint16_t worker_upper_layer_idx;
+  size_t master_offload_layer_num = 1;
+
+  int16_t master_lower_layer_idx, master_upper_layer_idx, master_nextn_lower_layer_idx, master_nextn_upper_layer_idx;
+  int16_t worker_lower_layer_idx, worker_upper_layer_idx, worker_nextn_lower_layer_idx, worker_nextn_upper_layer_idx;
 
   // master node.
   auto master_fn = [&]() {
     // Start master
     ctrl_channel_master_->Listen();
 
-    // Set block num for master.
-    test_block_manager->SetBlockNumber(10, 8);
-
     // Wait all workers connected.
     ctrl_channel_master_->Barrier();
 
     // synchronize layers.
-    ctrl_channel_master_->SynchronizeNodeLayers();
+    ctrl_channel_master_->SynchronizeNodeLayers(master_offload_layer_num);
 
     // synchronize cache block num.
     ctrl_channel_master_->SynchronizeCacheBlockNum();
@@ -123,6 +130,8 @@ TEST_F(ControlChannelTest, TestControlChannel) {
 
     master_lower_layer_idx = pipeline_config.lower_layer_idx;
     master_upper_layer_idx = pipeline_config.upper_layer_idx;
+    master_nextn_lower_layer_idx = pipeline_config.lower_nextn_layer_idx;
+    master_nextn_upper_layer_idx = pipeline_config.upper_nextn_layer_idx;
   };
   std::thread master_thread = std::thread(master_fn);
 
@@ -131,9 +140,6 @@ TEST_F(ControlChannelTest, TestControlChannel) {
     // Start worker
     ctrl_channel_worker_->Connect();
 
-    // Set block num for worker.
-    test_block_manager->SetBlockNumber(6, 4);
-
     // Add worker to cluster.
     ctrl_channel_worker_->AddNode();
 
@@ -141,7 +147,7 @@ TEST_F(ControlChannelTest, TestControlChannel) {
     ctrl_channel_worker_->Barrier();
 
     // Wait layer result.
-    ctrl_channel_worker_->SynchronizeNodeLayers();
+    ctrl_channel_worker_->SynchronizeNodeLayers(master_offload_layer_num);
 
     // synchronize cache block num.
     ctrl_channel_worker_->SynchronizeCacheBlockNum();
@@ -156,6 +162,8 @@ TEST_F(ControlChannelTest, TestControlChannel) {
 
     worker_lower_layer_idx = pipeline_config.lower_layer_idx;
     worker_upper_layer_idx = pipeline_config.upper_layer_idx;
+    worker_nextn_lower_layer_idx = pipeline_config.lower_nextn_layer_idx;
+    worker_nextn_upper_layer_idx = pipeline_config.upper_nextn_layer_idx;
   };
   std::thread worker_thread = std::thread(worker_fn);
 
@@ -164,9 +172,13 @@ TEST_F(ControlChannelTest, TestControlChannel) {
 
   // Check layer range.
   EXPECT_EQ(master_lower_layer_idx, 0);
-  EXPECT_EQ(master_upper_layer_idx, 15);
-  EXPECT_EQ(worker_lower_layer_idx, 16);
+  EXPECT_EQ(master_upper_layer_idx, 15 - master_offload_layer_num);
+  EXPECT_EQ(master_nextn_lower_layer_idx, -1);
+  EXPECT_EQ(master_nextn_upper_layer_idx, -1);
+  EXPECT_EQ(worker_lower_layer_idx, 16 - master_offload_layer_num);
   EXPECT_EQ(worker_upper_layer_idx, 31);
+  EXPECT_EQ(worker_nextn_lower_layer_idx, -1);
+  EXPECT_EQ(worker_nextn_upper_layer_idx, -1);
 
   // Check block num result.
   EXPECT_EQ(master_device_block_num, 6);

@@ -1,13 +1,17 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 ==============================================================================*/
 
-#include "request_packer.h"
+#include "ksana_llm/utils/request_packer.h"
+
 #include "base64.hpp"
-#include "ksana_llm/utils/device_utils.h"
 #include "logger.h"
 #include "msgpack.hpp"
 #include "request_serial.h"
 #include "tests/test.h"
+
+#include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
@@ -15,9 +19,12 @@ class RequestPackerTest : public testing::Test {
  protected:
   void SetUp() override {
     // Any tokenizer works here.
-    request_packer_.InitTokenizer("/model/llama-hf/7B");
+    Singleton<Tokenizer>::GetInstance()->InitTokenizer("/model/llama-hf/7B");
   }
-  void TearDown() override {}
+  void TearDown() override {
+    // Destroy the tokenizer.
+    Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
+  }
 
   RequestPacker request_packer_;
 
@@ -151,14 +158,6 @@ TEST_F(RequestPackerTest, WrongInput) {
             std::string::npos);
 
   target.target_name = "logits";
-  target.token_reduce_mode = "GATHER_ALL";
-  sbuf.clear();
-  msgpack::pack(sbuf, batch_request);
-  request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
-                .GetMessage()
-                .find("The output for logits does not support the 'GATHER_ALL' reduction mode."),
-            std::string::npos);
   target.token_reduce_mode = "GATHER_TOKEN_ID";
 
   request.input_tokens = std::vector<int>{1};
@@ -288,6 +287,80 @@ TEST_F(RequestPackerTest, NormalPack) {
   ASSERT_EQ(probs_response, probs_output);
   ASSERT_EQ(batch_response.message, response_status.GetMessage());
   ASSERT_EQ(batch_response.code, response_status.GetCode());
+}
+
+// Test for logits with GATHER_ALL mode
+TEST_F(RequestPackerTest, LogitsGatherAllTest) {
+  // This test verifies that using target.target_name = "logits" with target.token_reduce_mode = "GATHER_ALL"
+  // returns a 2D tensor (unlike GATHER_TOKEN_ID which returns a 1D tensor)
+
+  // Step 1: Set up a request with logits target and GATHER_ALL mode
+  request.prompt = "test prompt";
+  target.target_name = "logits";
+  target.slice_pos.emplace_back(0, 0);      // [0, 0]
+  target.token_reduce_mode = "GATHER_ALL";  // Using GATHER_ALL mode for logits
+  request.request_target.push_back(target);
+  batch_request.requests.push_back(request);
+
+  msgpack::pack(sbuf, batch_request);
+
+  // Parse request
+  std::string request_bytes(sbuf.data(), sbuf.size());
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
+  ASSERT_EQ(ksana_python_inputs.size(), 1ul);
+  ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1);
+  ASSERT_TRUE(ksana_python_inputs[0]->request_target.count(target.target_name));
+
+  // Verify that the token_reduce_mode is correctly set to GATHER_ALL
+  ASSERT_EQ(ksana_python_inputs[0]->request_target[target.target_name].token_reduce_mode, TokenReduceMode::GATHER_ALL);
+
+  // Step 2: Create a KsanaPythonOutput with logits data
+  // For GATHER_ALL mode, we need to simulate a 2D tensor with shape [token_count, vocab_size]
+  KsanaPythonOutput ksana_python_output;
+  PythonTensor tensor;
+
+  // Simulate a vocabulary size of 6
+  const size_t vocab_size = 6;
+  std::vector<float> logits_data = {0.0, 1.0, 2.0, 1.5, 0.7, 1.8};
+
+  // Shape for GATHER_ALL mode should be [token_count, vocab_size]
+  // Here token_count is 1 (we're gathering for one position)
+  tensor.shape = {1, vocab_size};
+  tensor.dtype = GetTypeString(TYPE_FP32);
+  tensor.data.resize(logits_data.size() * sizeof(float));
+  memcpy(tensor.data.data(), logits_data.data(), tensor.data.size());
+  ksana_python_output.response["logits"] = tensor;
+  ksana_python_outputs.push_back(ksana_python_output);
+  Status response_status;
+
+  // Step 3: Pack the response
+  std::string response_bytes;
+  ASSERT_TRUE(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes).OK());
+
+  // Step 4: Unpack and verify the response
+  auto handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
+  auto object = handle.get();
+  BatchResponseSerial batch_response = object.as<BatchResponseSerial>();
+  ASSERT_EQ(batch_response.responses.size(), 1ul);
+  ASSERT_EQ(batch_response.responses[0].response.size(), 1ul);
+  ASSERT_EQ(batch_response.responses[0].response[0].target_name, "logits");
+
+  // Verify the shape of the returned tensor - it should be 2D for GATHER_ALL mode
+  ASSERT_EQ(batch_response.responses[0].response[0].tensor.shape.size(), 2ul);
+  ASSERT_EQ(batch_response.responses[0].response[0].tensor.shape[0], 1);           // token_count
+  ASSERT_EQ(batch_response.responses[0].response[0].tensor.shape[1], vocab_size);  // vocab_size
+
+  // Decode and verify the logits data
+  auto logits_response_bytes =
+      base64::decode_into<std::vector<uint8_t>>(batch_response.responses[0].response[0].tensor.data.begin(),
+                                                batch_response.responses[0].response[0].tensor.data.end());
+  std::vector<float> logits_response(logits_data.size());
+  memcpy(logits_response.data(), logits_response_bytes.data(), logits_response_bytes.size());
+
+  // Compare the original logits with the returned logits
+  for (size_t i = 0; i < logits_data.size(); ++i) {
+    ASSERT_NEAR(logits_response[i], logits_data[i], 1e-6);
+  }
 }
 
 }  // namespace ksana_llm

@@ -150,8 +150,8 @@ if __name__ == "__main__":
                                 13
                             ],  # Provide specific token ids (only permitted in "layernorm" and "transformer")
                             # "slice_pos" : [[0,0],[2,5],[7,7]], # Set sorted intervals (negative indices are allowed)
-                            "token_reduce_mode": "GATHER_ALL",  # For "layernorm" and "transformer"
-                            # "token_reduce_mode" : "GATHER_TOKEN_ID", # For "logits"
+                            "token_reduce_mode": "GATHER_ALL",  # For "layernorm", "transformer" and "logits"
+                            # "token_reduce_mode" : "GATHER_TOKEN_ID", # Only for "logits"
                         },
                     ],
                 },

@@ -4,7 +4,8 @@
 
 #include <pybind11/embed.h>
 #include <pybind11/stl.h>
-#include "ksana_llm/utils/request.h"
+
+#include "ksana_llm/utils/status.h"
 
 namespace py = pybind11;
 
@@ -16,13 +17,17 @@ class Tokenizer {
   // Initialize the tokenizer from the given tokenizer_path.
   Status InitTokenizer(const std::string& tokenizer_path);
 
+  // Destroy the tokenizer.
+  void DestroyTokenizer();
+
   // Decode the given input token ids into string
-  Status Decode(std::vector<int>& input_tokens, std::string& output);
+  Status Decode(std::vector<int>& input_tokens, std::string& output, bool skip_special_tokens = true);
 
   // Encode the given prompt into token ids
-  Status Encode(const std::string& prompt, std::vector<int>& input_tokens);
+  Status Encode(const std::string& prompt, std::vector<int>& input_tokens, bool add_special_tokens = true);
+
  public:
-  py::object tokenizer;
+  py::object tokenizer_;
 };
 
 }  // namespace ksana_llm

@@ -4,7 +4,9 @@
 
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
 
+#include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
@@ -12,10 +14,21 @@
 
 namespace ksana_llm {
 
-HiddenUnitBufferPool::HiddenUnitBufferPool() { InitializeBufferSize(); }
+HiddenUnitBufferPool::HiddenUnitBufferPool() {
+  InitializeBufferSize();
+  recv_waiter_ = std::make_shared<Waiter>(1);
+  send_waiter_ = std::make_shared<Waiter>(1);
+  pending_recv_count_ = 0;
+}
+
+void HiddenUnitBufferPool::PreAllocateDeviceBuffer() {
+  HiddenUnitDeviceBuffer* dev_hidden_unit = new HiddenUnitDeviceBuffer();
+  InitializeHiddenUnitDeviceBuffer(dev_hidden_unit);
+  free_device_buffers_.Put(dev_hidden_unit);
+}
 
 Status HiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* hidden_unit_dev,
-                                          HiddenUnitHostBuffer* hidden_unit_host) {
+                                                       HiddenUnitHostBuffer* hidden_unit_host) {
   hidden_unit_dev->schedule_id = hidden_unit_host->schedule_id;
 
   size_t buffer_bytes = hidden_unit_host->shape_dims[0] * hidden_unit_host->shape_dims[1] * GetTypeSize(weight_type_);
@@ -31,7 +44,7 @@ Status HiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* h
 #endif
 
   for (size_t i = 0; i < hidden_unit_host->tensor_parallel; ++i) {
-    GetBlockManager()->SetDeviceId(i);
+    SetDevice(i);
     if (buffer_bytes > 0) {
       Memcpy(hidden_unit_dev->tensors[i].GetPtr<void>(), hidden_unit_host->data, buffer_bytes, MEMCPY_HOST_TO_DEVICE);
       hidden_unit_dev->tensors[i].shape = buffer_shape;
@@ -49,22 +62,18 @@ Status HiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* h
 }
 
 Status HiddenUnitBufferPool::ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hidden_unit_host,
-                                          HiddenUnitDeviceBuffer* hidden_unit_dev) {
+                                                       HiddenUnitDeviceBuffer* hidden_unit_dev) {
   hidden_unit_host->schedule_id = hidden_unit_dev->schedule_id;
   hidden_unit_host->tensor_parallel = hidden_unit_dev->tensors.size();
 
   std::vector<size_t> buffer_shape = hidden_unit_dev->tensors[0].shape;
   hidden_unit_host->shape_dims[0] = buffer_shape[0];
   hidden_unit_host->shape_dims[1] = buffer_shape[1];
-
 #ifdef ENABLE_ACL
   if (!hidden_unit_dev->decode_enabled) {
     hidden_unit_host->shape_dims[0] = 0;
     hidden_unit_host->shape_dims[1] = 0;
   }
-#endif
-
-#ifdef ENABLE_ACL
   std::vector<size_t> prefill_buffer_shape = hidden_unit_dev->prefill_tensors[0].shape;
   hidden_unit_host->prefill_shape_dims[0] = prefill_buffer_shape[0];
   hidden_unit_host->prefill_shape_dims[1] = prefill_buffer_shape[1];
@@ -81,7 +90,7 @@ Status HiddenUnitBufferPool::ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hid
       hidden_unit_host->prefill_shape_dims[0] * hidden_unit_host->prefill_shape_dims[1] * GetTypeSize(weight_type_);
 #endif
   for (size_t i = 0; i < hidden_unit_dev->tensors.size(); ++i) {
-    GetBlockManager()->SetDeviceId(i);
+    SetDevice(i);
     if (buffer_bytes > 0) {
       Memcpy(hidden_unit_host->data, hidden_unit_dev->tensors[i].GetPtr<void>(), buffer_bytes, MEMCPY_DEVICE_TO_HOST);
     }
@@ -111,6 +120,9 @@ size_t HiddenUnitBufferPool::GetHostPacketSize(Packet* packet) {
 void HiddenUnitBufferPool::InitializeBufferSize() {
   std::unordered_map<std::string, ModelConfig> model_configs;
   Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
+  PipelineConfig pipeline_config;
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+  comm_type_ = pipeline_config.pipeline_para_comm_type;
 
   // Skip if no model config.
   if (model_configs.empty()) {
@@ -122,7 +134,7 @@ void HiddenUnitBufferPool::InitializeBufferSize() {
 
   weight_type_ = model_config.weight_data_type;
   tensor_para_size_ = model_config.tensor_para_size;
-  max_token_num_ = model_config.max_scheduler_token_num;
+  max_token_num_ = model_config.max_step_token_num;
   hidden_unit_size_ = model_config.size_per_head * model_config.head_num;
 
   KLLM_LOG_INFO << "HiddenUnitBufferPool::InitializeBufferSize weight_type:" << weight_type_
@@ -136,12 +148,12 @@ Status HiddenUnitBufferPool::InitializeHiddenUnitDeviceBuffer(HiddenUnitDeviceBu
   hidden_unit_buffer->prefill_tensors.resize(tensor_para_size_);
 #endif
   for (int rank = 0; rank < tensor_para_size_; ++rank) {
-    GetBlockManager()->SetDeviceId(rank);
-    STATUS_CHECK_FAILURE(CreateTensor(hidden_unit_buffer->tensors[rank], {max_token_num_, hidden_unit_size_},
-                                      weight_type_, rank, MEMORY_DEVICE));
+    SetDevice(rank);
+    hidden_unit_buffer->tensors[rank] =
+        Tensor(MemoryLocation::LOCATION_DEVICE, weight_type_, {max_token_num_, hidden_unit_size_}, rank);
 #ifdef ENABLE_ACL
-    STATUS_CHECK_FAILURE(CreateTensor(hidden_unit_buffer->prefill_tensors[rank], {max_token_num_, hidden_unit_size_},
-                                      weight_type_, rank, MEMORY_DEVICE));
+    hidden_unit_buffer->prefill_tensors[rank] =
+        Tensor(MemoryLocation::LOCATION_DEVICE, weight_type_, {max_token_num_, hidden_unit_size_}, rank);
 #endif
   }
 
@@ -150,16 +162,19 @@ Status HiddenUnitBufferPool::InitializeHiddenUnitDeviceBuffer(HiddenUnitDeviceBu
   hidden_unit_buffer->decode_enabled = false;
 #endif
 
+  hidden_unit_buffer->comm_type = comm_type_;
+
   KLLM_LOG_DEBUG << "HiddenUnitBufferPool::InitializeHiddenUnitDeviceBuffe, shape:"
-                 << Vector2Str(hidden_unit_buffer->tensors[0].shape) << ", max_token_num:" << max_token_num_
-                 << ", hidden_unit_size:" << hidden_unit_size_;
+                 << Vector2Str(std::vector<size_t>(hidden_unit_buffer->tensors[0].shape))
+                 << ", max_token_num:" << max_token_num_ << ", hidden_unit_size:" << hidden_unit_size_
+                 << ", Pipeline Parallel Communication Type: " << static_cast<int32_t>(comm_type_);
 
   return Status();
 }
 
 HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetDeviceBuffer() {
   if (free_device_buffers_.Empty()) {
-    KLLM_LOG_DEBUG << "HiddenUnitBufferPool Create device buffer, should called only once.";
+    KLLM_LOG_INFO << "HiddenUnitBufferPool Create device buffer, should called only once.";
     HiddenUnitDeviceBuffer* hidden_unit = new HiddenUnitDeviceBuffer();
     InitializeHiddenUnitDeviceBuffer(hidden_unit);
     return hidden_unit;
@@ -183,7 +198,6 @@ Packet* HiddenUnitBufferPool::GetHostBuffer() {
   if (free_host_buffers_.Empty()) {
     size_t extra_size = max_token_num_ * hidden_unit_size_ * GetTypeSize(weight_type_);
     size_t packet_body_size = sizeof(HiddenUnitHostBuffer) + extra_size;
-
     Packet* packet = reinterpret_cast<Packet*>(malloc(sizeof(Packet) + packet_body_size));
     if (packet == nullptr) {
       KLLM_LOG_ERROR << "GetHostBuffer error, allocate memory failed.";
@@ -218,39 +232,72 @@ Status HiddenUnitBufferPool::PutToHostRecvQueue(Packet* packet) {
 Packet* HiddenUnitBufferPool::GetFromHostRecvQueue() { return recv_host_buffers_.Get(); }
 
 Status HiddenUnitBufferPool::PutToDeviceRecvQueue(HiddenUnitDeviceBuffer* hidden_unit) {
-  recv_device_buffers_.Put(hidden_unit);
+  recv_device_buffers_.Put(hidden_unit->schedule_id, hidden_unit);
   return Status();
 }
 
-HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromDeviceRecvQueue() { return recv_device_buffers_.Get(); }
+void HiddenUnitBufferPool::WaitUtilReadyToRecv() {
+  bool should_wait = false;
+  {
+    std::lock_guard<std::mutex> lock(recv_mutex_);
+    // If no threads have called GetFromDeviceRecvQueue, we should wait
+    if (pending_recv_count_ <= 0) {
+      should_wait = true;
+    } else {
+      // The caller will add a buffer to device buffer, decrease in advance
+      pending_recv_count_--;
+    }
+  }
+
+  // Release the mutex before waiting to avoid deadlock
+  if (should_wait) {
+    recv_waiter_->Wait();
+    recv_waiter_->Reset(1);
+    {
+      // After being notified, we need to decrement the counter
+      std::lock_guard<std::mutex> lock(recv_mutex_);
+      pending_recv_count_--;
+    }
+  }
+}
+
+void HiddenUnitBufferPool::NotifySendFinished() { send_waiter_->Notify(); }
+
+HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromDeviceRecvQueue(size_t schedule_id) {
+  {
+    std::lock_guard<std::mutex> lock(recv_mutex_);
+    // Increment the count of pending receives
+    pending_recv_count_++;
+  }
+  // Notify one waiter if any
+  recv_waiter_->Notify();
+  auto buffer = recv_device_buffers_.Get(schedule_id);
+
+  return buffer;
+}
 
 Status HiddenUnitBufferPool::PutToSendQueue(HiddenUnitDeviceBuffer* hidden_unit) {
-  // Pick a host buffer.
-  Packet* packet = GetHostBuffer();
-
-  // Convert device buffer to host.
-  HiddenUnitHostBuffer* hidden_unit_host = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
-  ConvertDeviceBufferToHost(hidden_unit_host, hidden_unit);
-
-  // Reset packet size.
-  packet->size = GetHostPacketSize(packet);
-
-  send_host_buffers_.Put(packet);
-
+  send_device_buffers_.Put(hidden_unit);
+  send_waiter_->Wait();
+  send_waiter_->Reset(1);
   return Status();
 }
 
-Packet* HiddenUnitBufferPool::GetFromSendQueue() { return send_host_buffers_.Get(); }
+HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromSendQueue() { return send_device_buffers_.Get(); }
 
 Status HiddenUnitBufferPool::Stop() {
   free_device_buffers_.Stop();
   recv_device_buffers_.Stop();
 
   recv_host_buffers_.Stop();
-  send_host_buffers_.Stop();
+  send_device_buffers_.Stop();
   free_host_buffers_.Stop();
+
+  recv_waiter_->Stop();
+  is_stopped_ = true;
 
   return Status();
 }
 
+bool HiddenUnitBufferPool::Stopped() { return is_stopped_; }
 }  // namespace ksana_llm

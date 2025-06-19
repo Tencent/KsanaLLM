@@ -1,35 +1,31 @@
 /*
- * Modified by Neural Magic
- * Copyright (C) Marlin.2024 Elias Frantar
+ * Copyright 2025 vLLM Team
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
-
-/*
- * Adapted from https://github.com/vllm-project/vllm
+ *
+ * Adapted from
+ * [vLLM Project]
+ * https://github.com/vllm-project/vllm/tree/65334ef3b9e4fd32ebc5c4e512debc25d5025488/csrc/quantization/gptq_marlin
  */
 
 #pragma once
 
-#ifndef _data_types_cuh
-#  define _data_types_cuh
-#  include <cuda_bf16.h>
-#  include <cuda_fp16.h>
-#  include "csrc/kernels/nvidia/gptq_marlin/marlin.cuh"
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include "csrc/kernels/nvidia/gptq_marlin/marlin.cuh"
 
 namespace llm_kernels {
 namespace nvidia {
-
 namespace marlin {
 
 template <typename scalar_t>
@@ -71,7 +67,6 @@ class ScalarType<nv_bfloat16> {
   using FragS = Vec<nv_bfloat162, 1>;
   using FragZP = Vec<nv_bfloat162, 4>;
 
-#  if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
   static __device__ float inline num2float(const nv_bfloat16 x) { return __bfloat162float(x); }
 
   static __device__ nv_bfloat162 inline num2num2(const nv_bfloat16 x) { return __bfloat162bfloat162(x); }
@@ -81,12 +76,8 @@ class ScalarType<nv_bfloat16> {
   }
 
   static __host__ __device__ nv_bfloat16 inline float2num(const float x) { return __float2bfloat16(x); }
-#  endif
 };
 
 }  // namespace marlin
-
-#endif
-
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -17,19 +17,23 @@ class BatchSchedulerInterface {
   virtual ~BatchSchedulerInterface() {}
 
   // Get the next infer reqs that ready to run.
-  virtual ScheduleOutput* Schedule() = 0;
+  virtual std::shared_ptr<ScheduleOutputGroup> Schedule(size_t pp_batch_idx) = 0;
 
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;
 
   // Set the cache manager instance of batch scheduler.
-  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) = 0;
+  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int attn_dp_idx) = 0;
 
   // Get cache manager
-  virtual std::shared_ptr<CacheManagerInterface> &GetCacheManager() = 0;
+  virtual std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) = 0;
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
-  virtual bool IsIdle() = 0;
+  virtual bool IsIdle(size_t pp_batch_idx) = 0;
+
+  virtual void WaitUntilHaveReqs(size_t pp_batch_idx) = 0;
+
+  virtual void Stop() = 0;
 };
 
 }  // namespace ksana_llm

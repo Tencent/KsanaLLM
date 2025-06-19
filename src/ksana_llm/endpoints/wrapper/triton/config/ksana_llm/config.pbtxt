@@ -1,0 +1,231 @@
+# Copyright 2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#  * Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#  * Neither the name of NVIDIA CORPORATION nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Note: You do not need to change any fields in this configuration.
+
+name: "ksana_llm"
+backend: "python"
+
+# Disabling batching in Triton, let Ksana_LLM handle the batching on its own.
+max_batch_size: 1
+
+# We need to use decoupled transaction policy for saturating
+# Ksana_LLM engine for max throughtput.
+model_transaction_policy {
+  decoupled: True
+}
+# Note: The Ksana_LLM backend uses the following input and output names.
+# Any change here needs to also be made in model.py
+input [
+  {
+    name: "text_input"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "image_input"
+    data_type: TYPE_UINT8
+    dims: [ -1 ]
+    optional: true
+  },
+  { name: "messages"
+    data_type: TYPE_STRING
+    dims:[ -1 ]
+    optional: true
+  },
+  {
+    name: "input_ids"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "streaming"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+  },
+  {
+    name: "input_lengths"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "request_output_len"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "num_return_sequences"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "presence_penalty"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "repetition_penalty"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "temperature"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "runtime_top_k"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "runtime_top_p"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "random_seed"
+    data_type: TYPE_UINT64
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "len_penalty"
+    data_type: TYPE_FP32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "beam_width"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "min_length"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "end_id"
+    data_type: TYPE_UINT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "sampling_parameters"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "stop_words_list"
+    data_type: TYPE_INT32
+    dims: [ -1 ]
+    optional: true
+    allow_ragged_batch: true
+  },
+  {
+    name: "stop_token_ids"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "bad_words_list"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+    optional: true
+  },
+  {
+    name: "input_refit_embedding"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "return_log_probs"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "text_output"
+    data_type: TYPE_STRING
+    dims: [ -1, -1 ]
+  },
+  {
+    name: "output_ids"
+    data_type: TYPE_UINT32
+    dims: [ -1, -1 ]
+  },
+  {
+    name: "completion_tokens"
+    data_type: TYPE_INT32
+    dims: [ -1 ]
+  },
+  {
+    name: "sequence_length"
+    data_type: TYPE_UINT32
+    dims: [ -1 ]
+  },
+  {
+    name: "cum_log_probs"
+    data_type: TYPE_FP32
+    dims: [ -1 ]
+  },
+  {
+    name: "finish_reason"
+    data_type: TYPE_UINT8
+    dims: [ -1 ]
+  },
+  {
+    name: "layer_embeddings"
+    data_type: TYPE_FP32
+    dims: [ -1, -1 ]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+  }
+]

@@ -7,9 +7,11 @@
 #include <nccl.h>
 
 #include "fmt/core.h"
-
+#include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
+#include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
 
@@ -19,6 +21,16 @@ namespace ksana_llm {
         ncclResult_t r = cmd;                                                                                         \
         if (r != ncclSuccess) {                                                                                       \
             KLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);  \
+            exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
+        }                                                                                                             \
+    } while (0)
+
+  #define NCCL_CHECK_CALL(cmd, call)                                                                                  \
+  do {                                                                                                                \
+        ncclResult_t r = cmd;                                                                                         \
+        if (r != ncclSuccess) {                                                                                       \
+            KLLM_LOG_ERROR << fmt::format("NCCL {} runtime error:{} {}:{}", call, ncclGetErrorString(r), __FILE__,    \
+            __LINE__);                                                                                                \
             exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
         }                                                                                                             \
     } while (0)
@@ -68,5 +80,8 @@ ncclDataType_t CastToNCCLDataType() {
 ncclResult_t DestroyNCCLParam(NCCLParam& param);
 
 ncclUniqueId GenerateNCCLUniqueID();
+
+// Convert data type to nccl data type.
+Status GetNcclDataType(DataType dtype, ncclDataType_t& nccl_dtype);
 
 }  // namespace ksana_llm

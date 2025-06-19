@@ -26,6 +26,11 @@ class PluginConfig:
     # the Torch inference.
     enable_trt: bool = True
     thread_pool_size: int = 1  # The thread pool size for running plugins
+    # The type of the vit model
+    # Some models shares the same base LLM model architecture but have different vit model 
+    # such as InternVL2_5 and InternVL2, then we need to specify the vit model type so that 
+    # we can share the same ksana_plugin.py
+    vit_model_type: str = ""
 
 
 class KsanaPlugin(object):
@@ -50,8 +55,14 @@ class KsanaPlugin(object):
                 "model_path": config.model_dir,
                 "config_file": config.config_file,
                 "enable_trt": config.enable_trt,
+                "model_type": config.plugin_name,
+                "vit_model_type": config.vit_model_type
             }
-            self._ksana_plugin.init_plugin(**kwargs)
+            try:
+                self._ksana_plugin.init_plugin(**kwargs)
+            except Exception as e:  # pylint: disable=broad-except
+                print(f"[E] Init plugin failed: {e}") 
+                self._ksana_plugin = None
         if self._ksana_plugin is None:
             return
 

@@ -5,46 +5,49 @@
 
 #include <memory>
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
+#include "ksana_llm/distributed/data_channel_interface.h"
 #include "ksana_llm/distributed/raw_socket.h"
 
+#include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
 // Used to send & recv data message.
-class DataChannel {
+class DataChannel : public DataChannelInterface {
  public:
   DataChannel(PacketCreationFunc packet_creation_fn = GetPacketObject,
               HiddenUnitBufferPool* hidden_unit_buffer_pool = nullptr, std::shared_ptr<Environment> env = nullptr);
-  ~DataChannel();
+
+  virtual ~DataChannel();
 
   // For master node only.
-  Status Listen();
+  virtual Status Listen() override;
 
   // Close open port.
-  Status Close();
+  virtual Status Close() override;
 
   // For normal node only.
-  Status Connect();
+  virtual Status Connect() override;
 
   // disconnect from master.
-  Status Disconnect();
+  virtual Status Disconnect() override;
 
- private:
+ public:
   // Invoked when data arrives.
-  Status HandleServerPacket(NodeInfo* node_info, Packet* packet);
-  Status HandleClientPacket(NodeInfo* node_info, Packet* packet);
+  virtual Status HandleServerPacket(NodeInfo* node_info, Packet* packet);
+  virtual Status HandleClientPacket(NodeInfo* node_info, Packet* packet);
 
   // Process hidden units.
-  Status ProcessHiddenUnitRequest(NodeInfo* node_info, Packet* req_packet);
-  Status ProcessHiddenUnitResponse(NodeInfo* node_info, Packet* rsp_packet);
+  virtual Status ProcessHiddenUnitRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessHiddenUnitResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // Send data to downstream node.
-  Status ProcessSendPacketLoop();
+  virtual Status ProcessSendPacketLoop();
 
   // Copy received packet to device if device buffer is free.
-  Status ProcessHostToDeviceLoop();
+  virtual Status ProcessHostToDeviceLoop();
 
  private:
   std::shared_ptr<RawSocket> server_raw_socket_ = nullptr;

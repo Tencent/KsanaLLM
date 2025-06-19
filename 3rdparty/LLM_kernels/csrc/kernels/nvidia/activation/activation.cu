@@ -143,6 +143,62 @@ struct IdentityActivation {
   static __device__ __forceinline__ T apply(const T& val) { return val; }
 };
 
+template <template <typename T> class Activation, typename T>
+__global__ void RowBasedActivationKernel(T* out, const T* __restrict input, int32_t m, int32_t n, int32_t stride,
+                                         int32_t for_range, int32_t packed_elems) {
+  using ActType = typename Activation<T>::return_type;
+
+  int32_t row_id = blockIdx.x;
+  int32_t output_col_num = n / 2;
+  for (int32_t offset = 0; offset < for_range && threadIdx.x * for_range + offset < output_col_num; ++offset) {
+    int32_t col_id = threadIdx.x * for_range + offset;
+    if (col_id >= output_col_num) {
+      return;
+    }
+    int32_t input_idx = row_id * n + col_id;
+    T val = input[input_idx];
+
+    T gated_val = input[input_idx + stride];
+
+    val = CastCudaDataType<T>(Activation<T>::apply(val) * CastCudaDataType<ActType>(gated_val));
+
+    out[row_id * output_col_num + col_id] = val;
+  }
+}
+
+template <template <typename T> class Activation, typename T>
+void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n, cudaStream_t& stream) {
+  using PT = typename PackTypeAlign<T>::type;
+  int32_t packed_elems = ElemsNum<PT>::value;
+  int32_t divided_column_num = n / 2;
+  if (divided_column_num % packed_elems != 0) {
+    packed_elems = 1;
+  }
+
+  const size_t BLOCK_SIZE = 256;
+  dim3 grid(m), block(BLOCK_SIZE);
+  size_t for_range = ceil(static_cast<float>(divided_column_num) / packed_elems / BLOCK_SIZE);
+  if (packed_elems == 1) {  // not using PT
+    RowBasedActivationKernel<Activation, T>
+        <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(out), reinterpret_cast<const T*>(input), m, n / packed_elems,
+                                     divided_column_num / packed_elems, for_range, packed_elems);
+  } else {
+    RowBasedActivationKernel<Activation, PT>
+        <<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out), reinterpret_cast<const PT*>(input), m,
+                                     n / packed_elems, divided_column_num / packed_elems, for_range, packed_elems);
+  }
+}
+
+#define INSTANTIATE_ROW_BASED_ACTIVATION(Activation, T)                                                            \
+  template void InvokeRowBasedActivation<Activation, T>(T * out, const T* input, const int32_t m, const int32_t n, \
+                                                            cudaStream_t& stream);
+
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float);
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, half);
+#ifdef ENABLE_BF16
+INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, __nv_bfloat16);
+#endif
+
 template <template <typename T> class Activation, typename T, typename BT>
 __global__ void InvokeGenericActivationKernel(T* out, const BT* __restrict bias, const T* __restrict gated_weights,
                                               const BT* __restrict gated_bias, const int32_t* __restrict ia3_tasks,

@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "ksana_llm/cache_manager/block_allocator/block_allocator_manager.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/logger.h"
@@ -32,20 +33,27 @@ struct RequestMemoryBlockSwappinessTask {
 template <class CachedBlockType, class CachedRequestType>
 class BaseCacheManager {
  public:
-  explicit BaseCacheManager(const CacheManagerConfig& cache_manager_config) {
+  explicit BaseCacheManager(const CacheManagerConfig& cache_manager_config,
+                            std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group) {
     cache_manager_config_ = cache_manager_config;
+    block_allocator_group_ = block_allocator_group;
+
+    block_device_num_ = block_allocator_group_->GetBlockAllocatorDevices().size();
+
     threadpool_ = std::make_shared<ThreadPool>(cache_manager_config_.swap_threadpool_size);
     threadpool_->Start();
   }
 
   ~BaseCacheManager() { threadpool_->Stop(); }
 
+  std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const { return block_allocator_group_; }
+
   // The value is from block mamanger.
-  size_t GetHostFreeBlockNumber() { return GetBlockManager()->GetHostFreeBlockNumber(); }
+  size_t GetHostFreeBlockNumber() { return block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber(); }
 
   // Get block number that not usable now, but will be usable in future.
   // That is, the blocks used by swapout, but not merged yet.
-  size_t GetFutureBlockNumber() {
+  size_t GetFutureFreeBlockNumber() {
     size_t future_block_num = 0;
     for (const auto& [req_id, swapout_blocks] : swapout_cached_block_buffer_) {
       future_block_num += swapout_blocks.size();
@@ -153,10 +161,8 @@ class BaseCacheManager {
     std::vector<int> dev_block_ids = dev_cached_block->memory_block_ids;
 
     // Swap out cached block to host.
-    for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
-      GetBlockManager()->SetDeviceId(i);
-
-      GetBlockManager()->SwapOut(host_cached_block->memory_block_ids[i], dev_cached_block->memory_block_ids[i]);
+    for (size_t i = 0; i < block_device_num_; ++i) {
+      block_allocator_group_->SwapOut(i, host_cached_block->memory_block_ids[i], dev_cached_block->memory_block_ids[i]);
       dev_cached_block->memory_block_ids[i] = host_cached_block->memory_block_ids[i];
     }
     dev_cached_block->is_device_location = false;
@@ -176,12 +182,11 @@ class BaseCacheManager {
     }
 
     // Swap in cached block to dev.
-    for (size_t i = 0; i < cache_manager_config_.tensor_para_size; ++i) {
-      GetBlockManager()->SetDeviceId(i);
-      GetBlockManager()->SwapIn(dev_cached_block->memory_block_ids[i], host_cached_block->memory_block_ids[i]);
+    for (size_t i = 0; i < block_device_num_; ++i) {
+      block_allocator_group_->SwapIn(i, dev_cached_block->memory_block_ids[i], host_cached_block->memory_block_ids[i]);
 
       // Free the host memory.
-      GetBlockManager()->FreeHostBlocks({host_cached_block->memory_block_ids[i]});
+      block_allocator_group_->GetHostBlockAllocator()->FreeBlocks({host_cached_block->memory_block_ids[i]});
 
       host_cached_block->memory_block_ids[i] = dev_cached_block->memory_block_ids[i];
     }
@@ -199,9 +204,10 @@ class BaseCacheManager {
     RequestMemoryBlockSwappinessTask req_memory_block_swappiness;
 
     req_memory_block_swappiness.device_memory_blocks = memory_block_ids;
-    for (int i = 0; i < memory_block_ids.size(); ++i) {
+    for (size_t i = 0; i < memory_block_ids.size(); ++i) {
       std::vector<int> host_block_ids;
-      Status status = GetBlockManager()->AllocateHostBlocks(cache_manager_config_.tensor_para_size, host_block_ids);
+      Status status =
+          block_allocator_group_->GetHostBlockAllocator()->AllocateBlocks(block_device_num_, host_block_ids);
       if (!status.OK()) {
         return status;
       }
@@ -211,11 +217,10 @@ class BaseCacheManager {
     request_memory_block_swap_task_[req_id] = req_memory_block_swappiness;
 
     request_memory_block_swap_result_[req_id] = threadpool_->Submit([=] {
-      for (int i = 0; i < memory_block_ids.size(); ++i) {
+      for (size_t i = 0; i < memory_block_ids.size(); ++i) {
         int dev_block_id = memory_block_ids[i];
-        for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
-          GetBlockManager()->SetDeviceId(j);
-          GetBlockManager()->SwapOut(req_memory_block_swappiness.host_memory_blocks[i][j], dev_block_id);
+        for (size_t j = 0; j < block_device_num_; ++j) {
+          block_allocator_group_->SwapOut(j, req_memory_block_swappiness.host_memory_blocks[i][j], dev_block_id);
         }
       }
     });
@@ -226,12 +231,12 @@ class BaseCacheManager {
   Status SwapinRequestMemoryBlockAsync(int64_t req_id, const std::vector<int>& memory_block_ids) {
     auto it = request_memory_block_swap_task_.find(req_id);
     if (it == request_memory_block_swap_task_.end()) {
-      return Status(RET_RUNTIME, FormatStr("SwapinRequestMemoryBlockAsync req_id %d not found.", req_id));
+      return Status(RET_RUNTIME_FAILED, FormatStr("SwapinRequestMemoryBlockAsync req_id %d not found.", req_id));
     }
 
     auto it2 = request_memory_block_swap_result_.find(req_id);
     if (it2 != request_memory_block_swap_result_.end()) {
-      return Status(RET_RUNTIME,
+      return Status(RET_RUNTIME_FAILED,
                     FormatStr("SwapinRequestMemoryBlockAsync Swapin req %d fail, please merge swapout first.", req_id));
     }
 
@@ -240,11 +245,11 @@ class BaseCacheManager {
 
     request_memory_block_swap_result_[req_id] = threadpool_->Submit([=] {
       for (int i = 0; i < memory_block_ids.size(); ++i) {
-        for (size_t j = 0; j < cache_manager_config_.tensor_para_size; ++j) {
-          GetBlockManager()->SetDeviceId(j);
-          GetBlockManager()->SwapIn(req_memory_block_swappiness.device_memory_blocks[j],
-                                    req_memory_block_swappiness.host_memory_blocks[i][j]);
-          GetBlockManager()->FreeHostBlocks({req_memory_block_swappiness.host_memory_blocks[i][j]});
+        for (size_t j = 0; j < block_device_num_; ++j) {
+          block_allocator_group_->SwapIn(j, req_memory_block_swappiness.device_memory_blocks[j],
+                                         req_memory_block_swappiness.host_memory_blocks[i][j]);
+          block_allocator_group_->GetHostBlockAllocator()->FreeBlocks(
+              {req_memory_block_swappiness.host_memory_blocks[i][j]});
         }
       }
     });
@@ -297,6 +302,12 @@ class BaseCacheManager {
 
  protected:
   CacheManagerConfig cache_manager_config_;
+
+  // The block allocators for this cache manager instance.
+  std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
+
+  // The devices of current cache manager.
+  size_t block_device_num_;
 
   // The cached blocks that have no computed data, and could be reused freely.
   std::queue<CachedBlockType*> free_cached_blocks_;

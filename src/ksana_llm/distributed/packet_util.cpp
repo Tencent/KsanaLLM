@@ -3,11 +3,15 @@
 ==============================================================================*/
 
 #include "ksana_llm/distributed/packet_util.h"
+#ifdef ENABLE_CUDA
+#  include <nccl.h>
+#endif
 
 #include <cstdlib>
 
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/distributed/control_message.h"
+#include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
 
@@ -64,6 +68,20 @@ Packet* GetPacketObject(PacketType packet_type, size_t body_size) {
       }
       break;
     }
+    // 2048: used to store nccl_unique_id info.
+    case PacketType::CONTROL_REQ_EXPERT_PARALLEL: {
+      ExpertParallelConfig expert_parallel_config;
+      Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config);
+      size_t ncclId_size = 0;
+#ifdef ENABLE_CUDA
+      ncclId_size = expert_parallel_config.expert_world_size * sizeof(ncclUniqueId);
+#endif
+      packet = reinterpret_cast<Packet*>(malloc(sizeof(Packet) + ncclId_size + sizeof(AllocateExpertRequest)));
+      if (packet != nullptr) {
+        packet->size = sizeof(AllocateExpertRequest) + ncclId_size;
+      }
+      break;
+    }
     case PacketType::CONTROL_REQ_ADD_NODE: {
       packet = reinterpret_cast<Packet*>(malloc(sizeof(Packet) + sizeof(AddNodeRequest)));
       if (packet != nullptr) {
@@ -88,6 +106,7 @@ Packet* GetPacketObject(PacketType packet_type, size_t body_size) {
     case PacketType::DATA_RSP_HIDDEN_UNIT:
     case PacketType::CONTROL_RSP_SCHEDULE:
     case PacketType::CONTROL_RSP_LAYER:
+    case PacketType::CONTROL_RSP_EXPERT_PARALLEL:
     case PacketType::CONTROL_RSP_ADD_NODE:
     case PacketType::CONTROL_REQ_SHUTDOWN:
     case PacketType::CONTROL_RSP_SHUTDOWN: {

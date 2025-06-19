@@ -154,8 +154,8 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
   }
 
   void TearDown() override {
+    ClearBuffers();
     NvidiaTestSuitBase::TearDown();
-    managed_buffers.clear();
   }
 
   void initWeights(DataType* buffer, int64_t w, int64_t h, float base, float scalar) {
@@ -256,8 +256,15 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
     return ptr;
   }
 
+  void ClearBuffers() {
+    for (BufferMeta& buffer : managed_buffers) {
+      DeleteBuffer(buffer);
+      managed_buffers.clear();
+    }
+  }
+
   bool checkSufficientTestMemory(int64_t num_tokens, int64_t hidden_size, int64_t num_experts, int64_t k) {
-    this->managed_buffers.clear();                     // Make sure all the previous buffers are freed
+    this->ClearBuffers();                     // Make sure all the previous buffers are freed
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());  // Sync to make sure all previous operations are resolved
 
     // Calculate the size contributions for all the large buffers to check if the GPU has enough space
@@ -288,7 +295,7 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
                           std::vector<std::vector<float>> h_router_results, int64_t hidden_size, int64_t num_experts,
                           int64_t k, std::vector<uint8_t> finished,
                           llm_kernels::nvidia::MOEParallelismConfig parallelism_config) {
-    managed_buffers.clear();
+    this->ClearBuffers();
 
     mMoERunner.use_deterministic_hopper_reduce_ = k > 2 && mUseDeterminsiticHopperReduce;
 
@@ -513,7 +520,6 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
 
   template <class T>
   auto populateTokens(std::vector<T>& hidden_states) {
-
     if constexpr (std::is_same_v<T, SafeFP8>) {
       std::vector<OutputType> internal_states(hidden_states.size());
       populateTokens(internal_states);
@@ -521,11 +527,11 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
       for (OutputType value : internal_states) {
         float floatValue = static_cast<float>(value);
         if (floatValue > mMaxInput) {
-            mMaxInput = floatValue;
+          mMaxInput = floatValue;
         }
-    }
+      }
       // mMaxInput = *std::max_element(internal_states.begin(), internal_states.end());
-      
+
       float scalar = getFP8Scalar(mMaxInput);
       std::transform(internal_states.begin(), internal_states.end(), hidden_states.begin(),
                      [scalar](OutputType in) -> T { return static_cast<T>(static_cast<float>(in) * scalar); });
@@ -632,49 +638,10 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
     return std::tuple{weight_1, weight_2, bias_1, bias2_ptr, scale_1, scale_2, scale_3};
   }
 
-  auto getFilteredConfigs(int sm) {
-    auto tactics = mMoERunner.getTactics();
-    if (sm == 89) {
-      // Filter some unsupported configs for L40S
-      auto it = std::remove_if(tactics.begin(), tactics.end(), [&](auto conf) {
-        using llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig;
-        auto checks = std::vector{
-            // Fail for BF16/FP16
-            conf.tile_config == CutlassTileConfig::CtaShape128x128x64_WarpShape64x32x64,
-            conf.tile_config == CutlassTileConfig::CtaShape64x128x64_WarpShape32x64x64 && conf.stages == 4,
-            // Fail for FP8
-            FP8 && conf.tile_config == CutlassTileConfig::CtaShape16x256x128_WarpShape16x64x128 && conf.stages >= 3,
-        };
-
-        return std::any_of(checks.begin(), checks.end(), [](auto v) { return v; });
-      });
-      tactics.erase(it, tactics.end());
-    }
-
-    if (sm == 86) {
-      // Note(winminkong): some config pipeline test failed on A10, filter this config
-      auto it = std::remove_if(tactics.begin(), tactics.end(), [&](auto conf) {
-      using llm_kernels::nvidia::cutlass_extensions::CutlassTileConfig;
-      auto checks = std::vector{
-          // Fail for BF16/FP16
-          conf.tile_config == CutlassTileConfig::CtaShape64x128x64_WarpShape32x64x64 && conf.stages == 4,
-          conf.tile_config == CutlassTileConfig::CtaShape32x128x64_WarpShape32x32x64 && conf.stages >= 2,
-          conf.tile_config == CutlassTileConfig::CtaShape128x128x64_WarpShape64x32x64 && conf.stages >= 3,
-      };
-
-      return std::any_of(checks.begin(), checks.end(), [](auto v) { return v; });
-    });
-    tactics.erase(it, tactics.end());
-    }
-
-    EXPECT_FALSE(tactics.empty());
-
-    return tactics;
-  }
-
   auto selectTacticsForArch(int sm) {
     bool is_sm90 = sm >= 90 && !INT_QUANT;
-    auto tactics = getFilteredConfigs(sm);
+    auto tactics = mMoERunner.getFilteredTactics(sm, FP8);
+    EXPECT_FALSE(tactics.empty());
     auto it = std::find_if(tactics.begin(), tactics.end(), [is_sm90](auto& c) { return c.is_sm90 == is_sm90; });
     if (it == tactics.end()) {
       // Fall back to any tactic
@@ -973,9 +940,9 @@ using Types = ::testing::Types<
 #ifdef ENABLE_BF16
     WeightParams<__nv_bfloat16>,
 #endif
-// #ifdef ENABLE_FP8
-//     WeightParams<SafeFP8, SafeFP8, half>,
-// #endif
+#ifdef ENABLE_FP8
+    WeightParams<SafeFP8, SafeFP8, half>,
+#endif
     WeightParams<half>, WeightParams<float>
 
     //, WeightParams<half, uint8_t>, WeightParams<half, cutlass::uint4b_t>
@@ -1413,7 +1380,8 @@ TYPED_TEST(MixtureOfExpertsTest, ConfigSweep) {
 
   auto const actiavtion_pool = {llm_kernels::nvidia::ActivationType::Relu, llm_kernels::nvidia::ActivationType::Swiglu,
                                 llm_kernels::nvidia::ActivationType::Geglu};
-  auto configs = this->getFilteredConfigs(GetSMVersion());
+  auto configs = this->mMoERunner.getFilteredTactics(GetSMVersion(), this->FP8);
+  EXPECT_FALSE(configs.empty());
   for (auto const activation_type : actiavtion_pool) {
     for (auto conf1 : configs) {
       for (auto conf2 : configs) {

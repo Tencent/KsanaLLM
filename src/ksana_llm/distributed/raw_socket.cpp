@@ -199,16 +199,16 @@ void RawSocket::RecvPacket(PacketHandle& packet_handle, std::vector<Packet*>& pa
 Status RawSocket::SendPacket(int socket_fd, const Packet* packet) {
   int magic_number = PACKET_MAGIC_NUMBER;
   if (write(socket_fd, &magic_number, sizeof(int)) < 0) {
-    return Status(RET_RUNTIME, fmt::format("Send magic number on socket {} error.", socket_fd));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Send magic number on socket {} error.", socket_fd));
   }
 
   int packet_size = sizeof(Packet) + packet->size;
   if (write(socket_fd, &packet_size, sizeof(int)) < 0) {
-    return Status(RET_RUNTIME, fmt::format("Send packet size on socket {} error.", socket_fd));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Send packet size on socket {} error.", socket_fd));
   }
 
   if (write(socket_fd, packet, packet_size) < 0) {
-    return Status(RET_RUNTIME, fmt::format("Send packet data on socket {} error.", socket_fd));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Send packet data on socket {} error.", socket_fd));
   }
 
   return Status();
@@ -298,7 +298,7 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
 
   server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd_ == -1) {
-    return Status(RET_RUNTIME, "Create socket error.");
+    return Status(RET_RUNTIME_FAILED, "Create socket error.");
   }
 
   struct sockaddr_in srv_address;
@@ -307,24 +307,24 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
   srv_address.sin_port = htons(port);
   if (bind(server_fd_, (struct sockaddr*)&srv_address, sizeof(srv_address)) == -1) {
     close(server_fd_);
-    return Status(RET_RUNTIME, fmt::format("Bind socket {}:{} error.", host, port));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Bind socket {}:{} error.", host, port));
   }
 
   if (fcntl(server_fd_, F_SETFL, fcntl(server_fd_, F_GETFL, 0) | O_NONBLOCK) == -1) {
     close(server_fd_);
-    return Status(RET_RUNTIME, "Set nonblocking mode error.");
+    return Status(RET_RUNTIME_FAILED, "Set nonblocking mode error.");
   }
 
   constexpr int max_connctions = 1024;
   if (listen(server_fd_, max_connctions) == -1) {
     close(server_fd_);
-    return Status(RET_RUNTIME, "Listen socket error.");
+    return Status(RET_RUNTIME_FAILED, "Listen socket error.");
   }
 
   epoll_fd_ = epoll_create1(0);
   if (epoll_fd_ == -1) {
     close(server_fd_);
-    return Status(RET_RUNTIME, "Create epoll instance error.");
+    return Status(RET_RUNTIME_FAILED, "Create epoll instance error.");
   }
 
   struct epoll_event event;
@@ -333,7 +333,7 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_fd_, &event) == -1) {
     close(server_fd_);
     close(epoll_fd_);
-    return Status(RET_RUNTIME, "Failed to add server socket to epoll instance.");
+    return Status(RET_RUNTIME_FAILED, "Failed to add server socket to epoll instance.");
   }
 
   auto thread_fn = [this]() -> void {
@@ -343,7 +343,8 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
     while (!terminated_) {
       int num_events = epoll_wait(epoll_fd_, events, max_event, 1000);
       if (num_events == -1) {
-        throw std::runtime_error("Wait for epoll event error.");
+        KLLM_LOG_ERROR << "RawSocket::Listen Wait for epoll event error.";
+        continue;
       } else if (num_events == 0) {
         // timeout 1000ms
         continue;
@@ -410,7 +411,7 @@ Status RawSocket::Connect(const std::string& host, uint16_t port, PacketProcessF
   // The client_fd_ is in blocking mode in default.
   client_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (client_fd_ == -1) {
-    return Status(RET_RUNTIME, "Create socket error.");
+    return Status(RET_RUNTIME_FAILED, "Create socket error.");
   }
 
   struct sockaddr_in srv_addr;
@@ -419,7 +420,7 @@ Status RawSocket::Connect(const std::string& host, uint16_t port, PacketProcessF
   srv_addr.sin_port = htons(port);
   if (connect(client_fd_, (struct sockaddr*)&srv_addr, sizeof(srv_addr)) == -1) {
     close(client_fd_);
-    return Status(RET_RUNTIME, fmt::format("Connect socket {}:{} error.", host, port));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Connect socket {}:{} error.", host, port));
   }
 
   NodeInfo node_info;
@@ -443,7 +444,7 @@ Status RawSocket::Send(NodeInfo node_info, const Packet* packet) {
 
   auto it = node_fd_.find(node_info);
   if (it == node_fd_.end()) {
-    return Status(RET_RUNTIME, fmt::format("Node {}:{} not found.", node_info.host, node_info.port));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Node {}:{} not found.", node_info.host, node_info.port));
   }
 
   return SendPacket(node_fd_[node_info], packet);

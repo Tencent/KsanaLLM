@@ -44,16 +44,16 @@ Status HcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
       ->SetExecuteStream(context_->GetComputeStreams()[rank_].Get());
   atb_all_gather_executor_.ResetVariantPack();
   atb_all_gather_executor_.SetInputTensor(input_tensors[0].GetPtr<void>(), input_tensors[0].shape,
-                                          static_cast<aclDataType>(input_tensors[0].dtype));
+                                          static_cast<aclDataType>(DataType(input_tensors[0].dtype)));
   atb_all_gather_executor_.SetOutputTensor(input_tensors[1].GetPtr<void>(), internal_tensor_shape,
-                                           static_cast<aclDataType>(input_tensors[1].dtype));
+                                           static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
   atb_all_gather_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   // permute op
   atb_permute_executor_.ResetVariantPack();
   atb_permute_executor_.SetInputTensor(input_tensors[1].GetPtr<void>(), internal_tensor_shape,
-                                       static_cast<aclDataType>(input_tensors[1].dtype));
+                                       static_cast<aclDataType>(DataType(input_tensors[1].dtype)));
   atb_permute_executor_.SetOutputTensor(output_tensors[0].GetPtr<void>(), output_tensors[0].shape,
-                                        static_cast<aclDataType>(output_tensors[0].dtype));
+                                        static_cast<aclDataType>(DataType(output_tensors[0].dtype)));
   atb_permute_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   output_tensors[0].shape = {h, tp_size * w_per};
   return Status();

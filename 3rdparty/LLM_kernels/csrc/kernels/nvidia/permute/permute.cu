@@ -24,7 +24,7 @@ namespace llm_kernels {
 namespace nvidia {
 
 template <size_t num_dims, typename IndexType>
-PermuteKernelParams<num_dims, IndexType> generatePermuteParams(const size_t* src_dims, const void* src,
+PermuteKernelParams<num_dims, IndexType> GeneratePermuteParams(const size_t* src_dims, const void* src,
                                                                const size_t* permutation, void* dst, size_t count) {
   PermuteKernelParams<num_dims, IndexType> params;
   params.src_index_helper = NdIndexOffsetHelper<IndexType, num_dims>(src_dims);
@@ -60,14 +60,59 @@ __global__ void PermuteKernel(PermuteKernelParams<num_dims, IndexType> params) {
   }
 }
 
+template <typename T>
+__global__ void SimplePermuteKernel(const T* __restrict__ src, T* __restrict__ dst, const int dim0, const int dim1,
+                                    const int dim2, const int pack_size) {
+  const size_t idx = (blockIdx.x * blockDim.x + threadIdx.x) * pack_size;
+  if (idx >= dim0 * dim1 * dim2) {
+    return;
+  }
+
+  int stride_src = dim1 * dim2;
+
+  int x0 = idx / stride_src;
+  int x1 = (idx - x0 * stride_src) / dim2;
+  int x2 = idx - x0 * stride_src - x1 * dim2;
+
+  size_t dst_offset = x1 * dim0 * dim2 + x0 * dim2 + x2;
+
+  dst[dst_offset / pack_size] = src[idx / pack_size];
+}
+
 template <size_t num_dims, size_t movement_size>
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
                    cudaStream_t& stream) {
+
   size_t total_size = 1;
   for (size_t& dim : input_shape) {
     total_size *= dim;
   }
-  PermuteKernelParams<num_dims, size_t> permute_params = generatePermuteParams<num_dims, size_t>(
+
+  int last_dim = input_shape.back();
+  for (size_t i = input_shape.size() - 2; i >= 2; --i) {
+    last_dim *= input_shape[i];
+  }
+
+  if (permutation.size() >= 3 && permutation[0] == 1 && permutation[1] == 0 && permutation[2] == 2 &&
+      input_shape.size() >= 3 && last_dim * movement_size % 16 == 0) {
+    using VecType = typename utils::PackType<float, 4>::type;
+    int pack_size = 16 / movement_size;
+
+    constexpr int threads_per_block = DEFAULT_CUDA_BLOCK_THREADS_NUM;
+    const int blocks_per_grid =
+        (total_size / pack_size + threads_per_block - 1) / threads_per_block;  // Round up division
+
+    dim3 blocks(blocks_per_grid);
+    dim3 threads(threads_per_block);
+
+    const VecType* src = reinterpret_cast<const VecType*>(input);
+    VecType* dst = reinterpret_cast<VecType*>(output);
+
+    SimplePermuteKernel<VecType><<<blocks, threads, 0, stream>>>(
+        src, dst, static_cast<int32_t>(input_shape[0]), static_cast<int32_t>(input_shape[1]), last_dim, pack_size);
+    return;
+  }
+  PermuteKernelParams<num_dims, size_t> permute_params = GeneratePermuteParams<num_dims, size_t>(
       const_cast<const size_t*>(input_shape.data()), const_cast<const void*>(input),
       const_cast<const size_t*>(permutation.data()), output, total_size);
 
@@ -78,8 +123,11 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
 
 template void InvokePermute<4ul, 4ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
 template void InvokePermute<3ul, 4ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
+template void InvokePermute<2ul, 4ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
+template void InvokePermute<2ul, 1ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
+template void InvokePermute<2ul, 2ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
 template void InvokePermute<4ul, 2ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
 template void InvokePermute<3ul, 2ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
-
+template void InvokePermute<4ul, 1ul>(void*, void*, std::vector<size_t>, std::vector<size_t>, cudaStream_t&);
 }  // namespace nvidia
 }  // namespace llm_kernels

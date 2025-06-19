@@ -16,60 +16,110 @@
 #include "ksana_llm/utils/status.h"
 #include "nlohmann/json.hpp"
 
-#include "ksana_llm/models/baichuan/baichuan_weight.h"
-#include "ksana_llm/models/chatglm/chatglm_weight.h"
-#include "ksana_llm/models/gpt/gpt_weight.h"
-#include "ksana_llm/models/llama/llama_weight.h"
-#include "ksana_llm/models/mixtral/mixtral_weight.h"
-#include "ksana_llm/models/qwen/qwen_weight.h"
-#include "ksana_llm/models/qwen2_moe/qwen2_moe_weight.h"
-#include "ksana_llm/models/qwen2_vl/qwen2_vl_weight.h"
-
 #include "ksana_llm/models/baichuan/baichuan_model.h"
 #include "ksana_llm/models/chatglm/chatglm_model.h"
+#include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/models/gpt/gpt_model.h"
+#include "ksana_llm/models/hunyuan_large/hunyuan_large_model.h"
+#include "ksana_llm/models/internlm2/internlm_model.h"
+#include "ksana_llm/models/internlmxcomposer2/internlmxcomposer2_model.h"
 #include "ksana_llm/models/llama/llama_model.h"
+#include "ksana_llm/models/llama4/llama4_model.h"
 #include "ksana_llm/models/mixtral/mixtral_model.h"
 #include "ksana_llm/models/qwen/qwen_model.h"
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_model.h"
-#include "ksana_llm/models/qwen2_vl/qwen2_vl_model.h"
+#include "ksana_llm/models/qwen3_moe/qwen3_moe_model.h"
 
 namespace ksana_llm {
 
-std::vector<std::shared_ptr<BaseModel>> ModelInstance::models_;
-std::vector<std::shared_ptr<BaseWeight>> ModelInstance::weights_;
+// Create the object and return a shared pointer.
+template <template <class> class ClassT>
+std::shared_ptr<BaseModel> CreateModel(int rank, std::shared_ptr<BaseWeight> base_weight, ModelConfig& model_config,
+                                       std::shared_ptr<Context>& context) {
+  std::shared_ptr<BaseModel> model_obj = nullptr;
+  switch (model_config.weight_data_type) {
+    case DataType::TYPE_FP16:
+      model_obj = std::make_shared<ClassT<float16>>(model_config, rank, context, base_weight);
+      break;
+#ifdef ENABLE_BFLOAT16
+    case DataType::TYPE_BF16:
+      model_obj = std::make_shared<ClassT<bfloat16>>(model_config, rank, context, base_weight);
+      break;
+#endif
+    case DataType::TYPE_FP32:
+      model_obj = std::make_shared<ClassT<float>>(model_config, rank, context, base_weight);
+      break;
+    default:
+      KLLM_THROW(fmt::format("Unsupported Tensor type: {}.", model_config.weight_data_type));
+  }
+  return model_obj;
+}
+
+template <template <class> class ModelType>
+void CreateModelInstance(const std::string model_name, ModelConfig& model_config, std::shared_ptr<Context>& context,
+                         std::vector<std::shared_ptr<BaseModel>>& models,
+                         std::shared_ptr<WeightInstanceInterface>& weight_instance) {
+  KLLM_LOG_INFO << "Start to init model instance " << model_name;
+  for (int worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
+    KLLM_LOG_INFO << "Start to create model on device " << worker_id;
+    models.push_back(CreateModel<ModelType>(worker_id, weight_instance->GetWeight(worker_id), model_config, context));
+  }
+}
 
 void ModelInstance::Load() {
   std::string unified_model_type = model_config_.type;
   // unify it to lower case
   std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),
                  [](unsigned char c) { return std::tolower(c); });
-
-  if (unified_model_type.find("llama") != std::string::npos) {
+  if (unified_model_type.find("llama4") != std::string::npos) {
+    type = "llama4";
+    CreateModelInstance<Llama4Model>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("llama") != std::string::npos) {
     type = "llama";
-    CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
+    CreateModelInstance<LlamaModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("qwen3_moe") != std::string::npos) {
+    type = "qwen3_moe";
+    CreateModelInstance<Qwen3MoeModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("qwen3") != std::string::npos) {
+    type = "qwen3";
+    model_config_.enable_qk_pre_norm_before_rotary_pos = true;
+    CreateModelInstance<QwenModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
     type = "qwen2_moe";
-    CreateModelInstance<Qwen2MoeModel, Qwen2MoeWeight>(unified_model_type);
-  } else if (unified_model_type.find("qwen2_vl") != std::string::npos) {
-    type = "qwen2_vl";
-    CreateModelInstance<Qwen2VLModel, Qwen2VLWeight>(unified_model_type);
+    CreateModelInstance<Qwen2MoeModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("qwen") != std::string::npos) {
     type = "qwen";
-    CreateModelInstance<QwenModel, QwenWeight>(unified_model_type);
+    // or qwen2_vl
+    model_config_.enable_add_qkv_bias = true;
+    CreateModelInstance<QwenModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("baichuan") != std::string::npos) {
     type = "baichuan";
-    CreateModelInstance<BaichuanModel, BaichuanWeight>(unified_model_type);
+    CreateModelInstance<BaichuanModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("chatglm") != std::string::npos) {
     type = "chatglm";
-    CreateModelInstance<ChatglmModel, ChatglmWeight>(unified_model_type);
+    CreateModelInstance<ChatglmModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("gpt") != std::string::npos ||
              unified_model_type.find("fairseq-transformer") != std::string::npos) {
-    type = "gpt";
-    CreateModelInstance<GPTModel, GPTWeight>(unified_model_type);
+    CreateModelInstance<GptModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("internlm2") != std::string::npos ||
+             unified_model_type.find("internvl_chat") != std::string::npos) {
+    type = "internlm2";
+    CreateModelInstance<Internlm2Model>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("internlmxcomposer2") != std::string::npos) {
+    type = "internlm2";
+    CreateModelInstance<InternlmxComposer2Model>(unified_model_type, model_config_, context_, models_,
+                                                 weight_instance_);
+  } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
+    type = "hunyuan";
+    CreateModelInstance<HunyuanLargeModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else if (unified_model_type.find("mixtral") != std::string::npos) {
     type = "mixtral";
-    CreateModelInstance<MixtralModel, MixtralWeight>(unified_model_type);
+    CreateModelInstance<MixtralModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
+  } else if (unified_model_type.find("deepseek_v3") != std::string::npos ||
+             unified_model_type.find("deepseek_v2") != std::string::npos) {
+    type = "deepseek_v3";
+    // deepseek v2 and v3 share a weight and model build process
+    CreateModelInstance<DeepSeekV3Model>(unified_model_type, model_config_, context_, models_, weight_instance_);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();
@@ -77,156 +127,65 @@ void ModelInstance::Load() {
         optional_file->GetOptionalFile(model_config_.path, "weight_map", unified_model_type + "_weight_map.json");
     if (weight_map != "") {
       type = "llama";
-      CreateModelInstance<LlamaModel, LlamaWeight>(unified_model_type);
+      CreateModelInstance<LlamaModel>(unified_model_type, model_config_, context_, models_, weight_instance_);
     } else {
       KLLM_THROW(fmt::format("Model type {} is not supported.", unified_model_type));
     }
   }
 }
 
-std::vector<float*> ModelInstance::GetLogitsPtr() {
+std::vector<float*> ModelInstance::GetLogitsPtr(size_t schedule_id) {
   std::vector<float*> results;
   for (auto& model : models_) {
-    results.push_back(model->GetLogitsPtr());
+    results.push_back(model->GetLogitsPtr(schedule_id));
   }
   return results;
 }
 
-std::vector<Status> ModelInstance::Forward(std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                                           std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+std::vector<Status> ModelInstance::Forward(size_t schedule_id, std::shared_ptr<WorkerGroup> worker_group,
+                                           InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   std::vector<Status> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group->GetWorker(worker_id)->Forward(models_[worker_id], weights_[worker_id], stage,
-                                                                  forward_reqs, epilogue));
+    results.push_back(worker_group->GetWorker(worker_id)->Forward(
+        schedule_id, models_[worker_id], weight_instance_->GetWeight(worker_id), stage, forward_reqs, epilogue));
   }
   return results;
 }
 
-std::vector<std::future<Status>> ModelInstance::ForwardAsync(std::shared_ptr<WorkerGroup> worker_group,
+std::vector<std::future<Status>> ModelInstance::ForwardAsync(size_t schedule_id,
+                                                             std::shared_ptr<WorkerGroup> worker_group,
                                                              InferStage stage,
-                                                             std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
+                                                             std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                                                             RunMode run_mode) {
   std::vector<std::future<Status>> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(models_[worker_id], weights_[worker_id], stage,
-                                                                       forward_reqs, epilogue));
+    results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(schedule_id, models_[worker_id],
+                                                                       weight_instance_->GetWeight(worker_id), stage,
+                                                                       forward_reqs, epilogue, run_mode));
   }
   return results;
 }
 
-void ModelInstance::SetEmbeddingsConfig() {
-  for (auto& weight : weights_) {
-    if (weight) {
-      weight->SetEmbeddingsConfig();
+Status ModelInstance::AllocResources(size_t schedule_id) {
+  std::vector<Status> results;
+  for (auto& model : models_) {
+    Status status = model->AllocResources(schedule_id);
+    if (!status.OK()) {
+      return status;
     }
   }
-}
-/*
- * embed_token.weight 和 lm_head.weight 的检查和替换逻辑如下表所示：
- * （第一列为模型config.json中是否存在参数tie_word_embeddings）
- * （第二列为参数tie_word_embeddings实际默认值）
- *  (第三列为是否存在lm_head.weight)
- *  (第四列为embed_token.weight是否替换lm_head.weight)
- *   +-----------+--------+---------------+-------------+
- *   | exist tie | value  | exist lm_head | is replace  |
- *   +-----------+--------+---------------+-------------+
- *   |           |        |     true      |     NO      |
- *   |           |  true  +---------------+-------------|
- *   |           |        |     false     |     YES     |
- *   | false     +--------+---------------+-------------+
- *   |           |        |     true      |     NO      |
- *   |           |  false +---------------+-------------|
- *   |           |        |     false     |     YES     |
- *   +-----------+--------+---------------+-------------+
- *   |           |        |     true      |     YES     |
- *   |           |  true  +---------------+-------------|
- *   |           |        |     false     |     YES     |
- *   |  true     +--------+---------------+-------------+
- *   |           |  false |     true      |     NO      |
- *   +-----------+--------+---------------+-------------+
- */
-void ModelInstance::CheckTieEmbeddings(int weight_file_size) {
-  if (weight_file_size <= 1 || model_config_.exist_tie_embeddings_param) {
-    return;
-  }
-  // When the quantity of weight files exceeds 1, retrieve the "index.json" file mapping the names of the weights
-  // under the model path.
-  for (const auto& entry : std::filesystem::directory_iterator(model_config_.path)) {
-    std::string index_filename = entry.path().filename().string();
-    if (index_filename.size() > 11 && index_filename.substr(index_filename.size() - 11) == ".index.json") {
-      std::ifstream file(entry.path());
-      nlohmann::json weights_index_json;
-      file >> weights_index_json;
-      if (!weights_index_json["weight_map"].contains("lm_head.weight") &&
-          !weights_index_json["weight_map"].contains("transformer.output_layer.weight")) {
-        SetEmbeddingsConfig();
-        KLLM_LOG_INFO
-            << "tie_word_embeddings param and lm_head.weight are not exist, replace it with embedd_tokens.weight";
-        break;
-      }
-    }
-  }
+  return Status();
 }
 
-void ModelInstance::CheckTieEmbeddings(std::vector<std::string>& custom_name_list) {
-  if (!model_config_.exist_tie_embeddings_param) {
-    // When the quantity of weight files is equal to 1, the weight file should be loaded directly before the name search
-    // is performed.
-    std::string lm_head_weight = "lm_head.weight";
-    auto exist_lm_head = std::find(custom_name_list.begin(), custom_name_list.end(), lm_head_weight);
-    if (exist_lm_head == custom_name_list.end()) {
-      SetEmbeddingsConfig();
-      KLLM_LOG_INFO
-          << "tie_word_embeddings param and lm_head.weight are not exist, replace it with the embedd_tokens.weight";
+Status ModelInstance::FreeResources(size_t schedule_id) {
+  std::vector<Status> results;
+  for (auto& model : models_) {
+    Status status = model->FreeResources(schedule_id);
+    if (!status.OK()) {
+      return status;
     }
   }
-}
-
-void ModelInstance::LoadWeightsAndModelsMap() {
-  ModelFileFormat model_file_format;
-  std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, model_file_format);
-  int weight_file_size = weights_file_list.size();
-  CheckTieEmbeddings(weight_file_size);
-
-  for (std::string& file_name : weights_file_list) {
-    std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-    if (model_file_format == SAFETENSORS) {
-      weights_loader = std::make_shared<SafeTensorsLoader>(file_name);
-    } else if (model_file_format == GGUF) {
-      weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name);
-    } else {
-      weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name);
-    }
-    std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
-    std::vector<std::string> custom_name_list;
-    GetCustomNameList(weight_name_list, custom_name_list, model_config_.path, model_config_.type, model_file_format);
-    if (weight_file_size == 1) {
-      CheckTieEmbeddings(custom_name_list);
-    }
-
-    std::vector<std::future<void>> get_weight_tasks;
-
-    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      get_weight_tasks.push_back(
-          loader_weight_threadpool_->Submit([worker_id, this, &weights_loader, &weight_name_list, &custom_name_list]() {
-            this->weights_[worker_id]->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
-            StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
-            return;
-          }));
-    }
-    for (auto&& get_weight_task : get_weight_tasks) {
-      get_weight_task.get();
-    }
-  }
-  std::vector<std::future<void>> process_weight_tasks;
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    process_weight_tasks.push_back(loader_weight_threadpool_->Submit([worker_id, this]() {
-      this->weights_[worker_id]->ProcessWeights();
-      return;
-    }));
-  }
-  for (auto&& process_weight_task : process_weight_tasks) {
-    process_weight_task.get();
-  }
+  return Status();
 }
 
 }  // namespace ksana_llm

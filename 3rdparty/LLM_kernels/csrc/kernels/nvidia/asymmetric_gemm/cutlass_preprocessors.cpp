@@ -27,16 +27,6 @@ using namespace llm_kernels::utils;
 namespace llm_kernels {
 namespace nvidia {
 
-struct LayoutDetails {
-  enum class Layout { UNKNOWN, ROW_MAJOR, COLUMN_MAJOR };
-
-  Layout layoutB = Layout::UNKNOWN;
-  int rows_per_column_tile = 1;
-  int columns_interleaved = 1;
-
-  bool uses_imma_ldsm = false;
-};
-
 template <typename Layout>
 struct getLayoutDetails {};
 

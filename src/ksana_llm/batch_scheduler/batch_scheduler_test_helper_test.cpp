@@ -25,8 +25,11 @@ class BatchSchedulerEnvironmentSimulatorTest : public testing::Test {
     block_manager_config.device_allocator_config.block_token_num = 6;
     device_num = 2;
 
+    std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group =
+        std::make_shared<FakedBlockAllocatorGroup>(block_manager_config, device_num);
+
     // 使用配置创建一个 BlockManagerSimulator 对象
-    env_simulator = new BatchSchedulerEnvironmentSimulator(block_manager_config, device_num);
+    env_simulator = new BatchSchedulerEnvironmentSimulator(block_manager_config, device_num, block_allocator_group);
     KLLM_LOG_INFO << "Simulator start";
   }
 
@@ -47,8 +50,7 @@ class BatchSchedulerEnvironmentSimulatorTest : public testing::Test {
                          FormatStr("req->kv_cache_blocks.size()=%d", req->kv_cache_blocks.size()));
     for (int i = 0; i < device_num; i++) {
       std::vector<int> blocks;
-      GetBlockManager()->SetDeviceId(i);
-      GetBlockManager()->AllocateBlocks(total_block_num, blocks);
+      env_simulator->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(i)->AllocateBlocks(total_block_num, blocks);
       req->kv_cache_blocks[i].insert(req->kv_cache_blocks[i].end(), blocks.begin(), blocks.end());
       KLLM_LOG_INFO << "req " << req->req_id << ", kv_cache_blocks[" << i
                     << "].size()=" << req->kv_cache_blocks[i].size();
@@ -125,6 +127,11 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
   for (int i = 0; i < max_output_step; i++) {
     std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
     for (auto& req : infer_reqs) {
+      if (req->sampling_result_tokens.size() > 0) {
+        req->output_tokens.push_back(req->sampling_result_tokens.back());
+        req->sampling_result_tokens.clear();
+      }
+      req->forwarding_tokens = req->output_tokens;
       if (!env_simulator->IsRequestFinished(req)) {
         scheduled_reqs.push_back(req);
       }
@@ -136,7 +143,8 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
     for (auto req : scheduled_reqs) {
       KLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
                      << ", output_token.size()=" << req->output_tokens.size()
-                     << ", last output token= " << req->output_tokens.back();
+                     << ", sampling_result_tokens.size()=" << req->sampling_result_tokens.size()
+                     << ", sampling_result_tokens token= " << req->sampling_result_tokens.back();
     }
   }
 
@@ -211,10 +219,10 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     }
   }
 
-  std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return dummy_cache_mgr_; }
+  std::shared_ptr<CacheManagerInterface>& GetCacheManager(int attn_dp_idx) { return dummy_cache_mgr_; }
 
-
-  ScheduleOutput* Schedule() override {
+  std::shared_ptr<ScheduleOutputGroup> Schedule(size_t pp_batch_idx) override {
+    assert(pp_batch_idx == 0);  // only support one batch
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     KLLM_LOG_DEBUG << " ============= Schedule, step " << step_ << ", running_reqs.size=" << running_reqs.size()
                    << ", waiting_reqs.size=" << waiting_reqs.size();
@@ -224,6 +232,10 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       for (auto it = running_reqs.begin(); it != running_reqs.end();) {
         // Update request status
         auto& req = *it;
+        if (req->sampling_result_tokens.size() > 0) {
+          req->output_tokens.push_back(req->sampling_result_tokens.back());
+          req->sampling_result_tokens.clear();
+        }
         if (env_simulator_->IsRequestFinished(req)) {
           ClearRequestAfterFinished(req);
           it = running_reqs.erase(it);
@@ -245,8 +257,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
             std::vector<int> blocks_to_drop(prefix_block_num_);
             std::copy(req->kv_cache_blocks[device_id].begin(),
                       req->kv_cache_blocks[device_id].begin() + prefix_block_num_, blocks_to_drop.begin());
-            GetBlockManager()->SetDeviceId(device_id);
-            GetBlockManager()->FreeBlocks(blocks_to_drop);
+            env_simulator_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(device_id)->FreeBlocks(blocks_to_drop);
           }
           FillPrefixCacheBlocks(req);
         }
@@ -283,8 +294,14 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       step_++;
     }
     KLLM_LOG_DEBUG << " ========= Schedule, running_reqs.size = " << running_reqs.size();
+    for (auto& req : running_reqs) {
+      req->forwarding_tokens = req->output_tokens;
+    }
     schedule_output->running_reqs = running_reqs;
-    return schedule_output;
+
+    std::shared_ptr<ScheduleOutputGroup> schedule_output_group = std::make_shared<ScheduleOutputGroup>();
+    schedule_output_group->outputs[0] = schedule_output;
+    return schedule_output_group;
   }
 
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) override {
@@ -294,9 +311,13 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     return Status();
   }
 
-  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager) override {}
+  virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int idx) override {}
 
-  virtual bool IsIdle() override { return false; }
+  virtual bool IsIdle(size_t pp_batch_idx) override { return false; }
+
+  virtual void WaitUntilHaveReqs(size_t pp_batch_idx) override {}
+
+  virtual void Stop() override {}
 
  private:
   Status AddAnInferRequest(std::shared_ptr<InferRequest>& infer_req) {
@@ -310,7 +331,6 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     // set prefix info
     infer_req->is_use_prefix_cache = true;
     infer_req->prefix_cache_len = prefix_token_num_;
-    infer_req->prefix_cache_blocks_number = prefix_block_num_;
     waiting_reqs.push_back(infer_req);
     return Status();
   }
@@ -329,16 +349,15 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       std::vector<int> free_blocks(kv_cache_blocks[device_id].size() - prefix_block_num_);
       std::copy(kv_cache_blocks[device_id].begin() + prefix_block_num_, kv_cache_blocks[device_id].end(),
                 free_blocks.begin());
-      GetBlockManager()->SetDeviceId(device_id);
-      GetBlockManager()->FreeBlocks(free_blocks);
+      env_simulator_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(device_id)->FreeBlocks(free_blocks);
     }
   }
 
   void PreparePrefixCacheBlocks() {
     for (int device_id = 0; device_id < tp_num_; device_id++) {
-      GetBlockManager()->SetDeviceId(device_id);
       std::vector<int> prefix_cache_block_tmp;
-      GetBlockManager()->AllocateBlocks(prefix_block_num_, prefix_cache_block_tmp);
+      env_simulator_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(device_id)->AllocateBlocks(
+          prefix_block_num_, prefix_cache_block_tmp);
       prefix_cache_blocks_.emplace_back(std::move(prefix_cache_block_tmp));
     }
     KLLM_LOG_INFO << "set prefix_cache_blocks =" << KvCaches2Str(prefix_cache_blocks_);
@@ -369,8 +388,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
         (req->output_tokens.size() + block_token_num_ - 1) / block_token_num_ - kv_cache_blocks[0].size();
     for (int i = 0; i < tp_num_; i++) {
       std::vector<int> new_blocks;
-      GetBlockManager()->SetDeviceId(i);
-      GetBlockManager()->AllocateBlocks(adding_block_num, new_blocks);
+      env_simulator_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(i)->AllocateBlocks(adding_block_num,
+                                                                                           new_blocks);
       kv_cache_blocks[i].insert(kv_cache_blocks[i].end(), new_blocks.begin(), new_blocks.end());
     }
     KLLM_LOG_DEBUG << "AdjustRequestKvCache, req_id= " << req->req_id

@@ -1,21 +1,89 @@
 setting:
   global:
-    tensor_para_size: 1
+   # TP并行
+    tensor_para_size: 2
+    # PP并行
     pipeline_para_size: 1
+    # 是否启用lora适配，false表示不启用，true表示启用
     enable_lora_adapter: false
+    # 是否使用cpu保存embed_tokens
+    embed_tokens_use_cpu: false
+    # 是否启用cudagraph用于decode阶段加速, 当前启用默认只开启decode阶段batchsize=1,2,3
+    # 不开启更多batchsize是因为每个batchsize的cudagraph实例会占用15~25mb左右显存
+    enable_cuda_graph: false
+
   batch_scheduler:
-    waiting_timeout_in_ms: 600000
-    max_waiting_queue_len: 1000
+    # 调度策略，0表示continuous_batching，默认为0
+    schedule_strategy: 0
+    # 请求在队列中的超时时间，单位为毫秒
+    waiting_timeout_in_ms: 3600000
+    # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
+    max_waiting_queue_len: 1200
+    # 一个调度step处理的最大token个数，一次context decode视为多个token。
     max_step_tokens: 4096
+    # 每一步推理时的最大batch_size
     max_batch_size: 128
+    # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
     max_token_len: 2048
+    # 单个请求可用blck小于该值触发换出
+    swapout_block_threshold: 1.0
+    # 单个请求可用block大于该值触发换入
+    swapin_block_threshold: 2.0
+    # 单个请求可用block大于该值拉起新任务
+    launch_block_threshold: 2.0
+    # 是否开启自动前缀匹配
+    enable_auto_prefix_cache: true
+    # split_fuse_token_num用于控制在单轮推理过程中，模型处理的最大token数量。
+    # 设置为256意味着在执行推理时，每个处理步骤（或“分割”）将处理最多256个token。
+    # 如果设置为0，则表示不对处理的token数量进行限制，模型将尝试一次性处理整个输入。
+    # 控制此参数可以帮助平衡推理速度与资源消耗，特别是在处理长文本时。
+    split_fuse_token_num: 0
+    # 用于执行异步swap的线程池大小
+    swap_threadpool_size: 8
+    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
+    preempt_mode: 0
+    # 多轮对话场景可以设置此值，在前缀缓存查询后，继续查询非前缀的连续灵活缓存，提高cache命中率。
+    # 此时命中的前缀缓存为prefix_tokens + flexible_tokens + 剩余tokens
+    # 此值为最小的命中长度，推荐设置为64，值为0或超过模型最长长度表示不启用。
+    min_flexible_cache_num: 0
+    # 是否开启投机解码。开启后每个Step将生成一定数量的draft_tokens，成功预测的情况下可提高处理速度
+    enable_speculative_decoding: true
+    # 是否开启MTP模块，开启后将使用MTP模块加速推理
+    enable_mtp_module: true
   block_manager:
+    # 单个block可处理的最大token个数
     block_token_num: 16
+    # 保留的显存占比，单位为百分比。
     reserved_device_memory_ratio: 0.01
+    # Lora权重的显存占比
     lora_deivce_memory_ratio: 0.0
+    # Lora权重在host上的预分配大小，相比device上的倍数
     lora_host_memory_factor: 10.0
+    # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
-    block_host_memory_factor: 2.0
+    # block部分在host上的预分配大小，相比device上的倍数
+    block_host_memory_factor: 1.0
+
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
 model_spec:
   base_model:
     model_dir: ./Llama-2-7b-hf
+# 仅在跑模型性能压测的时候有效
+model_performance_runner_config:
+  # 输入的配置
+  input_config:
+    # decode请求的个数
+    single_token_request_num: 2
+    # 每条decode请求已经拥有的kv cache的长度
+    single_token_request_cached_token_num: 32
+    # context请求的个数
+    multi_token_request_num: 2
+    # 每条context请求的长度
+    multi_token_request_token_num: 32
+  runner_config:
+    # warmup阶段压测的轮数
+    warmup_rounds: 10
+    # 压测的轮数
+    rounds: 100

@@ -17,7 +17,6 @@
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
 
-#include "ksana_llm/helpers/block_manager_test_helper.h"
 #include "ksana_llm/helpers/environment_test_helper.h"
 
 using namespace ksana_llm;
@@ -30,24 +29,25 @@ class DataHubTest : public testing::Test {
   void SetUp() override {
     std::string config_file = GetTestConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
-    InitTestBlockManager(Singleton<Environment>::GetInstance().get());
   }
 
   void TearDown() override {}
 };
 
 TEST_F(DataHubTest, TestDataHub) {
+  int rank = 0;
+  bool is_prefill = false;
   InitializeScheduleOutputPool();
   InitializeHiddenUnitBufferPool();
 
   EXPECT_TRUE(GetScheduleOutputPool() != nullptr);
   EXPECT_TRUE(GetHiddenUnitBufferPool() != nullptr);
 
-  // Get device buffer, set and get.
-  HiddenUnitDeviceBuffer* dev_hidden_unit = GetHiddenUnitBufferPool()->GetDeviceBuffer();
-  dev_hidden_unit->schedule_id = SCHEDULE_ID;
-  SetCurrentHiddenUnitBuffer(dev_hidden_unit);
-  HiddenUnitDeviceBuffer* cur_dev_hidden_unit = GetCurrentHiddenUnitBuffer();
+  // Initialize hidden units with schedule_id
+  Status status = InitHiddenUnits(SCHEDULE_ID);
+  EXPECT_TRUE(status.OK());
+
+  HiddenUnitDeviceBuffer* cur_dev_hidden_unit = GetCurrentHiddenUnitBuffer(SCHEDULE_ID);
   EXPECT_EQ(cur_dev_hidden_unit->schedule_id, SCHEDULE_ID);
 
   // Get schedule output.
@@ -65,15 +65,29 @@ TEST_F(DataHubTest, TestDataHub) {
 
   EXPECT_EQ(send_schedule_output->schedule_id, SCHEDULE_ID);
 
-  // Send hidden unit.
-  SendHiddenUnits(cur_dev_hidden_unit);
-
   // get from conv queue
-  Packet* send_packet = GetHiddenUnitBufferPool()->GetFromSendQueue();
-  HiddenUnitHostBuffer* send_host_hidden_unit = reinterpret_cast<HiddenUnitHostBuffer*>(send_packet->body);
-  EXPECT_EQ(send_host_hidden_unit->schedule_id, SCHEDULE_ID);
+  HiddenUnitDeviceBuffer* send_dev_hidden_unit;
+  auto send_fn = [&]() {
+    send_dev_hidden_unit = GetHiddenUnitBufferPool()->GetFromSendQueue();
+    GetHiddenUnitBufferPool()->NotifySendFinished();
+  };
+  std::thread send_thread(send_fn);
 
-  GetHiddenUnitBufferPool()->FreeDeviceBuffer(dev_hidden_unit);
+  SendHiddenUnits(SCHEDULE_ID);
+
+  send_thread.join();
+  EXPECT_EQ(send_dev_hidden_unit->schedule_id, SCHEDULE_ID);
+
+  Tensor tmp_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, GetCurrentHiddenUnitBuffer(SCHEDULE_ID)->tensors[rank].dtype,
+             GetCurrentHiddenUnitBuffer(SCHEDULE_ID)->tensors[rank].shape, rank);
+  CopyFromHiddenUnitBuffer(tmp_tensor, GetCurrentHiddenUnitBuffer(SCHEDULE_ID), rank, is_prefill);
+  CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(SCHEDULE_ID), tmp_tensor, rank, is_prefill);
+
+  // Test FreeHiddenUnits
+  Status free_status = FreeHiddenUnits(SCHEDULE_ID);
+  EXPECT_TRUE(free_status.OK());
+
   GetScheduleOutputPool()->FreeScheduleOutput(schedule_output);
 
   DestroyScheduleOutputPool();

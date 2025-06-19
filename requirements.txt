@@ -1,4 +1,4 @@
-transformers==4.45.0
+transformers==4.51.3
 sentencepiece==0.2.0
 uvicorn[standard]==0.29.0
 fastapi==0.110.0
@@ -8,3 +8,5 @@ aiohttp==3.9.5
 msgpack>=1.0.8
 orjson>=3.10.7
 uvloop>=0.20.0
+grpcio==1.67.1
+tritonclient[grpc]==2.41.0

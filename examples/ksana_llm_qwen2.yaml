@@ -43,7 +43,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 2.0
+    block_host_memory_factor: 1.0
     # prefix缓存token数，0表示不缓存，-1表示自动适配(未实现)
     prefix_cache_len: 0
   # 性能统计相关配置
@@ -54,6 +54,10 @@ setting:
     stat_buffer_size: 1024
     # 异步上报的线程池大小
     report_threadpool_size: 4
+  # tokenizer配置
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
 # 模型配置
 model_spec:
   # 基础模型配置，只能有一个

@@ -5,10 +5,10 @@
 
 #include <memory>
 #include "ksana_llm/batch_manager/batch_manager.h"
-#include "ksana_llm/block_manager/block_manager.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/distributed/distributed_coordinator.h"
 #include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/weight_instance_inferface.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/status.h"
 
@@ -46,6 +46,9 @@ class InferenceEngine {
   // Cudagraph capture during warmup
   Status CudaGraphCapture();
 
+  // Load operator optimization
+  Status LoadOperatorOptimization(const std::unordered_map<std::string, ModelConfig> &model_configs);
+
  private:
   // The channel used to pass request from endpoint.
   Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue_;
@@ -56,11 +59,8 @@ class InferenceEngine {
   // Used for pipeline mode.
   std::shared_ptr<DistributedCoordinator> distributed_coordinator_ = nullptr;
 
-  // The global block manager.
-  BlockManager *block_manager_ = nullptr;
-
   // The batch manager for the whole inference.
-  std::shared_ptr<BatchManager> batch_manager_ = nullptr;
+  std::unique_ptr<BatchManager> batch_manager_ = nullptr;
 
   // The batch scheduler used for inference engine.
   std::shared_ptr<BatchScheduler> batch_scheduler_ = nullptr;
@@ -69,19 +69,18 @@ class InferenceEngine {
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
 
   // The cache manager inference used for inference engine.
-  std::shared_ptr<CacheManagerInterface> cache_manager_ = nullptr;
+  std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;
 
   // The model instances this service support.
   std::vector<std::shared_ptr<ModelInstance>> model_instances_;
+
+  std::vector<std::shared_ptr<WeightInstanceInterface>> weight_instances_;
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;
 
   // The async thread used to hanle main loop.
   std::thread handle_thread_;
-
-  // The tokenizer used to do encode and decode
-  std::shared_ptr<Tokenizer> tokenizer_ = nullptr;
 };
 
 }  // namespace ksana_llm

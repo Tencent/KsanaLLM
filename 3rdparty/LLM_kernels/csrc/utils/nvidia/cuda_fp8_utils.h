@@ -40,6 +40,7 @@ namespace llm_kernels {
 namespace utils {
 
 constexpr float FP8_E4M3_MAX = 448.0f;
+constexpr float FP8_E4M3_MIN = -448.0f;
 constexpr float FP8_E4M3_MIN_SCALE = 1.0f / FP8_E4M3_MAX / 512.0f;
 
 // Packed Data Type
@@ -50,36 +51,6 @@ typedef struct __CUDA_ALIGN__(32) {
 typedef struct __CUDA_ALIGN__(16) {
   half array[8];
 } half8;
-
-#  ifdef ENABLE_BF16
-typedef struct __CUDA_ALIGN__(4) {
-  __nv_bfloat16 array[2];
-} __nv_bfloat16_2;
-
-typedef struct __CUDA_ALIGN__(8) {
-  __nv_bfloat162 x, y;
-} __nv_bfloat162_2_xy;
-
-typedef struct __CUDA_ALIGN__(8) {
-  __nv_bfloat16 array[4];
-} __nv_bfloat164;
-
-typedef struct __CUDA_ALIGN__(8) {
-  __nv_bfloat162 array[2];
-} __nv_bfloat162_2;
-
-typedef struct __CUDA_ALIGN__(16) {
-  __nv_bfloat16 array[8];
-} __nv_bfloat168;
-
-typedef struct __CUDA_ALIGN__(16) {
-  __nv_bfloat162 array[4];
-} __nv_bfloat162_4;
-
-typedef struct __CUDA_ALIGN__(32) {
-  __nv_bfloat16 array[16];
-} __nv_bfloat1616;
-#  endif
 
 #  ifdef ENABLE_FP8
 typedef struct __CUDA_ALIGN__(2) {

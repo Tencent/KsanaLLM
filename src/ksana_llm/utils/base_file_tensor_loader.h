@@ -15,7 +15,8 @@ namespace ksana_llm {
 class BaseFileTensorLoader {
  public:
   // Constructor that takes a file name as input
-  explicit BaseFileTensorLoader(const std::string& file_name) : file_name_(file_name) {}
+  explicit BaseFileTensorLoader(const std::string& file_name, const bool load_bias)
+      : file_name_(file_name), load_bias_(load_bias) {}
 
   // Pure virtual function to get the list of tensor names
   virtual const std::vector<std::string>& GetTensorNameList() = 0;
@@ -32,6 +33,7 @@ class BaseFileTensorLoader {
  protected:
   std::string file_name_;
   std::vector<std::string> tensor_name_list_;
+  bool load_bias_;
 };
 
 }  // namespace ksana_llm

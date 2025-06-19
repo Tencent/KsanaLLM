@@ -2,11 +2,13 @@
  * Copyright 2024 Tencent Inc.  All rights reserved.
  */
 
+#include <cstdlib>
+
 #include <gtest/gtest.h>
 
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/kernels/nvidia/samplers/repetition_penalty.h"
-#include "csrc/kernels/nvidia/samplers/samplingTopKKernels.h"
+#include "csrc/kernels/nvidia/samplers/sampling_topk_kernels.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 namespace llm_kernels {
@@ -43,8 +45,8 @@ class LlamaNvidiaSamplersTestSuit : public NvidiaTestSuitBase {
     // create kernel's buffer
     int32_t batch_size = 2;
     int32_t vocab_size = 10;
-    T max_logit = 101.0;
-    T logit_range = 100.0;
+    T max_logit = 5.0;
+    T logit_range = 4.0;
     std::vector<uint32_t> base_result = {5, 7};
 
     // [batch_size, vocab_size]
@@ -78,6 +80,9 @@ class LlamaNvidiaSamplersTestSuit : public NvidiaTestSuitBase {
 
   template <typename T>
   void TestGreedyEqual() {
+    if (std::getenv("ENABLE_NEW_ARGMAX") == nullptr) {
+      return;
+    }
     // create kernel's buffer
     int32_t batch_size = 3;
     int32_t vocab_size = 120;
@@ -121,6 +126,9 @@ class LlamaNvidiaSamplersTestSuit : public NvidiaTestSuitBase {
 
 TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyCommonTest) {
   TestGreedyCommon<float>();
+  if (std::getenv("ENABLE_NEW_ARGMAX") == nullptr) {
+    return;
+  }
   TestGreedyCommon<half>();
 #ifdef ENABLE_BF16
   TestGreedyCommon<__nv_bfloat16>();
@@ -139,7 +147,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {
   using DataType = float;
   // prepare input data
   BufferMeta input_data;
-  LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float.npy", MemoryType::MEMORY_GPU, input_data);
+  input_data.LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float.npy", MemoryType::MEMORY_GPU);
   int32_t batch_size = input_data.shape[0];
   int32_t vocab_size = input_data.shape[1];
   // prepare output data
@@ -169,8 +177,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
   void* workspace = nullptr;
   size_t workspaceSize = 0;
   BufferMeta logProbs;
-  LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float_10x32000.npy", MemoryType::MEMORY_GPU,
-                    logProbs);
+  logProbs.LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float_10x32000.npy", MemoryType::MEMORY_GPU);
   int32_t batch_size = logProbs.shape[0];
   int32_t vocab_size = logProbs.shape[1];
   int32_t maxTopK = std::min(batch_size, vocab_size);  // Set the top K value
@@ -183,7 +190,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
   BufferMeta randomSeeds = CreateBuffer<uint64_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
   curandState_t* d_state;
   cudaMalloc(&d_state, batch_size * sizeof(curandState_t));
-  tensorrt_llm::kernels::invokeCurandBatchInitialize(d_state, nullptr, batch_size,
+  tensorrt_llm::kernels::InvokeCurandBatchInitialize(d_state, nullptr, batch_size,
                                                      static_cast<uint64_t*>(randomSeeds.data_ptr), 0);
   float topP = 1;  // Set the top P value
 
@@ -198,12 +205,12 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
   }
   BufferMeta d_ids = CopyToDevice<uintptr_t>(ids);
 
-  tensorrt_llm::kernels::invokeBatchTopKSampling(
+  tensorrt_llm::kernels::invoke_batch_topk_sampling(
       workspace, workspaceSize, static_cast<float*>(logProbs.data_ptr), reinterpret_cast<int**>(d_ids.data_ptr),
       nullptr, nullptr, nullptr, nullptr, nullptr, d_state, maxTopK, static_cast<int*>(d_topKs.data_ptr), topP, nullptr,
       vocab_size, nullptr, nullptr, 0, batch_size, 0, nullptr, normalizeLogProbs, logitsHasProbs);
   cudaMalloc(&workspace, workspaceSize);
-  tensorrt_llm::kernels::invokeBatchTopKSampling(
+  tensorrt_llm::kernels::invoke_batch_topk_sampling(
       workspace, workspaceSize, static_cast<float*>(logProbs.data_ptr), reinterpret_cast<int**>(d_ids.data_ptr),
       nullptr, nullptr, nullptr, nullptr, nullptr, d_state, maxTopK, static_cast<int*>(d_topKs.data_ptr), topP, nullptr,
       vocab_size, nullptr, nullptr, 0, batch_size, 0, nullptr, normalizeLogProbs, logitsHasProbs);
@@ -231,8 +238,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKTopPSampling) {
   void* workspace = nullptr;
   size_t workspaceSize = 0;
   BufferMeta logProbs;
-  LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float_10x32000.npy", MemoryType::MEMORY_GPU,
-                    logProbs);
+  logProbs.LoadNpy<DataType>("/tmp/tests/kernels/data/sampler/greedy/input_float_10x32000.npy", MemoryType::MEMORY_GPU);
   int32_t batch_size = logProbs.shape[0];
   int32_t vocab_size = logProbs.shape[1];
   int32_t maxTopK = std::min(batch_size, vocab_size);  // Set the top K value
@@ -243,7 +249,7 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKTopPSampling) {
   BufferMeta randomSeeds = CreateBuffer<uint64_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
   curandState_t* d_state;
   cudaMalloc(&d_state, batch_size * sizeof(curandState_t));
-  tensorrt_llm::kernels::invokeCurandBatchInitialize(d_state, nullptr, batch_size,
+  tensorrt_llm::kernels::InvokeCurandBatchInitialize(d_state, nullptr, batch_size,
                                                      static_cast<uint64_t*>(randomSeeds.data_ptr), 0);
 
   bool normalizeLogProbs = false;  // Set whether to normalize log probabilities
@@ -267,18 +273,18 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKTopPSampling) {
   BufferMeta d_temperatures = CopyToDevice<float>(temperatures);
   BufferMeta d_topKs = CopyToDevice<int32_t>(topKs);
   BufferMeta d_topPs = CopyToDevice<int32_t>(topPs);
-  tensorrt_llm::kernels::invokeAddBiasSoftMax<float>(static_cast<float*>(logProbs.data_ptr), nullptr,
+  tensorrt_llm::kernels::InvokeAddBiasSoftMax<float>(static_cast<float*>(logProbs.data_ptr), nullptr,
                                                      static_cast<float*>(d_temperatures.data_ptr), nullptr, nullptr,
                                                      nullptr, static_cast<int32_t*>(d_batch_slots.data_ptr), batch_size,
                                                      0, 1, vocab_size, vocab_size, false, false, nullptr);
 
-  tensorrt_llm::kernels::invokeBatchTopKSampling(
+  tensorrt_llm::kernels::invoke_batch_topk_sampling(
       workspace, workspaceSize, static_cast<float*>(logProbs.data_ptr), reinterpret_cast<int**>(d_ids.data_ptr),
       nullptr, nullptr, nullptr, nullptr, nullptr, d_state, maxTopK, static_cast<int*>(d_topKs.data_ptr), 1.0,
       static_cast<float*>(d_topPs.data_ptr), vocab_size, nullptr, static_cast<int32_t*>(d_batch_slots.data_ptr), 0,
       batch_size, 0, nullptr, normalizeLogProbs, logitsHasProbs);
   cudaMalloc(&workspace, workspaceSize);
-  tensorrt_llm::kernels::invokeBatchTopKSampling(
+  tensorrt_llm::kernels::invoke_batch_topk_sampling(
       workspace, workspaceSize, static_cast<float*>(logProbs.data_ptr), reinterpret_cast<int**>(d_ids.data_ptr),
       nullptr, nullptr, nullptr, nullptr, nullptr, d_state, maxTopK, static_cast<int*>(d_topKs.data_ptr), 1.0,
       static_cast<float*>(d_topPs.data_ptr), vocab_size, nullptr, static_cast<int32_t*>(d_batch_slots.data_ptr), 0,

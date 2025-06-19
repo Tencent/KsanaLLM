@@ -15,6 +15,8 @@ namespace nvidia {
 
 enum WeightType { INT4, INT8 };
 
+void packInt4x2ToInt8(cudaStream_t stream, const int8_t* unpacked, int8_t* packed, const size_t len);
+
 template <typename T, WeightType WT>
 class FpAIntBGroupCutlassGemmWrapper {
  public:

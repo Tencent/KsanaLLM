@@ -53,6 +53,7 @@ struct SamplingConfig {
   // The parameter for no_repeat_ngram_size.
   int no_repeat_ngram_size = 0;
   int encoder_no_repeat_ngram_size = 0;
+  int decoder_no_repeat_ngram_size = 0;
 
   // In generation phasse, when stop strings are meet, the request will be stopped and truncated
   std::vector<std::string> stop_strings;
@@ -186,9 +187,6 @@ class Request {
   // The output tokens of this request.
   std::vector<int>& output_tokens;
 
-  // The padded token num.
-  int padded_size = 0;
-
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::pair<int, float>>>& logprobs;
 
@@ -246,6 +244,12 @@ class Request {
   // The FiniteStateMachine when using structured output optimization.
   std::shared_ptr<FiniteStateMachine> req_fsm;
 
+  // This is a unique ID for the KV transformer group.
+  int64_t kv_comm_request_id;
+
+  // This key for kv transformer group.
+  std::string kv_comm_group_key;
+
  private:
   // The id generator
   inline static IdGenerator id_generator_;
@@ -271,6 +275,9 @@ struct KsanaPythonOutput {
 
   // The result of request_target.
   std::map<std::string, PythonTensor> response;
+
+  // The finish status of this request.
+  Status finish_status;
 };
 
 }  // namespace ksana_llm

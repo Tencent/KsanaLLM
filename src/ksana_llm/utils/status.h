@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 
 namespace ksana_llm {
@@ -90,5 +91,7 @@ class Status {
     span->End();                                                                                               \
     return _status;                                                                                            \
   } while (0)
+
+#define DEFAULT_SCHEDULE_ID 0
 
 }  // namespace ksana_llm

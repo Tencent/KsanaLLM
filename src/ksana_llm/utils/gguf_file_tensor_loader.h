@@ -167,7 +167,7 @@ struct GGUFContext {
 
 class GGUFFileTensorLoader : public BaseFileTensorLoader {
  public:
-  explicit GGUFFileTensorLoader(const std::string& file_name);
+  explicit GGUFFileTensorLoader(const std::string& file_name, const bool load_bias);
 
   ~GGUFFileTensorLoader();
 

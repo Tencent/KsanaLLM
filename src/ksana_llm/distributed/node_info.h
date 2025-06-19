@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <stdint.h>
+
 #include <string>
 
 namespace ksana_llm {

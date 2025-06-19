@@ -79,10 +79,10 @@ class FiniteStateNode {
   // Retrieve the prompt for the edge (this function is only called in non-generation states).
   std::pair<std::string, size_t> GetEdge();
 
-  // The state id of this node.
+  // state_id_ represents the node's number in the entire FSM.
   size_t state_id_;
 
-  // The dtype of this node.
+  // state_type_ indicates the Finite State Type of this node.
   FiniteStateType state_type_;
 
   // current state + token = next state (the constant string in edge, next state id)
@@ -108,10 +108,13 @@ class FiniteStateMachine {
   // Check whether request need pop the last token when doing jump-forward
   void CheckFSMPopToken(const size_t& state_id, std::vector<int>& input_tokens);
 
+  // Check if the string can be correctly parsed as UTF-8.
+  bool IsUTF8Supported(const std::string& str);
+
   // Get the state_type of state_id.
   FiniteStateType GetStateType(const size_t& state_id);
 
-  // Get the state in  state_map_.
+  // Get the state in state_map_.
   std::shared_ptr<FiniteStateNode> GetState(size_t state_id) { return state_map_[state_id]; }
 
   // Return the token list of string.

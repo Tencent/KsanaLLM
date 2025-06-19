@@ -25,3 +25,8 @@ target_link_libraries(profiler
   PUBLIC 
      ${OPENTELEMETRY_CPP_LIBRARIES}
 )
+
+# for test
+file(GLOB_RECURSE profiler_test_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/profiler/*test.cpp)
+cpp_test(profiler_test SRCS ${profiler_test_SRCS} DEPS profiler )

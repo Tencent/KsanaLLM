@@ -1,31 +1,32 @@
 /*
- * Modified by Neural Magic
- * Copyright (C) Marlin.2024 Elias Frantar
+ * Copyright 2025 vLLM Team
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Adapted from
+ * [vLLM Project]
+ * https://github.com/vllm-project/vllm/tree/65334ef3b9e4fd32ebc5c4e512debc25d5025488/csrc/quantization/gptq_marlin
  */
 
-/*
- * Adapted from https://github.com/vllm-project/vllm
- */
-
-#include "csrc/kernels/nvidia/gptq_marlin/gptq_marlin_repack.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin.cuh"
-#include "csrc/kernels/nvidia/gptq_marlin/marlin_params.h"
+#include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
+#include "csrc/utils/nvidia/cuda_utils.h"
+#include "csrc/utils/nvidia/string_utils.h"
+
+using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace nvidia {
-
 namespace marlin {
 
 template <int const num_threads, int const num_bits, bool const has_perm>
@@ -38,7 +39,7 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
   int n_tiles = size_n / tile_n_size;
   int block_k_tiles = div_ceil(k_tiles, gridDim.x);
 
-  int start_k_tile = blockIdx.x * block_k_tiles;
+  auto start_k_tile = blockIdx.x * block_k_tiles;
   if (start_k_tile >= k_tiles) {
     return;
   }
@@ -94,8 +95,8 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
 
     if constexpr (has_perm) {
       if (threadIdx.x < stage_size) {
-        int k_id = threadIdx.x / stage_n_threads;
-        int n_id = threadIdx.x % stage_n_threads;
+        auto k_id = threadIdx.x / stage_n_threads;
+        auto n_id = threadIdx.x % stage_n_threads;
 
         uint32_t const* sh_perm_int_ptr = reinterpret_cast<uint32_t const*>(sh_perm_ptr);
 
@@ -108,8 +109,8 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
 
     } else {
       if (threadIdx.x < stage_size) {
-        int k_id = threadIdx.x / stage_n_threads;
-        int n_id = threadIdx.x % stage_n_threads;
+        auto k_id = threadIdx.x / stage_n_threads;
+        auto n_id = threadIdx.x % stage_n_threads;
 
         int first_k = k_tile_id * tile_k_size;
         int first_k_packed = first_k / pack_factor;
@@ -128,8 +129,8 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
       return;
     }
 
-    int warp_id = threadIdx.x / 32;
-    int th_id = threadIdx.x % 32;
+    auto warp_id = threadIdx.x / 32;
+    auto th_id = threadIdx.x % 32;
 
     if (warp_id >= 4) {
       return;
@@ -252,8 +253,6 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
   }
 }
 
-}  // namespace marlin
-
 #define CALL_IF(NUM_BITS, HAS_PERM)                                                                             \
   else if (num_bits == NUM_BITS && has_perm == HAS_PERM) {                                                      \
     cudaFuncSetAttribute(marlin::gptq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS, HAS_PERM>,         \
@@ -268,6 +267,7 @@ void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr
   int blocks = 0, max_shared_mem = 0;
   cudaDeviceGetAttribute(&blocks, cudaDevAttrMultiProcessorCount, rank);
   cudaDeviceGetAttribute(&max_shared_mem, cudaDevAttrMaxSharedMemoryPerBlockOptin, rank);
+  KLLM_KERNEL_CHECK(max_shared_mem > 0);
 
   if (false) {
   }
@@ -276,8 +276,16 @@ void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr
   CALL_IF(8, false)
   CALL_IF(8, true)
   else {
+    KLLM_KERNEL_CHECK_WITH_INFO(false,
+                                fmtstr("Unsupported repack config: num_bits = {}, has_perm = {}", num_bits, has_perm));
   }
 }
 
+std::vector<int64_t> gptq_marlin_repack_meta(int64_t size_k, int64_t size_n, int64_t num_bits) {
+  int const pack_factor = 32 / num_bits;
+  return {size_k / marlin::tile_size, size_n * marlin::tile_size / pack_factor};
+}
+
+}  // namespace marlin
 }  // namespace nvidia
 }  // namespace llm_kernels

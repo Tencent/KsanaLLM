@@ -10,3 +10,9 @@ message(STATUS "batch_manager_SRCS: ${batch_manager_SRCS}")
 
 add_library(batch_manager STATIC ${batch_manager_SRCS})
 
+# batch_manager_test
+file(GLOB_RECURSE batch_manager_test_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_manager/batch_manager_test.cpp)
+
+message(STATUS "batch_manager_test_SRCS: ${batch_manager_test_SRCS}")
+cpp_test(batch_manager_test SRCS ${batch_manager_test_SRCS} DEPS runtime data_hub)

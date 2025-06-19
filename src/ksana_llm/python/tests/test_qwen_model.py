@@ -1,7 +1,9 @@
-# tests/test_qwen_model.py
+# Copyright 2024 Tencent Inc.  All rights reserved.
+#
+# ==============================================================================
 
 import pytest
-from test_models import run_test
+from test_ksana_engine import run_test
 
 # Test Parameters
 test_models = [

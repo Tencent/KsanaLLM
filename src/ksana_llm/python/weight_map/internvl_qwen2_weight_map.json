@@ -1,0 +1,19 @@
+{
+    "vision_model.*": "deprecated",
+    "mlp1.*": "deprecated",
+    "language_model.lm_head.weight": "lm_head.weight",
+    "language_model.model.embed_tokens.weight": "model.embed_tokens.weight",
+    "language_model.model.norm.weight": "model.norm.weight",
+    "language_model.model.layers.(\\d+).input_layernorm.weight": "model.layers.$1.input_layernorm.weight",
+    "language_model.model.layers.(\\d+).mlp.down_proj.weight": "model.layers.$1.mlp.down_proj.weight",
+    "language_model.model.layers.(\\d+).mlp.gate_proj.weight": "model.layers.$1.mlp.gate_proj.weight",
+    "language_model.model.layers.(\\d+).mlp.up_proj.weight": "model.layers.$1.mlp.up_proj.weight",
+    "language_model.model.layers.(\\d+).post_attention_layernorm.weight": "model.layers.$1.post_attention_layernorm.weight",
+    "language_model.model.layers.(\\d+).self_attn.k_proj.bias": "model.layers.$1.self_attn.k_proj.bias",
+    "language_model.model.layers.(\\d+).self_attn.k_proj.weight": "model.layers.$1.self_attn.k_proj.weight",
+    "language_model.model.layers.(\\d+).self_attn.o_proj.weight": "model.layers.$1.self_attn.o_proj.weight",
+    "language_model.model.layers.(\\d+).self_attn.q_proj.bias": "model.layers.$1.self_attn.q_proj.bias",
+    "language_model.model.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_proj.weight",
+    "language_model.model.layers.(\\d+).self_attn.v_proj.bias": "model.layers.$1.self_attn.v_proj.bias",
+    "language_model.model.layers.(\\d+).self_attn.v_proj.weight": "model.layers.$1.self_attn.v_proj.weight"
+}

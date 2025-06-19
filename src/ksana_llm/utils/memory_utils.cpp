@@ -4,21 +4,18 @@
 
 #include "ksana_llm/utils/memory_utils.h"
 
+#include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 
+#include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
-
-static BlockManagerInterface* g_block_manager = nullptr;
-
-void SetBlockManager(BlockManagerInterface* block_manager) { g_block_manager = block_manager; }
-
-BlockManagerInterface* GetBlockManager() { return g_block_manager; }
 
 AlignedMemoryQueue::AlignedMemoryQueue(size_t alignment, Allocator allocator)
     : alignment_(alignment), allocator_(allocator) {
@@ -144,25 +141,35 @@ Status GetHostMemoryInfo(size_t* free, size_t* total) {
     return Status();
   }
 
-  return Status(RET_RUNTIME, "Get host memory info failed.");
+  return Status(RET_HOST_MEM_ALLOCATE_FAILED, "Get host memory info failed.");
 }
 
 void GetWorkSpaceImpl(size_t size, void** ws_addr) {
+  static std::vector<WorkspaceMeta> g_workspace_metas;
+  if (g_workspace_metas.empty()) {
+    int device_count;
+    GetDeviceCount(&device_count);
+    g_workspace_metas.resize(device_count);
+  }
+
   if (size > 0) {
-    WorkspaceMeta& workspace_meta = GetBlockManager()->GetWorkspaceMeta();
-    int block_id = workspace_meta.block_id;
-    size_t block_size = workspace_meta.block_size;
-    if (block_size < size) {
-      if (block_id >= 0) {
-        GetBlockManager()->FreeContiguous(block_id);
+    int device_id;
+    GetDevice(&device_id);
+    WorkspaceMeta& workspace_meta = g_workspace_metas[device_id];
+
+    size_t space_size = workspace_meta.space_size;
+    if (space_size < size) {
+      if (workspace_meta.space_ptr != nullptr) {
+        Free(workspace_meta.space_ptr);
       }
-      GetBlockManager()->AllocateContiguous(size, block_id);
-      block_size = size;
+
+      void* ws_memory_buffer;
+      Malloc(&ws_memory_buffer, size);
+      workspace_meta.space_ptr = ws_memory_buffer;
       // update workspace metaATBOperationExecutor using work
-      workspace_meta.block_id = block_id;
-      workspace_meta.block_size = block_size;
+      workspace_meta.space_size = size;
     }
-    GetBlockManager()->GetContiguousPtr(block_id, *ws_addr);
+    *ws_addr = workspace_meta.space_ptr;
   }
 }
 

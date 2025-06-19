@@ -22,9 +22,10 @@ Status SamplingConfig::VerifyArgs() {
   if (topk < 1 || topk > 1024) {
     return Status(RET_INVALID_ARGUMENT, fmt::format("topk should be between 1 and 1024, but {} was provided", topk));
   }
-  if (no_repeat_ngram_size > 0 && encoder_no_repeat_ngram_size > 0) {
+  if ((encoder_no_repeat_ngram_size > 0) + (decoder_no_repeat_ngram_size > 0) + (no_repeat_ngram_size > 0) > 1) {
     return Status(RET_INVALID_ARGUMENT,
-                  "no_repeat_ngram_size and encoder_no_repeat_ngram_size can not be used at the same time");
+                  "no_repeat_ngram_size/encoder_no_repeat_ngram_size/decoder_no_repeat_ngram_size"
+                  " can not be used at the same time");
   }
   return Status();
 }
@@ -42,7 +43,6 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                             1)),
       beam_search_group(),
       output_tokens(std::get<0>(output_group[0])),
-      padded_size(0),
       logprobs(std::get<1>(output_group[0])),
       sampling_config(ksana_python_input->sampling_config),
       waiter(nullptr),
@@ -72,12 +72,24 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
         Singleton<FiniteStateMachineController>::GetInstance();
     req_fsm = fsm_controller->CreateOrGetFSM(output_structure);
   }
+
+  kv_comm_request_id = 0;
+  kv_comm_group_key = "";
+  if (req_ctx) {
+    if (req_ctx->count("kv-comm-request-id")) {
+      kv_comm_request_id = std::stoll((*req_ctx)["kv-comm-request-id"]);
+    }
+    if (req_ctx->count("kv-comm-group-key")) {
+      kv_comm_group_key = (*req_ctx)["kv-comm-group-key"];
+    }
+  }
 }
 
 KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
+  finish_status = req->finish_status;
   input_tokens = req->input_tokens;
   for (const auto& [output, req_logprobs, total_score] : req->output_group) {
-    std::vector<int> req_output = {output.begin() + input_tokens.size() + req->padded_size, output.end()};
+    std::vector<int> req_output = {output.begin() + input_tokens.size(), output.end()};
     output_tokens.emplace_back(req_output);
     if (req->sampling_config.logprobs_num > 0) {
       logprobs.emplace_back(req_logprobs);
@@ -158,10 +170,6 @@ Status KsanaPythonInput::VerifyRequestTarget() {
 
     // TODO(zakwang): Enhance support for additional request parameters
     if (target_name == "logits") {
-      // Verify that the GATHER_ALL token reduce mode is not used, as it's unsupported for logits output
-      if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
-        KLLM_THROW(fmt::format("The output for {} does not support the 'GATHER_ALL' reduction mode.", target_name));
-      }
       // Verify that no token IDs are specified, as they are not supported for logits output.
       if (!target_desc.token_id.empty()) {
         KLLM_THROW(fmt::format("Specifying token_id for {} output is not supported.", target_name));

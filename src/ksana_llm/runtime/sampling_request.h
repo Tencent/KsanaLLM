@@ -27,8 +27,13 @@ struct SamplingRequest {
   size_t logits_offset;
 
   std::vector<int>* input_tokens = nullptr;
-  // The output token will be appended here.
-  std::vector<int>* output_tokens = nullptr;
+
+  std::vector<int>* forwarding_tokens = nullptr;
+
+  // Generated tokens in this sampling.
+  std::vector<int>* sampling_result_tokens = nullptr;
+
+  size_t sampling_token_num = 1;
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
@@ -36,9 +41,6 @@ struct SamplingRequest {
 
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;
-
-  // The mutex used to protect output_tokens.
-  std::mutex* output_mutex;
 
   // Store token and their corresponding float probability values.
   std::vector<std::vector<std::pair<int, float>>>* logprobs = nullptr;

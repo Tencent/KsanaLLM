@@ -1,0 +1,6 @@
+{
+    "model.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_b_proj.weight",
+    "model.layers.(\\d+).mlp.shared_experts.gate_proj.weight" : "model.layers.$1.mlp.shared_expert.gate_proj.weight",
+    "model.layers.(\\d+).mlp.shared_experts.up_proj.weight" : "model.layers.$1.mlp.shared_expert.up_proj.weight",
+    "model.layers.(\\d+).mlp.shared_experts.down_proj.weight" : "model.layers.$1.mlp.shared_expert.down_proj.weight"
+}

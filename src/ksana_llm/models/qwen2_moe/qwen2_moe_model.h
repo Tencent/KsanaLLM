@@ -3,59 +3,85 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/layers/activation_layer.h"
-#include "ksana_llm/layers/mul_layer.h"
-#include "ksana_llm/models/common_moe/common_moe_model.h"
-#include "ksana_llm/models/common_moe/common_moe_weight.h"
+#include "ksana_llm/models/common/model_interface.h"
+
+#include "ksana_llm/models/communicator/tp_communicator.h"
+#include "ksana_llm/modules/attention/multihead_attention.h"
+#include "ksana_llm/modules/basic/moe.h"
+#include "ksana_llm/modules/basic/mul.h"
+#include "ksana_llm/modules/basic/sigmoid.h"
+#include "ksana_llm/modules/ffn/two_layered_ffn.h"
 
 namespace ksana_llm {
 
 template <typename T>
-class __attribute__((visibility("hidden"))) Qwen2MoeModel : public CommonMoeModel<T> {
+class Qwen2MoeDecoderLayer {
+ public:
+  Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, TensorBuffer* share_gating_buffer,
+                       LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+  ~Qwen2MoeDecoderLayer() = default;
+
+  Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
+                 ForwardingContext<T>& forwarding_context);
+
+ private:
+  Status ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                    const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+
+ private:
+  int layer_idx_;
+  std::shared_ptr<Add<T>> adds_;
+  std::shared_ptr<Layernorm<T>> input_layernorms_;
+  std::shared_ptr<Layernorm<T>> post_attention_layernorms_;
+  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+
+  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MoE<T>> moes_;
+  std::shared_ptr<Linear<T>> expert_gates_;
+  std::shared_ptr<TwoLayeredFFN<T>> shared_mlps_;
+  std::shared_ptr<Linear<T>> shared_expert_gates_;
+
+  std::shared_ptr<Sigmoid<T>> sigmoids_;
+  std::shared_ptr<Mul<T>> muls_;
+
+  TensorBuffer* moe_buffer_;
+  TensorBuffer* share_gating_buffer_;
+};
+
+template <typename T>
+class Qwen2Moe : public ModelInterface<T> {
+ public:
+  Qwen2Moe() {}
+  ~Qwen2Moe() = default;
+
+  Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
+  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+
+ private:
+  TensorBuffer* moe_buffer_;
+  TensorBuffer* share_gating_buffer_;
+
+  std::map<int, std::shared_ptr<Qwen2MoeDecoderLayer<T>>> decoder_layers_;
+};
+
+template <typename T>
+class Qwen2MoeModel : public CommonModel<T> {
  public:
   Qwen2MoeModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
                 std::shared_ptr<BaseWeight> base_weight);
-
-  // Initialize the run config.
-  void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
-
- protected:
-  Status CommonMlp(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                   const std::vector<Tensor>& mlp_input, const bool is_multi_token_forward) override;
-
- protected:
-  using CommonModel<T>::context_;
-  using CommonModel<T>::rank_;
-
-  using CommonModel<T>::model_config_;
-  using CommonModel<T>::model_output_;
-  using CommonModel<T>::model_communicator_;
-
-  using CommonModel<T>::matmul_layer_factory_;
-  using CommonModel<T>::add_layer_;
-  using CommonModel<T>::silu_mul_layer_;
-
-  using CommonModel<T>::hidden_buffer_0_;
-  using CommonModel<T>::hidden_buffer_1_;
-  using CommonModel<T>::reduce_buffer_;
-  using CommonModel<T>::gated_buffer_;
-
-  using CommonMoeModel<T>::moe_layer_;
-  using CommonMoeModel<T>::expert_gating_layer_;
+  ~Qwen2MoeModel() = default;
 
  private:
-  size_t moe_buffer_size_;
+  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
-  std::vector<Tensor> moe_buffer_{1};
-  std::vector<Tensor> share_gating_buffer_{1};
+ protected:
+  using CommonModel<T>::GetHiddenUnitBuffer;
+  using CommonModel<T>::SetHiddenUnitBuffer;
 
-  std::shared_ptr<BaseLayer> share_expert_gating_layer_;
-  std::shared_ptr<BaseLayer> share_expert_gate_proj_layer_;
-  std::shared_ptr<BaseLayer> share_expert_up_proj_layer_;
-  std::shared_ptr<BaseLayer> share_expert_down_proj_layer_;
-
-  std::shared_ptr<SigmoidLayer<T>> sigmoid_layer_;
-  std::shared_ptr<BaseLayer> mul_layer_;
+ private:
+  Qwen2Moe<T> qwen2moe_;
 };
 
 }  // namespace ksana_llm

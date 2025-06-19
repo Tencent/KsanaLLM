@@ -15,7 +15,7 @@ setting:
     enable_cuda_graph: false
   # 调度相关配置
   batch_scheduler:
-    # 调度策略，0表示continuous_batching，1表示auto_batching，默认为0
+    # 调度策略，0表示continuous_batching，默认为0
     schedule_strategy: 0
     # 请求在队列中的超时时间，单位为毫秒
     waiting_timeout_in_ms: 3600000
@@ -88,9 +88,13 @@ setting:
         container_name: "container_name_001"
         version: "1.1"
   # 服务端类型，支持python（默认）或自定义的rpc框架（如trpc/grpc）
-  # 自定义的rpc框架需要在src/endpoints_impl目录下实现服务代码，编译
+  # 自定义的rpc框架需要在src/ksana_llm/endpoints/wrapper 目录下实现服务代码，编译
   # 为共享库f"lib{endpoint_type}_endpoint.so"，由ksana_llm查找和启动
   endpoint_type: python
+  # tokenizer配置
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
 # 模型配置
 model_spec:
   # 基础模型配置，只能有一个

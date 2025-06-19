@@ -15,13 +15,13 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "ksana_llm/block_manager/block_manager_interface.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager_test_helper.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/distributed/control_channel.h"
 
 #include "ksana_llm/distributed/data_channel.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/socket_util.h"
@@ -33,6 +33,8 @@ using namespace ksana_llm;
 class DataChannelTest : public testing::Test {
  protected:
   void SetUp() override {
+    InitLoguru();
+
     master_env_ = std::make_shared<Environment>();
     worker_env_ = std::make_shared<Environment>();
 
@@ -50,10 +52,6 @@ class DataChannelTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
-
-    int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
-    BlockManager* block_manager = new BlockManager(block_manager_config, std::make_shared<Context>(tp_para, 1));
-    SetBlockManager(block_manager);
 
     // Must initialized before create data channel instance.
     master_hidden_unit_buffer_pool_ = new HiddenUnitBufferPool();
@@ -146,22 +144,26 @@ TEST_F(DataChannelTest, TestDataChannel) {
 
   // Get a device buffer
   HiddenUnitDeviceBuffer* master_dev_hidden_unit = master_hidden_unit_buffer_pool_->GetDeviceBuffer();
-  master_dev_hidden_unit->schedule_id = 5;
+  size_t master_schedule_id = 5;
+  master_dev_hidden_unit->schedule_id = master_schedule_id;
 
   // Send from master to worker.
   master_hidden_unit_buffer_pool_->PutToSendQueue(master_dev_hidden_unit);
 
   // Should be sent to worker, get it and check id.
-  HiddenUnitDeviceBuffer* worker_dev_hidden_unit = worker_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue();
-  EXPECT_EQ(worker_dev_hidden_unit->schedule_id, 5);
+  HiddenUnitDeviceBuffer* worker_dev_hidden_unit =
+      worker_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue(master_schedule_id);
+  EXPECT_EQ(worker_dev_hidden_unit->schedule_id, master_schedule_id);
 
   // Change the id and send back from worker to master.
-  worker_dev_hidden_unit->schedule_id = 7;
+  size_t worker_schedule_id = 7;
+  worker_dev_hidden_unit->schedule_id = worker_schedule_id;
   worker_hidden_unit_buffer_pool_->PutToSendQueue(worker_dev_hidden_unit);
 
   // Should be sent to master, get it and check new id.
-  HiddenUnitDeviceBuffer* master_dev_hidden_unit_2 = master_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue();
-  EXPECT_EQ(master_dev_hidden_unit_2->schedule_id, 7);
+  HiddenUnitDeviceBuffer* master_dev_hidden_unit_2 =
+      master_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue(worker_schedule_id);
+  EXPECT_EQ(master_dev_hidden_unit_2->schedule_id, worker_schedule_id);
 
   master_data_channel_->Disconnect();
   worker_data_channel_->Disconnect();

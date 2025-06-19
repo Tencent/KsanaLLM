@@ -2,8 +2,9 @@
 
 ==============================================================================*/
 #include "ksana_llm/distributed/control_channel.h"
-#include <torch/csrc/utils/variadic.h>
 
+#include <torch/csrc/utils/variadic.h>
+#include <cassert>
 #include <chrono>
 #include <complex>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/distributed/control_message.h"
 #include "ksana_llm/distributed/node_info.h"
@@ -36,27 +38,32 @@ ControlChannel::ControlChannel(const std::string& master_host, uint16_t master_p
   world_size_ = world_size;
   node_rank_ = node_rank;
 
-  raw_socket_ = std::make_shared<RawSocket>(packet_creation_fn);
+  if (world_size_ > 1) {
+    raw_socket_ = std::make_shared<RawSocket>(packet_creation_fn);
 
-  env_ = env ? env : Singleton<Environment>::GetInstance();
-  schedule_output_pool_ = schedule_output_pool ? schedule_output_pool : GetScheduleOutputPool();
+    env_ = env ? env : Singleton<Environment>::GetInstance();
+    schedule_output_pool_ = schedule_output_pool ? schedule_output_pool : GetScheduleOutputPool();
 
-  // Start assisant threads.
-  heartbeat_thread_ = std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessHeartbeatLoop, this));
-  send_packet_thread_ =
-      std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessSendScheduleOutputLoop, this));
+    // Start assisant threads.
+
+    heartbeat_thread_ = std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessHeartbeatLoop, this));
+    send_packet_thread_ =
+        std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessSendScheduleOutputLoop, this));
+  }
 }
 
 ControlChannel::~ControlChannel() {
-  terminated_ = true;
-  schedule_output_pool_->Stop();
+  if (world_size_ > 1) {
+    terminated_ = true;
+    schedule_output_pool_->Stop();
 
-  if (heartbeat_thread_) {
-    heartbeat_thread_->join();
-  }
+    if (heartbeat_thread_) {
+      heartbeat_thread_->join();
+    }
 
-  if (send_packet_thread_) {
-    send_packet_thread_->join();
+    if (send_packet_thread_) {
+      send_packet_thread_->join();
+    }
   }
 }
 
@@ -158,6 +165,8 @@ Status ControlChannel::Connect() {
   Status status = raw_socket_->Connect(master_host_, master_port_, connect_fn);
   if (!status.OK()) {
     KLLM_LOG_ERROR << "Connect control channel error:" << status.GetMessage();
+  } else {
+    KLLM_LOG_INFO << "ControlChannel connect to " << master_host_ << ":" << master_port_ << " succeed. \n";
   }
 
   return status;
@@ -168,7 +177,7 @@ Status ControlChannel::Disconnect() { return raw_socket_->Disconnect(); }
 Status ControlChannel::ProcessAddNodeRequest(NodeInfo* node_info, Packet* req_packet) {
   auto it = node_ranks_.find(*node_info);
   if (it != node_ranks_.end()) {
-    return Status(RET_RUNTIME, fmt::format("Duplicated node {}:{}", node_info->host, node_info->port));
+    return Status(RET_RUNTIME_FAILED, fmt::format("Duplicated node {}:{}", node_info->host, node_info->port));
   }
 
   AddNodeRequest* add_node_req = reinterpret_cast<AddNodeRequest*>(req_packet->body);
@@ -290,8 +299,11 @@ Status ControlChannel::ProcessLayerRequest(NodeInfo* node_info, Packet* req_pack
   // update pipeline config.
   pipeline_config.lower_layer_idx = layer_req->lower_layer_idx;
   pipeline_config.upper_layer_idx = layer_req->upper_layer_idx;
+  pipeline_config.lower_nextn_layer_idx = layer_req->lower_nextn_layer_idx;
+  pipeline_config.upper_nextn_layer_idx = layer_req->upper_nextn_layer_idx;
   pipeline_config.downstream_host = layer_req->downstream_host;
   pipeline_config.downstream_port = layer_req->downstream_port;
+  memcpy(pipeline_config.nccl_unique_id, layer_req->nccl_unique_id, sizeof(layer_req->nccl_unique_id));
   env_->SetPipelineConfig(pipeline_config);
 
   {
@@ -332,6 +344,7 @@ Status ControlChannel::ProcessBlockNumRequest(NodeInfo* node_info, Packet* req_p
   rank_cach_block_num_[node_rank] = std::make_pair(device_block_num, host_block_num);
 
   if (rank_cach_block_num_.size() == world_size_) {
+    std::unique_lock<std::mutex> lock(mutex_);
     block_num_cv_.notify_all();
   }
 
@@ -363,7 +376,7 @@ Status ControlChannel::ProcessBlockNumResponse(NodeInfo* node_info, Packet* rsp_
 Status ControlChannel::ProcessScheduleRequest(NodeInfo* node_info, Packet* req_packet) {
   ScheduleOutput* schedule_output = schedule_output_pool_->GetScheduleOutput();
   if (schedule_output == nullptr) {
-    return Status(RET_TERMINATED);
+    return Status(RET_SERVICE_TERMINATED);
   }
 
   ScheduleOutputParser::DeserializeScheduleOutput(reinterpret_cast<void*>(req_packet->body), schedule_output);
@@ -403,7 +416,7 @@ Status ControlChannel::ProcessShutdownResponse(NodeInfo* node_info, Packet* rsp_
 
   auto it = node_ranks_.find(*node_info);
   if (it == node_ranks_.end()) {
-    return Status(RET_RUNTIME, "Unknown node received.");
+    return Status(RET_RUNTIME_FAILED, "Unknown node received.");
   }
 
   int node_rank = it->second;
@@ -507,85 +520,138 @@ Status ControlChannel::AddNode() {
   return status;
 }
 
-Status ControlChannel::SynchronizeNodeLayers() {
-  ModelConfig model_config;
-  env_->GetModelConfig("", model_config);
-  int num_layer = model_config.num_layer;
+std::map<int, std::pair<int, int>> ControlChannel::GenerateLayerDistribution(int num_layer,
+                                                                             size_t master_offload_layer_num) {
+  std::map<int, std::pair<int, int>> layer_distribution;
+
+  // Fast path for single node case
+  if (world_size_ <= 1) {
+    layer_distribution[0] = std::make_pair(0, num_layer - 1);
+    return layer_distribution;
+  }
 
   int quotient = num_layer / world_size_;
   int remainder = num_layer % world_size_;
 
-  // For master node.
-  if (node_rank_ == 0) {
-    PipelineConfig pipeline_config;
-    env_->GetPipelineConfig(pipeline_config);
+  // Calculate how many layers the master node has
+  int master_layers = quotient;  // reminders are assigned to workers
 
-    // update master pipeline config.
-    pipeline_config.lower_layer_idx = 0;
-    pipeline_config.upper_layer_idx = quotient - 1;
-    pipeline_config.downstream_host = rank_data_nodes_[1].host;
-    pipeline_config.downstream_port = rank_data_nodes_[1].port;
-    env_->SetPipelineConfig(pipeline_config);
+  // If offloading layers, assert that we're not trying to offload more layers than the master has (minus 1)
+  if (master_offload_layer_num > 0) {
+    assert(master_offload_layer_num < static_cast<size_t>(master_layers) &&
+           "Cannot offload more layers than the master node has (minus 1)");
+  }
 
-    KLLM_LOG_INFO << "ControlChannel set node " << node_rank_ << ", data downstream endpoint "
-                  << pipeline_config.downstream_host << ":" << pipeline_config.downstream_port << ", layer range ["
-                  << pipeline_config.lower_layer_idx << ", " << pipeline_config.upper_layer_idx << "].";
+  // Set master node's range (with or without offloading)
+  master_layers = master_layers - static_cast<int>(master_offload_layer_num);
+  layer_distribution[0] = std::make_pair(0, master_layers - 1);
 
-    // Send to every node.
-    int padding = 0;
-    for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
-      if (padding < remainder) {
-        ++padding;
-      }
+  // Distribute layers to worker nodes
+  int current_upper_layer = master_layers - 1;
 
-      int lower_layer_idx = node_rank * quotient + padding;
-      int upper_layer_idx = (node_rank + 1) * quotient - 1 + padding;
+  // Recompute layer distribution for remaining nodes
+  size_t remaining_worker_nodes = world_size_ - 1;
+  int num_layer_left = num_layer - master_layers;
+  quotient = num_layer_left / remaining_worker_nodes;
+  remainder = num_layer_left % remaining_worker_nodes;
 
-      Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_LAYER, 0);
-      if (req_packet == nullptr) {
-        throw std::runtime_error("ControlChannel::SynchronizeNodeLayers allocate memory error.");
-      }
-
-      AllocateLayerRequest* layer_req = reinterpret_cast<AllocateLayerRequest*>(req_packet->body);
-      layer_req->lower_layer_idx = lower_layer_idx;
-      layer_req->upper_layer_idx = upper_layer_idx;
-
-      // post-data_node
-      if (node_rank == world_size_ - 1) {
-        strcpy(layer_req->downstream_host, pipeline_config.data_host.c_str());
-        layer_req->downstream_port = pipeline_config.data_port;
-      } else {
-        strcpy(layer_req->downstream_host, rank_data_nodes_[node_rank + 1].host.c_str());
-        layer_req->downstream_port = rank_data_nodes_[node_rank + 1].port;
-      }
-
-      KLLM_LOG_INFO << "ControlChannel set node " << node_rank << ", data downstream endpoint "
-                    << layer_req->downstream_host << ":" << layer_req->downstream_port << ", layer range ["
-                    << lower_layer_idx << ", " << upper_layer_idx << "].";
-      Status status = raw_socket_->Send(rank_nodes_[node_rank], req_packet);
-      free(req_packet);
-
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "ControlChannel sync node layers error, send packet failed, info:" << status.GetMessage();
-      }
+  for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+    int remainder_pad = 0;
+    if (remainder > 0) {
+      remainder_pad++;
+      remainder--;
     }
-  } else {
-    // for worker node,  wait master response
+
+    const int lower_layer_idx = current_upper_layer + 1;
+    const int upper_layer_idx = lower_layer_idx + quotient - 1 + remainder_pad;
+    current_upper_layer = upper_layer_idx;
+
+    layer_distribution[node_rank] = std::make_pair(lower_layer_idx, upper_layer_idx);
+  }
+
+  return layer_distribution;
+}
+
+Status ControlChannel::SynchronizeNodeLayers(size_t master_offload_layer_num) {
+  if (node_rank_ != 0) {
+    // for worker node, wait master response
     std::unique_lock<std::mutex> lock(mutex_);
 
     layer_allocation_cv_.wait(lock, [this]() -> bool { return layer_allocated_; });
+    return Status();
+  }
+
+  // For master node.
+  ModelConfig model_config;
+  env_->GetModelConfig("", model_config);
+
+  // Generate layer distribution for all nodes
+  auto layer_distribution = GenerateLayerDistribution(model_config.num_layer, master_offload_layer_num);
+
+  PipelineConfig pipeline_config;
+  env_->GetPipelineConfig(pipeline_config);
+
+  // update master pipeline config.
+  pipeline_config.lower_layer_idx = layer_distribution[0].first;
+  pipeline_config.upper_layer_idx = layer_distribution[0].second;
+
+  // only master node do nextn predict
+  if (model_config.num_nextn_predict_layers != 0 && env_->IsMTPEnabled()) {
+    pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
+    pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
+  }
+  pipeline_config.downstream_host = rank_data_nodes_[1].host;
+  pipeline_config.downstream_port = rank_data_nodes_[1].port;
+  env_->SetPipelineConfig(pipeline_config);
+
+  KLLM_LOG_INFO << "ControlChannel set master node " << node_rank_ << ", data downstream endpoint "
+                << pipeline_config.downstream_host << ":" << pipeline_config.downstream_port << ", normal layer range ["
+                << pipeline_config.lower_layer_idx << ", " << pipeline_config.upper_layer_idx
+                << "], nextn layer range [" << pipeline_config.lower_nextn_layer_idx << ", "
+                << pipeline_config.upper_nextn_layer_idx << "].";
+
+  // Send to every worker node.
+  for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+    Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_LAYER, 0);
+    if (req_packet == nullptr) {
+      throw std::runtime_error("ControlChannel::SynchronizeNodeLayers allocate memory error.");
+    }
+
+    AllocateLayerRequest* layer_req = reinterpret_cast<AllocateLayerRequest*>(req_packet->body);
+    layer_req->lower_layer_idx = layer_distribution[node_rank].first;
+    layer_req->upper_layer_idx = layer_distribution[node_rank].second;
+    // only master node do nextn predict
+    layer_req->lower_nextn_layer_idx = -1;
+    layer_req->upper_nextn_layer_idx = -1;
+
+    // post-data_node
+    if (node_rank == world_size_ - 1) {
+      strcpy(layer_req->downstream_host, pipeline_config.data_host.c_str());
+      layer_req->downstream_port = pipeline_config.data_port;
+    } else {
+      strcpy(layer_req->downstream_host, rank_data_nodes_[node_rank + 1].host.c_str());
+      layer_req->downstream_port = rank_data_nodes_[node_rank + 1].port;
+    }
+
+    // Broadcast nccl unique_id for all nodes.
+    memcpy(layer_req->nccl_unique_id, pipeline_config.nccl_unique_id, sizeof(pipeline_config.nccl_unique_id));
+    KLLM_LOG_INFO << "ControlChannel set worker node " << node_rank << ", data downstream endpoint "
+                  << layer_req->downstream_host << ":" << layer_req->downstream_port << ", layer range ["
+                  << layer_distribution[node_rank].first << ", " << layer_distribution[node_rank].second << "].";
+    Status status = raw_socket_->Send(rank_nodes_[node_rank], req_packet);
+    free(req_packet);
+
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << "ControlChannel sync node layers error, send packet failed, info:" << status.GetMessage();
+    }
   }
 
   return Status();
 }
 
 Status ControlChannel::SynchronizeCacheBlockNum() {
-  size_t device_block_num;
-  size_t host_block_num;
-  Status status = GetBlockManager()->GetBlockNumber(device_block_num, host_block_num);
-  if (!status.OK()) {
-    return status;
-  }
+  size_t device_block_num = env_->GetTotalDeviceBlockNum();
+  size_t host_block_num = env_->GetTotalHostBlockNum();
 
   // For master
   if (node_rank_ == 0) {
@@ -599,6 +665,8 @@ Status ControlChannel::SynchronizeCacheBlockNum() {
     // Get minimum block num.
     size_t real_device_block_num = std::numeric_limits<size_t>::max();
     size_t real_host_block_num = std::numeric_limits<size_t>::max();
+    size_t i = 0;
+    std::stringstream ss;
     for (auto pair : rank_cach_block_num_) {
       if (real_device_block_num > pair.second.first) {
         real_device_block_num = pair.second.first;
@@ -606,7 +674,11 @@ Status ControlChannel::SynchronizeCacheBlockNum() {
       if (real_host_block_num > pair.second.second) {
         real_host_block_num = pair.second.second;
       }
+      ss << "[" << i << "] device_block_num=" << pair.second.first << ", host_block_num=" << pair.second.second;
+      i++;
     }
+    KLLM_LOG_INFO << "Reset block nums after sync. real_device_block_num=" << real_device_block_num
+                  << ", real_host_block_num=" << real_host_block_num << ", node block infos: " << ss.str();
 
     // Set master config.
     PipelineConfig pipeline_config;
@@ -648,6 +720,7 @@ Status ControlChannel::SynchronizeCacheBlockNum() {
     CacheBlockNumRequest* block_req = reinterpret_cast<CacheBlockNumRequest*>(req_packet->body);
     block_req->device_block_num = device_block_num;
     block_req->host_block_num = host_block_num;
+    block_req->node_rank = node_rank_;
 
     Status status = raw_socket_->Send({master_host_, master_port_}, req_packet);
     free(req_packet);
@@ -718,9 +791,12 @@ Status ControlChannel::HandleServerPacket(NodeInfo* node_info, Packet* packet) {
     case PacketType::CONTROL_RSP_SHUTDOWN: {
       return ProcessShutdownResponse(node_info, packet);
     }
+    case PacketType::CONTROL_RSP_EXPERT_PARALLEL: {
+      return ProcessExpertParallelResponse(node_info, packet);
+    }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;
-      return Status(RET_RUNTIME, FormatStr("Not supported packet type %d", packet->type));
+      return Status(RET_RUNTIME_FAILED, FormatStr("Not supported packet type %d", packet->type));
     }
   }
 
@@ -747,9 +823,12 @@ Status ControlChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
     case PacketType::CONTROL_REQ_SHUTDOWN: {
       return ProcessShutdownRequest(node_info, packet);
     }
+    case PacketType::CONTROL_REQ_EXPERT_PARALLEL: {
+      return ProcessExpertParallelRequest(node_info, packet);
+    }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;
-      return Status(RET_RUNTIME, FormatStr("Not supported packet type %d", packet->type));
+      return Status(RET_RUNTIME_FAILED, FormatStr("Not supported packet type %d", packet->type));
     }
   }
 

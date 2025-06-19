@@ -3,11 +3,13 @@
 ## Forward接口说明
 
 请求模型对输入的提示词或tokens执行单步推理，即context阶段。
-用户可以指定若干请求目标，包括transformer，layernorm和logits对应的推理结果。
+用户可以指定若干请求目标，并指定token归约模式，包括transformer，layernorm和logits对应的推理结果。
+具体而言，对于transformer或layernorm目标，支持"GATHER_ALL"归约模式，分别用于获取进行一次推理后的transformer或layernorm结果。
+对于logits目标，支持"GATHER_ALL"或"GATHER_TOKEN_ID"，分别用于获取推理后的所需位置所有token的logits结果（softmax处理前）或所需位置对应token的logits结果（softmax处理后）。
 
 该接口支持批处理，用户可以一次性提交一组请求，之后会返回与这组请求对应的一组响应。
 
-比如以下请求获取模型对"hello world"进行一次推理后的logits结果，即对除首token外的各个token的预测概率（已经过softmax处理），后续可以进一步用于计算困惑度（PPL）等。
+比如以下请求获取模型对"hello world"进行一次推理后的所需位置对应token的计算结果，即对除首token外的各个token的预测概率（已经过softmax处理），后续可以进一步用于计算困惑度（PPL）等。
 
 ```bash
 # the user request

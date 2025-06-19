@@ -9,25 +9,24 @@
 #include "ksana_llm/batch_scheduler/state/batch_state.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
-#include "ksana_llm/utils/tokenizer.h"
 #include "ksana_llm/utils/stop_checker.h"
-
+#include "ksana_llm/utils/tokenizer.h"
 
 namespace ksana_llm {
 
 class BaseScheduleStrategy {
  public:
-  BaseScheduleStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num,
-                       std::shared_ptr<BatchState> batch_state)
-      : batch_state_(batch_state), batch_scheduler_config_(batch_scheduler_config), tp_num_(tp_num) {}
+  BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
+      : batch_scheduler_config_(batch_scheduler_config), tp_num_(tp_num) {}
+
+  virtual void UpdateRunningRequests() = 0;
 
   // Get the next infer reqs that ready to run.
-  virtual void Schedule() = 0;
+  virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;
 
+  void SetBatchState(std::shared_ptr<BatchState> batch_state);
   // Set the cache manager instance of scheduler strategy.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
-
-  void SetTokenizer(std::shared_ptr<Tokenizer> tokenizer);
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return cache_manager_; }
 
@@ -41,9 +40,6 @@ class BaseScheduleStrategy {
   // the config and context.
   BatchSchedulerConfig batch_scheduler_config_;
   int tp_num_;
-
-  // The tokenizer used for encode and decode
-  std::shared_ptr<Tokenizer> tokenizer_ = nullptr;
 
   std::shared_ptr<StopChecker> stop_checker_;
 };

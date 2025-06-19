@@ -12,7 +12,9 @@ namespace ksana_llm {
 class CacheManagerFactory {
  public:
   // Create a prefix cache manager instance.
-  static std::shared_ptr<CacheManagerInterface> CreateCacheManager(const CacheManagerConfig& cache_manager_config);
+  static std::shared_ptr<CacheManagerInterface> CreateCacheManager(
+      const CacheManagerConfig& cache_manager_config,
+      std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group);
 };
 
 }  // namespace ksana_llm
