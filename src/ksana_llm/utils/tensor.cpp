@@ -388,8 +388,8 @@ std::string GetNumpyType(DataType dtype) {
   static const std::unordered_map<DataType, std::string> type_map{
       {TYPE_INVALID, "x"}, {TYPE_BOOL, "?"},      {TYPE_BYTES, "b"},    {TYPE_UINT8, "u1"}, {TYPE_UINT16, "u2"},
       {TYPE_UINT32, "u4"}, {TYPE_UINT64, "u8"},   {TYPE_POINTER, "u8"}, {TYPE_INT8, "i1"},  {TYPE_INT16, "i2"},
-      {TYPE_INT32, "i4"},  {TYPE_INT64, "i8"},    {TYPE_FP16, "f2"},    {TYPE_BF16, "f4"},  {TYPE_FP32, "f4"},
-      {TYPE_FP64, "f8"},   {TYPE_FP8_E4M3, "f4"}, {TYPE_FP8_E5M2, "f4"}};
+      {TYPE_INT32, "i4"},  {TYPE_INT64, "i8"},    {TYPE_FP16, "f2"},    {TYPE_BF16, "u2"},  {TYPE_FP32, "f4"},
+      {TYPE_FP64, "f8"},   {TYPE_FP8_E4M3, "u1"}, {TYPE_FP8_E5M2, "u1"}};
 
   DataType dtype_impl = dtype;
   return type_map.count(dtype_impl) ? type_map.at(dtype_impl) : "x";
@@ -468,7 +468,6 @@ void Tensor::SaveToNpyFile(const std::string& file_path) {
 
   size_t total_size = GetTotalBytes();
   void* cpu_data = malloc(total_size);
-  void* cpu_fp32_data = nullptr;
   void* tensor_data_ptr = GetPtr<void>();
   auto memcpy_type = (location == MemoryLocation::LOCATION_DEVICE) ? MEMCPY_DEVICE_TO_HOST : MEMCPY_HOST_TO_HOST;
 
@@ -512,11 +511,7 @@ void Tensor::SaveToNpyFile(const std::string& file_path) {
   // Tensor Data
   file.write(reinterpret_cast<const char*>(cpu_data), total_size);
   file.close();
-  if (dtype_impl == TYPE_BF16 || dtype_impl == TYPE_FP8_E4M3 || dtype_impl == TYPE_FP8_E5M2) {
-    free(cpu_fp32_data);
-  } else {
-    free(cpu_data);
-  }
+  free(cpu_data);
 }
 
 void Tensor::LoadFromNpyFile(const std::string& file_path) {

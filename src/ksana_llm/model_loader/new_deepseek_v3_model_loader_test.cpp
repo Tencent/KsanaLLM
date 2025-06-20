@@ -40,7 +40,7 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
 
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../../examples/ksana_llm_deepseekv2.yaml";
+    std::filesystem::path config_path_relate = parent_path / "../../../examples/ksana_llm_deepseekv2.yaml";
     // Initialize block manager.
     Singleton<Environment>::GetInstance()->ParseConfig(config_path_relate);
 
@@ -56,17 +56,20 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
 };
 
 TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
-  std::vector<std::string> model_dirs = {"/model/DeepSeek-V2-Lite-Chat-17868/"};
+  std::vector<std::string> model_dirs = {"/model/DeepSeek-V2-Lite-Chat-17868/",
+      "/model/DeepSeek-R1-17832-fix-bf16/"};
 
-  std::vector<int> head_nums = {16};
-  std::vector<int> hidden_units = {2048};
-  std::vector<int> inter_sizes = {10944};
-  std::vector<int> num_layers = {27};
-  std::vector<int> vocab_sizes = {102400};
-  std::vector<int> kv_lora_ranks = {512};
-  std::vector<int> num_key_value_heads = {16};
-  std::vector<int> max_position_embeddings = {163840};
-  std::vector<ModelFormat> model_formats = {ModelFormat::PYTORCH_SAFETENSOR};
+  std::vector<int> head_nums = {16, 128};
+  std::vector<int> hidden_units = {2048, 7168};
+  std::vector<int> inter_sizes = {10944, 18432};
+  std::vector<int> num_layers = {27, 4};
+  std::vector<int> vocab_sizes = {102400, 129280};
+  std::vector<int> q_lora_ranks = {0, 1536};
+  std::vector<int> kv_lora_ranks = {512, 512};
+  std::vector<int> num_key_value_heads = {16, 128};
+  std::vector<int> max_position_embeddings = {163840, 163840};
+  std::vector<ModelFormat> model_formats = {ModelFormat::PYTORCH_SAFETENSOR,
+      ModelFormat::PYTORCH_SAFETENSOR};
 
   for (size_t i = 0; i < model_dirs.size(); ++i) {
     const std::string& model_dir = model_dirs[i];
@@ -100,6 +103,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
     EXPECT_EQ(new_deepseek_v3_config->inter_size, inter_sizes[i]);
     EXPECT_EQ(new_deepseek_v3_config->num_layer, num_layers[i]);
     EXPECT_EQ(new_deepseek_v3_config->vocab_size, vocab_sizes[i]);
+    EXPECT_EQ(new_deepseek_v3_config->mla_config.q_lora_rank, q_lora_ranks[i]);
     EXPECT_EQ(new_deepseek_v3_config->mla_config.kv_lora_rank, kv_lora_ranks[i]);
     EXPECT_EQ(new_deepseek_v3_config->num_key_value_heads, num_key_value_heads[i]);
     EXPECT_EQ(new_deepseek_v3_config->max_position_embeddings, max_position_embeddings[i]);
@@ -107,7 +111,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
 }
 
 TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3WeightLoader) {
-  std::vector<std::string> model_dirs = {"/model/DeepSeek-V2-Lite-Chat-17868/"};
+  std::vector<std::string> model_dirs = {"/model/DeepSeek-R1-17832-fix-bf16/"};
 
   for (size_t i = 0; i < model_dirs.size(); ++i) {
     const std::string & model_dir = model_dirs[i];
@@ -155,7 +159,8 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3WeightLoader) {
       }
     }
 
-    std::string command = fmt::format("python {}/../src/ksana_llm/model_loader/check_deepseek_weight_tensor.py {} {}",
+    std::string command = fmt::format("python {}/../src/ksana_llm/model_loader/"
+                                      "check_deepseek_weight_tensor.py {} {}",
                                       std::filesystem::current_path().string(), model_dir, dev_weights.size());
     // check ret code
     int ret_code = std::system(command.c_str());

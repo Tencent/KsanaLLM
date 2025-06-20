@@ -91,7 +91,7 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
 
   for (size_t i = 0; i < tp_size; i++) {
     dev_weights[i]->weights_map_.insert(dev_model_weights[i].begin(), dev_model_weights[i].end());
-    dev_weights[i]->BindQuantWeightScales();
+    model_weight_loader->PostProcessModelWeights(dev_weights[i]->weights_map_, i);
   }
   return Status();
 }

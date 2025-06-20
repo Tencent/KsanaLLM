@@ -43,6 +43,11 @@ Status BaseModelWeightLoader::PreProcessModelWeights(
   return Status();
 }
 
+Status BaseModelWeightLoader::PostProcessModelWeights(
+    std::unordered_map<std::string, Tensor>& dev_weights_map, int dev_rank) {
+  return Status();
+}
+
 Status BaseModelWeightLoader::ProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights,
                                                   int dev_rank,
                                                   std::unordered_map<std::string, Tensor>& device_model_weights,

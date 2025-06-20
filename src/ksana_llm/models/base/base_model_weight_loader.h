@@ -36,6 +36,9 @@ class BaseModelWeightLoader {
   // Invoked only once before ProcessModelWeights.
   virtual Status PreProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights);
 
+  // Invoked only once after ProcessModelWeights.
+  virtual Status PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map, int dev_rank);
+
  protected:
   // Permute tensor by specific permutation.
   Status PermuteDeviceTensor(const Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank,

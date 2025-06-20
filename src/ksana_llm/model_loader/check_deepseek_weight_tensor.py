@@ -5,6 +5,7 @@
 import os
 import sys
 import re
+import copy
 
 import json
 import torch
@@ -22,6 +23,19 @@ def get_layer_idx(tensor_name):
         return -1, -1
 
 
+def convert_uint16_bf16_to_fp32(u16_arr):
+    """
+    bf16 was save as uint16 in ksana,
+    use this function to convert it to its real value as fp32
+    """
+    uint32_view = u16_arr.astype(np.uint32)
+    bf16_padded = uint32_view << 16
+
+    arr_float32 = bf16_padded.view(np.float32)
+
+    return arr_float32.copy()
+
+
 def check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path):
     tensor_data_file = dump_path + "/" + \
         str(rank) + "/" + tensor_name + ".npy"
@@ -29,8 +43,10 @@ def check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path):
         print("Tensor file {} is not exist.".format(tensor_data_file))
         sys.exit(1)
 
-    read_data_arr = np.load(tensor_data_file).astype(np.float16)
-    base_data_arr = torch_tensor.to(torch.float16).numpy()
+    read_data_arr = np.load(tensor_data_file)
+    if read_data_arr.dtype == np.uint16:
+        read_data_arr = convert_uint16_bf16_to_fp32(read_data_arr)
+    base_data_arr = torch_tensor.to(torch.float32).numpy()
 
     if not read_data_arr.shape == base_data_arr.shape:
         print("Tensor {} has different shape, current shape: {}, "
@@ -95,7 +111,7 @@ def check_model_kv_b(process_weights, tensor_name, num_ranks, rank):
 
 def check_model_o_proj(process_weights, tensor_name, num_ranks, rank):
     torch_tensor = process_weights[tensor_name]
-    slice_size = int((torch_tensor.shape[1] + (num_ranks - 1)) / num_ranks)
+    slice_size = int((torch_tensor.shape[0] + (num_ranks - 1)) / num_ranks)
     offset_beg = rank * slice_size
     offset_end = (rank + 1) * slice_size
     torch_tensor = torch_tensor[offset_beg:offset_end, :]
@@ -111,6 +127,11 @@ def check_model_q_b(process_weights, tensor_name, num_ranks, rank):
     check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path)
 
 
+def check_model_q_a(process_weights, tensor_name, num_ranks, rank):
+    torch_tensor = process_weights[tensor_name]
+    check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path)
+
+
 def check_model_mlp_down_proj(process_weights, tensor_name, num_ranks, rank):
     torch_tensor = process_weights[tensor_name]
     slice_size = int((torch_tensor.shape[0] + (num_ranks - 1)) / num_ranks)
@@ -120,13 +141,19 @@ def check_model_mlp_down_proj(process_weights, tensor_name, num_ranks, rank):
     check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path)
 
 
-def check_model_mlp_up_gate_proj(process_weights, tensor_name, num_ranks, rank):
+def check_model_mlp_gate_up_proj(process_weights, tensor_name, num_ranks, rank):
     torch_tensor = process_weights[tensor_name]
-    slice_size = int((torch_tensor.shape[1] + (num_ranks - 1)) / num_ranks)
+    gate_up_size  = torch_tensor.shape[0] // 2
+    slice_size = int((gate_up_size + (num_ranks - 1)) / num_ranks)
     offset_beg = rank * slice_size
     offset_end = (rank + 1) * slice_size
-    torch_tensor = torch_tensor[:, offset_beg:offset_end]
-    check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path)
+    sliced_tensor = torch.empty([slice_size * 2,
+                                 torch_tensor.shape[1]], dtype=torch_tensor.dtype)
+    sliced_tensor[:slice_size, :] = torch_tensor[offset_beg:offset_end, :]
+    sliced_tensor[slice_size:, :] = \
+        torch_tensor[offset_beg + gate_up_size:offset_end + gate_up_size, :]
+    sliced_tensor = sliced_tensor.permute(1, 0)
+    check_torch_tensor_equl(tensor_name, sliced_tensor, rank, dump_path)
 
 
 def check_model_mlp_experts_down_proj(process_weights, tensor_name, num_ranks, rank):
@@ -164,11 +191,27 @@ def process_model_weights(state_dict, model_config):
             processed_dict[weight_name] = weight_tensor.permute(1, 0)
         elif "norm.weight" in weight_name:
             processed_dict[weight_name] = weight_tensor
-        elif "mlp.shared_experts." in weight_name:
-            weight_name = weight_name.replace("shared_experts.", "shared_expert.")
+        elif "mlp.down_proj" in weight_name or "mlp.shared_experts.down_proj" in weight_name:
+            weight_name = weight_name.replace(".shared_experts.", ".shared_expert.")
             processed_dict[weight_name] = weight_tensor.permute(1, 0)
-        elif "mlp" in weight_name and "expert" not in weight_name:
-            processed_dict[weight_name] = weight_tensor.permute(1, 0)
+        elif "mlp.shared_experts.gate_proj" in weight_name or \
+             "mlp.shared_experts.up_proj" in weight_name or \
+             "mlp.gate_proj" in weight_name or \
+             "mlp.up_proj" in weight_name:
+            gate_up_name = copy.deepcopy(weight_name)
+            gate_up_name = gate_up_name.replace("shared_experts.", "shared_expert.")
+            if "gate_proj" in weight_name:
+                gate_up_name = gate_up_name.replace("gate_proj", "gate_up_proj")
+            if "up_proj" in weight_name:
+                gate_up_name = gate_up_name.replace("up_proj", "gate_up_proj")
+            if gate_up_name not in processed_dict:
+                processed_dict[gate_up_name] = torch.empty([weight_tensor.shape[0] * 2,
+                                                            weight_tensor.shape[1]],
+                                                            dtype=weight_tensor.dtype)
+            if "gate_proj" in weight_name:
+                processed_dict[gate_up_name][:weight_tensor.shape[0], :] = weight_tensor
+            elif "up_proj" in weight_name:
+                processed_dict[gate_up_name][weight_tensor.shape[0]:, :] = weight_tensor
         elif "mlp.experts." in weight_name:
             """
             1. cat up_proj and gate_proj to one tensor
@@ -222,9 +265,9 @@ def process_model_weights(state_dict, model_config):
             processed_dict[v_head_name] = processed_dict[v_head_name].permute(1, 0)
         elif "self_attn.o_proj.weight" in weight_name:
             processed_dict[weight_name] = weight_tensor.permute(1, 0)
-        elif "self_attn.q_proj.weight" in weight_name:
-            q_b_nope_name = weight_name.replace(".q_proj.", ".q_b_nope_proj.")
-            q_b_rope_name = weight_name.replace(".q_proj.", ".q_b_rope_proj.")
+        elif "self_attn.q_b_proj.weight" in weight_name:
+            q_b_nope_name = weight_name.replace(".q_b_proj.", ".q_b_nope_proj.")
+            q_b_rope_name = weight_name.replace(".q_b_proj.", ".q_b_rope_proj.")
 
             q_b_nope_dim0 = model_config["num_attention_heads"] * model_config["qk_nope_head_dim"]
             q_b_rope_dim0 = model_config["num_attention_heads"] * model_config["qk_rope_head_dim"]
@@ -246,7 +289,9 @@ def process_model_weights(state_dict, model_config):
                     weight_tensor[copy_st + model_config["qk_nope_head_dim"]:copy_ed, :]
             processed_dict[q_b_nope_name] = processed_dict[q_b_nope_name].permute(1, 0)
             processed_dict[q_b_rope_name] = processed_dict[q_b_rope_name].permute(1, 0)
-    print("process {} weights".format(len(processed_dict)))
+        elif "self_attn.q_a_proj.weight" in weight_name:
+            processed_dict[weight_name] = weight_tensor.permute(1, 0)
+    print("processed {} weights".format(len(processed_dict)))
     return processed_dict
 
 
@@ -297,7 +342,7 @@ if __name__ == "__main__":
         check_model_norm(process_weights, "model.norm.weight", num_ranks, rank)
 
         # check all layers is time consuming, so we only check some layers here.
-        for layer_idx in [0, 5, 7]:
+        for layer_idx in [0, 3]:
             NAME_PREFIX = "model.layers." + str(layer_idx) + "."
 
             # model.layers.N.input_layernorm.weight
@@ -308,6 +353,9 @@ if __name__ == "__main__":
 
             # model.layers.N.self.attn.kv_a_layernorm.weight
             check_model_norm(process_weights, NAME_PREFIX + "self_attn.kv_a_layernorm.weight", num_ranks, rank)
+
+            # model.layers.N.q_a_layernorm.weight
+            check_model_norm(process_weights, NAME_PREFIX + "self_attn.q_a_layernorm.weight", num_ranks, rank)
 
             # model.layers.N.self_attn.kv_a_lora_proj.weight
             check_model_kv_a(process_weights, NAME_PREFIX + "self_attn.kv_a_lora_proj.weight", num_ranks, rank)
@@ -330,6 +378,9 @@ if __name__ == "__main__":
             # model.layers.N.self_attn.q_b_rope_proj.weight
             check_model_q_b(process_weights, NAME_PREFIX + "self_attn.q_b_rope_proj.weight", num_ranks, rank)
 
+            # model.layers.N.self_attn.q_a_proj.weight
+            check_model_q_a(process_weights, NAME_PREFIX + "self_attn.q_a_proj.weight", num_ranks, rank)
+
             # model.layers.0.mlp.down_proj.weight
             if layer_idx == 0:
                 check_model_mlp_down_proj(process_weights, NAME_PREFIX + "mlp.down_proj.weight", num_ranks, rank)
@@ -339,26 +390,15 @@ if __name__ == "__main__":
                                           NAME_PREFIX + "mlp.shared_expert.down_proj.weight",
                                           num_ranks, rank)
 
-            # model.layers.0.mlp.gate_proj.weight
+            # model.layers.0.mlp.gate_up_proj.weight
             if layer_idx == 0:
-                check_model_mlp_up_gate_proj(process_weights,
-                                             NAME_PREFIX + "mlp.gate_proj.weight",
+                check_model_mlp_gate_up_proj(process_weights,
+                                             NAME_PREFIX + "mlp.gate_up_proj.weight",
                                              num_ranks, rank)
-            # model.layers.N.mlp.shared_expert.gate_proj.weight
+            # model.layers.N.mlp.shared_expert.gate_up_proj.weight
             elif layer_idx >= 1:
-                check_model_mlp_up_gate_proj(process_weights,
-                                             NAME_PREFIX + "mlp.shared_expert.gate_proj.weight",
-                                             num_ranks, rank)
-
-            # model.layers.0.mlp.up_proj.weight
-            if layer_idx == 0:
-                check_model_mlp_up_gate_proj(process_weights,
-                                             NAME_PREFIX + "mlp.up_proj.weight",
-                                             num_ranks, rank)
-            # model.layers.N.mlp.shared_expert.up_proj.weight
-            elif layer_idx >= 1:
-                check_model_mlp_up_gate_proj(process_weights,
-                                             NAME_PREFIX + "mlp.shared_expert.up_proj.weight",
+                check_model_mlp_gate_up_proj(process_weights,
+                                             NAME_PREFIX + "mlp.shared_expert.gate_up_proj.weight",
                                              num_ranks, rank)
 
             # model.layers.N.mlp.experts.down_proj.weight

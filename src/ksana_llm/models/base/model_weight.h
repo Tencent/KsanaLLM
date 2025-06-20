@@ -49,7 +49,7 @@ class ModelWeight : public BaseWeight {
   Status BindQuantWeightScales();
 
  private:
-  std::unordered_map<std::string, Tensor> weights_map_;
+  using BaseWeight::weights_map_;
   Tensor empty_tensor_;
 };
 
