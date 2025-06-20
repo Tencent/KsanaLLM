@@ -211,15 +211,28 @@ class BuildExt(build_ext_orig):
                     shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
         # List of required Python files to copy into the package
-        need_files = [
+        server_need_files = [
             "serving_server.py",
             "serving_generate_client.py",
             "serving_forward_client.py",
         ]
 
         # Copy each required Python file
-        for need_file in need_files:
+        for need_file in server_need_files:
             src_file = cwd / "src" / "ksana_llm" / "python" / need_file
+            dst_dir = extdir.parent / "ksana_llm"
+            copy_file(str(src_file), str(dst_dir))
+
+
+        # List of generate deepgemm optimize kernels files to copy into the package
+        deepgemm_need_files = [
+            "deep_gemm_kernel_generator.py",
+            "cuda_data_type_enum.py",
+        ]
+
+        # Copy each required deepgemm optimize kernel file
+        for need_file in deepgemm_need_files:
+            src_file = cwd / "3rdparty" / "LLM_kernels" / "tools" / "search_best_gemm_algo" / need_file
             dst_dir = extdir.parent / "ksana_llm"
             copy_file(str(src_file), str(dst_dir))
 
