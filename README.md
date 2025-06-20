@@ -65,20 +65,7 @@ nvidia-docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.2 Direct Use of Internal Nvidia GPU Image (For H20)
-
-1. Internal Image Name:
-
-```bash
-mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2
-```
-
-2. Container Creation:
-```bash
- sudo docker run -itd --name xxx -v /data1/:/data1 --network host  --shm-size=10g --privileged --gpus all -v /usr/local/nvidia:/usr/local/nvidia  mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2 /bin/bash
- ```
-
-#### 1.3 Direct Use of Tencent Cloud Nvidia GPU Image
+#### 1.2 Direct Use of Tencent Cloud Nvidia GPU Image
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -97,7 +84,7 @@ nvidia-docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.4 For Huawei Ascend NPU
+#### 1.3 For Huawei Ascend NPU
 
 **Please install Huawei Ascend NPU driver and CANN: [driver download link](https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit)**
 
@@ -191,6 +178,11 @@ python serving_server.py \
     --port 8080
 ```
 
+Tip: KsanaLLM automatically generates log files in the directory where the service is started. You can view information such as model loading, service startup, and request warning through these log files.
+```bash
+vim log/ksana_llm.log
+```
+
 Inference test with one shot conversation
 
 ```bash
@@ -252,8 +244,6 @@ Note: By default, NCCL communication is used. If you want to force TCP communica
 export USE_TCP_DATA_CHANNEL=1
 
 #### 4.3 Example of Running the DeepSeek Model on H20
-
-**Suggestion**: Use the internal NVIDIA image from section 1.2
 
 ##### 4.3.1 Compilation for NVIDIA H20
 

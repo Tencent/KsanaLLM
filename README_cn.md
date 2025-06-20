@@ -66,20 +66,7 @@ nvidia-docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.2 直接使用内部英伟达GPU镜像（H20）
-
-1. 内部镜像名称：
-
-```bash
-mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2
-```
-
-2. 容器创建：
-```bash
- sudo docker run -itd --name xxx -v /data1/:/data1 --network host  --shm-size=10g --privileged --gpus all -v /usr/local/nvidia:/usr/local/nvidia  mirrors.tencent.com/todacc/venus-std-base-tlinux4-ksana-hopper-gpu-rdma:0.1.2 /bin/bash
- ```
-
-#### 1.3 直接使用腾讯云GPU镜像
+#### 1.2 直接使用腾讯云GPU镜像
 
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
@@ -98,7 +85,7 @@ nvidia-docker run \
 pip install -r requirements.txt
 ```
 
-#### 1.4 华为昇腾 NPU
+#### 1.3 华为昇腾 NPU
 
 **请先安装Huawei Ascend NPU驱动和CANN：[驱动下载链接](https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/softwareinst/instg/instg_0000.html?Mode=PmIns&OS=Ubuntu&Software=cannToolKit)**
 
@@ -205,6 +192,11 @@ forward推理测试（单轮推理，无采样）
 python serving_forward_client.py --port 8080
 ```
 
+提示：KsanaLLM会在服务启动的目录下自动生成log文件，可通过以下方式查看模型加载、服务启动，请求告警等信息。
+```bash
+vim log/ksana_llm.log
+```
+
 #### 4.2 分布式执行
 
 分布式执行依赖以下环境变量：
@@ -242,8 +234,6 @@ python serving_server.py \
 export USE_TCP_DATA_CHANNEL=1
 
 #### 4.3 H20执行DeepSeek模型示例
-
-**建议**：使用1.2中的内部英伟达镜像
 
 ##### 4.3.1 NVIDIA H20 编译
 
