@@ -27,13 +27,20 @@ DeepGEMMAOTWrapper::DeepGEMMAOTWrapper(size_t m, size_t n, size_t k, bool need_g
   std::string dynamic_lib_path = fmt::format("{}/.deepgemm/cache/deep_gemm_kernel_{}_{}_{}", InitCacheDir(), m, n, k);
   int status_code = 0;
   if (need_generate_kernel && !IsKernelExist(dynamic_lib_path)) {
-    std::filesystem::path current_path = __FILE__;
-    std::string current_dir = std::filesystem::absolute(current_path.parent_path()).string();
+    std::string generator_dir;
+    if (std::getenv("DEEPGEMM_KERNEL_GENERATOR_PY_DIR") != nullptr) {
+      generator_dir = std::string(std::getenv("DEEPGEMM_KERNEL_GENERATOR_PY_DIR"));
+    } else {
+      std::filesystem::path current_path = __FILE__;
+      std::string current_dir = std::filesystem::absolute(current_path.parent_path()).string();
+      generator_dir = fmt::format("{}/../../../../tools/search_best_gemm_algo", current_dir);
+    }
+
     std::string cmd = fmt::format(
         "python "
-        "{}/../../../../tools/search_best_gemm_algo/deep_gemm_kernel_generator.py "
+        "{}/deep_gemm_kernel_generator.py "
         "--m {} --n {} --k {} --kernel_saved_path {} --tuner_device_id {}",
-        current_dir, m, n, k, dynamic_lib_path, tuner_device_id);
+        generator_dir, m, n, k, dynamic_lib_path, tuner_device_id);
     // Execute the command
     status_code = std::system(cmd.c_str());
   }
@@ -102,14 +109,14 @@ void DeepGEMMAOTWrapper::ThrowError(const std::string& error_msg){
 }
 
 bool DeepGEMMAOTWrapper::IsKernelExist(const std::string& directory) {
-
   if (!std::filesystem::exists(directory) || !std::filesystem::is_directory(directory)) {
     return false;
   }
   std::filesystem::path dir_path(directory);
   std::vector<std::string> required_files = {"kernel.args", "kernel.cu", "kernel.cubin", "kernel.so", "config.yaml"};
-  for( const auto& file : required_files) {
-    if (!std::filesystem::exists(dir_path / file)) {
+  const size_t min_file_size = 4;  // Minimum file size to consider a file valid
+  for (const auto& file : required_files) {
+    if (!std::filesystem::exists(dir_path / file) || std::filesystem::file_size(dir_path / file) < min_file_size) {
       return false;
     }
   }

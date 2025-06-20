@@ -53,6 +53,9 @@ def args_config():
     args = parser.parse_args()
     return args
 
+def may_print(msg: str):
+    if os.environ.get("DEEP_GEMM_GENERATOR_DEBUG", "0") == "1":
+        print(msg, flush=True)
 
 def update_yaml_config(config_path: str, new_config: Dict[str, Any]) -> bool:
     existing_config = {}
@@ -125,6 +128,7 @@ def construct_deep_gemm_fp8fp8bf16nt_input(m: int, k: int, n: int) -> \
 
 
 def copy_files(src_dir: str, dst_dir: str):
+    may_print(f"Copying files from {src_dir} to {dst_dir}")
     if not os.path.exists(dst_dir):
         os.makedirs(dst_dir)
     for filename in os.listdir(src_dir):
@@ -225,16 +229,19 @@ def generate_deep_gemm_kernel(m: int, n: int, k: int, input_dtype: str,
         "smem_size": smem_size,
         "num_sms": num_sms
     }
-    with open(os.path.join(kernel_dir, "config.yaml"), 'w') as config_file:
-        yaml.dump(kernel_config, config_file, default_flow_style=False)
+    if kernel_saved_path:
+        os.makedirs(kernel_saved_path, exist_ok=True)
+        may_print(f"Saving config.yaml to {kernel_saved_path}")
+        with open(os.path.join(kernel_saved_path, "config.yaml"), 'w') as config_file:
+            yaml.dump(kernel_config, config_file, default_flow_style=False)
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        copy_files(kernel_dir, kernel_saved_path)
+
     # merge config
     merged_config = {**original_kernel_conf, **gemm_algo_config}
     with open(config_path, "w", encoding="utf-8") as _f:
         yaml.dump(merged_config, _f, allow_unicode=True, sort_keys=False)
-    if kernel_saved_path:
-        copy_files(kernel_dir, kernel_saved_path)
-    else:
-        print(f"Kernel saved to {kernel_dir}, please copy it to your desired location.")
 
 
 if __name__ == "__main__":
