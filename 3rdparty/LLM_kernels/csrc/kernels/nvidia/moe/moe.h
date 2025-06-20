@@ -64,6 +64,12 @@ void InvokeMoeSum(void* input,      // [num_tokens, topk, hidden_size]
                   int num_tokens, const int num_experts, int topk, int hidden_size, const cudaStream_t& stream);
 
 template <typename T, bool UseExpertParallel>
+void SiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
+                size_t elements_num, size_t inter_size, const cudaStream_t& stream);
+template <typename T>
+void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
+                          size_t elements_num, size_t inter_size, const cudaStream_t& stream);
+template <typename T, bool UseExpertParallel>
 void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
                       size_t elements_num, size_t inter_size, const cudaStream_t& stream);
 

@@ -28,6 +28,7 @@
 
 #include <cub/cub.cuh>
 #include "csrc/utils/nvidia/cuda_utils.h"
+#include <flashinfer/activation.cuh>
 
 
 #define CEILDIV(x, y) (((x) + (y)-1) / (y))
@@ -844,11 +845,11 @@ INVOKE_MOE_SUM(__nv_bfloat16);
 #undef INVOKE_MOE_SUM
 
 template <typename T, bool UseExpertParallel>
-void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                      size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
+void SiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
+                size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
   size_t num_tokens = elements_num / 2 / inter_size;
   // dim3 grid(std::min(elements_num / 2 / inter_size, static_cast<size_t>(65535)));
-  dim3 grid(elements_num / 2 / inter_size);
+  dim3 grid(num_tokens);
   dim3 block(std::min(inter_size, static_cast<size_t>(1024)));
   if constexpr (UseExpertParallel) {
     silu_and_mul_kernel_expert_parallel<T>
@@ -857,6 +858,54 @@ void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int*
     silu_and_mul_kernel<T><<<grid, block, 0, stream>>>(input, output, num_tokens, inter_size);
   }
 }
+
+#define SILU_AND_MUL(T)                                                                                     \
+  template void SiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, const int* expert_map,  \
+                                    int num_experts, size_t elements_num, size_t inter_size,                \
+                                    const cudaStream_t& stream);                                            \
+  template void SiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, const int* expert_map, \
+                                     int num_experts, size_t elements_num, size_t inter_size,               \
+                                     const cudaStream_t& stream)
+SILU_AND_MUL(float);
+SILU_AND_MUL(half);
+SILU_AND_MUL(__nv_bfloat16);
+#undef SILU_AND_MUL
+
+__device__ __forceinline__ float silu(const float& val) { return val / (1.0f + __expf(-val)); }
+
+template <typename T>
+void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
+                          size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
+  size_t num_tokens = elements_num / 2 / inter_size;
+  dim3 grid(num_tokens);
+  uint32_t vec_size = 16 / sizeof(T);
+  dim3 block(std::min(inter_size / vec_size, static_cast<size_t>(1024)));
+  flashinfer::activation::act_and_mul_kernel<T, silu><<<grid, block, 0, stream>>>(output, input, inter_size);
+}
+
+#define FLASHINFER_SILU_AND_MUL(T)                                                                             \
+  template void FlashinferSiluAndMul<T>(const T* input, T* output, const int* topk_ids, const int* expert_map, \
+                                        int num_experts, size_t elements_num, size_t inter_size,               \
+                                        const cudaStream_t& stream)
+FLASHINFER_SILU_AND_MUL(float);
+FLASHINFER_SILU_AND_MUL(half);
+FLASHINFER_SILU_AND_MUL(__nv_bfloat16);
+#undef FLASHINFER_SILU_AND_MUL
+
+template <typename T, bool UseExpertParallel>
+void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
+                      size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
+  if constexpr (UseExpertParallel) {
+    SiluAndMul<T, true>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+  } else {
+#if defined(ENABLE_FLASHINFER)
+    FlashinferSiluAndMul<T>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+#else
+    SiluAndMul<T, false>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+#endif
+  }
+}
+
 #define INVOKE_SILU_AND_MUL(T)                                                                                    \
   template void InvokeSiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, const int* expert_map,  \
                                           int num_experts, size_t elements_num, size_t inter_size,                \

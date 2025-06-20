@@ -1,5 +1,9 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 
+if(SM VERSION_GREATER_EQUAL "90")
+    add_definitions(-DENABLE_FLASHINFER=ON)
+endif()
+
 # set kernels target
 file(GLOB_RECURSE MOE_SRCS *.cu)
 list(FILTER MOE_SRCS EXCLUDE REGEX ".*test.cu")

@@ -20,8 +20,16 @@ class LlamaNvidiaMoeTestSuit : public NvidiaTestSuitBase {
 
   void TearDown() override { NvidiaTestSuitBase::TearDown(); }
 
+  template <typename T>
+  void SiluMulKernelAccTest();
+  template <typename T>
+  void SiluMulKernelPerformanceTest();
+
  protected:
+  size_t inter_size = 1024;
+  size_t topk = 8;
   using NvidiaTestSuitBase::stream;
+  const std::vector<size_t> m_list = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
 };
 
 TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
@@ -86,48 +94,86 @@ TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
   CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
 }
 
-TEST_F(LlamaNvidiaMoeTestSuit, SiluKernelTest) {
-  size_t inter_size = 1024;
-  size_t num_elements = 512 * 512 * inter_size * 2;
-
-  std::vector<float> input(num_elements);
-  std::vector<float> output(num_elements / 2);
-  for (size_t i = 0; i < num_elements; ++i) {
-    input[i] = i;
+template <typename T>
+void LlamaNvidiaMoeTestSuit::SiluMulKernelAccTest() {
+  std::string type_str = "float";
+  float tol = 1e-5f;
+  if (std::is_same<T, half>::value) {
+    type_str = "half";
+    tol = 1e-3f;  // half precision has higher tolerance
+  } else if (std::is_same<T, __nv_bfloat16>::value) {
+    type_str = "bfloat16";
+    tol = 1e-3f;  // __nv_bfloat16 precision has higher tolerance
   }
+  for (size_t i = 0; i < m_list.size(); i++) {
+    size_t m = m_list[i];
+    size_t num_elements = m * topk * inter_size * 2;
+    BufferMeta d_input = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m * topk, inter_size * 2},
+                                         /*is_random_init*/ true);
+    BufferMeta d_output_ref = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m * topk, inter_size},
+                                              /*is_random_init*/ true);
+    BufferMeta d_output_flashinfer = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m * topk, inter_size},
+                                                     /*is_random_init*/ true);
 
-  void* d_input;
-  void* d_output;
-  cudaMalloc(&d_input, num_elements * sizeof(float));
-  cudaMalloc(&d_output, num_elements / 2 * sizeof(float));
-  CHECK_NVIDIA_CUDA_ERROR(
-      cudaMemcpy(d_input, reinterpret_cast<void*>(input.data()), num_elements * sizeof(float), cudaMemcpyHostToDevice));
+    SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output_ref.data_ptr),
+                         nullptr, nullptr, 256, num_elements, inter_size, stream);
+    FlashinferSiluAndMul<T>(reinterpret_cast<const T*>(d_input.data_ptr),
+                            reinterpret_cast<T*>(d_output_flashinfer.data_ptr), nullptr, nullptr, 256, num_elements,
+                            inter_size, stream);
 
-  for (int i = 0; i < 10; ++i) {
-    InvokeSiluAndMul<float, false>(reinterpret_cast<const float*>(d_input), reinterpret_cast<float*>(d_output), nullptr,
-                                   nullptr, 256, num_elements, inter_size, stream);
+    EXPECT_TRUE(CheckResult<T>("SiluKernelTest dtype: " + type_str + " m = " + std::to_string(m), d_output_ref,
+                               d_output_flashinfer, tol, tol));
+    DeleteBuffer(d_input);
+    DeleteBuffer(d_output_ref);
+    DeleteBuffer(d_output_flashinfer);
   }
+}
 
-  cudaEvent_t start, stop;
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
+template <typename T>
+void LlamaNvidiaMoeTestSuit::SiluMulKernelPerformanceTest() {
+  for (size_t i = 0; i < m_list.size(); i++) {
+    size_t m = m_list[i];
+    size_t num_elements = m * topk * inter_size * 2;
+    std::cout << "===== Testing with m = " << m << " =====" << std::endl;
+    BufferMeta d_input = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m * topk, inter_size * 2},
+                                         /*is_random_init*/ true);
+    BufferMeta d_output = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m * topk, inter_size},
+                                          /*is_random_init*/ true);
 
-  for (int i = 0; i < 1000; ++i) {
-    InvokeSiluAndMul<float, false>(reinterpret_cast<const float*>(d_input), reinterpret_cast<float*>(d_output), nullptr,
-                                   nullptr, 256, num_elements, inter_size, stream);
+    auto cuda_run = [&]() {
+      SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output.data_ptr),
+                           nullptr, nullptr, 256, num_elements, inter_size, stream);
+    };
+    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    std::cout << std::left << std::setw(25) << "SiluAndMul "
+              << "Kernel execution 1 times " << std::setw(10) << milliseconds << " ms" << std::endl;
+
+    auto cuda_run_flashinfer = [&]() {
+      FlashinferSiluAndMul<T>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output.data_ptr),
+                              nullptr, nullptr, 256, num_elements, inter_size, stream);
+    };
+    milliseconds = MeasureCudaExecutionTime(cuda_run_flashinfer, stream, 10, 100);
+    std::cout << std::left << std::setw(25) << "FlashinferSiluAndMul "
+              << "Kernel execution 1 times " << std::setw(10) << milliseconds << " ms" << std::endl;
+
+    DeleteBuffer(d_input);
+    DeleteBuffer(d_output);
   }
+}
 
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-  float milliseconds = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
-  std::cout << "Kernel execution 1 times " << (milliseconds / 1000) << " ms" << std::endl;
+TEST_F(LlamaNvidiaMoeTestSuit, halfSiluKernelTest) {
+  SiluMulKernelAccTest<half>();
+  SiluMulKernelPerformanceTest<half>();
+}
 
-  cudaFree(d_input);
-  cudaFree(d_output);
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
+TEST_F(LlamaNvidiaMoeTestSuit, FloatSiluKernelTest) {
+  SiluMulKernelAccTest<float>();
+  SiluMulKernelPerformanceTest<float>();
+}
+
+TEST_F(LlamaNvidiaMoeTestSuit, bf16SiluKernelTest) {
+  SiluMulKernelAccTest<__nv_bfloat16>();
+  SiluMulKernelPerformanceTest<__nv_bfloat16>();
 }
 
 void MoeAlignBlockCpu(std::vector<int>& topk_ids, std::vector<int>& expert_ids, std::vector<int>& sorted_ids,
