@@ -389,7 +389,6 @@ class CoordinatorDB:
             A dictionary containing the node's heartbeat information.
         """
         self.requests_served += 1
-        logger.info(f"Getting node heartbeat info: {node_id}")
 
         # Helper function to get online node addresses
         def get_online_node_addresses(group):

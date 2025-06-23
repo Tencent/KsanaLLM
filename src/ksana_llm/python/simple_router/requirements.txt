@@ -1,7 +1,7 @@
-fastapi==0.68.0
-uvicorn==0.15.0
-pydantic==1.8.2
-python-dotenv==0.19.0
+fastapi==0.110.0
+uvicorn==0.29.0
+pydantic==2.10.6
+python-dotenv==1.0.1
 etcd3==0.12.0
 httpx==0.28.1
 pydantic-settings==2.9.1

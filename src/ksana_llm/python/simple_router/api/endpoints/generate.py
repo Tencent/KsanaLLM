@@ -18,8 +18,8 @@ from db import db
 logger = logging.getLogger(__name__)
 
 # Configuration for prefill and decode nodes (used as fallback for fixed mode)
-PREFILL_NODES = [("prefill_group_1", "127.0.0.1:8088")]
-DECODE_NODES = [("decode_group_1", "127.0.0.1:8089")]
+PREFILL_NODES = [("prefill_group_1", "localhost:8088")]
+DECODE_NODES = [("decode_group_1", "localhost:8089")]
 
 raw_router = APIRouter()
 
@@ -137,7 +137,6 @@ async def generate(req: Request):
         decode_name = decode[0]
         decode_url = f"http://{decode[1]}/generate"
 
-    logger.info(f"Routing to prefill: {prefill_url}, decode: {decode_url}")
 
     # 全局自增 communication id
     if not hasattr(generate, "_comm_id"):
@@ -147,6 +146,7 @@ async def generate(req: Request):
         "kv-comm-group-key": f"{prefill_name}__{decode_name}",
         "kv-comm-request-id": str(comm_id),
     }
+    logger.info(f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}")
     generate._comm_id += 1
 
     async def merged_stream():
@@ -191,6 +191,7 @@ async def generate(req: Request):
                     still_running = sum(t and not t.done() for t in (closer1, closer2))
 
             # 后端两条流都结束了，发送真正的结束标识
+            logger.info(f"Communication {comm_id} completed, sending EOS")
             yield EOS + DELIM
 
     return StreamingResponse(merged_stream(), media_type="application/octet-stream")

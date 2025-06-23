@@ -47,8 +47,8 @@ void TransferEngine::Initialize(GroupRole group_role) {
   kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
 
   // 判断是否处于不需要prefill的decode状态
-  decode_node_benchmark = (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) &&
-                              (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
+  decode_node_benchmark =
+      (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) && (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
 
   KLLM_LOG_DEBUG << "TransferEngine initialized";
 }
@@ -160,7 +160,6 @@ int TransferEngine::IsRecvDone(int request_id) {
 
     // 检查所有任务是否完成（管道并行异构模式）
     if (block_num > 0 && meta->finished_tasks_deque_.size() == expected_tasks && meta->first_token != -1) {
-      CleanupTransferMeta(request_id);
       return meta->first_token;
     }
   }

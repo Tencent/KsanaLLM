@@ -113,7 +113,11 @@ class TaskManager {
  public:
   using TaskNotifyCallback = std::function<void()>;
 
-  TaskManager() : send_waiter_(std::make_shared<Waiter>(1)) {}
+  TaskManager() : send_waiter_(std::make_shared<Waiter>(1)) {
+    task_map_.reserve(100000000);
+    prefill_pending_tasks_.reserve(10000000);
+    decode_confirmed_tasks_.reserve(10000000);
+  }
   ~TaskManager() = default;
 
   // 记录淘汰时间默认（15分钟）
@@ -173,7 +177,6 @@ class TaskManager {
       it->second->is_completed = true;
       task_map_.erase(it);
     }
-    // If task not found, silently ignore - it may have been already completed or never existed
   }
 
   void Shutdown() {

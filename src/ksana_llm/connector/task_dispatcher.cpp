@@ -207,7 +207,9 @@ void TaskDispatcher::HandlePrefillGroupBatch(
   std::string connection_id = MakeConnectionId(group_key, device_idx);
   std::string signal = connection_id + "|" + std::to_string(group_vec.size());
   Status status = zmq_communicator_->Send(group_key, device_idx, 0, signal.data(), signal.size(), DataType::TYPE_BYTES);
+  KLLM_LOG_INFO << "Fetched batch of size: " << group_vec.size();
   if (!status.OK()) {
+    KLLM_LOG_WARNING << "Failed to send signal to Decode";
     return;
   }
   KLLM_LOG_DEBUG << "Step_3: Prefill signal sent to Decode for group_key=" << group_key << ", device_idx=" << device_idx
@@ -584,7 +586,6 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
                  << ", and first task_key is:=" << group_vec[0].ToString();
 
   if (tensors.empty() || tensor_sizes.empty() || data_types.empty()) {
-    KLLM_LOG_ERROR << "No valid tensors found for group_key=" << group_key;
     return;
   }
 

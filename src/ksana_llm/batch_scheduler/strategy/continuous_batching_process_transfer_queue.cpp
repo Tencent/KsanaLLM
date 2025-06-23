@@ -64,6 +64,7 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       req->output_tokens.push_back(first_token);
       batch_state_->schedule_output->running_reqs.push_back(req);
       it = batch_state_->transfer_queue.erase(it);
+      transfer_engine->CleanupTransferMeta(req->kv_comm_request_id);
     } else {
       // 接收未完成，继续检查下一个请求
       ++it;

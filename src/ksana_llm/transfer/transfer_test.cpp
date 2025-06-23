@@ -315,6 +315,7 @@ TEST_F(TransferEngineTest, SendTokens) {
   bool is_done = transfer_engine_->IsSendDone(request_id);
   ASSERT_TRUE(is_done);
 
+  transfer_engine_->CleanupTransferMeta(request_id);
   // 清理分配的内存
   meta = transfer_engine_->GetTransferMeta(request_id);
   ASSERT_EQ(meta, nullptr);
