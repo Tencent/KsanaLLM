@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# only use one GPU
+if [[ -v CUDA_VISIBLE_DEVICES ]]; then
+    IFS=',' read -ra devices <<< "$CUDA_VISIBLE_DEVICES"
+    export CUDA_VISIBLE_DEVICES=${devices[0]}
+fi
+
 SCRIPT_HOME=`pwd`
 
 cd 3rdparty/LLM_kernels/csrc/kernels/nvidia/fused_moe
