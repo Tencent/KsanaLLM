@@ -18,10 +18,9 @@ template <int T>
 ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size)
     : tensor_parallel_size_(tensor_parallel_size), attn_data_parallel_size_(attn_data_parallel_size) {
   GetDeviceCount(&device_num_);
-  if (device_num_ < tensor_parallel_size_) {
-    KLLM_THROW(fmt::format("{} tensor_parallel_size should not bigger than devices num: {}", tensor_parallel_size_,
-                           device_num_));
-  }
+  KLLM_CHECK_WITH_INFO(device_num_ >= tensor_parallel_size_,
+                       fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
+                                   tensor_parallel_size_, device_num_));
 
   memory_manage_streams_.reserve(tensor_parallel_size_);
   compute_streams_.reserve(tensor_parallel_size_);

@@ -22,7 +22,7 @@ class ModelWeight : public BaseWeight {
   friend class ModelWeightLoader;
 
   // Get a weight tensor by name.
-  const Tensor & GetWeightTensor(const std::string& weight_name) const;
+  const Tensor& GetWeightTensor(const std::string& weight_name) const;
 
   // Get the weight name list.
   std::vector<std::string> GetWeightNames() const;
@@ -32,9 +32,9 @@ class ModelWeight : public BaseWeight {
   // //////////////////////////////////////////////////////////////////////////////////////////
   virtual Tensor GetModelWeights(const std::string& weight_name) override { return GetWeightTensor(weight_name); }
 
-  virtual Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                     std::vector<std::string>& weight_name_list,
-                                     std::vector<std::string>& custom_name_list) override {
+  virtual Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                     const std::vector<std::string>& weight_name_list,
+                                     const std::vector<std::string>& custom_name_list) override {
     return Status();
   }
 

@@ -1850,7 +1850,7 @@ torch::Tensor QuantWeight<T>::TpSplitTensor(torch::Tensor& tensor, int split_dim
 template <typename T>
 void QuantWeight<T>::GetExpertsScaleIdx(const std::string& expert_scale_name, int& layer_idx, int& expert_idx) {
   // Get the index of the moe layer and the index of each expert
-  std::regex re(R"(\d+)");
+  static const std::regex re(R"(\d+)");
   std::sregex_iterator next(expert_scale_name.begin(), expert_scale_name.end(), re);
   std::sregex_iterator end;
   if (next != end) {

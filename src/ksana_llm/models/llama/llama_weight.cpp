@@ -16,21 +16,19 @@ Tensor LlamaWeight<T>::GetModelWeights(const std::string& weight_name) {
   return common_weight_->GetModelWeights(weight_name);
 }
 template <typename T>
-void LlamaWeight<T>::PermuteQKWeight(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                     std::vector<std::string>& weight_name_list,
-                                     std::vector<std::string>& custom_name_list) {
+void LlamaWeight<T>::PermuteQKWeight(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                     const std::vector<std::string>& weight_name_list,
+                                     const std::vector<std::string>& custom_name_list) {
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
-    std::string& tensor_name = custom_name_list[idx];
-    std::string& weight_name = weight_name_list[idx];
+    const std::string& tensor_name = custom_name_list[idx];
+    const std::string& weight_name = weight_name_list[idx];
     if (tensor_name.find("k_proj.weight") != std::string_view::npos ||
         tensor_name.find("k_proj.bias") != std::string_view::npos ||
         tensor_name.find("q_proj.weight") != std::string_view::npos ||
         tensor_name.find("q_proj.bias") != std::string_view::npos) {
       std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
       // get weight's data ptr
-      void* weight_ptr;
-      size_t weight_size;
-      std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+      auto [weight_ptr, weight_size] = weights_loader->GetTensor(weight_name);
       if (weight_ptr == nullptr) {
         KLLM_LOG_DEBUG << fmt::format("The {}'s weight_ptr is null", weight_name);
         continue;
@@ -72,9 +70,9 @@ void LlamaWeight<T>::PermuteQKWeight(std::shared_ptr<BaseFileTensorLoader>& weig
 }
 
 template <typename T>
-Status LlamaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                           std::vector<std::string>& weight_name_list,
-                                           std::vector<std::string>& custom_name_list) {
+Status LlamaWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                           const std::vector<std::string>& weight_name_list,
+                                           const std::vector<std::string>& custom_name_list) {
   if (model_config_.model_file_format == GGUF) {
     PermuteQKWeight(weights_loader, weight_name_list, custom_name_list);
   }

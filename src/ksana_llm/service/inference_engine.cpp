@@ -279,6 +279,7 @@ Status InferenceEngine::Initialize() {
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
     VersionReporter::GetInstance().Init();
   }
+
   return Status();
 }
 

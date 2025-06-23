@@ -160,11 +160,11 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
 }
 
 template <typename T>
-Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                            std::vector<std::string>& weight_name_list,
-                                            std::vector<std::string>& custom_name_list) {
+Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                            const std::vector<std::string>& weight_name_list,
+                                            const std::vector<std::string>& custom_name_list) {
   SetDevice(rank_);
-  bool use_fused_gate_up_weights = ShouldUseFusedGateUpWeights();
+  const bool use_fused_gate_up_weights = ShouldUseFusedGateUpWeights();
   KLLM_LOG_DEBUG << "use_fused_gate_up_weights: " << use_fused_gate_up_weights;
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
@@ -178,8 +178,8 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     //     lm_head:                  不做分卡处理, 需转置
     //     norm:                     不做分卡处理
     //     embedding:                不做分卡处理
-    std::string& tensor_name = custom_name_list[idx];
-    std::string& weight_name = weight_name_list[idx];
+    const std::string& tensor_name = custom_name_list[idx];
+    const std::string& weight_name = weight_name_list[idx];
 
     if (!BaseWeight::IsPipelineNodeWeight(tensor_name)) {
       continue;
@@ -203,9 +203,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
 
     // get weight's data ptr
-    void* weight_ptr;
-    size_t weight_size;
-    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+    auto [weight_ptr, weight_size] = weights_loader->GetTensor(weight_name);
     if (weight_ptr == nullptr) {
       KLLM_LOG_DEBUG << fmt::format("The {}'s weight_ptr is null", weight_name);
       continue;
@@ -288,16 +286,16 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
       continue;
     }
 
-    int head_num = model_config_.head_num;
-    int num_kv_heads = model_config_.num_key_value_heads;
+    const int head_num = model_config_.head_num;
+    const int num_kv_heads = model_config_.num_key_value_heads;
     // copy host data to device
-    int qkv_offset = CheckQKVWeight(tensor_name, head_num, num_kv_heads);
+    const int qkv_offset = CheckQKVWeight(tensor_name, head_num, num_kv_heads);
     // Load qkv weights, name like: "model.layers.(\\d+).self_attn.q_proj.weight",
     // "model.layers.(\\d+).self_attn.k_proj.weight", "model.layers.(\\d+).self_attn.v_proj.weight".
     if (qkv_offset >= 0) {
       // Start get layer_idx
       int layer_idx = 0;
-      std::regex re("\\d+");
+      static const std::regex re("\\d+");
       std::smatch match;
       if (std::regex_search(tensor_name, match, re)) {
         std::string layer_idx_str = match.str(0);
@@ -310,11 +308,11 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
         LoadRegularTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first, tensor_para_offset,
                           weight_size);
       } else {
-        std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
-                               (is_bias ? ".bias" : ".weight");
+        const std::string qkv_name = tensor_name.substr(0, tensor_name.find_last_of('_') - 1) + "query_key_value" +
+                                     (is_bias ? ".bias" : ".weight");
         if (!weights_map_.count(qkv_name)) {
           // Bias has been prepended with 1.
-          int first_dim = is_bias ? 1 : 0;
+          const size_t first_dim = is_bias ? 1 : 0;
           if (qkv_offset == 0) {
             // For q_proj in the GQA scenario, the weight_shape is first transformed into k_proj.
             weight_shape[first_dim] /= head_num / num_kv_heads;
@@ -325,7 +323,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader
         weights_data_type_map_[qkv_name] = weight_data_type;
         Tensor& qkv_weight_tensor = weights_map_[qkv_name];
         size_t single_proj_size = qkv_weight_tensor.GetTotalBytes() / (head_num / num_kv_heads + 2);
-        size_t saved_offset = qkv_offset * single_proj_size;
+        const size_t saved_offset = qkv_offset * single_proj_size;
         if (qkv_offset == 0) {
           single_proj_size *= head_num / num_kv_heads;
         }
@@ -668,11 +666,11 @@ Status CommonWeight<T>::LoadMlpUpGateTensor(void* weight_ptr, std::string tensor
   std::string replacement = "gate_up_proj";
   if (tensor_name.find("gate_proj") != std::string::npos) {
     concat_offset = 0;
-    std::regex pattern("gate_proj");
+    static const std::regex pattern("gate_proj");
     up_gate_weights_name = std::regex_replace(tensor_name, pattern, replacement);
   } else if (tensor_name.find("up_proj") != std::string::npos) {
     concat_offset = 1;
-    std::regex pattern("up_proj");
+    static const std::regex pattern("up_proj");
     up_gate_weights_name = std::regex_replace(tensor_name, pattern, replacement);
   } else {
     KLLM_THROW("tensor name should contain gate_proj or up_proj");
@@ -1020,10 +1018,11 @@ void CommonWeight<T>::ChunkGateWeight() {
 
 template <typename T>
 void CommonWeight<T>::PrintDebugMessage() {
-  for (auto& [k, v] : weights_map_) {
-    KLLM_LOG_INFO << "CommonWeight have weight " << k << ", shapes " << Vector2Str(std::vector<size_t>(v.shape))
-                  << ", dtype " << v.dtype;
+  std::string debug_message = "CommonWeight weights:";
+  for (const auto& [k, v] : weights_map_) {
+    debug_message += fmt::format(" [{}, shape: {}, dtype: {}]", k, Vector2Str(std::vector<size_t>(v.shape)), v.dtype);
   }
+  KLLM_LOG_INFO << debug_message;
 }
 template class CommonWeight<float>;
 template class CommonWeight<float16>;

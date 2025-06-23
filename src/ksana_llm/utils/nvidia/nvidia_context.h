@@ -9,6 +9,7 @@
 
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
+#include "ksana_llm/utils/waiter.h"
 
 #include "3rdparty/LLM_kernels/csrc/kernels/nvidia/gemm_wrapper/gemm_algo_map.h"
 
@@ -24,7 +25,12 @@ class NvidiaContextExtension {
 
   ncclUniqueId& GetNCCLUniqueID() { return nccl_uid_; }
 
-  std::vector<NCCLParam>& GetNCCLParam() { return nccl_params_; }
+  std::vector<NCCLParam>& GetNCCLParam() {
+    while (!init_done_.load(std::memory_order_relaxed)) {
+      std::this_thread::yield();
+    }
+    return nccl_params_;
+  }
 
   std::vector<cublasHandle_t>& GetCublasHandles() { return cublas_handles_; }
 
@@ -89,6 +95,8 @@ class NvidiaContextExtension {
   std::vector<void*> cublaslt_workspace_ptrs_;
   // The helper for providing the best performance gemm algo
   llm_kernels::nvidia::GPUGemmAlgoHelper gpu_gemm_algo_helper_;
+
+  std::atomic_bool init_done_{false};
 };
 
 template <>

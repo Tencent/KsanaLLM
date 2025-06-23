@@ -66,9 +66,9 @@ class ContextT {
 
  private:
   int device_num_{0};
-  size_t tensor_parallel_size_{0};
-  size_t attn_data_parallel_size_{0};
-  const int defalt_device_id_{0};
+  const size_t tensor_parallel_size_{0};
+  const size_t attn_data_parallel_size_{0};
+  static constexpr int defalt_device_id_{0};
   int driver_version_;
   // if true, only one thread execute context_decode/decode and context_decode decode run in sync
   // TODO(karlluo): load from environment

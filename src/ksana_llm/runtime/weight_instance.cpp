@@ -29,13 +29,13 @@
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_weight.h"
 #include "ksana_llm/models/qwen3_moe/qwen3_moe_weight.h"
 
+#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/pytorch_file_tensor_loader.h"
 #include "ksana_llm/utils/safetensors_file_tensor_loader.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 
-#include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
 #include "ksana_llm/models/llama/llama_model_config.h"
+#include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
 
 namespace ksana_llm {
 
@@ -119,8 +119,8 @@ void WeightInstance::CreateWeightInstances() {
 }
 
 void WeightInstance::Load() {
-  static const char* enable_old_loader = std::getenv("ENABLE_OLD_LOADER");
-  bool use_old_loader = (enable_old_loader != nullptr && strcmp(enable_old_loader, "1") == 0);
+  const char* const enable_old_loader = std::getenv("ENABLE_OLD_LOADER");
+  const bool use_old_loader = (enable_old_loader != nullptr && strcmp(enable_old_loader, "1") == 0);
 
   ModelConfigParser model_config_parser;
   std::shared_ptr<BaseModelConfig> model_config;
@@ -203,12 +203,12 @@ void WeightInstance::CheckTieEmbeddings(int weight_file_size) {
   }
 }
 
-void WeightInstance::CheckTieEmbeddings(std::vector<std::string>& custom_name_list) {
+void WeightInstance::CheckTieEmbeddings(const std::vector<std::string>& custom_name_list) {
   if (!model_config_.exist_tie_embeddings_param) {
     // When the quantity of weight files is equal to 1, the weight file should be loaded directly before the name search
     // is performed.
-    std::string lm_head_weight = "lm_head.weight";
-    auto exist_lm_head = std::find(custom_name_list.begin(), custom_name_list.end(), lm_head_weight);
+    const std::string lm_head_weight = "lm_head.weight";
+    const auto exist_lm_head = std::find(custom_name_list.begin(), custom_name_list.end(), lm_head_weight);
     if (exist_lm_head == custom_name_list.end()) {
       SetEmbeddingsConfig();
       KLLM_LOG_INFO
@@ -233,13 +233,13 @@ void WeightInstance::LoadWeightsAndModelsMap(bool& loaded_from_cache) {
 
 bool WeightInstance::SaveWeightsToCache() {
   std::vector<std::future<void>> save_weight_tasks;
+  save_weight_tasks.reserve(context_->GetTensorParallelSize());
 
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    save_weight_tasks.push_back(loader_weight_threadpool_->Submit([worker_id, this]() {
+    save_weight_tasks.emplace_back(loader_weight_threadpool_->Submit([worker_id, this]() {
       StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
       this->weights_[worker_id]->SaveWeightsToCacheFolder();
       StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
-      return;
     }));
   }
   for (auto&& save_weight_task : save_weight_tasks) {
@@ -271,13 +271,16 @@ bool WeightInstance::TryToLoadWeightsFromCache() {
 }
 
 void WeightInstance::LoadWeights() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+  const auto start_time = std::chrono::high_resolution_clock::now();
   ModelFileFormat model_file_format;
-  std::vector<std::string> weights_file_list = SearchLocalPath(model_config_.path, model_file_format);
-  int weight_file_size = weights_file_list.size();
+  const std::vector<std::string>& weights_file_list = SearchLocalPath(model_config_.path, model_file_format);
+  const size_t weight_file_size = weights_file_list.size();
   CheckTieEmbeddings(weight_file_size);
 
-  for (std::string& file_name : weights_file_list) {
+  std::vector<std::future<void>> load_weight_tasks;
+  std::vector<std::mutex> tp_mutex(context_->GetTensorParallelSize());
+
+  for (const std::string& file_name : weights_file_list) {
     std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
     if (model_file_format == SAFETENSORS) {
       weights_loader = std::make_shared<SafeTensorsLoader>(file_name, model_config_.load_bias);
@@ -286,44 +289,54 @@ void WeightInstance::LoadWeights() {
     } else {
       weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name, model_config_.load_bias);
     }
-    std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
+
     std::vector<std::string> custom_name_list;
-    GetCustomNameList(model_config_.path, model_config_.type, weight_name_list, custom_name_list, model_file_format);
+    GetCustomNameList(model_config_.path, model_config_.type, weights_loader->GetTensorNameList(), custom_name_list,
+                      model_file_format);
+
     if (weight_file_size == 1) {
       CheckTieEmbeddings(custom_name_list);
     }
 
-    std::vector<std::future<void>> get_weight_tasks;
-
-    for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      get_weight_tasks.push_back(
-          loader_weight_threadpool_->Submit([worker_id, this, &weights_loader, &weight_name_list, &custom_name_list]() {
-            this->weights_[worker_id]->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
-            StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
-            return;
+    for (size_t tp_i = 0; tp_i < context_->GetTensorParallelSize(); ++tp_i) {
+      load_weight_tasks.emplace_back(
+          loader_weight_threadpool_->Submit([tp_i, this, weights_loader, custom_name_list, &tp_mutex]() {
+            // The current implementation can only process serially per card.
+            std::lock_guard<std::mutex> lock(tp_mutex[tp_i]);
+            const auto& weight_name_list = weights_loader->GetTensorNameList();
+            this->weights_[tp_i]->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
+            StreamSynchronize(this->context_->GetMemoryManageStreams()[tp_i]);
           }));
     }
-    for (auto&& get_weight_task : get_weight_tasks) {
-      get_weight_task.get();
+
+    if (model_file_format != SAFETENSORS) {
+      for (auto&& get_weight_task : load_weight_tasks) {
+        get_weight_task.get();
+      }
+      load_weight_tasks.clear();
     }
   }
-  std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;
+
+  for (auto&& get_weight_task : load_weight_tasks) {
+    get_weight_task.get();
+  }
+
+  const std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;
   KLLM_LOG_INFO << fmt::format("load cost: {} seconds", elapsed.count());
 }
 
 void WeightInstance::ProcessWeights() {
   const auto start_time = std::chrono::high_resolution_clock::now();
   std::vector<std::future<void>> process_weight_tasks;
+  process_weight_tasks.reserve(context_->GetTensorParallelSize());
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    process_weight_tasks.push_back(loader_weight_threadpool_->Submit([worker_id, this]() {
-      this->weights_[worker_id]->ProcessWeights();
-      return;
-    }));
+    process_weight_tasks.emplace_back(
+        loader_weight_threadpool_->Submit([worker_id, this]() { this->weights_[worker_id]->ProcessWeights(); }));
   }
   for (auto&& process_weight_task : process_weight_tasks) {
     process_weight_task.get();
   }
-  std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;
+  const std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;
   KLLM_LOG_INFO << fmt::format("process cost: {} seconds", elapsed.count());
 }
 
@@ -341,8 +354,7 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
   // Temporarily support partly llama and deepseek v3 on nvidia-GPU
   switch (model_config->model_arch) {
     case ModelArchitecture::ARCH_LLAMA: {
-      std::shared_ptr<LlamaModelConfig> llama_model_config =
-          std::dynamic_pointer_cast<LlamaModelConfig>(model_config);
+      std::shared_ptr<LlamaModelConfig> llama_model_config = std::dynamic_pointer_cast<LlamaModelConfig>(model_config);
       if (!llama_model_config->is_quant) {
         return true;
       }
@@ -352,17 +364,22 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
 
     case ModelArchitecture::ARCH_DEEPSEEK: {
       std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
-        std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
+          std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
       // Early return for incompatible cases
-      if (new_deepseek_v3_config->is_quant &&
-          !(new_deepseek_v3_config->quant_config.method == QUANT_FP8_E4M3 ||
-            new_deepseek_v3_config->quant_config.method == QUANT_BLOCK_FP8_E4M3)) {
+      if (new_deepseek_v3_config->is_quant && !(new_deepseek_v3_config->quant_config.method == QUANT_FP8_E4M3 ||
+                                                new_deepseek_v3_config->quant_config.method == QUANT_BLOCK_FP8_E4M3)) {
         return false;
       }
-      if (new_deepseek_v3_config->attn_data_para_size > 1 ||
-          new_deepseek_v3_config->expert_para_size > 1) {
+      if (new_deepseek_v3_config->attn_data_para_size > 1 || new_deepseek_v3_config->expert_para_size > 1) {
         return false;
       }
+
+      // Due to loading performance issues, the old version implementation is temporarily being used when launching with
+      // 8 cards.
+      if (new_deepseek_v3_config->tensor_para_size == 8) {
+        return false;
+      }
+
       return true;
     }
     default:

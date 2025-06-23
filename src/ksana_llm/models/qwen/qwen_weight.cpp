@@ -17,9 +17,9 @@ Tensor QwenWeight<T>::GetModelWeights(const std::string& weight_name) {
 }
 
 template <typename T>
-Status QwenWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                          std::vector<std::string>& weight_name_list,
-                                          std::vector<std::string>& custom_name_list) {
+Status QwenWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                          const std::vector<std::string>& weight_name_list,
+                                          const std::vector<std::string>& custom_name_list) {
   if (!common_weight_->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list).OK()) {
     KLLM_THROW(fmt::format("Load weight file {} error.", weights_loader->GetTensorFileName()));
   }

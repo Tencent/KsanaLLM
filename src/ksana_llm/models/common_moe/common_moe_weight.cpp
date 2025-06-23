@@ -44,7 +44,7 @@ CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, int rank, s
 template <typename T>
 Status CommonMoeWeight<T>::GetExpertsIdx(const std::string& expert_name, int& layer_idx, int& expert_idx) {
   // Get the index of the moe layer and the index of each expert
-  std::regex re(R"(\d+)");
+  static const std::regex re(R"(\d+)");
   std::sregex_iterator next(expert_name.begin(), expert_name.end(), re);
   std::sregex_iterator end;
   if (next != end) {
@@ -64,9 +64,9 @@ Status CommonMoeWeight<T>::GetExpertsIdx(const std::string& expert_name, int& la
 }
 
 template <typename T>
-Status CommonMoeWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                               std::vector<std::string>& weight_name_list,
-                                               std::vector<std::string>& custom_name_list) {
+Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                               const std::vector<std::string>& weight_name_list,
+                                               const std::vector<std::string>& custom_name_list) {
   CommonWeight<T>::LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
   SetDevice(rank_);
 
@@ -74,8 +74,8 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoa
     // For each layer of the model, experts at the same position in 'up' and 'gate' need to be concatenated together
     // and named 'up_gate.weight. And for each layer, all corresponding experts from 'up_gate' and 'down' need to be
     // stacked to form one expert weight.
-    std::string& tensor_name = custom_name_list[idx];
-    std::string& weight_name = weight_name_list[idx];
+    const std::string& tensor_name = custom_name_list[idx];
+    const std::string& weight_name = weight_name_list[idx];
 
     if (!BaseWeight::IsPipelineNodeWeight(tensor_name)) {
       continue;
@@ -84,9 +84,7 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoa
     if (quant_weight_solver_->IsEnable() || model_config_.quant_config.enable_moe_int4) {
       break;
     }
-    void* weight_ptr;
-    size_t weight_size;
-    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+    auto [weight_ptr, weight_size] = weights_loader->GetTensor(weight_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
 #ifdef ENABLE_FP8

@@ -35,7 +35,7 @@ BaseWeight::BaseWeight(const ModelConfig& model_config, int rank, std::shared_pt
                   << pipeline_config_.lower_nextn_layer_idx << ", " << pipeline_config_.upper_nextn_layer_idx << "].";
   }
   // extract dense and moe layer idx
-  std::vector<size_t>& moe_layers = model_config_.moe_config.moe_layers;
+  const std::vector<size_t>& moe_layers = model_config_.moe_config.moe_layers;
   for (const auto idx : required_layer_idx_.all) {
     if (model_config_.is_moe && idx >= model_config_.moe_config.first_k_dense_replace &&
         (moe_layers.empty() || std::find(moe_layers.begin(), moe_layers.end(), idx) != moe_layers.end())) {
@@ -49,10 +49,10 @@ BaseWeight::BaseWeight(const ModelConfig& model_config, int rank, std::shared_pt
 bool BaseWeight::IsPipelineNodeWeight(const std::string& tensor_name) {
   // Start get layer_idx
   int layer_idx = 0;
-  std::regex re("\\d+");
+  static const std::regex re("\\d+");
   std::smatch match;
   if (std::regex_search(tensor_name, match, re)) {
-    std::string layer_idx_str = match.str(0);
+    const std::string& layer_idx_str = match.str(0);
     layer_idx = std::stoi(layer_idx_str);
   }  // End get layer_idx
   if (required_layer_idx_.all.find(layer_idx) != required_layer_idx_.all.end()) {
@@ -64,22 +64,22 @@ bool BaseWeight::IsPipelineNodeWeight(const std::string& tensor_name) {
 }
 
 bool BaseWeight::TryToLoadWeightsFromCache() {
-  ModelFileFormat model_file_format;
-  std::filesystem::path cache_path(GetCacheFolder());
+  const std::filesystem::path cache_path(GetCacheFolder());
   if (!std::filesystem::exists(cache_path) || !std::filesystem::is_directory(cache_path)) {
     KLLM_LOG_INFO << fmt::format("CacheFolder: {} does not exist, skip load cache", cache_path.string());
     return false;
   }
-  std::vector<std::string> weights_file_list = SearchLocalPath(cache_path, model_file_format);
-  const size_t file_count = weights_file_list.size();
-  std::shared_ptr<ThreadPool> worker_loader_threadpool = std::make_shared<ThreadPool>(16);
+
+  ModelFileFormat model_file_format;
+  const std::vector<std::string>& weights_file_list = SearchLocalPath(cache_path, model_file_format);
+  auto worker_loader_threadpool = std::make_shared<ThreadPool>(16);
   worker_loader_threadpool->Start();
-  std::atomic<bool> all_ok = true;
+  std::atomic_bool all_ok = true;
   std::vector<std::future<void>> futures;
+  futures.reserve(weights_file_list.size());
   std::mutex tensor_manager_mutex;
-  for (size_t i = 0; i < file_count; ++i) {
-    const std::string& file_name = weights_file_list[i];
-    futures.push_back(worker_loader_threadpool->Submit([&, file_name]() {
+  for (const std::string& file_name : weights_file_list) {
+    futures.emplace_back(worker_loader_threadpool->Submit([&, file_name]() {
       try {
         auto loader = std::make_shared<SafeTensorsLoader>(file_name, model_config_.load_bias);
         const auto& tensor_names = loader->GetTensorNameList();
@@ -87,13 +87,13 @@ bool BaseWeight::TryToLoadWeightsFromCache() {
           if (!IsPipelineNodeWeight(tensor_name)) {
             continue;
           }
-          auto shape = loader->GetTensorShape(tensor_name);
-          auto data_type = loader->GetTensorDataType(tensor_name);
-          auto [weight_ptr, weight_size] = loader->GetTensor(tensor_name);
+          const auto& shape = loader->GetTensorShape(tensor_name);
+          const auto& data_type = loader->GetTensorDataType(tensor_name);
+          const auto& [weight_ptr, weight_size] = loader->GetTensor(tensor_name);
           {
             std::lock_guard<std::mutex> lock(tensor_manager_mutex);
             weights_data_type_map_[tensor_name] = data_type;
-            Status status = tensor_manager_->AddWeightTensor(tensor_name, shape, data_type);
+            const Status status = tensor_manager_->AddWeightTensor(tensor_name, shape, data_type);
             if (!status.OK()) {
               KLLM_LOG_INFO << fmt::format("Failed to load cache model from {}", cache_path.string());
               all_ok = false;
@@ -109,8 +109,11 @@ bool BaseWeight::TryToLoadWeightsFromCache() {
     }));
   }
   // Wait for all file processing
-  for (auto& future : futures) future.wait();
-  if (!all_ok) {
+  for (auto& future : futures) {
+    future.wait();
+  }
+
+  if (!all_ok.load(std::memory_order_relaxed)) {
     KLLM_LOG_INFO << "Error occurred during parallel file loading";
     return false;
   }
@@ -135,7 +138,7 @@ bool BaseWeight::SaveWeightsToCacheFolder() {
 }
 
 std::string BaseWeight::GetCacheFolder() {
-  const char* model_cache_path_env = std::getenv("MODEL_CACHE_PATH");
+  const char* const model_cache_path_env = std::getenv("MODEL_CACHE_PATH");
   std::string base_path = model_config_.path;
   if (model_cache_path_env != nullptr) {
     base_path = std::string(model_cache_path_env);

@@ -16,9 +16,9 @@ CommonMlaWeight<T>::CommonMlaWeight(const ModelConfig& model_config, int rank, s
     : CommonWeight<T>(model_config, rank, context) {}
 
 template <typename T>
-Status CommonMlaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                               std::vector<std::string>& weight_name_list,
-                                               std::vector<std::string>& custom_name_list) {
+Status CommonMlaWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                               const std::vector<std::string>& weight_name_list,
+                                               const std::vector<std::string>& custom_name_list) {
   SetDevice(rank_);
   size_t kv_lora_rank = model_config_.mla_config.kv_lora_rank;
   size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
@@ -34,8 +34,8 @@ Status CommonMlaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoa
                                 Vector2Str(custom_name_list));
 
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
-    std::string& tensor_name = custom_name_list[idx];
-    std::string& weight_name = weight_name_list[idx];
+    const std::string& tensor_name = custom_name_list[idx];
+    const std::string& weight_name = weight_name_list[idx];
 
     if (!BaseWeight::IsPipelineNodeWeight(tensor_name)) {
       continue;
@@ -44,9 +44,7 @@ Status CommonMlaWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoa
     if (quant_weight_solver_->IsEnable()) {
       break;
     }
-    void* weight_ptr;
-    size_t weight_size;
-    std::tie(weight_ptr, weight_size) = weights_loader->GetTensor(weight_name);
+    auto [weight_ptr, weight_size] = weights_loader->GetTensor(weight_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
     std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
 #ifdef ENABLE_FP8

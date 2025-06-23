@@ -24,6 +24,7 @@ ModelWeightLoader::~ModelWeightLoader() { weight_loader_threadpool_->Stop(); }
 
 Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_config,
                                       std::vector<std::shared_ptr<ModelWeight>>& dev_weights) {
+  const auto start_time = std::chrono::high_resolution_clock::now();
   std::shared_ptr<BaseModelWeightLoader> model_weight_loader;
   Status status = ModelWeightLoaderFactory::CreateModelWeightLoader(model_config->model_arch, model_config, env_,
                                                                     context_, model_weight_loader);
@@ -39,18 +40,21 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
   status = model_weight_loader->FilterModelFiles(model_file_list);
   STATUS_CHECK_RETURN(status);
 
-  size_t tp_size = context_->GetTensorParallelSize();
+  const size_t tp_size = context_->GetTensorParallelSize();
+  dev_weights.reserve(tp_size);
   for (size_t i = 0; i < tp_size; ++i) {
-    std::shared_ptr<ModelWeight> weight = std::make_shared<ModelWeight>();
-    dev_weights.push_back(weight);
+    dev_weights.emplace_back(std::make_shared<ModelWeight>());
   }
 
   std::vector<std::unordered_map<std::string, Tensor>> left_host_weights(tp_size);
-  std::vector<std::unordered_map<std::string, Tensor>> dev_model_weights;
-  dev_model_weights.resize(tp_size);
+  std::vector<std::mutex> tp_mutex(tp_size);
+  std::vector<std::future<void>> load_weight_tasks;
 
+  // file loader may use mmap, hold it until finish load weight
+  std::vector<FileLoader> file_loaders;
+  file_loaders.reserve(model_file_list.size());
   for (const std::string& model_file : model_file_list) {
-    FileLoader file_loader(model_file);
+    auto& file_loader = file_loaders.emplace_back(model_file);
 
     std::vector<std::string> weight_names;
     status = file_loader.LoadWeightNames(model_config->model_format, weight_names);
@@ -59,40 +63,41 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
     status = model_weight_loader->FilterWeightNames(weight_names);
     STATUS_CHECK_RETURN(status);
 
-    std::unordered_map<std::string, Tensor> host_model_weights;
-    status = file_loader.LoadModelWeights(model_config->model_format, weight_names, host_model_weights);
+    auto host_model_weights = std::make_shared<std::unordered_map<std::string, Tensor>>();
+    status = file_loader.LoadModelWeights(model_config->model_format, weight_names, *host_model_weights);
     STATUS_CHECK_RETURN(status);
 
     // Process common task for all tp devices.
-    model_weight_loader->PreProcessModelWeights(host_model_weights);
+    model_weight_loader->PreProcessModelWeights(*host_model_weights);
 
-    std::vector<std::unordered_map<std::string, Tensor>> merged_tensors(tp_size);
-
-    std::vector<std::future<void>> process_weight_tasks;
-    for (int dev_rank = 0; dev_rank < tp_size; ++dev_rank) {
-      // Merge left host weights.
-      merged_tensors[dev_rank].insert(host_model_weights.begin(), host_model_weights.end());
-      merged_tensors[dev_rank].insert(left_host_weights[dev_rank].begin(), left_host_weights[dev_rank].end());
-      left_host_weights[dev_rank].clear();
-
-      process_weight_tasks.push_back(weight_loader_threadpool_->Submit([&, dev_rank]() {
+    for (size_t dev_rank = 0; dev_rank < tp_size; ++dev_rank) {
+      load_weight_tasks.emplace_back(weight_loader_threadpool_->Submit([&, dev_rank, host_model_weights]() {
+        // The current implementation can only process serially per card.
+        std::lock_guard<std::mutex> lock(tp_mutex[dev_rank]);
         SetDevice(dev_rank);
-        model_weight_loader->ProcessModelWeights(merged_tensors[dev_rank], dev_rank, dev_model_weights[dev_rank],
-                                                 left_host_weights[dev_rank]);
+        std::unordered_map<std::string, Tensor> model_weights = *host_model_weights;
+        auto& left_tensor = left_host_weights[dev_rank];
+        model_weights.insert(left_tensor.begin(), left_tensor.end());
+        left_tensor.clear();
+        model_weight_loader->ProcessModelWeights(model_weights, dev_rank, dev_weights[dev_rank]->weights_map_,
+                                                 left_tensor);
         StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
       }));
     }
-
-    // Wait all task finished.
-    for (size_t i = 0; i < process_weight_tasks.size(); ++i) {
-      process_weight_tasks[i].get();
-    }
   }
 
+  // Wait all task finished.
+  for (auto& task : load_weight_tasks) {
+    task.get();
+  }
+
+  // post process
   for (size_t i = 0; i < tp_size; i++) {
-    dev_weights[i]->weights_map_.insert(dev_model_weights[i].begin(), dev_model_weights[i].end());
     model_weight_loader->PostProcessModelWeights(dev_weights[i]->weights_map_, i);
   }
+
+  const std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;
+  KLLM_LOG_INFO << fmt::format("LoadWeights cost: {} seconds", elapsed.count());
   return Status();
 }
 

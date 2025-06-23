@@ -12,6 +12,7 @@ class WeightInstanceTest : public ::testing::Test {
     Py_Initialize();
     InitLoguru();
     setenv("ENABLE_MODEL_CACHE", "1", 1);
+    setenv("ENABLE_OLD_LOADER", "1", 1);
     context_ = std::make_shared<Context>(1, 1);
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -20,7 +21,6 @@ class WeightInstanceTest : public ::testing::Test {
     tmp_cache_model_path_ =
         std::filesystem::absolute(parent_path / "../../../build/tmp" / std::to_string(std::time(nullptr)));
     setenv("MODEL_CACHE_PATH", tmp_cache_model_path_.c_str(), 1);
-    setenv("ENABLE_OLD_LOADER", "1", 1);
 
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);

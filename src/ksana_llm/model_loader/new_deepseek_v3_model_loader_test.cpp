@@ -56,8 +56,7 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
 };
 
 TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
-  std::vector<std::string> model_dirs = {"/model/DeepSeek-V2-Lite-Chat-17868/",
-      "/model/DeepSeek-R1-17832-fix-bf16/"};
+  std::vector<std::string> model_dirs = {"/model/DeepSeek-V2-Lite-Chat-17868/", "/model/DeepSeek-R1-17832-fix-bf16/"};
 
   std::vector<int> head_nums = {16, 128};
   std::vector<int> hidden_units = {2048, 7168};
@@ -68,8 +67,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
   std::vector<int> kv_lora_ranks = {512, 512};
   std::vector<int> num_key_value_heads = {16, 128};
   std::vector<int> max_position_embeddings = {163840, 163840};
-  std::vector<ModelFormat> model_formats = {ModelFormat::PYTORCH_SAFETENSOR,
-      ModelFormat::PYTORCH_SAFETENSOR};
+  std::vector<ModelFormat> model_formats = {ModelFormat::PYTORCH_SAFETENSOR, ModelFormat::PYTORCH_SAFETENSOR};
 
   for (size_t i = 0; i < model_dirs.size(); ++i) {
     const std::string& model_dir = model_dirs[i];
@@ -90,7 +88,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
 
     // check config type.
     std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
-      std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
+        std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
 
     // Check common info.
     EXPECT_EQ(new_deepseek_v3_config->model_dir, model_dir);
@@ -114,7 +112,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3WeightLoader) {
   std::vector<std::string> model_dirs = {"/model/DeepSeek-R1-17832-fix-bf16/"};
 
   for (size_t i = 0; i < model_dirs.size(); ++i) {
-    const std::string & model_dir = model_dirs[i];
+    const std::string& model_dir = model_dirs[i];
     if (!std::filesystem::is_directory(model_dir)) {
       KLLM_LOG_WARNING << "Model dir " << model_dir << " not exist, skip." << std::endl;
       EXPECT_TRUE(false);
@@ -159,9 +157,10 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3WeightLoader) {
       }
     }
 
-    std::string command = fmt::format("python {}/../src/ksana_llm/model_loader/"
-                                      "check_deepseek_weight_tensor.py {} {}",
-                                      std::filesystem::current_path().string(), model_dir, dev_weights.size());
+    std::string command = fmt::format(
+        "python {}/../src/ksana_llm/model_loader/"
+        "check_deepseek_weight_tensor.py {} {}",
+        std::filesystem::current_path().string(), model_dir, dev_weights.size());
     // check ret code
     int ret_code = std::system(command.c_str());
     EXPECT_TRUE(WEXITSTATUS(ret_code) == 0);

@@ -15,9 +15,9 @@ class DeepSeekV3Weight : public CommonMlaWeight<T>, public CommonMoeWeight<T> {
   DeepSeekV3Weight() {}
   explicit DeepSeekV3Weight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
 
-  Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                             std::vector<std::string>& weight_name_list,
-                             std::vector<std::string>& custom_name_list) override;
+  Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                             const std::vector<std::string>& weight_name_list,
+                             const std::vector<std::string>& custom_name_list) override;
 
   void ProcessWeights() override;
 

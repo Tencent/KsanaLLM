@@ -20,9 +20,9 @@ class BaseWeight {
   // 查表,返回 weights_map_[weight_name]
   virtual Tensor GetModelWeights(const std::string& weight_name) = 0;
   // 加载权重
-  virtual Status LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                     std::vector<std::string>& weight_name_list,
-                                     std::vector<std::string>& custom_name_list) = 0;
+  virtual Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                     const std::vector<std::string>& weight_name_list,
+                                     const std::vector<std::string>& custom_name_list) = 0;
 
   virtual bool TryToLoadWeightsFromCache();
 

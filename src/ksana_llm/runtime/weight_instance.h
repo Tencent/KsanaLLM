@@ -45,7 +45,7 @@ class WeightInstance : public WeightInstanceInterface {
 
   void CheckTieEmbeddings(int weight_file_size);
 
-  void CheckTieEmbeddings(std::vector<std::string>& custom_name_list);
+  void CheckTieEmbeddings(const std::vector<std::string>& custom_name_list);
 
   void CreateWeightInstances();
 

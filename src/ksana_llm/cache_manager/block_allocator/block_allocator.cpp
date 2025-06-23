@@ -55,6 +55,7 @@ void BlockAllocator::PreAllocateBlocks() {
 #endif
 
   // NOTE: Make sure block ids on all worker nodes have same id range.
+  free_blocks_.reserve(block_num_);
   void* memory_ptr = nullptr;
   for (size_t block_id = 0; block_id < block_num_; ++block_id) {
     if (use_continuous_memory) {
@@ -62,7 +63,7 @@ void BlockAllocator::PreAllocateBlocks() {
     } else {
       malloc_fn_(&memory_ptr, block_size_);
     }
-    free_blocks_.insert({block_id, memory_ptr});
+    free_blocks_.emplace(block_id, memory_ptr);
   }
 }
 

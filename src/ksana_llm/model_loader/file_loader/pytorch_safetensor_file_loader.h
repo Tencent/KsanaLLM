@@ -36,15 +36,11 @@ class PytorchSafetensorFileLoader : public BaseFileLoader {
   Status LoadSafetensorTensorDict();
 
  private:
-  std::string filename_;
-
-  // the file stream.
-  std::ifstream safetensors_file_;
-
+  const std::string filename_;
   json tensor_dict_;
 
-  // Whether the file have been loaded.
-  bool loaded_ = false;
+  void* mmap_ptr_ = nullptr;
+  size_t file_size_;
 };
 
 }  // namespace ksana_llm

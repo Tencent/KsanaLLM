@@ -10,9 +10,9 @@ Qwen2MoeWeight<T>::Qwen2MoeWeight(const ModelConfig& model_config, int rank, std
     : CommonWeight<T>(model_config, rank, context), CommonMoeWeight<T>(model_config, rank, context) {}
 
 template <typename T>
-Status Qwen2MoeWeight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                              std::vector<std::string>& weight_name_list,
-                                              std::vector<std::string>& custom_name_list) {
+Status Qwen2MoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                              const std::vector<std::string>& weight_name_list,
+                                              const std::vector<std::string>& custom_name_list) {
   CommonMoeWeight<T>::LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
   return Status();
 }

@@ -39,13 +39,12 @@ class SafeTensorsLoader : public BaseFileTensorLoader {
  private:
   // Use unordered_map to store the tensor names and their data ptr
   std::unordered_map<std::string, void*> tensor_ptr_map_;
-
-  std::unordered_map<std::string, size_t> tensor_offset_map_;
   std::unordered_map<std::string, size_t> tensor_size_map_;
   std::unordered_map<std::string, DataType> tensor_data_type_map_;
   std::unordered_map<std::string, std::vector<size_t>> tensor_shape_map_;
 
-  char* weights_buffer_ = nullptr;
+  void* mmap_ptr_ = nullptr;
+  size_t file_size_;
 };
 
 }  // namespace ksana_llm

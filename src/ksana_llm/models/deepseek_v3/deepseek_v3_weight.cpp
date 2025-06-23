@@ -20,9 +20,9 @@ DeepSeekV3Weight<T>::DeepSeekV3Weight(const ModelConfig& model_config, int rank,
       CommonMoeWeight<T>(model_config, rank, context) {}
 
 template <typename T>
-Status DeepSeekV3Weight<T>::LoadWeightsFromFile(std::shared_ptr<BaseFileTensorLoader>& weights_loader,
-                                                std::vector<std::string>& weight_name_list,
-                                                std::vector<std::string>& custom_name_list) {
+Status DeepSeekV3Weight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                                const std::vector<std::string>& weight_name_list,
+                                                const std::vector<std::string>& custom_name_list) {
   SetDevice(rank_);
   CommonMoeWeight<T>::LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
   CommonMlaWeight<T>::LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);

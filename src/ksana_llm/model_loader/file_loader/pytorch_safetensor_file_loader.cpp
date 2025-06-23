@@ -4,7 +4,12 @@
 
 #include "ksana_llm/model_loader/file_loader/pytorch_safetensor_file_loader.h"
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <filesystem>
+#include <iostream>
 #include <unordered_set>
 
 #include "ksana_llm/utils/device_types.h"
@@ -13,75 +18,76 @@
 
 namespace ksana_llm {
 
-PytorchSafetensorFileLoader::PytorchSafetensorFileLoader(const std::string& filename) : filename_(filename) {}
+PytorchSafetensorFileLoader::PytorchSafetensorFileLoader(const std::string& filename) : filename_(filename) {
+  const int fd = open(filename.c_str(), O_RDONLY);
+  if (fd < 0) {
+    KLLM_LOG_FATAL << "Can't open safetensors file: " << filename;
+  }
+
+  struct stat sb;
+  if (fstat(fd, &sb) == -1) {
+    KLLM_LOG_FATAL << "Can't open safetensors file: " << filename;
+    close(fd);
+    return;
+  }
+  file_size_ = sb.st_size;
+
+  mmap_ptr_ = mmap(NULL, file_size_, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (mmap_ptr_ == MAP_FAILED) {
+    KLLM_LOG_FATAL << "Can't open safetensors file: " << filename;
+    close(fd);
+    return;
+  }
+  close(fd);
+}
 
 PytorchSafetensorFileLoader::~PytorchSafetensorFileLoader() {
-  if (safetensors_file_.is_open()) {
-    safetensors_file_.close();
-    loaded_ = false;
+  if (mmap_ptr_ != nullptr) {
+    munmap(mmap_ptr_, file_size_);
+    mmap_ptr_ = nullptr;
   }
 }
 
 DataType GetTensorDataType(const std::string& safetensor_dtype) {
-  if (safetensor_dtype == "F16") {
-    return TYPE_FP16;
-  } else if (safetensor_dtype == "F32") {
-    return TYPE_FP32;
-  } else if (safetensor_dtype == "BF16") {
-    return TYPE_BF16;
-  } else if (safetensor_dtype == "I32") {
-    return TYPE_INT32;
-  } else if (safetensor_dtype == "F8_E4M3") {
-    return TYPE_FP8_E4M3;
-  }
-  return TYPE_INVALID;
+  const std::map<std::string, DataType> type_map = {{"F16", TYPE_FP16},         {"F32", TYPE_FP32},
+                                                    {"BF16", TYPE_BF16},        {"I32", TYPE_INT32},
+                                                    {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}};
+  return type_map.at(safetensor_dtype);
 }
 
 Status PytorchSafetensorFileLoader::LoadSafetensorTensorDict() {
-  if (!loaded_) {
-    safetensors_file_.open(filename_, std::ios::binary | std::ios::ate);
-    if (!safetensors_file_.is_open()) {
-      return Status(RET_INVALID_ARGUMENT, FormatStr("Failed to load safetensors file %s.", filename_.c_str()));
-    }
-
-    int64_t file_size = safetensors_file_.tellg();
-    if (file_size == -1) {
-      safetensors_file_.close();
-      return Status(RET_RUNTIME_FAILED,
-                    FormatStr("Invalid safetensors file size: -1, filename: %s", filename_.c_str()));
-    }
-    safetensors_file_.seekg(0, std::ios::beg);
-
-    // get the tensor list(string)
-    size_t header_size;
-    safetensors_file_.read(reinterpret_cast<char*>(&header_size), sizeof(size_t));
-
-    std::string tensor_dict_str;
-    tensor_dict_str.resize(header_size);
-    safetensors_file_.read(&tensor_dict_str[0], header_size);
-    KLLM_LOG_DEBUG << FormatStr("Safetensors file %s Header = %s", filename_.c_str(), tensor_dict_str.c_str());
-
-    // Parsing JSON to retrieve tensor information.
-    tensor_dict_ = json::parse(tensor_dict_str);
-
-    loaded_ = true;
+  if (!tensor_dict_.empty()) {
+    return Status();
   }
+
+  char* data_ptr = reinterpret_cast<char*>(mmap_ptr_);
+
+  // get the tensor list(string)
+  const size_t header_size = *reinterpret_cast<const size_t*>(data_ptr);
+  data_ptr += sizeof(header_size);
+
+  const std::string_view tensor_dict_str(reinterpret_cast<const char*>(data_ptr), header_size);
+  data_ptr += header_size;
+  KLLM_LOG_DEBUG << fmt::format("Safetensors file {} Header = {}", filename_, tensor_dict_str);
+
+  // Parsing JSON to retrieve tensor information.
+  tensor_dict_ = json::parse(tensor_dict_str);
   return Status();
 }
 
 Status PytorchSafetensorFileLoader::LoadWeightNames(std::vector<std::string>& weight_names) {
-  Status status = LoadSafetensorTensorDict();
+  const Status status = LoadSafetensorTensorDict();
   if (!status.OK()) {
     return status;
   }
 
-  for (const auto& tensor_iter : tensor_dict_.items()) {
-    const std::string& weight_name = tensor_iter.key();
-    json tensor_data = tensor_iter.value();
+  weight_names.clear();
+  weight_names.reserve(tensor_dict_.size());
+  for (const auto& [weight_name, tensor_data] : tensor_dict_.items()) {
     if (!tensor_data.contains("data_offsets")) {
       continue;
     }
-    weight_names.push_back(weight_name);
+    weight_names.emplace_back(weight_name);
   }
 
   return Status();
@@ -89,46 +95,32 @@ Status PytorchSafetensorFileLoader::LoadWeightNames(std::vector<std::string>& we
 
 Status PytorchSafetensorFileLoader::LoadModelWeights(const std::vector<std::string>& weight_names,
                                                      std::unordered_map<std::string, Tensor>& result) {
-  Status status = LoadSafetensorTensorDict();
+  const Status status = LoadSafetensorTensorDict();
   if (!status.OK()) {
     return status;
   }
 
-  std::unordered_set<std::string> weight_name_set(weight_names.begin(), weight_names.end());
-  size_t last_end_index = 0;
-  for (const auto& tensor_iter : tensor_dict_.items()) {
-    const std::string& weight_name = tensor_iter.key();
+  char* data_ptr = reinterpret_cast<char*>(mmap_ptr_);
+  const size_t header_size = *reinterpret_cast<const size_t*>(data_ptr);
+  data_ptr += sizeof(header_size) + header_size;
+
+  result.reserve(tensor_dict_.size());
+  const std::unordered_set<std::string> weight_name_set(weight_names.begin(), weight_names.end());
+  for (const auto& [weight_name, tensor_data] : tensor_dict_.items()) {
     if (weight_name_set.find(weight_name) == weight_name_set.end()) {
       KLLM_LOG_DEBUG << "Skip weight tensor name " << weight_name;
       continue;
     }
-    KLLM_LOG_DEBUG << "Load weight tensor name " << weight_name;
 
-    std::vector<size_t> tensor_shape;
-    json tensor_data = tensor_iter.value();
-    for (size_t dim : tensor_data["shape"]) {
-      tensor_shape.emplace_back(dim);
-    }
-
+    const std::vector<size_t> tensor_shape = tensor_data["shape"].get<decltype(tensor_shape)>();
     KLLM_LOG_DEBUG << FormatStr("SafeTensors Loader: weight_name:%s, shape:%s", weight_name.c_str(),
                                 Vector2Str(tensor_shape).c_str());
 
-    size_t tensor_beg_index = tensor_data["data_offsets"][0];
-    size_t tensor_end_index = tensor_data["data_offsets"][1];
-    size_t tensor_size = tensor_end_index - tensor_beg_index;
-
-    DataType tensor_dtype = GetTensorDataType(tensor_data["dtype"]);
-
-    Tensor weight_tensor = Tensor(MemoryLocation::LOCATION_HOST, tensor_dtype, tensor_shape);
-    safetensors_file_.seekg(tensor_beg_index - last_end_index, std::ios::cur);
-    safetensors_file_.read(weight_tensor.GetPtr<char>(), tensor_size);
-    result[weight_name] = weight_tensor;
-    last_end_index = tensor_end_index;
+    const size_t tensor_beg_index = tensor_data["data_offsets"][0];
+    const DataType tensor_dtype = GetTensorDataType(tensor_data["dtype"]);
+    result[weight_name] = Tensor(MemoryLocation::LOCATION_HOST, tensor_dtype, tensor_shape, -1,
+                                 reinterpret_cast<void*>(data_ptr) + tensor_beg_index);
   }
-
-  // Could read only once.
-  safetensors_file_.close();
-  loaded_ = false;
 
   return Status();
 }
