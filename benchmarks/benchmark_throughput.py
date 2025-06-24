@@ -181,12 +181,12 @@ def args_config():
                         type=str,
                         default="benchmark_input.csv",
                         help='input data for benchmark')
-    parser.add_argument('--dataset_name', 
+    parser.add_argument('--dataset_name',
                         type=str,
                         default="customize",
                         choices=[
-                            'customize', 'sharegpt500', 
-                            'longbenchV2withCtx', 'longbenchV2noCtx' 
+                            'customize', 'sharegpt500',
+                            'longbenchV2withCtx', 'longbenchV2noCtx'
                             # LongBench V2 dataset (questions with/no long text contexts)
                         ],
                         help='Name of the data to benchmark on.')
@@ -483,7 +483,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
     input_tokens = None
     if args.random_input_len > 0:
         input_tokens = [random.randint(0, tokenizer.vocab_size - 1) for _ in range(args.random_input_len)]
-        
+
     if args.backend == "ksana":
         data = {
             "sampling_config": {
@@ -785,7 +785,7 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
 
     # Set a timeout of 3 hours for the aiohttp client
     timeout = aiohttp.ClientTimeout(total=args.client_timeout)
-    
+
     # Store the output of sever in stream mode
     server_stream_output = ""
 
@@ -1048,7 +1048,7 @@ def search_request_rate(args: argparse.Namespace, request_rate_list: List[Tuple[
 def main(args: argparse.Namespace):
     global REQUEST_LATENCY
     check_args(args)
-    
+
     np.random.seed(args.seed)
     random.seed(args.seed)
 
@@ -1088,7 +1088,7 @@ def main(args: argparse.Namespace):
     elif args.dataset_name.startswith("longbenchV2"):
         with_ctx = True if "withCtx" in args.dataset_name else False
         # we need encode tokens to check and truncate the long-context prompts
-        longbench_dataset = LongBenchV2Dataset(file_path=args.dataset_path, with_context=with_ctx, 
+        longbench_dataset = LongBenchV2Dataset(file_path=args.dataset_path, with_context=with_ctx,
                                                tokenizer_path=args.tokenizer_path)
         inputs = longbench_dataset.get_all_prompts()
     else:

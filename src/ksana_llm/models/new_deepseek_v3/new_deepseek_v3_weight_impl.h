@@ -54,7 +54,6 @@ class NewDeepSeekV3WeightImplBase {
                                                  new_deepseek_v3_config) = 0;
 #endif
 #ifdef ENABLE_FP8
-#ifdef ENABLE_FP8_TORCH
   virtual bool LoadMoeFp8E4m3BlockWiseScale(const std::string & host_weight_name,
                                     const Tensor & host_weight_tensor,
                                     int dev_rank,
@@ -76,6 +75,7 @@ class NewDeepSeekV3WeightImplBase {
                                                                 int dev_rank,
                                                                 const std::shared_ptr<NewDeepSeekV3Config> &
                                                                 new_deepseek_v3_config) = 0;
+#ifdef ENABLE_FP8_TORCH
   virtual Status ProcessMlaFp8E4m3BlockWiseScaleOfWeight(std::unordered_set<std::string> & processed_weights,
                                         std::unordered_set<std::string> & dequant_weights,
                                         int dev_rank,
@@ -122,7 +122,6 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 #endif
 
 #ifdef ENABLE_FP8
-#ifdef ENABLE_FP8_TORCH
   Tensor DequantFp8E4m3BlockWiseTensor(const Tensor & weight_tensor,
                                           const Tensor & weight_scale_tensor,
                                           int dev_rank,
@@ -133,7 +132,7 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
                                                         int dev_rank,
                                                         const std::shared_ptr<NewDeepSeekV3Config> &
                                                           new_deepseek_v3_config) override;
-
+#ifdef ENABLE_FP8_TORCH
   Status ProcessMlaFp8E4m3BlockWiseScaleOfWeight(std::unordered_set<std::string> & processed_weights,
                                           std::unordered_set<std::string> & dequant_weights,
                                           int dev_rank,
@@ -141,6 +140,7 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
                                             new_deepseek_v3_config,
                                           std::unordered_map<std::string, Tensor> &
                                             device_model_weights) override;
+#endif
 
   bool LoadMoeFp8E4m3BlockWiseScale(const std::string & host_weight_name,
                                     const Tensor & host_weight_tensor,
@@ -153,7 +153,6 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
                                     int dev_rank,
                                     std::shared_ptr<NewDeepSeekV3Config> & new_deepseek_v3_config,
                                     std::unordered_map<std::string, Tensor> & device_model_weights) override;
-#endif
 #endif
 
  private:

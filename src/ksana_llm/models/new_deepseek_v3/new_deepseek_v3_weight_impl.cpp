@@ -41,7 +41,6 @@ Status NewDeepSeekV3WeightImpl<T>::TransSplitOptTrans(const Tensor & host_weight
               MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
   StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
 
-  StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
   if (transpose) {
     permute_dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, dev_tensor.dtype, dev_tensor.shape, dev_rank);
     Permute(dev_tensor, permute_dev_tensor, {1, 0}, context_->GetMemoryManageStreams()[dev_rank]);
@@ -185,6 +184,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessAbsorbWeightsTypeUKV(
     Tensor attn_o_tensor = dev_weights_map_.at(attn_o_proj_name);
     bool transpose_matrix = false;
     if (new_deepseek_v3_config->quant_config.is_fp8_blockwise) {
+#ifdef ENABLE_FP8
       transpose_matrix = true;
       q_b_nope_tensor = this->DequantFp8E4m3BlockWiseTensor(
           q_b_nope_tensor,
@@ -206,6 +206,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessAbsorbWeightsTypeUKV(
           dev_weights_map_.at(attn_o_proj_name + "_scale_inv"),
           dev_rank,
           new_deepseek_v3_config);
+#endif
     }
 
     // for compatible with deepseek v2
@@ -223,6 +224,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessAbsorbWeightsTypeUKV(
     std::string w_q_uk_name = replace_first(q_b_nope_name, "q_b_nope_proj", "w_q_uk");
     std::string w_uv_o_name = replace_first(q_b_nope_name, "q_b_nope_proj", "w_uv_o");
     if (new_deepseek_v3_config->quant_config.is_fp8_blockwise) {
+#ifdef ENABLE_FP8
       std::swap(w_q_uk_tensor.shape[0], w_q_uk_tensor.shape[1]);
       std::swap(w_uv_o_tensor.shape[0], w_uv_o_tensor.shape[1]);
 
@@ -237,6 +239,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessAbsorbWeightsTypeUKV(
       std::string w_uv_o_scale_name = w_uv_o_name + "_scale_inv";
       dev_weights_map_.insert({w_uv_o_name, quant_w_uv_o_tensor});
       dev_weights_map_.insert({w_uv_o_scale_name, w_uv_o_weight_scale});
+#endif
     } else {
       dev_weights_map_.insert({w_q_uk_name, w_q_uk_tensor});
       dev_weights_map_.insert({w_uv_o_name, w_uv_o_tensor});
@@ -247,7 +250,6 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessAbsorbWeightsTypeUKV(
 #endif
 
 #ifdef ENABLE_FP8
-#ifdef ENABLE_FP8_TORCH
 template <typename T>
 Tensor NewDeepSeekV3WeightImpl<T>::DequantFp8E4m3BlockWiseTensor(const Tensor & weight_tensor,
                                                                   const Tensor & weight_scale_tensor,
@@ -281,6 +283,7 @@ std::pair<Tensor, Tensor> NewDeepSeekV3WeightImpl<T>::QuantFp8E4m3BlockWiseTenso
                                 DataType::TYPE_FP8_E4M3, weight_tensor.shape, dev_rank);
   Tensor weight_scale_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32,
                                       {scale_shape_0, scale_shape_1}, dev_rank);
+#ifdef ENABLE_FP8_TORCH
   ScaledQuantizeFp8E4m3<T>(
     static_cast<T*>(weight_tensor.GetPtr<void>()),
     quant_weight_tensor.GetPtr<void>(),
@@ -289,9 +292,11 @@ std::pair<Tensor, Tensor> NewDeepSeekV3WeightImpl<T>::QuantFp8E4m3BlockWiseTenso
     quant_weight_tensor.shape[0],
     quant_weight_tensor.shape[1],
     dev_rank);
+#endif
   return std::make_pair(quant_weight_tensor, weight_scale_tensor);
 }
 
+#ifdef ENABLE_FP8_TORCH
 template <typename T>
 Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
                                           std::unordered_set<std::string> & processed_weights,
@@ -519,6 +524,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
   }
   return Status();
 }
+#endif
 
 template <typename T>
 bool NewDeepSeekV3WeightImpl<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string & host_weight_name,
@@ -758,7 +764,6 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string 
   }
   return true;
 }
-#endif
 #endif
 
 template class NewDeepSeekV3WeightImpl<float>;

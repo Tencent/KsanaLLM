@@ -706,7 +706,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       continue;
     }
 
-    // 7. en_proj.weight (for mtp layer)
+    // 7. eh_proj.weight (for mtp layer)
     // Split along axis = 0
     if (file_weight_name.find(".eh_proj.weight") != std::string::npos) {
       Tensor dev_tensor;
