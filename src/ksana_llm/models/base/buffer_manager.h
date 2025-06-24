@@ -79,7 +79,8 @@ class BufferManager {
    * @return TensorBuffer* Pointer to the created TensorBuffer, nullptr if creation failed
    */
   TensorBuffer* CreateBufferTensor(const std::string& name, const std::vector<size_t> shape, const DataType dtype,
-                                   const MemoryLocation location = MemoryLocation::LOCATION_DEVICE);
+                                   const MemoryLocation location = MemoryLocation::LOCATION_DEVICE,
+                                   Stream* stream = nullptr);
 
   /**
    * @brief Release all buffer tensors

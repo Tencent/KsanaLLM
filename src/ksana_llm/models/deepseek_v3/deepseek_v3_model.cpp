@@ -255,17 +255,17 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
     /*
      * Add moe output and share_expert output:
      *
-     * When model_communicator_ is False, which means device_num = 1:
+     * When model_communicator is False, which means device_num = 1:
      *     MoeOutput          saved in reduce_buffer_tensors
      *     SharedExpertOutput saved in hidden_buffer_tensors_0
      *     CommonMlp Output = reduce_buffer_tensors + hidden_buffer_tensors_0
      *
-     * When model_communicator_ is True, and enable_full_shared_expert_ is False:
+     * When model_communicator is True, and enable_full_shared_expert_ is False:
      *     MoeOutput          saved in reduce_buffer_tensors
      *     SharedExpertOutput saved in common_mlp_buffer_tensors
      *     CommonMlp Output = reduce_buffer_tensors + common_mlp_buffer_tensors
      *
-     * When model_communicator_ is True, and enable_full_shared_expert_ is True:
+     * When model_communicator is True, and enable_full_shared_expert_ is True:
      *     MoeOutput          saved in hidden_buffer_tensors_0
      *     SharedExpertOutput saved in common_mlp_buffer_tensors
      *     CommonMlp Output = hidden_buffer_tensors_0 + common_mlp_buffer_tensors

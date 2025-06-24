@@ -13,7 +13,6 @@
 #include "3rdparty/LLM_kernels/csrc/utils/common.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_types.h"
-#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
@@ -225,15 +224,16 @@ bool ShapeTypeWithCheck::operator==(const ShapeTypeWithCheck& other) { return (v
 
 Tensor::Tensor() { InitializeChecker(); }
 
-Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr)
-    : location(location), device_id(device_id), dtype(dtype), shape(shape), data_ptr(data_ptr) {
+Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
+               Stream* stream)
+    : location(location), device_id(device_id), dtype(dtype), shape(shape), data_ptr(data_ptr), stream_(stream) {
   if (dtype == DataType::TYPE_INVALID) {
     // For dummy tensor, with type TYPE_INVALID, checker is disabled.
     return;
   }
 
   if (this->shape.empty()) {
-    KLLM_THROW("Tensor could not be created with empty shape ");
+    KLLM_THROW("Tensor could not be created with empty shape");
   }
 
   if (data_ptr != nullptr) {
@@ -273,7 +273,11 @@ void Tensor::FreeMemory() {
       HostFree(data_ptr);
     } else if (location == MemoryLocation::LOCATION_DEVICE) {
       SetDevice(device_id);
-      Free(data_ptr);
+      if (stream_ == nullptr) {
+        Free(data_ptr);
+      } else {
+        FreeAsync(data_ptr, *stream_);
+      }
     }
     data_ptr.Set(nullptr);
   }
@@ -286,7 +290,17 @@ void Tensor::AllocateMemory() {
       HostAlloc(&data_ptr.Get(), total_bytes);
     } else if (location == MemoryLocation::LOCATION_DEVICE) {
       SetDevice(device_id);
-      Malloc(&data_ptr.Get(), total_bytes);
+      if (stream_ == nullptr) {
+        Malloc(&data_ptr.Get(), total_bytes);
+      } else {
+        // NOTE(karlluo): for NVIDIA GPU ref
+        // https://developer.nvidia.com/blog/using-cuda-stream-ordered-memory-allocator-part-1/
+        // for Huawei NPU ref
+        // https://support.enflame-tech.com/onlinedoc_dev_3.3/_static/topsplatform_html/3-guide
+        // /programing_guide/content/source/memory_model.html
+        // create device memory space with stream and memory pool as extra memory management.
+        MallocAsync(&data_ptr.Get(), total_bytes, *stream_);
+      }
     }
   }
 }

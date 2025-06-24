@@ -54,7 +54,8 @@ void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input) 
   size_t max_size = input->GetTotalBytes();
   size_t largest_part = max_size / tp_size_ + max_size % tp_size_;
   size_t signal_sz = sizeof(llm_kernels::nvidia::Signal) + largest_part;
-  tp_signal_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {signal_sz}, rank_);
+  Stream* stream = &(context_->GetMemoryManageStreams()[rank_]);
+  tp_signal_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {signal_sz}, rank_, nullptr, stream);
 
   // This is a buffer for storing the tuples of pointers pointing to
   // IPC buffers from all ranks. Each registered tuple has size of
@@ -63,7 +64,9 @@ void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input) 
   // needs less than 10000 of registered tuples.
   constexpr size_t rank_data_sz = 8 * 1024 * 1024;
   tp_custom_all_reduce_sum_layer_ = std::make_shared<CustomAllReduceSumLayer<T>>();
-  tp_custom_all_reduce_rank_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {rank_data_sz}, rank_);
+  tp_custom_all_reduce_rank_tensor_ =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {rank_data_sz}, rank_, nullptr, stream);
+  StreamSynchronize(*stream);
   tp_custom_all_reduce_sum_layer_->Init(
       {input->GetPtr<void>(), tp_signal_tensor_.GetPtr<void>(), signal_sz,
        tp_custom_all_reduce_rank_tensor_.GetPtr<void>(), rank_data_sz, /*is_group_custom_all_reduce*/ false},

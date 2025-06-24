@@ -31,7 +31,8 @@ class FakeModel {
 
     bool return_hidden_states = pipeline_config.lower_nextn_layer_idx >= static_cast<int>(model_config.num_layer);
     buffers_.Init(context_, rank_, model_config, return_hidden_states, &buffer_mgr_);
-    forwarding_context_.Init(context, rank, model_config, pipeline_config, buffers_.buffers_.get(), &buffer_mgr_);
+    forwarding_context_.Init(context, rank, model_config, pipeline_config, buffers_.buffers_.get(), &buffer_mgr_,
+                             /*pp_batch_idx*/ 0);
     // Initialize instances for each layer.
     layer_creation_context_.Init(base_weight, shared_matmul_workspace_buffer_, context, rank, pipeline_config,
                                  model_config, &buffer_mgr_);

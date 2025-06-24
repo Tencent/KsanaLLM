@@ -348,6 +348,7 @@ void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_
 }
 
 void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs) {
+  ProfileEvent::PushEvent("PrepareVLRequest", rank_);
   is_mask = false;
   if (model_config_.type == "internlmxcomposer2") {
     size_t pos_num = cpu_input_refit_tensor.pos_pair_tensor.shape[0];
@@ -362,9 +363,11 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
 #endif
     }
   }
+  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+  ProfileEvent::PushEvent("PrepareNetxnGatherIdx", rank_);
   std::vector<size_t> mtp_hidden_gather_idx;
   size_t total_len = 0;
   for (size_t i = 0; i < forward_reqs.size(); ++i) {
@@ -383,6 +386,7 @@ void ModelInput::PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forwar
   }
 
   if (run_mode == RunMode::kMain) {
+    ProfileEvent::PopEvent();
     return;
   }
 
@@ -391,6 +395,7 @@ void ModelInput::PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forwar
               mtp_hidden_gather_idx.size() * sizeof(decltype(mtp_hidden_gather_idx)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
   KLLM_LOG_DEBUG << "mtp_hidden_gather_idx: " << mtp_hidden_gather_idx;
+  ProfileEvent::PopEvent();
 }
 
 #ifdef ENABLE_CUDA

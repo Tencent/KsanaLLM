@@ -9,8 +9,7 @@
 
 namespace ksana_llm {
 
-void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
-                             BufferManager* buffer_mgr) {
+void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_num) {
   auto env = Singleton<Environment>::GetInstance();
   const size_t tensor_para_size = model_config.tensor_para_size;
   const size_t head_num = model_config.head_num;
@@ -18,13 +17,11 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
   const size_t hidden_units = size_per_head * head_num;
   const size_t head_num_per_tp = head_num / env->GetAttentionTensorParallel();
   const size_t num_kv_heads_per_tp = model_config.num_key_value_heads / env->GetAttentionTensorParallel();
-  const size_t max_token_num = model_config.max_step_token_num;  // max seq len for a step (batch)
-  const size_t max_batch_size = model_config.max_batch_size;
   size_t vocab_size_pad = DivRoundUp(model_config.vocab_size, tensor_para_size) * tensor_para_size;
 
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
-  const size_t max_logits_tokens = max_batch_size * batch_scheduler_config.max_decode_tokens_per_req;
+  const size_t max_logits_tokens = batch_size * batch_scheduler_config.max_decode_tokens_per_req;
 
   size_t inter_size_per_tp = model_config.inter_size / tensor_para_size;
   if (model_config.has_shared_experts) {
@@ -37,6 +34,7 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
     inter_size_per_tp = std::max(inter_size_per_tp, shared);
   }
   KLLM_LOG_DEBUG << fmt::format("inter_size_per_tp = {}", inter_size_per_tp);
+
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
   size_t max_dim = std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units),
                             inter_size_per_tp * 2);
@@ -63,39 +61,63 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
   }
 
-  KLLM_LOG_DEBUG << "max_batch_size=" << max_batch_size << ", vocab_size_pad=" << vocab_size_pad
-                 << ", max_token_num=" << max_token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
+  KLLM_LOG_DEBUG << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
+                 << ", max_token_num=" << token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
                  << ", inter_size_per_tp=" << inter_size_per_tp;
-  const size_t hidden_buffer_size = std::max(max_logits_tokens * vocab_size_pad, max_token_num * max_dim);
-  const size_t residual_buffer_size = max_token_num * hidden_units;
+  const size_t hidden_buffer_size = std::max(max_logits_tokens * vocab_size_pad, token_num * max_dim);
+  const size_t residual_buffer_size = token_num * hidden_units;
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
-  const size_t shared_buffer_size = max_token_num * std::max(inter_size_per_tp, hidden_units * 2);
-
-  const DataType weight_type = model_config.weight_data_type;
-  // TODO(karlluo): all create tensor used dynamic memory pool
-  hidden_buffer_0 = buffer_mgr->CreateBufferTensor("hidden_buffer_0", {hidden_buffer_size}, weight_type);
-  hidden_buffer_1 = buffer_mgr->CreateBufferTensor("hidden_buffer_1", {hidden_buffer_size}, weight_type);
-  shared_buffer = buffer_mgr->CreateBufferTensor("shared_buffer", {shared_buffer_size}, weight_type);
-
-  dp_input_buffer = buffer_mgr->CreateBufferTensor("dp_input_buffer", {hidden_buffer_size}, weight_type);
+  const size_t shared_buffer_size = token_num * std::max(inter_size_per_tp, hidden_units * 2);
+  buffers_shape_map = {{"hidden_buffer_0", {hidden_buffer_size}},
+                       {"hidden_buffer_1", {hidden_buffer_size}},
+                       {"shared_buffer", {shared_buffer_size}},
+                       {"dp_input_buffer", {hidden_buffer_size}}};
 
   const size_t max_seq_len = model_config.max_token_num;  // max seq len for one request
   // TODO(robertyuan): This buffer is too large
   // TODO(jinxcwu): Move all env to environment
-  // 双重判断，避免非mla模型但设置了环境变量的情况
+  // Use double-checking to avoid cases where environment variables are configured for non-MLA models.
   if (IsAbsorbWeightsEnabled() && model_config.use_mla) {
-    kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", {0}, TYPE_FP32);
+    buffers_shape_map["kv_cache_buffer"] = {0};
   } else {
-    kv_cache_buffer = buffer_mgr->CreateBufferTensor(
-        "kv_cache_buffer", {max_batch_size, (max_seq_len + 511) / 512, head_num_per_tp, size_per_head + 2}, TYPE_FP32);
+    buffers_shape_map["kv_cache_buffer"] = {batch_size, (max_seq_len + 511) / 512, head_num_per_tp, size_per_head + 2};
   }
+
+  if (use_mtp) {
+    buffers_shape_map["mtp_hidden_buffer_tensors"] = {residual_buffer_size};
+  }
+}
+
+void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
+                             BufferManager* buffer_mgr) {
+  this->use_mtp = use_mtp;
+  this->model_config = model_config;
+  CalculateBuffersShape(model_config.max_batch_size, model_config.max_step_token_num);
+
+  Stream* stream = &(context->GetMemoryManageStreams()[rank]);
+
+  const DataType weight_type = model_config.weight_data_type;
+  // NOTE(karlluo): all create tensor used dynamic memory pool
+  hidden_buffer_0 = buffer_mgr->CreateBufferTensor("hidden_buffer_0", buffers_shape_map["hidden_buffer_0"], weight_type,
+                                                   ksana_llm::LOCATION_DEVICE);
+  hidden_buffer_1 = buffer_mgr->CreateBufferTensor("hidden_buffer_1", buffers_shape_map["hidden_buffer_1"], weight_type,
+                                                   ksana_llm::LOCATION_DEVICE);
+  shared_buffer = buffer_mgr->CreateBufferTensor("shared_buffer", buffers_shape_map["shared_buffer"], weight_type,
+                                                 ksana_llm::LOCATION_DEVICE, stream);
+  dp_input_buffer = buffer_mgr->CreateBufferTensor("dp_input_buffer", buffers_shape_map["dp_input_buffer"], weight_type,
+                                                   ksana_llm::LOCATION_DEVICE, stream);
+  kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
+                                                   ksana_llm::LOCATION_DEVICE, stream);
 
   if (use_mtp) {
     // mtp_hidden_buffer_tensors will used across main forward and nextn forward
     TensorBuffer* mtp_hidden_buffer =
-        buffer_mgr->CreateBufferTensor("mtp_hidden_buffer_tensors", {residual_buffer_size}, weight_type);
+        buffer_mgr->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"],
+                                       weight_type, ksana_llm::LOCATION_DEVICE, stream);
     mtp_hidden_buffer_tensors = mtp_hidden_buffer->GetTensors();
   }
+
+  StreamSynchronize(*stream);
 }
 
 void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
@@ -146,12 +168,13 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
 template <typename T>
 void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
                                 const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
-                                BufferManager* buffer_mgr) {
+                                BufferManager* buffer_mgr, size_t pp_batch_idx) {
   pipeline_config_ = pipeline_config;
   context_ = context;
   rank_ = rank;
   attn_data_parallel_size_ = model_config.attn_data_para_size;
   buffers_ = buffers;
+  pp_batch_idx = pp_batch_idx;
 
   vocab_size_ = model_config.vocab_size;
   vocab_size_pad_ = DivRoundUp(model_config.vocab_size, model_config.tensor_para_size) * model_config.tensor_para_size;
@@ -200,7 +223,6 @@ template <typename T>
 void ForwardingContext<T>::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
   ProfileEvent::PushEvent("UpdateBeforeForward", rank_);
   model_input_->ParseFromRequests(forward_reqs, run_mode);
-
 
   // create forward shape tensor
   attn_ctx_.forward_shape.shape = {

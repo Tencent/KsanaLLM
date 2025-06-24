@@ -77,10 +77,11 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
     // Initialize all forwarding contexts in the buffer
     forwarding_context_buffer_.reserve(forwarding_context_buffer_size);
-    for (size_t i = 0; i < forwarding_context_buffer_size; ++i) {
+    for (size_t pp_batch_idx = 0; pp_batch_idx < forwarding_context_buffer_size; ++pp_batch_idx) {
       auto forwarding_context = std::make_unique<ForwardingContext<T>>();
+      // TODO(karlluo): each forwarding_context binding different model buffer
       forwarding_context->Init(context_, rank_, model_config_, pipeline_config_, model_buffers_.buffers_.get(),
-                               GetBufferManager());
+                               GetBufferManager(), pp_batch_idx);
       forwarding_context_buffer_.push_back(std::move(forwarding_context));
     }
 

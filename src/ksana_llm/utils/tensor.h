@@ -11,6 +11,7 @@
 
 #include "c10/core/ScalarType.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
@@ -129,7 +130,7 @@ class Tensor {
 
   // Initialize the tensor, if data_ptr is not null, it will be used as data buffer.
   Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id = -1,
-         void* data_ptr = nullptr);
+         void* data_ptr = nullptr, Stream* stream = nullptr);
 
   ~Tensor();
 
@@ -221,6 +222,14 @@ class Tensor {
 
   // The max buffer size, used to check tensor validation.
   size_t max_buffer_size_ = 0;
+
+  // NOTE(karlluo): for NVIDIA GPU ref
+  // https://developer.nvidia.com/blog/using-cuda-stream-ordered-memory-allocator-part-1/
+  // for Huawei NPU ref
+  // https://support.enflame-tech.com/onlinedoc_dev_3.3/_static/topsplatform_html/3-guide
+  // /programing_guide/content/source/memory_model.html
+  // create device memory space with stream and memory pool as extra memory management.
+  Stream* stream_{nullptr};
 
  public:
   // TODO(yancyliu): The following number should be removed later.

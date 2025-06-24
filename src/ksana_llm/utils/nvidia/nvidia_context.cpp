@@ -16,33 +16,44 @@ constexpr int CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION = 120103;
 
 template <int T>
 void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
-  if (base_ptr_->driver_version_ < CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
-    KLLM_LOG_DEBUG << "driver version " << base_ptr_->driver_version_ << " < " << CUDA_MEMPOOL_MIN_DRIVER_VERSION
-                   << ", skip init memory pool";
+  int device_supports_memory_pools = 0;
+  CUDA_CHECK(cudaDeviceGetAttribute(&device_supports_memory_pools, cudaDevAttrMemoryPoolsSupported, worker_id));
+  // NOTE(karlluo): 1 if the device supports using the cudaMallocAsync and cudaMemPool family of APIs, and 0 otherwise
+  if (device_supports_memory_pools == 0) {
+    KLLM_LOG_WARNING << fmt::format("GPU {} is not support GPU mempool, skip init.", worker_id);
     return;
   }
 
-  KLLM_LOG_DEBUG << "Init nvidia memroy pool on worker " << worker_id;
-  int device_supports_memory_pools = 0;
-  int pool_supported_handle_types = 0;
-  CUDA_CHECK(cudaDeviceGetAttribute(&device_supports_memory_pools, cudaDevAttrMemoryPoolsSupported, worker_id));
-  CUDA_CHECK(
-      cudaDeviceGetAttribute(&pool_supported_handle_types, cudaDevAttrMemoryPoolSupportedHandleTypes, worker_id));
-  CUDA_CHECK(cudaDeviceGetDefaultMemPool(&memory_pool_[worker_id], worker_id));
-  // Set access_id's accessing to the worker_id's mempool.
-  for (int access_id = 0; access_id < base_ptr_->tensor_parallel_size_; ++access_id) {
-    if (access_id != worker_id) {
-      cudaMemAccessDesc desc = {};
-      desc.location.type = cudaMemLocationTypeDevice;
-      desc.location.id = access_id;
-      desc.flags = cudaMemAccessFlagsProtReadWrite;
-      int can_access = 0;
-      CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
-      if (can_access == 0) {
-        KLLM_THROW(
-            fmt::format("GPU {} is not capable of directly accessing memory of peer GPU {}.", access_id, worker_id));
+  KLLM_LOG_DEBUG << "Init nvidia memroy pool on GPU " << worker_id;
+  CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_version_));
+  if (cuda_driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
+    int pool_supported_handle_types = 0;
+    cudaMemPool_t mempool;
+    CUDA_CHECK(
+        cudaDeviceGetAttribute(&pool_supported_handle_types, cudaDevAttrMemoryPoolSupportedHandleTypes, worker_id));
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&mempool, worker_id));
+    uint64_t threshold = UINT64_MAX;
+    CUDA_CHECK(cudaMemPoolSetAttribute(mempool, cudaMemPoolAttrReleaseThreshold, &threshold));
+    int enable = 1;
+    CUDA_CHECK(cudaMemPoolSetAttribute(mempool, cudaMemPoolReuseFollowEventDependencies, &enable));
+    CUDA_CHECK(cudaMemPoolSetAttribute(mempool, cudaMemPoolReuseAllowOpportunistic, &enable));
+    CUDA_CHECK(cudaMemPoolSetAttribute(mempool, cudaMemPoolReuseAllowInternalDependencies, &enable));
+
+    // Set access_id's accessing to the worker_id's mempool.
+    for (int access_id = 0; access_id < base_ptr_->tensor_parallel_size_; ++access_id) {
+      if (access_id != worker_id) {
+        cudaMemAccessDesc desc = {};
+        desc.location.type = cudaMemLocationTypeDevice;
+        desc.location.id = access_id;
+        desc.flags = cudaMemAccessFlagsProtReadWrite;
+        int can_access = 0;
+        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
+        if (can_access == 0) {
+          KLLM_THROW(
+              fmt::format("GPU {} is not capable of directly accessing memory of peer GPU {}.", access_id, worker_id));
+        }
+        CUDA_CHECK(cudaMemPoolSetAccess(mempool, &desc, 1));
       }
-      CUDA_CHECK(cudaMemPoolSetAccess(memory_pool_[worker_id], &desc, 1));
     }
   }
 }

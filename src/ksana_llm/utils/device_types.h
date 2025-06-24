@@ -213,7 +213,7 @@ size_t GetTypeSize(DataType dtype);
 enum MemoryDevice { MEMORY_HOST, MEMORY_DEVICE };
 
 // The memory location.
-enum MemoryLocation { LOCATION_UNKNOWN, LOCATION_HOST, LOCATION_DEVICE };
+enum MemoryLocation { LOCATION_UNKNOWN, LOCATION_HOST, LOCATION_DEVICE, LOCATION_NVSHMEM };
 
 // A dummy class used as a real defined class.
 struct DummyClass {};

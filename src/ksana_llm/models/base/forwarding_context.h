@@ -14,7 +14,6 @@
 #include "ksana_llm/models/base/model_output.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 
-
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/runtime/cuda_graph_runner.h"
 #endif
@@ -44,6 +43,17 @@ struct ForwardingBuffers {
 
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
             BufferManager* buffer_mgr);
+
+  void CalculateBuffersShape(size_t batch_size, size_t token_num);
+
+  // Model config
+  ModelConfig model_config;
+
+  // Is use multi-token prediction
+  bool use_mtp{false};
+
+  // Map to record each buffers shape.
+  std::unordered_map<std::string, std::vector<size_t>> buffers_shape_map;
 };
 
 struct ModelBuffers {
@@ -62,7 +72,8 @@ class ForwardingContext {
  public:
   ~ForwardingContext() {}
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-            const PipelineConfig& pipeline_config, ForwardingBuffers* buffers, BufferManager* buffer_mgr);
+            const PipelineConfig& pipeline_config, ForwardingBuffers* buffers, BufferManager* buffer_mgr,
+            size_t pp_batch_idx);
 
   void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
 
@@ -91,12 +102,17 @@ class ForwardingContext {
   // The model communicator.
   std::shared_ptr<ModelCommunicator<T>> model_communicator_;
 
-  size_t attn_data_parallel_size_ = 1;
-
   // mark state for sched event recording
   bool is_forwarding_layers = false;
 
-  BatchRequestSchedInfo batch_event_info;  // Used for tracing sched events.
+  // Used for tracing sched events.
+  BatchRequestSchedInfo batch_event_info;
+
+  // fwd context related pp batch idx.
+  size_t pp_batch_idx = 0;
+
+  // Attention data parallel size
+  size_t attn_data_parallel_size_ = 1;
 
  private:
   // The original vocab size of the model

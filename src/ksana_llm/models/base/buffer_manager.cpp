@@ -7,9 +7,9 @@
 namespace ksana_llm {
 
 TensorBuffer* BufferManager::CreateBufferTensor(const std::string& name, const std::vector<size_t> shape,
-                                                const DataType dtype, const MemoryLocation location) {
+                                                const DataType dtype, const MemoryLocation location, Stream* stream) {
   // Create a tensor with the specified parameters
-  Tensor tensor(location, dtype, shape, rank_);
+  Tensor tensor(location, dtype, shape, rank_, nullptr, stream);
 
   // Create a TensorBuffer to manage the tensor
   auto buffer = std::make_unique<TensorBuffer>(name, tensor);
@@ -30,4 +30,5 @@ Status BufferManager::ReleaseBufferTensors() {
   total_buffer_size_ = 0ul;
   return Status();
 }
+
 }  // namespace ksana_llm
