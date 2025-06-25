@@ -18,18 +18,24 @@ if __name__ == "__main__":
     elif args.type == "bfloat16":
         inference_data_type = torch.bfloat16
     if args.use_layernorm_3d == "false":
-        input = torch.Tensor(
-            np.load("layernorm_test_input.npy")).to(inference_data_type).cuda()
-        weight = torch.Tensor(
-            np.load("layernorm_test_weight.npy")).to(inference_data_type).cuda()
-        bias = torch.Tensor(
-            np.load("layernorm_test_bias.npy")).to(inference_data_type).cuda()
+        #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+        #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+        input = torch.from_numpy(
+            np.load("layernorm_test_input.npy")).view(inference_data_type).cuda()
+        weight = torch.from_numpy(
+            np.load("layernorm_test_weight.npy")).view(inference_data_type).cuda()
+        bias = torch.from_numpy(
+            np.load("layernorm_test_bias.npy")).view(inference_data_type).cuda()
 
         layernorm = torch.nn.LayerNorm(normalized_shape=input.shape[1], eps=args.variance_epsilon)
         layernorm.weight.data = weight
         layernorm.bias.data = bias
         layernorm_output = layernorm(input)
 
+        #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+        #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+        if args.type == "bfloat16":
+            layernorm_output = layernorm_output.view(torch.float16)
         np.save("layernorm_test_output.npy", layernorm_output.cpu().detach().numpy())
 
         input_dtype = input.dtype
@@ -38,16 +44,18 @@ if __name__ == "__main__":
         hidden_states = hidden_states * torch.rsqrt(variance + args.variance_epsilon)
         rmsnorm_output = weight * hidden_states.to(input_dtype)
 
+        if args.type == "bfloat16":
+            rmsnorm_output = rmsnorm_output.view(torch.float16)
         np.save("rmsnorm_test_output.npy", rmsnorm_output.cpu().numpy())
 
     elif args.use_layernorm_3d == "true":
         # for 3d layer norm test 
-        input_3d = torch.Tensor(
-            np.load("rmsnorm_3d_test_input.npy")).to(inference_data_type).cuda()
-        weight_3d = torch.Tensor(
-            np.load("rmsnorm_3d_test_weight.npy")).to(inference_data_type).cuda()
-        mask = torch.Tensor(
-            np.load("rmsnorm_3d_test_mask.npy")).to(inference_data_type).cuda()
+        input_3d = torch.from_numpy(
+            np.load("rmsnorm_3d_test_input.npy")).view(inference_data_type).cuda()
+        weight_3d = torch.from_numpy(
+            np.load("rmsnorm_3d_test_weight.npy")).view(inference_data_type).cuda()
+        mask = torch.from_numpy(
+            np.load("rmsnorm_3d_test_mask.npy")).view(inference_data_type).cuda()
 
         input_dtype = input_3d.dtype
         hidden_states = input_3d[2:, 0:2, :]
@@ -57,4 +65,6 @@ if __name__ == "__main__":
         hidden_states = weight_3d * hidden_states.to(input_dtype)
         input_3d[2:, 0:2, :] = hidden_states
         rmsnorm_output = input_3d
+        if args.type == "bfloat16":
+            rmsnorm_output = rmsnorm_output.view(torch.float16)
         np.save("rmsnorm_3d_test_torch_output.npy", rmsnorm_output.cpu().numpy())

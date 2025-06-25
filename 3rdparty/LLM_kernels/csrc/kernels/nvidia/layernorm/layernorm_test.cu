@@ -21,7 +21,7 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
  protected:
   using NvidiaTestSuitBase::stream;
-  const std::vector<std::pair<int, int>> m_n_pairs = {{2, 4096}};
+  const std::vector<std::pair<int, int>> m_n_pairs = {{1, 2048}, {2, 4096}, {64000, 8}};;
 
   template <typename T>
   void RunLayerNormRef(const float variance_epsilon = 1e-6f, const std::string use_layernorm_3d = "false") {
@@ -63,9 +63,9 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
                                                          /*is_random_init*/ false);
     float layernorm_eps = 1e-6;
 
-    input_meta.SaveNpy<T>("layernorm_test_input.npy");
-    weight_meta.SaveNpy<T>("layernorm_test_weight.npy");
-    bias_meta.SaveNpy<T>("layernorm_test_bias.npy");
+    input_meta.SaveToNpy<T>("layernorm_test_input.npy");
+    weight_meta.SaveToNpy<T>("layernorm_test_weight.npy");
+    bias_meta.SaveToNpy<T>("layernorm_test_bias.npy");
     RunLayerNormRef<T>(layernorm_eps, "false");
     layernorm_output_ref_meta.LoadNpy<T>("layernorm_test_output.npy", MemoryType::MEMORY_GPU);
     rmsnorm_output_ref_meta.LoadNpy<T>("rmsnorm_test_output.npy", MemoryType::MEMORY_GPU);
@@ -89,6 +89,23 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     EXPECT_TRUE(CheckResult<T>("rmsnorm_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
                                rmsnorm_output_ref_meta, rmsnorm_output_meta, 1e-3f, 1e-3f));
 
+    auto cuda_run = [&]() {
+      InvokeLayerNorm<T>(reinterpret_cast<T*>(layernorm_output_meta.data_ptr),
+                         reinterpret_cast<const T*>(input_meta.data_ptr),
+                         reinterpret_cast<const T*>(weight_meta.data_ptr),
+                         reinterpret_cast<const T*>(bias_meta.data_ptr), layernorm_eps, m, n, stream);
+    };
+    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    auto cuda_run_rmsnorm = [&]() {
+      InvokeLayerNorm<T>(reinterpret_cast<T*>(rmsnorm_output_meta.data_ptr),
+                         reinterpret_cast<const T*>(input_meta.data_ptr),
+                         reinterpret_cast<const T*>(weight_meta.data_ptr),
+                         /* bias */ nullptr, layernorm_eps, m, n, stream);
+    };
+    float milliseconds_rmsnorm = MeasureCudaExecutionTime(cuda_run_rmsnorm, stream, 10, 100);
+    std::cout << std::left << type_str << " m=" << std::setw(6) << m << " n=" << std::setw(6) << n
+              << " execution 1 times : " << "layernorm " << std::setw(10) << milliseconds << " ms " << "| rmsnorm "
+              << milliseconds_rmsnorm << " ms" << std::endl;
     DeleteBuffer(rmsnorm_output_ref_meta);
     DeleteBuffer(layernorm_output_ref_meta);
     DeleteBuffer(rmsnorm_output_meta);
@@ -120,8 +137,8 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
     float layernorm_eps = 1e-6;
 
-    input_meta.SaveNpy<T>("rmsnorm_3d_test_input.npy");
-    weight_meta.SaveNpy<T>("rmsnorm_3d_test_weight.npy");
+    input_meta.SaveToNpy<T>("rmsnorm_3d_test_input.npy");
+    weight_meta.SaveToNpy<T>("rmsnorm_3d_test_weight.npy");
     d_mask.SaveNpy<int64_t>("rmsnorm_3d_test_mask.npy");
     RunLayerNormRef<T>(layernorm_eps, "true");
     rmsnorm_3d_output_ref_meta.LoadNpy<T>("rmsnorm_3d_test_torch_output.npy", MemoryType::MEMORY_GPU);
@@ -130,16 +147,25 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
     // compute 3d rmsnorm
     InvokeRmsNorm3D<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
-                         reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, m, n, 0, 2,
-                         reinterpret_cast<int64_t*>(d_mask.data_ptr), stream);
+                       reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, m, n, 0, 2,
+                       reinterpret_cast<int64_t*>(d_mask.data_ptr), stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
     EXPECT_TRUE(CheckResult<T>(
         "rmsnorm_3d_" + type_str + "_l_" + std::to_string(l) + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
         rmsnorm_3d_output_ref_meta, input_meta, 1e-3f, 1e-3f));
-    input_meta.SaveNpy<T>("rmsnorm_3d_test_ksana_output.npy");
+    input_meta.SaveToNpy<T>("rmsnorm_3d_test_ksana_output.npy");
 
+    auto cuda_run = [&]() {
+      InvokeRmsNorm3D<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+                         reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, m, n, 0, 2,
+                         reinterpret_cast<int64_t*>(d_mask.data_ptr), stream);
+    };
+    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    std::cout << std::left << type_str << " l=" << std::setw(6) << l << " m=" << std::setw(6) << m
+              << " n=" << std::setw(6) << n << " execution 1 times : "
+              << "rmsnorm_3d " << std::setw(10) << milliseconds << " ms" << std::endl;
     DeleteBuffer(rmsnorm_3d_output_ref_meta);
     DeleteBuffer(d_mask);
     DeleteBuffer(weight_meta);
@@ -159,9 +185,17 @@ TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernormCommonTest) {
   }
 }
 
+TEST_F(LlamaNvidiaLayernormTestSuit, Bf16LayernormCommonTest) {
+  for (const auto& m_n_pair : m_n_pairs) {
+    TestLayerNorm<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second));
+  }
+}
+
 TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernorm3DTest) { TestLayerNorm3D<half>(5, 5, 6); }
 
 TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernorm3DTest) { TestLayerNorm3D<float>(5, 5, 6); }
+
+TEST_F(LlamaNvidiaLayernormTestSuit, Bf16Layernorm3DTest) { TestLayerNorm3D<__nv_bfloat16>(5, 5, 6); }
 
 }  // namespace test
 }  // namespace nvidia

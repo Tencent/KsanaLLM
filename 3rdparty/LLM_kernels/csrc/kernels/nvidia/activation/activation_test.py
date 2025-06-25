@@ -23,10 +23,12 @@ def InvokeGenericActivation(args):
         activation = "relu"
 
     # input
-    input = torch.Tensor(
-        np.load("activation_test_input.npy")).to(inference_data_type).cuda()
-    gated_weight = torch.Tensor(
-        np.load("activation_test_gated_weight.npy")).to(inference_data_type).cuda()
+    #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+    #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+    input = torch.from_numpy(
+        np.load("activation_test_input.npy")).view(inference_data_type).cuda()
+    gated_weight = torch.from_numpy(
+        np.load("activation_test_gated_weight.npy")).view(inference_data_type).cuda()
 
     if activation == "silu":
         act = torch.nn.SiLU()
@@ -36,6 +38,10 @@ def InvokeGenericActivation(args):
         act = torch.nn.ReLU()
     output = act(input) * gated_weight
 
+    #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+    #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+    if args.type == "bfloat16":
+        output = output.view(torch.float16)
     np.save("activation_test_output.npy", output.cpu().numpy())
     
 def InvokeRowBasedActivation(args):
@@ -46,8 +52,8 @@ def InvokeRowBasedActivation(args):
         inference_data_type = torch.bfloat16
 
     # input
-    input = torch.Tensor(
-        np.load("row_based_activation_test_input.npy")).to(inference_data_type).cuda()
+    input = torch.from_numpy(
+        np.load("row_based_activation_test_input.npy")).view(inference_data_type).cuda()
     _, num_cols = input.shape
     mid_col = num_cols // 2
     gate_proj_output = input[:, :mid_col]
@@ -57,6 +63,8 @@ def InvokeRowBasedActivation(args):
 
     output = act(gate_proj_output) * up_proj_output
 
+    if args.type == "bfloat16":
+        output = output.view(torch.float16)
     np.save("row_based_activation_test_output.npy", output.cpu().numpy())
 
 if __name__ == "__main__":

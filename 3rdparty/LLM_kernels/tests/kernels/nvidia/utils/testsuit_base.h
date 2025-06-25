@@ -135,6 +135,17 @@ struct BufferMeta {
     }
   }
 
+  // Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+  // interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+  template <typename T>
+  void SaveToNpy(const std::string& npy_name) {
+    if (std::is_same<T, __nv_bfloat16>::value) {
+      SaveNpy<half>(npy_name);
+    } else {
+      SaveNpy<T>(npy_name);
+    }
+  }
+
   inline void ParseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data) {
     const char magic[] =
         "\x93"
