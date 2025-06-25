@@ -44,3 +44,11 @@ if(FUSED_MOE_NEED_REGENERATE)
   file(WRITE ${FUSED_MOE_MD5_FILE} ${NEW_MD5})
   message(STATUS "Success generate fused_moe triton kernel")
 endif()
+
+# for test
+file(GLOB_RECURSE fused_moe_test_SRCS
+${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/fused_moe/*test.cpp)
+# copy python script for make test
+execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/fused_moe/fused_moe.py ${CMAKE_CURRENT_BINARY_DIR})
+execute_process(COMMAND cp -r ${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/fused_moe/fused_moe.py ${CMAKE_BINARY_DIR})
+cc_test(fused_moe_config_find_test SRCS ${fused_moe_test_SRCS})

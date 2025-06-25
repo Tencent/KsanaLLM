@@ -27,6 +27,8 @@ import sys
 import torch
 import json
 import logging
+from transformers import AutoConfig
+from tqdm import tqdm
 
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
@@ -232,7 +234,7 @@ def fused_moe(
     if A.shape[0] < config["BLOCK_SIZE_M"]:
         EM = min(sorted_token_ids.shape[0],
                  A.shape[0] * top_k * config['BLOCK_SIZE_M'])
-    
+
     K = B.shape[2]
     if K % config["BLOCK_SIZE_K"] != 0 and args.even_Ks:
         assert False, "K must be divisible by BLOCK_SIZE_K when even_Ks is True"
@@ -264,6 +266,34 @@ def fused_moe(
         **config,
     )
     return C, kernel
+
+
+def two_step_fused_moe(
+    up_gate_proj_dict: Dict[str, torch.Tensor],
+    down_proj_dict: Dict[str, torch.Tensor],
+    gate_dict: Dict[str, torch.Tensor],
+    mul_routed_weight: bool,
+    top_k: int,
+    config: Dict[str, Any],
+    compute_type: tl.dtype,
+    use_fp8_w8a8: bool,
+    use_int8_w8a16: bool,
+    block_shape: List[int],
+):
+    fused_moe(**up_gate_proj_dict, **gate_dict,
+              mul_routed_weight=False,
+              top_k=top_k, config=config,
+              compute_type=compute_type,
+              use_fp8_w8a8=use_fp8_w8a8,
+              use_int8_w8a16=use_int8_w8a16,
+              block_shape=block_shape)
+    fused_moe(**down_proj_dict, **gate_dict,
+              mul_routed_weight=True,
+              top_k=1, config=config,
+              compute_type=compute_type,
+              use_fp8_w8a8=use_fp8_w8a8,
+              use_int8_w8a16=use_int8_w8a16,
+              block_shape=block_shape)
 
 
 def str_to_bool(value):
@@ -301,6 +331,23 @@ def args_config():
     parser.add_argument('--output_dir', type=str, default="./")
     parser.add_argument("--tune", action="store_true")
     parser.add_argument("--even_Ks", type=str_to_bool, default="False")
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="",
+        help="Path to model configuration file. If provided, input settings"
+        "(k, n, num_experts, topk, block_shape) will be overridden by the model configuration. "
+    )
+    parser.add_argument(
+        "--deep_tune",
+        action="store_true",
+        help=(
+            "Deep_tune will enable two-step fused_moe_kernel and "
+            "automatically tune BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, and GROUP_SIZE_M for optimal performance. "
+            "Note: No Triton kernel will be generated in this mode; instead, a JSON file with the best configuration will be saved."
+        )
+    )
+    parser.add_argument("--tp_size", type=int, default=1)
     args = parser.parse_args()
     if args.compute_type == "FP16":
         args.torch_dtype = torch.float16
@@ -369,6 +416,52 @@ def performance_fused_moe(
     return kernel, kernel_time, output_tensor
 
 
+def performance_two_step_fused_moe(
+    up_gate_proj_dict: Dict[str, torch.Tensor],
+    down_proj_dict: Dict[str, torch.Tensor],
+    gate_dict: Dict[str, torch.Tensor],
+    mul_routed_weight: bool,
+    topk: int,
+    config: Dict[str, Any],
+    compute_type: tl.dtype,
+    use_fp8_w8a8: bool,
+    use_int8_w8a16: bool,
+    block_shape: List[int],
+):
+    two_step_fused_moe(up_gate_proj_dict, down_proj_dict, gate_dict,
+                       mul_routed_weight, topk, config, compute_type,
+                       use_fp8_w8a8, use_int8_w8a16, block_shape)
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        for _ in range(10):
+            two_step_fused_moe(up_gate_proj_dict, down_proj_dict, gate_dict,
+                               mul_routed_weight, topk, config, compute_type,
+                               use_fp8_w8a8, use_int8_w8a16, block_shape)
+    torch.cuda.synchronize()
+    # Warmup
+    for _ in range(5):
+        graph.replay()
+    torch.cuda.synchronize()
+
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    latencies: List[float] = []
+
+    for i in range(num_iters):
+        torch.cuda.synchronize()
+
+        start_event.record()
+        graph.replay()
+        end_event.record()
+        end_event.synchronize()
+        latencies.append(start_event.elapsed_time(end_event))
+    kernel_time = sum(latencies) / (num_iters) * 1000  # us
+    graph.reset()
+
+    return kernel_time
+
+
 def dump_kernel(kernel, output_dir, kernel_name, config):
     with open(f"{output_dir}/{kernel_name}.cubin", "wb") as _f:
         _f.write(kernel.asm['cubin'])
@@ -395,9 +488,50 @@ def dump_kernel(kernel, output_dir, kernel_name, config):
         print(kernel.asm['ptx'], file=_f)
 
 
+def get_weight_block_size_safety(config, default_value=None):
+    quantization_config = getattr(config, 'quantization_config', {})
+    if isinstance(quantization_config, dict):
+        return quantization_config.get('weight_block_size', default_value)
+    return default_value
+
+# get expert_ids, sorted_ids, token_post_pad according to block_size_m, token_post_pad will influence the MOE execution latency
+def moe_align_block_cpu(topk_ids, expert_ids, sorted_ids, token_post_pad, token_num, topk, expert_num, block_size):
+    cumsum = [0] * (expert_num + 1)
+    token_cnts = [0] * (expert_num + 1)
+    numel = token_num * topk
+    sorted_ids.fill_(numel)
+    expert_ids.fill_(-1)
+
+    for i in range(numel):
+        expert_id = topk_ids[i]
+        if expert_id >= expert_num:
+            continue
+        token_cnts[expert_id] += 1
+
+    for i in range(expert_num):
+        cumsum[i + 1] = cumsum[i] + \
+            (token_cnts[i] + block_size - 1) // block_size
+        token_cnts[i] = 0
+        for j in range(cumsum[i], cumsum[i + 1]):
+            expert_ids[j] = i
+
+    token_post_pad[0] = cumsum[expert_num] * block_size
+
+    for i in range(numel):
+        expert_id = topk_ids[i]
+        if expert_id >= expert_num:
+            continue
+        idx = cumsum[expert_id] * block_size + token_cnts[expert_id]
+        sorted_ids[idx] = i
+        token_cnts[expert_id] += 1
+
+
 if __name__ == "__main__":
     torch.manual_seed(42)
     args = args_config()
+    if not args.tune and args.deep_tune:
+        logging.error("can not set deep_tune=true when tune=false")
+        sys.exit(1)
 
     m = args.m
     k = args.k
@@ -409,8 +543,33 @@ if __name__ == "__main__":
     block_shape = [args.group_n, args.group_k]
     use_fp8_w8a8 = args.use_fp8_w8a8
     use_int8_w8a16 = args.use_int8_w8a16
-    numel = m * topk
     num_iters = 20
+
+    if args.model_path != "":
+        model_config = AutoConfig.from_pretrained(
+            args.model_path, trust_remote_code=True)
+        block_shape_override = get_weight_block_size_safety(model_config)
+        if (model_config.architectures[0] == "DeepseekV3ForCausalLM"
+                or model_config.architectures[0] == "DeepseekV2ForCausalLM"):
+            logging.info(
+                "Load model config - these inputs will be ignored and have been overridden: \n"
+                "k:{}->{}, n:{}->{}, num_experts:{}->{}, topk:{}->{}, block_shape(groupn,groupk):[{},{}]-> [{},{}].".format(
+                    k, model_config.hidden_size,
+                    n, model_config.moe_intermediate_size,
+                    num_experts, model_config.n_routed_experts,
+                    topk, model_config.num_experts_per_tok,
+                    block_shape[0], block_shape[1], block_shape_override[0], block_shape_override[1]
+                )
+            )
+            k = model_config.hidden_size
+            n = model_config.moe_intermediate_size
+            num_experts = model_config.n_routed_experts
+            topk = model_config.num_experts_per_tok
+            block_shape = block_shape_override
+        else:
+            logging.error("no support for this model")
+            exit(1)
+    numel = m * topk
 
     config = {
         "BLOCK_SIZE_M": args.BLOCK_SIZE_M,
@@ -432,14 +591,34 @@ if __name__ == "__main__":
     else:
         input_dtype = args.torch_dtype
 
-    A = torch.rand([m, k], device='cuda', dtype=torch.float32).to(input_dtype)
-    B = torch.rand([num_experts, n, k], device='cuda', dtype=torch.float32).to(input_dtype)
-    C = torch.rand([m, topk, n], device='cuda', dtype=args.torch_dtype)
-    A_scale = torch.rand([m, k // 128], device='cuda', dtype=torch.float32)
-    B_scale = torch.rand([num_experts, n // 128, k // 128],
-                          device='cuda',
-                          dtype=torch.float32)
+    up_gate_proj_dict = {}
+    up_gate_proj_dict["A"] = torch.rand(
+        [m, k], device='cuda', dtype=torch.float32).to(input_dtype)
+    up_gate_proj_dict["B"] = torch.rand(
+        [num_experts, n * 2 // args.tp_size, k], device='cuda', dtype=torch.float32).to(input_dtype)
+    up_gate_proj_dict["C"] = torch.rand(
+        [m, topk, n * 2 // args.tp_size], device='cuda', dtype=args.torch_dtype)
+    up_gate_proj_dict["A_scale"] = torch.rand(
+        [m, k // 128], device='cuda', dtype=torch.float32)
+    up_gate_proj_dict["B_scale"] = torch.rand([num_experts, n * 2 // args.tp_size // 128, k // 128],
+                                              device='cuda',
+                                              dtype=torch.float32)
+    down_proj_dict = {}
+    if args.deep_tune:
+        down_proj_dict["A"] = torch.rand(
+            [m * topk, n // args.tp_size], device='cuda', dtype=torch.float32).to(input_dtype)
+        down_proj_dict["B"] = torch.rand(
+            [num_experts, k, n // args.tp_size], device='cuda', dtype=torch.float32).to(input_dtype)
+        down_proj_dict["C"] = torch.rand(
+            [m, topk, k], device='cuda', dtype=args.torch_dtype)
+        down_proj_dict["A_scale"] = torch.rand(
+            [m * topk, n // args.tp_size // 128], device='cuda', dtype=torch.float32)
+        down_proj_dict["B_scale"] = torch.rand([num_experts, k // 128, n // args.tp_size // 128],
+                                               device='cuda',
+                                               dtype=torch.float32)
+
     topk_weights = torch.rand([m, topk], device='cuda', dtype=torch.float32)
+    torch.manual_seed(42)
     topk_ids = torch.randint(size=[m, topk],
                              low=0,
                              high=num_experts,
@@ -460,6 +639,23 @@ if __name__ == "__main__":
                                            high=1,
                                            device='cuda',
                                            dtype=torch.int32)
+# todo(pengfeilei): moe_align_block_cpu initializes num_tokens_post_padded, which determines MOE execution latency.
+# Behavior depends on whether deep_tune is enabled:
+# 1. If deep_tune is not enabled (default behavior):
+#    - num_tokens_post_padded = 0 (tuning is disabled)
+# 2. If deep_tune is enabled:
+#    - num_tokens_post_padded is properly set for tuning
+    if args.deep_tune:
+        moe_align_block_cpu(topk_ids.flatten(), expert_ids, sorted_token_ids,
+                            num_tokens_post_padded, m, topk, num_experts, config["BLOCK_SIZE_M"])
+
+    gate_dict = {
+        "topk_weights": topk_weights,
+        "topk_ids": topk_ids,
+        "sorted_token_ids": sorted_token_ids,
+        "expert_ids": expert_ids,
+        "num_tokens_post_padded": num_tokens_post_padded,
+    }
 
     # NOTE(karlluo): set best config as the best config
     candidate_configs = {
@@ -471,31 +667,113 @@ if __name__ == "__main__":
         }
     }
 
-    default_kernel, kernel_time, output_tensor = performance_fused_moe(
-        A, B, C, A_scale, B_scale, topk_weights, topk_ids, sorted_token_ids,
-        expert_ids, num_tokens_post_padded, mul_routed_weight, topk, config,
-        compute_type, use_fp8_w8a8, use_int8_w8a16, block_shape)
-    candidate_configs["default"]["kernel_time"] = kernel_time
-    candidate_configs["default"]["kernel"] = default_kernel
+    if args.deep_tune:
+        kernel_time = performance_two_step_fused_moe(
+            up_gate_proj_dict, down_proj_dict, gate_dict,
+            mul_routed_weight, topk, config, compute_type, use_fp8_w8a8,
+            use_int8_w8a16, block_shape)
+        candidate_configs["default"]["kernel_time"] = kernel_time
+        candidate_configs["default"]["kernel"] = None
+    else:
+        default_kernel, kernel_time, output_tensor = performance_fused_moe(
+            **up_gate_proj_dict, **gate_dict, mul_routed_weight=mul_routed_weight, topk=topk, config=config,
+            compute_type=compute_type, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, block_shape=block_shape)
+        candidate_configs["default"]["kernel_time"] = kernel_time
+        candidate_configs["default"]["kernel"] = default_kernel
 
+    # vllm search space
+    # block_m_range = [16, 32, 64, 128, 256]
+    # block_n_range = [32, 64, 128, 256]
+    # block_k_range = [64, 128, 256]
+    # group_m_range = [1, 16, 32, 64]
+    # num_warps_range = [4, 8]
+    # num_stage_range = [2, 3, 4, 5]
+    if args.deep_tune:
+        block_size_m_list = [16, 32, 64, 128]
+        block_size_n_list = [64, 128]
+        block_size_k_list = [64, 128]
+        group_size_m_list = [1, 16, 32, 64]
+    else:
+        block_size_m_list = [args.BLOCK_SIZE_M]
+        block_size_n_list = [args.BLOCK_SIZE_N]
+        block_size_k_list = [args.BLOCK_SIZE_K]
+        group_size_m_list = [args.GROUP_SIZE_M]
+    num_warps_list = [4, 8]
+    num_stages_list = [2, 3, 4, 5]
+    total_loops = len(block_size_m_list) * len(block_size_n_list) * len(block_size_k_list) * \
+        len(group_size_m_list) * len(num_warps_list) * len(num_stages_list)
     if args.tune:
         # using the same search space as vllm in vllm/benchmarks/kernels/benchmark_moe.py
-        for num_warps in [4, 8]:
-            for num_stages in [2, 3, 4, 5]:
-                opt_config = config.copy()
-                opt_config.update({"num_warps": num_warps, "num_stages": num_stages})
-
-                kernel, kernel_time, output_tensor = performance_fused_moe(
-                    A, B, C, A_scale, B_scale, topk_weights, topk_ids,
-                    sorted_token_ids, expert_ids, num_tokens_post_padded,
-                    mul_routed_weight, topk, opt_config, compute_type,
-                    use_fp8_w8a8, use_int8_w8a16, block_shape)
-                candidate_configs["configs"].append({
-                    "config": opt_config,
-                    "kernel_time": kernel_time,
-                    "kernel": kernel
-                })
-
+        with tqdm(total=total_loops, desc="deep tune", disable=not args.deep_tune) as pbar:
+            for block_size_m in block_size_m_list:
+                em = numel + num_experts * (block_size_m - 1)
+                max_num_m_blocks = (em + block_size_m - 1) // block_size_m
+                sorted_token_ids = torch.randint(size=[em],
+                                                 low=0,
+                                                 high=num_experts,
+                                                 device='cuda',
+                                                 dtype=torch.int32)
+                expert_ids = torch.randint(size=[max_num_m_blocks],
+                                           low=0,
+                                           high=num_experts,
+                                           device='cuda',
+                                           dtype=torch.int32)
+                num_tokens_post_padded = torch.empty(
+                    (1,), dtype=torch.int32, device='cuda').flatten()
+                if args.deep_tune:
+                    moe_align_block_cpu(topk_ids.flatten(
+                    ), expert_ids, sorted_token_ids, num_tokens_post_padded, m, topk, num_experts, block_size_m)
+                gate_dict["expert_ids"] = expert_ids
+                gate_dict["sorted_token_ids"] = sorted_token_ids
+                gate_dict["num_tokens_post_padded"] = num_tokens_post_padded
+                for block_size_n in block_size_n_list:
+                    for block_size_k in block_size_k_list:
+                        for group_size_m in group_size_m_list:
+                            for num_warps in num_warps_list:
+                                for num_stages in num_stages_list:
+                                    opt_config = {
+                                        "BLOCK_SIZE_M": block_size_m,
+                                        "BLOCK_SIZE_N": block_size_n,
+                                        "BLOCK_SIZE_K": block_size_k,
+                                        "GROUP_SIZE_M": group_size_m,
+                                        "num_warps": num_warps,
+                                        "num_stages": num_stages,
+                                    }
+                                    try:
+                                        if args.deep_tune:
+                                            kernel_time = performance_two_step_fused_moe(
+                                                up_gate_proj_dict,
+                                                down_proj_dict,
+                                                gate_dict,
+                                                mul_routed_weight=mul_routed_weight,
+                                                topk=topk,
+                                                config=opt_config,
+                                                compute_type=compute_type,
+                                                use_fp8_w8a8=use_fp8_w8a8,
+                                                use_int8_w8a16=use_int8_w8a16,
+                                                block_shape=block_shape)
+                                            kernel = None
+                                            output_tensor = None
+                                        else:
+                                            kernel, kernel_time, output_tensor = performance_fused_moe(
+                                                **up_gate_proj_dict, **gate_dict,
+                                                mul_routed_weight=mul_routed_weight,
+                                                topk=topk,
+                                                config=opt_config,
+                                                compute_type=compute_type,
+                                                use_fp8_w8a8=use_fp8_w8a8,
+                                                use_int8_w8a16=use_int8_w8a16,
+                                                block_shape=block_shape)
+                                        candidate_configs["configs"].append({
+                                            "config": opt_config,
+                                            "kernel_time": kernel_time,
+                                            "kernel": kernel
+                                        })
+                                    except Exception as e:
+                                        logging.error(
+                                            f"Error in config {opt_config}: {e}")
+                                        continue
+                                    pbar.update(1)
     opt_best_kernel_time = sys.float_info.max
     opt_best_kerenl_config = None
     opt_best_kernel = None
@@ -505,15 +783,30 @@ if __name__ == "__main__":
             opt_best_kerenl_config = config
             opt_best_kernel = config["kernel"]
 
+    if args.deep_tune:
+        best_config_path = os.path.join(args.output_dir, "best_config.json")
+        if os.path.exists(best_config_path):
+            with open(best_config_path, "r") as f:
+                best_config = json.load(f)
+        else:
+            best_config = {}
+        best_config[m] = opt_best_kerenl_config["config"]
+        sorted_best_config = {k: best_config[k] for k in sorted(
+            best_config, key=lambda x: int(x))}
+        with open(best_config_path, "w") as f:
+            json.dump(sorted_best_config, f, indent=4)
+        exit(0)
+
+    # block_shape[groupn,groupk]
     kernel_name = "fused_moe_kernel" + \
-                  f"_group_n_{args.group_n}" + \
-                  f"_group_k_{args.group_k}" + \
+                  f"_group_n_{block_shape[0]}" + \
+                  f"_group_k_{block_shape[1]}" + \
                   f"_BLOCK_SIZE_M_{args.BLOCK_SIZE_M}" + \
                   f"_BLOCK_SIZE_N_{args.BLOCK_SIZE_N}" + \
                   f"_BLOCK_SIZE_K_{args.BLOCK_SIZE_K}" + \
                   f"_GROUP_SIZE_M_{args.GROUP_SIZE_M}" + \
                   f"_MUL_ROUTED_WEIGHT_{args.MUL_ROUTED_WEIGHT}" + \
-                  f"_top_k_{args.top_k}" + \
+                  f"_top_k_{topk}" + \
                   f"_compute_type_{args.compute_type}" + \
                   f"_use_fp8_w8a8_{args.use_fp8_w8a8}" + \
                   f"_use_int8_w8a16_{args.use_int8_w8a16}"

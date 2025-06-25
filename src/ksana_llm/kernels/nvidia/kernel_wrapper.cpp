@@ -2928,7 +2928,10 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
       KLLM_LOG_ERROR << fmt::format("Config fp8_w8a8 need block_shape.shape = [2,]");
       return;
     }
-    // TODO(rockcao): 256是参考sglang的阈值，后续需要具备搜索最优config的能力
+    // This optimal configuration is obtained via deep_tune from
+    // "/KsanaLLM/3rdparty/LLM_kernels/csrc/kernels/nvidia/fused_moe/fused_moe.py".
+    // For details, refer to the best_config.json file in the same directory.
+    // Usage instructions can be found in the README located in the same path.
     const int config_selection_threshold = 256;
     if (num_tokens > config_selection_threshold) {
       config = {{"block_size_m", 64},
@@ -2941,7 +2944,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
       config = {{"block_size_m", 16},
                 {"block_size_n", block_shape[0]},
                 {"block_size_k", block_shape[1]},
-                {"group_size_m", 32},
+                {"group_size_m", 1},
                 {"num_warps", 4},
                 {"num_stages", 3}};
     }
