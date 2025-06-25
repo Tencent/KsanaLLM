@@ -426,6 +426,15 @@ Status InferenceEngine::CudaGraphCapture() {
 
 Status InferenceEngine::LoadOperatorOptimization(const std::unordered_map<std::string, ModelConfig> &model_configs) {
 #ifdef ENABLE_CUDA
+  if (std::getenv("KSANA_GEMM_ALGO_MAP_DIR") != nullptr) {
+    std::string gemm_algo_map_path =
+        fmt::format("{}/gemm_algo_map.yaml", std::string(std::getenv("KSANA_GEMM_ALGO_MAP_DIR")));
+    if (context_->ext->GetGPUGemmAlgoHelper().LoadFromYaml(gemm_algo_map_path)) {
+      KLLM_LOG_INFO << fmt::format("Load gemm algo from {} success.", gemm_algo_map_path);
+    } else {
+      KLLM_LOG_ERROR << fmt::format("Load gemm algo from {} failed.", gemm_algo_map_path);
+    }
+  }
   // NOTE(karlluo): GEMM algo file is in model dir, so we have to load gemm best algo here
   for (const auto &model_configs_it : model_configs) {
     if (context_->ext->GetGPUGemmAlgoHelper().LoadFromYaml(
@@ -515,6 +524,10 @@ Status InferenceEngine::Stop() {
   }
   model_instances_.clear();
 
+  // Destroy all CacheManager
+  KLLM_LOG_INFO << "Destroy batch scheduler.";
+  DestroyCacheManager();
+
   // Clear batch scheduler
   KLLM_LOG_INFO << "Destroy batch scheduler.";
   batch_scheduler_.reset();
@@ -533,6 +546,9 @@ Status InferenceEngine::Stop() {
     VersionReporter::GetInstance().StopReporting();
     VersionReporter::GetInstance().Destroy();
   }
+
+  KLLM_LOG_INFO << "Destroy Profiler";
+  Singleton<Profiler>::DeleteInstance();
 
   KLLM_LOG_INFO << "The Inference Engine has stopped.";
   return Status();

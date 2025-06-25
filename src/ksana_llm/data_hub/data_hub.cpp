@@ -366,4 +366,6 @@ std::shared_ptr<CacheManagerInterface> GetCacheManager(int group_id) {
   return g_cache_managers[group_id];
 }
 
+void DestroyCacheManager() { g_cache_managers.clear(); }
+
 }  // namespace ksana_llm

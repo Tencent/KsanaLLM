@@ -69,5 +69,6 @@ void DestroyModelInstance();
 // Get and set cache_managers, for worker only.
 Status SetCacheManagers(const std::vector<std::shared_ptr<CacheManagerInterface>>& cache_managers);
 std::shared_ptr<CacheManagerInterface> GetCacheManager(int group_id);
+void DestroyCacheManager();
 
 }  // namespace ksana_llm

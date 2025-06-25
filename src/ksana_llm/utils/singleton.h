@@ -25,6 +25,15 @@ class Singleton {
     return singleton_instance_;
   }
 
+  static void DeleteInstance() {
+    if (singleton_instance_) {
+      std::lock_guard<std::mutex> lock(singleton_mutex_);
+      if (singleton_instance_) {
+        singleton_instance_.reset();
+      }
+    }
+  }
+
  private:
   Singleton();
   Singleton(const Singleton&) = delete;
