@@ -46,8 +46,8 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   // #endif
   // output_tensors:
   //     0: flash_attention_output shape: [std::max(max_batch_size * vocab_size, max_token_num * hidden_units * 3)]
-  int max_tokens = input_tensors[14].shape[1];
-  int batch_size = input_tensors[14].shape[0];
+  int max_tokens = input_tensors[14].shape[9];
+  int batch_size = input_tensors[14].shape[8];
   int layer_block_num = input_tensors[14].shape[2];
   int total_tokens = input_tensors[0].shape[0] - input_tensors[14].shape[3];
   bool use_cache = input_tensors[17].GetPtr<bool>()[0];

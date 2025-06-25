@@ -10,15 +10,12 @@
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/logger.h"
-#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tensor.h"
-#include "ksana_llm/utils/waiter.h"
-#include "ksana_llm/profiler/sched_event_tracer.h"
-
 
 namespace ksana_llm {
 

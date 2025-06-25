@@ -706,12 +706,12 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
     CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.buffers_->kv_cache_buffer);
 
     // Process seq1 and seq2 separately
-    if (!forwarding_context.model_input_->page_single_input.reqs.empty()) {
+    if (!forwarding_context.model_input_->page_single_input.dp_reqs.empty()) {
       Tensor decode_one_seq(decode_q_buffer_tensor.location, decode_q_buffer_tensor.dtype,
                             std::vector<size_t>(decode_q_buffer_tensor.shape), decode_q_buffer_tensor.device_id,
                             decode_q_buffer_tensor.GetPtr<void>() +
                                 decode_q_buffer_tensor.GetTotalBytes() / decode_q_buffer_tensor.shape[0] *
-                                    forwarding_context.model_input_->page_dual_input.reqs.size() * 2);
+                                    forwarding_context.model_input_->page_dual_input.dp_reqs.size() * 2);
 
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
           hidden_buffer_tensors_0, forwarding_context.model_input_->page_single_input, hidden_buffer_tensors_1,
@@ -719,7 +719,7 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
           decode_one_seq, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
     }
 
-    if (!forwarding_context.model_input_->page_dual_input.reqs.empty()) {
+    if (!forwarding_context.model_input_->page_dual_input.dp_reqs.empty()) {
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
           hidden_buffer_tensors_0, forwarding_context.model_input_->page_dual_input, hidden_buffer_tensors_1,
           kv_cache_buffer_tensors[0], forwarding_context.attn_ctx_, paged_buffer_tensors[0], /* workspace */

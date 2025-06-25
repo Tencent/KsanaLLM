@@ -86,8 +86,8 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
     }
     auto [weight_ptr, weight_size] = weights_loader->GetTensor(weight_name);
     DataType weight_data_type = weights_loader->GetTensorDataType(weight_name);
-    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
 #ifdef ENABLE_FP8
+    std::vector<size_t> weight_shape = weights_loader->GetTensorShape(weight_name);
     if (model_config_.quant_config.is_fp8_blockwise &&
         quant_weight_solver_->LoadMoeFp8E4m3BlockWiseScale(tensor_name, weight_shape, weight_data_type, weight_ptr)) {
       continue;
@@ -98,159 +98,160 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
       continue;
     }
 
-    if (tensor_name.find(".experts.") != std::string::npos) {
-      int layer_idx = -1, expert_idx = -1;
-      STATUS_CHECK_RETURN(GetExpertsIdx(tensor_name, layer_idx, expert_idx));
-      if (expert_idx >= 0 && expert_map_[expert_idx] >= num_experts_per_rank_) {
-        // Skip load weight when the expert_id will be not used in current rank.
+    if (tensor_name.find(".experts.") == std::string::npos) {
+      continue;
+    }
+
+    int layer_idx = -1, expert_idx = -1;
+    STATUS_CHECK_RETURN(GetExpertsIdx(tensor_name, layer_idx, expert_idx));
+    if (expert_idx >= 0 && expert_map_[expert_idx] >= num_experts_per_rank_) {
+      // Skip load weight when the expert_id will be not used in current rank.
+      continue;
+    }
+
+    // cast TYPE_FP32 to weight_data_type_.
+    torch::Tensor weight_cpu_tensor;
+    if (weight_data_type == TYPE_FP32) {
+      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
+      torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
+      weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
+      if (weight_data_type_ == TYPE_FP16) {
+        weight_cpu_tensor = in.to(torch::kFloat16);
+        weight_ptr = weight_cpu_tensor.data_ptr();
+        weight_data_type = weight_data_type_;
+      } else if (weight_data_type_ == TYPE_BF16) {
+        weight_cpu_tensor = in.to(torch::kBFloat16);
+        weight_ptr = weight_cpu_tensor.data_ptr();
+        weight_data_type = weight_data_type_;
+      } else {
+        KLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
+                         << weight_data_type_;
+      }
+    } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16 &&
+               (model_config_.quant_config.method != QUANT_GPTQ || weight_data_type != TYPE_INT32) &&
+               weight_data_type != TYPE_FP8_E4M3) {
+      KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
+    }
+
+    // determine weight shape
+    const size_t hidden_units = model_config_.hidden_units;
+    const bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
+
+    const size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
+    const size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
+    if (tensor_name.find(".experts.gate_up_proj.") != std::string::npos) {
+      // cpu weight is [config.num_experts, hidden_units, 2 * moe_inter_size]
+      // Create gpu up_gate_proj Tensor
+      std::vector<size_t> up_gate_experts_shape = {num_experts_per_rank_, hidden_units, 2 * moe_inter_size_per_rank};
+      std::string up_gate_experts_name =
+          "model.layers." + std::to_string(layer_idx) + ".mlp.experts.up_gate_proj.weight";
+      if (weights_map_.find(tensor_name) == weights_map_.end()) {
+        KLLM_LOG_INFO << fmt::format("will create {} in rank {}", up_gate_experts_name, rank_);
+        tensor_manager_->AddWeightTensor(up_gate_experts_name, up_gate_experts_shape, weight_data_type);
+        weights_data_type_map_[up_gate_experts_name] = weight_data_type;
+      }
+      Tensor& tensor = weights_map_[up_gate_experts_name];
+      // view as Memcpy2D
+      // from cpu[config.num_experts * hidden_units, moe_inter_size + moe_inter_size]
+      // to gpu [num_experts * hidden_units, moe_inter_size_per_rank + moe_inter_size_per_rank]
+      const size_t start_expert =
+          std::distance(expert_map_.begin(), std::find(expert_map_.begin(), expert_map_.end(), 0));
+      const size_t height = num_experts_per_rank_ * hidden_units;
+      const size_t width = moe_inter_size_per_rank * GetTypeSize(weight_data_type);
+      const size_t src_width = moe_inter_size * GetTypeSize(weight_data_type);
+      const size_t src_pitch = 2 * src_width;
+      const size_t dst_pitch = 2 * width;
+      // gate
+      void* src_ptr = weight_ptr + start_expert * hidden_units * src_pitch + 0 * src_width + rank_ * width;
+      void* dst_ptr = tensor.GetPtr<void>() + 1 * width;
+      Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+      // up
+      src_ptr = weight_ptr + start_expert * hidden_units * src_pitch + 1 * src_width + rank_ * width;
+      dst_ptr = tensor.GetPtr<void>() + 0 * width;
+      Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find(".experts.down_proj.") != std::string::npos) {
+      // cpu weight is [config.num_experts, moe_inter_size, hidden_units]
+      // Create gpu down_proj Tensor
+      if (weights_map_.find(tensor_name) == weights_map_.end()) {
+        KLLM_LOG_INFO << fmt::format("will create {} in rank {}", tensor_name, rank_);
+        tensor_manager_->AddWeightTensor(tensor_name, {num_experts_per_rank_, moe_inter_size_per_rank, hidden_units},
+                                         weight_data_type);
+        weights_data_type_map_[tensor_name] = weight_data_type;
+      }
+      const Tensor& tensor = weights_map_[tensor_name];
+
+      // view as Memcpy2D
+      // from cpu [config.num_experts, moe_inter_size * hidden_units]
+      // to gpu [num_experts, moe_inter_size_per_rank * hidden_units]
+      const size_t start_expert =
+          std::distance(expert_map_.begin(), std::find(expert_map_.begin(), expert_map_.end(), 0));
+      const size_t height = num_experts_per_rank_;
+      const size_t width = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
+      const size_t src_pitch = moe_inter_size * hidden_units * GetTypeSize(weight_data_type);
+      const size_t dst_pitch = width;
+      void* const src_ptr = weight_ptr + start_expert * src_pitch + rank_ * dst_pitch;
+      void* const dst_ptr = tensor.GetPtr<void>();
+      Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find(".up_proj.") != std::string::npos ||
+               tensor_name.find(".gate_proj.") != std::string::npos) {
+      if (expert_idx < 0) {
         continue;
       }
-
-      // cast TYPE_FP32 to weight_data_type_.
-      torch::Tensor weight_cpu_tensor;
-      if (weight_data_type == TYPE_FP32) {
-        auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-        torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
-        weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
-        if (weight_data_type_ == TYPE_FP16) {
-          weight_cpu_tensor = in.to(torch::kFloat16);
-          weight_ptr = weight_cpu_tensor.data_ptr();
-          weight_data_type = weight_data_type_;
-        } else if (weight_data_type_ == TYPE_BF16) {
-          weight_cpu_tensor = in.to(torch::kBFloat16);
-          weight_ptr = weight_cpu_tensor.data_ptr();
-          weight_data_type = weight_data_type_;
-        } else {
-          KLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
-                           << weight_data_type_;
-        }
-      } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16 &&
-                 (model_config_.quant_config.method != QUANT_GPTQ || weight_data_type != TYPE_INT32) &&
-                 weight_data_type != TYPE_FP8_E4M3) {
-        KLLM_LOG_WARNING << "Weight " << tensor_name << " data type is " << weight_data_type;
+      expert_idx = expert_map_[expert_idx];
+      const std::string up_gate_experts_name =
+          "model.layers." + std::to_string(layer_idx) + ".mlp.experts.up_gate_proj.weight";
+      // Create up_gate_proj Tensor
+      if (weights_map_.find(up_gate_experts_name) == weights_map_.end()) {
+        KLLM_LOG_INFO << fmt::format("will create {} in rank {}", up_gate_experts_name, rank_);
+        tensor_manager_->AddWeightTensor(
+            up_gate_experts_name, {num_experts_per_rank_, moe_inter_size_per_rank * 2, hidden_units}, weight_data_type);
+        weights_data_type_map_[up_gate_experts_name] = weight_data_type;
       }
 
-      // determine weight shape
-      size_t hidden_units = model_config_.hidden_units;
-      bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
-
-      size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
-      size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
-      if (tensor_name.find(".experts.gate_up_proj.") != std::string::npos) {
-        // cpu weight is [config.num_experts, hidden_units, 2 * moe_inter_size]
-        // Create gpu up_gate_proj Tensor
-        std::vector<size_t> up_gate_experts_shape = {num_experts_per_rank_, hidden_units, 2 * moe_inter_size_per_rank};
-        std::string up_gate_experts_name =
-            "model.layers." + std::to_string(layer_idx) + ".mlp.experts.up_gate_proj.weight";
-        if (weights_map_.find(tensor_name) == weights_map_.end()) {
-          KLLM_LOG_INFO << fmt::format("will create {} in rank {}", up_gate_experts_name, rank_);
-          tensor_manager_->AddWeightTensor(up_gate_experts_name, up_gate_experts_shape, weight_data_type);
-          weights_data_type_map_[up_gate_experts_name] = weight_data_type;
-        }
-        Tensor& tensor = weights_map_[up_gate_experts_name];
-        // view as Memcpy2D
-        // from cpu[config.num_experts * hidden_units, moe_inter_size + moe_inter_size]
-        // to gpu [num_experts * hidden_units, moe_inter_size_per_rank + moe_inter_size_per_rank]
-        size_t start_expert = std::distance(expert_map_.begin(), std::find(expert_map_.begin(), expert_map_.end(), 0));
-        size_t height = num_experts_per_rank_ * hidden_units;
-        size_t width = moe_inter_size_per_rank * GetTypeSize(weight_data_type);
-        size_t src_width = moe_inter_size * GetTypeSize(weight_data_type);
-        size_t src_pitch = 2 * src_width;
-        size_t dst_pitch = 2 * width;
-        // gate
-        void* src_ptr = weight_ptr + start_expert * hidden_units * src_pitch + 0 * src_width + rank_ * width;
-        void* dst_ptr = tensor.GetPtr<void>() + 1 * width;
-        Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-        // up
-        src_ptr = weight_ptr + start_expert * hidden_units * src_pitch + 1 * src_width + rank_ * width;
-        dst_ptr = tensor.GetPtr<void>() + 0 * width;
-        Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-      } else if (tensor_name.find(".experts.down_proj.") != std::string::npos) {
-        // cpu weight is [config.num_experts, moe_inter_size, hidden_units]
-        // Create gpu down_proj Tensor
-        std::vector<size_t> down_experts_shape = {num_experts_per_rank_, moe_inter_size_per_rank, hidden_units};
-        if (weights_map_.find(tensor_name) == weights_map_.end()) {
-          KLLM_LOG_INFO << fmt::format("will create {} in rank {}", tensor_name, rank_);
-          tensor_manager_->AddWeightTensor(tensor_name, down_experts_shape, weight_data_type);
-          weights_data_type_map_[tensor_name] = weight_data_type;
-        }
-        Tensor& tensor = weights_map_[tensor_name];
-
-        // view as Memcpy2D
-        // from cpu [config.num_experts, moe_inter_size * hidden_units]
-        // to gpu [num_experts, moe_inter_size_per_rank * hidden_units]
-        size_t start_expert = std::distance(expert_map_.begin(), std::find(expert_map_.begin(), expert_map_.end(), 0));
-        size_t height = num_experts_per_rank_;
-        size_t width = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
-        size_t src_pitch = moe_inter_size * hidden_units * GetTypeSize(weight_data_type);
-        size_t dst_pitch = width;
-        void* src_ptr = weight_ptr + start_expert * src_pitch + rank_ * dst_pitch;
-        void* dst_ptr = tensor.GetPtr<void>();
-        Memcpy2DAsync(dst_ptr, dst_pitch, src_ptr, src_pitch, width, height, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-      } else if (tensor_name.find(".up_proj.") != std::string::npos ||
-                 tensor_name.find(".gate_proj.") != std::string::npos) {
-        if (expert_idx < 0) {
-          continue;
-        }
-        expert_idx = expert_map_[expert_idx];
-        std::vector<size_t> up_gate_experts_shape;
-        up_gate_experts_shape = {num_experts_per_rank_, moe_inter_size_per_rank * 2, hidden_units};
-        std::string up_gate_experts_name =
-            "model.layers." + std::to_string(layer_idx) + ".mlp.experts.up_gate_proj.weight";
-        // Create up_gate_proj Tensor
-        if (weights_map_.find(up_gate_experts_name) == weights_map_.end()) {
-          KLLM_LOG_INFO << fmt::format("will create {} in rank {}", up_gate_experts_name, rank_);
-          tensor_manager_->AddWeightTensor(up_gate_experts_name, up_gate_experts_shape, weight_data_type);
-          weights_data_type_map_[up_gate_experts_name] = weight_data_type;
-        }
-
-        size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
-        size_t double_expert_pitch = expert_pitch * 2;
-        size_t src_upgate_offset =
-            model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * expert_pitch : 0;
-        Tensor& up_gate_experts_tensor = weights_map_[up_gate_experts_name];
-        if (tensor_name.find(".up_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * double_expert_pitch +
-                          (use_vllm_moe ? expert_pitch : 0),
-                      weight_ptr + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-        } else if (tensor_name.find(".gate_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * double_expert_pitch +
-                          (use_vllm_moe ? 0 : expert_pitch),
-                      weight_ptr + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
-        }
-      } else if (tensor_name.find(".down_proj.") != std::string::npos) {
-        if (expert_idx < 0) {
-          continue;
-        }
-        expert_idx = expert_map_[expert_idx];
-        std::vector<size_t> down_experts_shape;
-        down_experts_shape = {num_experts_per_rank_, hidden_units, moe_inter_size_per_rank};
-        std::string down_experts_name = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.down_proj.weight";
-        if (weights_map_.find(down_experts_name) == weights_map_.end()) {
-          tensor_manager_->AddWeightTensor(down_experts_name, down_experts_shape, weight_data_type);
-          weights_data_type_map_[down_experts_name] = weight_data_type;
-        }
-        // get experts.down_proj weight's data ptr
-        void* down_weight_ptr;
-        size_t down_weight_size;
-        std::tie(down_weight_ptr, down_weight_size) = weights_loader->GetTensor(weight_name);
-
-        size_t dst_pitch = moe_inter_size_per_rank * GetTypeSize(weight_data_type);
-        size_t src_pitch = moe_inter_size_per_rank * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
-        size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
-        size_t src_down_offset = model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
-        Tensor& down_expert_tensor = weights_map_[down_experts_name];
-        Memcpy2DAsync(down_expert_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_pitch, dst_pitch,
-                      down_weight_ptr + src_down_offset, src_pitch, dst_pitch, hidden_units, MEMCPY_HOST_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[rank_]);
+      const size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
+      const size_t double_expert_pitch = expert_pitch * 2;
+      const size_t src_upgate_offset =
+          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * expert_pitch : 0;
+      const Tensor& up_gate_experts_tensor = weights_map_[up_gate_experts_name];
+      if (tensor_name.find(".up_proj.") != std::string::npos) {
+        MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * double_expert_pitch +
+                        (use_vllm_moe ? expert_pitch : 0),
+                    weight_ptr + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
+      } else if (tensor_name.find(".gate_proj.") != std::string::npos) {
+        MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * double_expert_pitch +
+                        (use_vllm_moe ? 0 : expert_pitch),
+                    weight_ptr + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
       }
-      KLLM_LOG_DEBUG << "Success load weight:" << tensor_name << " on rank " << rank_;
+    } else if (tensor_name.find(".down_proj.") != std::string::npos) {
+      if (expert_idx < 0) {
+        continue;
+      }
+      expert_idx = expert_map_[expert_idx];
+      const std::string down_experts_name =
+          "model.layers." + std::to_string(layer_idx) + ".mlp.experts.down_proj.weight";
+      if (weights_map_.find(down_experts_name) == weights_map_.end()) {
+        tensor_manager_->AddWeightTensor(
+            down_experts_name, {num_experts_per_rank_, hidden_units, moe_inter_size_per_rank}, weight_data_type);
+        weights_data_type_map_[down_experts_name] = weight_data_type;
+      }
+
+      const size_t dst_pitch = moe_inter_size_per_rank * GetTypeSize(weight_data_type);
+      const size_t src_pitch =
+          moe_inter_size_per_rank * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
+      const size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
+      const size_t src_down_offset =
+          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
+      const Tensor& down_expert_tensor = weights_map_[down_experts_name];
+      Memcpy2DAsync(down_expert_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_pitch, dst_pitch,
+                    weight_ptr + src_down_offset, src_pitch, dst_pitch, hidden_units, MEMCPY_HOST_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[rank_]);
     }
+    KLLM_LOG_DEBUG << "Success load weight:" << tensor_name << " on rank " << rank_;
   }  // end for loop
 
   return Status();

@@ -839,11 +839,12 @@ std::string CommonWeight<T>::ConcatLayerName(std::string layer_flag, int& layer_
 
 template <typename T>
 Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
-  if (!weights_map_.count(weight_name)) {
+  const auto it = weights_map_.find(weight_name);
+  if (it == weights_map_.end()) {
     KLLM_LOG_WARNING << fmt::format("weight name {} not in weights map", weight_name);
     return Tensor();
   }
-  return weights_map_[weight_name];
+  return it->second;
 }
 
 template <typename T>

@@ -25,15 +25,16 @@ namespace ksana_llm {
 ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
     : model_config_(model_config), rank_(rank), context_(context) {
   auto env = Singleton<Environment>::GetInstance();
-  env->GetPipelineConfig(pipeline_config_);
+  PipelineConfig pipeline_config;
+  env->GetPipelineConfig(pipeline_config);
   env->GetAttnBackendConfig(attn_backend_config_);
 
   block_size_ = env->GetBlockSize();
   const size_t max_batch_size = model_config_.max_batch_size;
   const size_t max_token_num = model_config.max_step_token_num;  // max step token num
-  layer_num_on_node_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
-  if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
-    layer_num_on_node_ += pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
+  layer_num_on_node_ = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
+  if (pipeline_config.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
+    layer_num_on_node_ += pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1;
     KLLM_LOG_INFO << "ModelInput add next n, now layer: " << layer_num_on_node_;
   }
 
@@ -287,20 +288,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 
   PrepareVLInputRefit(forward_reqs);
   PrepareInputRefit(forward_reqs);
-
-  size_t gather_offset = 0;
-  attn_dp_group_gather_offsets_.clear();
-  for (size_t group_id = 0; group_id < attn_dp_group_size_; ++group_id) {
-    size_t prefill_size = attn_dp_group_offsets_[group_id * 4 + 1] - attn_dp_group_offsets_[group_id * 4];
-    size_t decode_size = attn_dp_group_offsets_[group_id * 4 + 3] - attn_dp_group_offsets_[group_id * 4 + 2];
-
-    attn_dp_group_gather_offsets_.push_back(gather_offset);
-    gather_offset += prefill_size;
-    attn_dp_group_gather_offsets_.push_back(gather_offset);
-    attn_dp_group_gather_offsets_.push_back(gather_offset);
-    gather_offset += decode_size;
-    attn_dp_group_gather_offsets_.push_back(gather_offset);
-  }
 
   PrepareVLRequest(forward_reqs);
   PrepareNetxnGatherIdx(forward_reqs, run_mode);
@@ -841,12 +828,11 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
   // preapare pos
   std::vector<int64_t> rotary_pos_host(total_input_len, 1);
   size_t rotary_data_offset = 0;
-  for (size_t i = 0; i < input.dp_reqs.size(); ++i) {
-    const auto& req = *input.dp_reqs[i];
-    const size_t input_len = req.forwarding_tokens->size() - req.kv_cached_token_num;
-    const auto pos_offset = model_config_.type == "qwen2_vl" ? *req.mrotary_embedding_pos_offset : 0;
+  for (const auto& req : input.dp_reqs) {
+    const size_t input_len = req->forwarding_tokens->size() - req->kv_cached_token_num;
+    const auto pos_offset = model_config_.type == "qwen2_vl" ? *req->mrotary_embedding_pos_offset : 0;
     std::iota(rotary_pos_host.begin() + rotary_data_offset, rotary_pos_host.begin() + rotary_data_offset + input_len,
-              req.kv_cached_token_num + pos_offset);
+              req->kv_cached_token_num + pos_offset);
     rotary_data_offset += input_len;
   }
   KLLM_LOG_DEBUG << "rotary_pos_host " << rotary_pos_host;
@@ -977,7 +963,7 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
   KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
   if (Singleton<Environment>::GetInstance()->GetKVCacheType() == DataType::TYPE_FP8_E5M2 ||
       Singleton<Environment>::GetInstance()->GetKVCacheType() == DataType::TYPE_FP8_E4M3) {
-    size_t block_table_host_size = block_table_host.size();
+    const size_t block_table_host_size = block_table_host.size();
     block_table_host.resize(block_table_host.size() * 2);
     for (size_t i = 0; i < block_table_host_size; i++) {
       block_table_host[block_table_host_size + i] = block_table_host[i] / layer_num_on_node_;
@@ -1168,8 +1154,9 @@ void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash
       }
     }
 
+
     if (!is_page && req.logits_custom_length > 0) {  // Specify the range of logits required
-      for (auto [l, r] : req.request_target->at("logits").slice_pos) {
+      for (const auto& [l, r] : req.request_target->at("logits").slice_pos) {
         std::iota(logits_idx_list.begin() + logits_idx_list_idx,
                   logits_idx_list.begin() + logits_idx_list_idx + r - l + 1, input_ids_cpu.size() - input_length + l);
         logits_idx_list_idx += r - l + 1;

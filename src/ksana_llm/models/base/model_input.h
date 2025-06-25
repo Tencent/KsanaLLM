@@ -196,11 +196,9 @@ class ModelInput {
   // in format [dp0_prefill_beg, dp0_prefill_end, dp0_decode_beg, dp0_decode_end,
   //            dp1_prefill_beg, dp1_prefill_end, dp1_decode_beg, dp1_decode_end ...]
   std::vector<int> attn_dp_group_offsets_;
-  std::vector<int> attn_dp_group_gather_offsets_;
 
  private:
   ModelConfig model_config_;
-  PipelineConfig pipeline_config_;
   AttnBackendConfig attn_backend_config_;
 
   const int rank_;

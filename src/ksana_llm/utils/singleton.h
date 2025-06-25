@@ -31,14 +31,8 @@ class Singleton {
   Singleton& operator=(const Singleton&) = delete;
 
  private:
-  static std::shared_ptr<T> singleton_instance_;
-  static std::mutex singleton_mutex_;
+  inline static std::shared_ptr<T> singleton_instance_ = nullptr;
+  inline static std::mutex singleton_mutex_;
 };
-
-template <typename T>
-std::shared_ptr<T> Singleton<T>::singleton_instance_ = nullptr;
-
-template <typename T>
-std::mutex Singleton<T>::singleton_mutex_;
 
 }  // namespace ksana_llm

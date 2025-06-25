@@ -9,7 +9,6 @@
 
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/nvidia/nccl_utils.h"
-#include "ksana_llm/utils/waiter.h"
 
 #include "3rdparty/LLM_kernels/csrc/kernels/nvidia/gemm_wrapper/gemm_algo_map.h"
 
