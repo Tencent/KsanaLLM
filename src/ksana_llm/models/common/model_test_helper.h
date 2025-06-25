@@ -78,8 +78,9 @@ class FakeModel {
   Status GetOutputToCPU(std::vector<float>& cpu_fp32_data) {
     auto& residula_buffer_tensor = buffers_.local_residual_buffer_tensors_[0];
     cpu_fp32_data.resize(residula_buffer_tensor.GetElementNumber());
-    STATUS_CHECK_RETURN(cast_layer_->Forward({residula_buffer_tensor, forwarding_context_.attn_ctx_.forward_shape},
-                                             residual_fp32_buffer_));
+    STATUS_CHECK_RETURN(
+        cast_layer_->Forward({residula_buffer_tensor, forwarding_context_.GetAttentionForwardContext().forward_shape},
+                             residual_fp32_buffer_));
     DeviceSynchronize();
     Memcpy(cpu_fp32_data.data(), residual_fp32_buffer_[0].template GetPtr<void>(),
            sizeof(float) * residual_fp32_buffer_[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);

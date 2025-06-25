@@ -226,7 +226,6 @@ TEST(CacheCopyTest, CacheCopyTest) {
   int src_index = 0;
   for (size_t i = 0; i < h_block_offsets.back() * block_size; i++) {
     if (h_input_offsets[cache_offset_indx] == i) {
-      // printf("i %d -> %d\n", i, h_block_offsets[cache_offset_indx] * block_size);
       i = h_block_offsets[cache_offset_indx] * block_size;
       cache_offset_indx++;
       if (!(i < h_block_offsets.back() * block_size)) break;
@@ -234,22 +233,15 @@ TEST(CacheCopyTest, CacheCopyTest) {
     int index = i % block_size;
     float* h_src_base = h_src.data() + src_index * token_data_size;
     float* h_dst_base = h_dst.data() + (i / block_size) * block_size * token_data_size;
-    // printf("i = %d h_src_base = %d h_dst_base = %d\n", i, int(src_index * token_data_size), int((i / block_size) *
-    // block_size * token_data_size));
     for (int num_head_i = 0; num_head_i < num_heads; num_head_i++) {
       for (int head_size_i = 0; head_size_i < head_size / x; head_size_i++) {
         for (int j = 0; j < x; j++) {
           int k_src_index = num_head_i * head_size + head_size_i * x + j;
           int k_dst_index = num_head_i * (head_size * block_size) + head_size_i * (block_size * x) + index * x + j;
-          // printf("num_head_i = %d head_size_i = %d j = %d x = %d\n", num_head_i, head_size_i, j, x);
-          // printf("k_src_index = %d k_dst_index = %d index = %d\n", k_src_index, k_dst_index, index);
           EXPECT_EQ(*(h_src_base + k_src_index), *(h_dst_base + k_dst_index));
         }
       }
     }
-    //    printf("%f ", *(h_dst.data() + i * token_data_size + j));
-    //    printf("%f ", *(h_src.data() + src_index * token_data_size + j));
-    // printf("\n");
     src_index++;
     if (i == 1) break;
   }

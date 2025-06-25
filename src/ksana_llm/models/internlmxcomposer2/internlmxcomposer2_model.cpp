@@ -74,9 +74,9 @@ Status InternlmxComposer2DecoderLayer<T>::FlashAttentionForward(std::vector<Tens
                                                                 std::vector<Tensor>& hidden_buffer_tensors_1,
                                                                 std::vector<Tensor>& reduce_buffer_tensors,
                                                                 ForwardingContext<T>& forwarding_context) {
-  return flash_attentions_->Forward(hidden_buffer_tensors_0, forwarding_context.model_input_, hidden_buffer_tensors_1,
-                                    reduce_buffer_tensors, forwarding_context.attn_ctx_, query_layernorm_weight_,
-                                    key_layernorm_weight_);
+  return flash_attentions_->Forward(
+      hidden_buffer_tensors_0, forwarding_context.GetModelInput(), hidden_buffer_tensors_1, reduce_buffer_tensors,
+      forwarding_context.GetAttentionForwardContext(), query_layernorm_weight_, key_layernorm_weight_);
 }
 
 template <typename T>
@@ -84,10 +84,11 @@ Status InternlmxComposer2DecoderLayer<T>::PagedAttentionForward(std::vector<Tens
                                                                 std::vector<Tensor>& hidden_buffer_tensors_1,
                                                                 std::vector<Tensor>& reduce_buffer_tensors,
                                                                 ForwardingContext<T>& forwarding_context) {
-  CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.buffers_->kv_cache_buffer);
-  return paged_attentions_->Forward(hidden_buffer_tensors_0, forwarding_context.model_input_, hidden_buffer_tensors_1,
-                                    reduce_buffer_tensors, kv_cache_buffer_tensors[0], forwarding_context.attn_ctx_,
-                                    query_layernorm_weight_, key_layernorm_weight_);
+  CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
+  return paged_attentions_->Forward(hidden_buffer_tensors_0, forwarding_context.GetModelInput(),
+                                    hidden_buffer_tensors_1, reduce_buffer_tensors, kv_cache_buffer_tensors[0],
+                                    forwarding_context.GetAttentionForwardContext(), query_layernorm_weight_,
+                                    key_layernorm_weight_);
 }
 
 template <typename T>
@@ -99,10 +100,10 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden
   // Attn proj MatMul
   STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
 #ifdef ENABLE_CUDA
-  if (forwarding_context.model_input_->multi_token_request_num && forwarding_context.model_input_->is_mask) {
+  if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
     CREATE_BUFFER_SCOPE(plora_b_buffer_tensor, plora_b_buffer_);
     CREATE_BUFFER_SCOPE(plora_a_buffer_tensor, plora_a_buffer_);
-    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.model_input_->im_mask,
+    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.GetModelInput()->im_mask,
                                             plora_a_buffer_tensor));
     STATUS_CHECK_RETURN(qkv_lora_a_proj_->Forward(plora_b_buffer_tensor[0], plora_a_buffer_tensor));
     STATUS_CHECK_RETURN(qkv_lora_b_proj_->Forward(plora_a_buffer_tensor[0], plora_b_buffer_tensor));
@@ -111,33 +112,33 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden
 #endif
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   // MMHA Flash/Paged Attention
-  if (!forwarding_context.model_input_->is_cudagraph_capture_request && layer_idx_ == 0) {
+  if (!forwarding_context.GetModelInput()->is_cudagraph_capture_request && layer_idx_ == 0) {
     // only need sync in the first layer
-    StreamWaitEvent(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_],
-                    forwarding_context.model_input_->kvcache_offset_event);
-    StreamWaitEvent(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_],
-                    forwarding_context.model_input_->rotary_embedding_event);
+    StreamWaitEvent(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()],
+                    forwarding_context.GetModelInput()->kvcache_offset_event);
+    StreamWaitEvent(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()],
+                    forwarding_context.GetModelInput()->rotary_embedding_event);
   }
-  if (forwarding_context.model_input_->multi_token_request_num) {
+  if (forwarding_context.GetModelInput()->multi_token_request_num) {
     FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, forwarding_context);
-    if (forwarding_context.model_input_->single_token_request_num) {
+    if (forwarding_context.GetModelInput()->single_token_request_num) {
       std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
     }
   }
 
-  if (forwarding_context.model_input_->single_token_request_num) {
+  if (forwarding_context.GetModelInput()->single_token_request_num) {
     PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, forwarding_context);
   }
-  if (forwarding_context.model_communicator_) {
+  if (forwarding_context.GetModelCommunicator()) {
     STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
   } else {
     STATUS_CHECK_RETURN(attn_o_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
     // Plora
 #ifdef ENABLE_CUDA
-    if (forwarding_context.model_input_->multi_token_request_num && forwarding_context.model_input_->is_mask) {
+    if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
       CREATE_BUFFER_SCOPE(plora_b_buffer_tensor, plora_b_buffer_);
       CREATE_BUFFER_SCOPE(plora_a_buffer_tensor, plora_a_buffer_);
-      STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.model_input_->im_mask,
+      STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.GetModelInput()->im_mask,
                                               plora_b_buffer_tensor));
       STATUS_CHECK_RETURN(o_lora_a_proj_->Forward(plora_b_buffer_tensor[0], plora_a_buffer_tensor));
       STATUS_CHECK_RETURN(o_lora_b_proj_->Forward(plora_a_buffer_tensor[0], plora_b_buffer_tensor));
@@ -162,15 +163,15 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden
   STATUS_CHECK_RETURN(mlp_up_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
 #ifdef ENABLE_CUDA
   // Plora
-  if (forwarding_context.model_input_->multi_token_request_num && forwarding_context.model_input_->is_mask) {
+  if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
     CREATE_BUFFER_SCOPE(plora_b_buffer_tensor, plora_b_buffer_);
     CREATE_BUFFER_SCOPE(plora_a_buffer_tensor, plora_a_buffer_);
-    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.model_input_->im_mask,
+    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.GetModelInput()->im_mask,
                                             plora_b_buffer_tensor));
     STATUS_CHECK_RETURN(gate_proj_plora_a_->Forward(plora_b_buffer_tensor[0], plora_a_buffer_tensor));
     STATUS_CHECK_RETURN(gate_proj_plora_b_->Forward(plora_a_buffer_tensor[0], plora_b_buffer_tensor));
     STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_1[0], plora_b_buffer_tensor[0], hidden_buffer_tensors_1));
-    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.model_input_->im_mask,
+    STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.GetModelInput()->im_mask,
                                             plora_b_buffer_tensor));
     STATUS_CHECK_RETURN(up_proj_plora_a_->Forward(plora_b_buffer_tensor[0], plora_a_buffer_tensor));
     STATUS_CHECK_RETURN(up_proj_plora_b_->Forward(plora_a_buffer_tensor[0], plora_b_buffer_tensor));
@@ -181,16 +182,16 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden
   STATUS_CHECK_RETURN(
       silu_muls_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0], hidden_buffer_tensors_0));
   // Mlp down_proj MatMul
-  if (forwarding_context.model_communicator_) {
+  if (forwarding_context.GetModelCommunicator()) {
     STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));
   } else {
     STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
     // Plora
 #ifdef ENABLE_CUDA
-    if (forwarding_context.model_input_->multi_token_request_num && forwarding_context.model_input_->is_mask) {
+    if (forwarding_context.GetModelInput()->multi_token_request_num && forwarding_context.GetModelInput()->is_mask) {
       CREATE_BUFFER_SCOPE(plora_b_buffer_tensor, plora_b_buffer_);
       CREATE_BUFFER_SCOPE(plora_a_buffer_tensor, plora_a_buffer_);
-      STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.model_input_->im_mask,
+      STATUS_CHECK_RETURN(mask_muls_->Forward(hidden_buffer_tensors_0[0], forwarding_context.GetModelInput()->im_mask,
                                               plora_b_buffer_tensor));
       STATUS_CHECK_RETURN(down_proj_plora_a_->Forward(plora_b_buffer_tensor[0], plora_a_buffer_tensor));
       STATUS_CHECK_RETURN(down_proj_plora_b_->Forward(plora_a_buffer_tensor[0], plora_b_buffer_tensor));
@@ -208,9 +209,9 @@ template <typename T>
 Status InternlmxComposer2DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer,
                                                   const bool is_multi_token_forward,
                                                   ForwardingContext<T>& forwarding_context) {
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.buffers_->hidden_buffer_0);
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.buffers_->hidden_buffer_1);
-  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.buffers_->shared_buffer);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   // Pre attn layernorm
   // Pre layernorm uses layernorm input for residual connection.
   input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
@@ -274,9 +275,9 @@ Status InternlmxComposer2<T>::CreateLayers(LayerCreationContext<T>& creation_con
 
 template <typename T>
 Status InternlmxComposer2<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
-  for (int layer_idx = forwarding_context.pipeline_config_.lower_layer_idx;
-       layer_idx <= forwarding_context.pipeline_config_.upper_layer_idx; ++layer_idx) {
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
+       layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
     STATUS_CHECK_RETURN(
         decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
   }
@@ -308,7 +309,7 @@ Status InternlmxComposer2Model<T>::CreateLayers(LayerCreationContext<T>& creatio
 template <typename T>
 Status InternlmxComposer2Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
-      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.context_->IsChief());
+      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(internlmx_composer2_.Forward(residual_buffer, forwarding_context));
   SetHiddenUnitBuffer(residual_buffer, forwarding_context);
 

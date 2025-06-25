@@ -21,16 +21,20 @@
 namespace ksana_llm {
 
 struct ForwardingBuffers {
-  /**
-   * The following 4 buffers are used as temporary buffers during the whole model inference:
-   * 1. `hidden_buffer_0_` and `hidden_buffer_1_` serve as the input and output for each layer.
-   *    We assume that the input of each layer is taken from `hidden_buffer_0_`, the output is
-   *    put into `hidden_buffer_1_`, and then swapped with `hidden_buffer_0_`. This convention
-   *    makes each layer independent and pluggable.
-   * 3. `shared_buffer_` is shared to store the output of the up layer for gated activation
-   *    (`gated_buffer_`), as the fixed input buffer for custom reduce sum (`reduce_buffer_`),
-   *    and as the extra workspace for paged attention (`paged_buffer_`).
-   */
+  //  NOTE(karlluo): The following 4 buffers(3 different kinds) are used as temporary buffers during the whole model
+  //  inference:
+  //  1. intermedia buffer: `hidden_buffer_0` and `hidden_buffer_1` serve as the input and output for each layer.
+  //     We assume that the input of each layer is taken from `hidden_buffer_0`, the output is
+  //     put into `hidden_buffer_1`, and then swapped with `hidden_buffer_0`. This convention
+  //     makes each layer independent and pluggable.
+  //  2. operators' extra buffer: `shared_buffer` is shared to store the output of the up layer for gated activation
+  //     (`gated_buffer_`), as the fixed input buffer for custom reduce sum (`reduce_buffer_`),
+  //     and as the extra workspace for paged attention (`paged_buffer_`).
+  //  3. kv cache buffer: `kv_cache_buffer` stores the key-value pairs for all attention layers
+  //     across different sequence positions. This enables efficient autoregressive generation
+  //     by avoiding recomputation of previously calculated key-value pairs during inference.
+  //     The buffer supports both paged attention and continuous memory layouts for optimal
+  //     memory utilization and access patterns.
   TensorBuffer* hidden_buffer_0;
   TensorBuffer* hidden_buffer_1;
   TensorBuffer* shared_buffer;
@@ -39,7 +43,8 @@ struct ForwardingBuffers {
   // Use for dp only.
   TensorBuffer* dp_input_buffer;
 
-  std::vector<Tensor> mtp_hidden_buffer_tensors;  // This buffer is used among multiple forward calls
+  // This buffer is used among multiple forward calls
+  std::vector<Tensor> mtp_hidden_buffer_tensors;
 
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
             BufferManager* buffer_mgr);
@@ -66,7 +71,6 @@ struct ModelBuffers {
             BufferManager* buffer_mgr);
 };
 
-// Too many obj, try to clear later
 template <typename T>
 class ForwardingContext {
  public:
@@ -79,19 +83,47 @@ class ForwardingContext {
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
 
- public:
-  size_t schedule_id = DEFAULT_SCHEDULE_ID;
-  ForwardingBuffers* buffers_;
+  ForwardingBuffers* GetForwardingBuffers() { return buffers_; }
 
-  /*
-   * These variables must be set through functions, do not set them
-   * TODO(robertyuan): change to Get functions
-   */
-  AttentionForwardContext attn_ctx_;
+  AttentionForwardContext& GetAttentionForwardContext() { return attn_ctx_; }
 
-  std::shared_ptr<Context> context_;
+  inline const size_t GetAttentionDataParallelSize() { return attn_data_parallel_size_; }
+
+  std::shared_ptr<ModelCommunicator<T>>& GetModelCommunicator() { return model_communicator_; }
+
+  std::shared_ptr<ModelOutput>& GetModelOutput() { return model_output_; }
+
+  std::shared_ptr<ModelInput>& GetModelInput() { return model_input_; }
+
+  inline const size_t GetScheduleId() { return schedule_id_; }
+
+  inline void SetScheduleId(size_t schedule_id) { schedule_id_ = schedule_id; }
+
+  inline BatchRequestSchedInfo& GetBatchRequestSchedInfo() { return batch_event_info_; }
+
+  inline const bool IsForwardingLayers() { return is_forwarding_layers_; }
+
+  inline void SetIsForwardingLayers(bool is_forwarding_layers) { is_forwarding_layers_ = is_forwarding_layers; }
+
+  inline const std::shared_ptr<Context>& GetContext() { return context_; }
+
+  inline void SetContext(std::shared_ptr<Context> context) { context_ = context; }
+
+  inline int GetCurrentRank() { return rank_; }
+
+  inline void SetCurrentRank(int rank) { rank_ = rank; }
+
+  inline const PipelineConfig& GetPipelineConfig() { return pipeline_config_; }
+
+ private:
+  // Rank of current inference device
   int rank_;
-  PipelineConfig pipeline_config_;
+
+  // Current inference context
+  std::shared_ptr<Context> context_;
+
+  // Current inference task related schedule id
+  size_t schedule_id_ = DEFAULT_SCHEDULE_ID;
 
   // The model input information.
   std::shared_ptr<ModelInput> model_input_;
@@ -99,26 +131,34 @@ class ForwardingContext {
   // The model output.
   std::shared_ptr<ModelOutput> model_output_;
 
+  // Used for tracing sched events.
+  BatchRequestSchedInfo batch_event_info_;
+
   // The model communicator.
   std::shared_ptr<ModelCommunicator<T>> model_communicator_;
 
-  // mark state for sched event recording
-  bool is_forwarding_layers = false;
-
-  // Used for tracing sched events.
-  BatchRequestSchedInfo batch_event_info;
+  // Pipeline parallel configuration
+  PipelineConfig pipeline_config_;
 
   // fwd context related pp batch idx.
-  size_t pp_batch_idx = 0;
+  size_t pp_batch_idx_ = 0;
 
   // Attention data parallel size
   size_t attn_data_parallel_size_ = 1;
 
- private:
+  // Extra attributes for attention
+  AttentionForwardContext attn_ctx_;
+
+  // Buffers for temporary buffers during the whole model inference
+  ForwardingBuffers* buffers_;
+
   // The original vocab size of the model
   size_t vocab_size_;
 
   // Vocab size aligned and padded with tensor_para_size
   size_t vocab_size_pad_;
+
+  // mark state for sched event recording
+  bool is_forwarding_layers_ = false;
 };
 }  // namespace ksana_llm

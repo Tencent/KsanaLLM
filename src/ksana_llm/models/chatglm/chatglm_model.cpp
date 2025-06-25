@@ -33,12 +33,12 @@ Status ChatglmModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 
 template <typename T>
 Status ChatglmModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
 
   std::vector<Tensor>& residual_buffer =
-      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.context_->IsChief());
-  for (int layer_idx = forwarding_context.pipeline_config_.lower_layer_idx;
-       layer_idx <= forwarding_context.pipeline_config_.upper_layer_idx; ++layer_idx) {
+      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
+  for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
+       layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
     STATUS_CHECK_RETURN(
         decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
   }

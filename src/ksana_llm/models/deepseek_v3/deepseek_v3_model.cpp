@@ -83,9 +83,9 @@ template <typename T>
 Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
                                           ForwardingContext<T>& forwarding_context, bool need_add_residual_before_attn,
                                           bool need_add_residual_after_mlp) {
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.buffers_->hidden_buffer_0);
-  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.buffers_->shared_buffer);
-  CREATE_BUFFER_SCOPE(extra_buffer_tensors, forwarding_context.buffers_->dp_input_buffer);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
+  CREATE_BUFFER_SCOPE(extra_buffer_tensors, forwarding_context.GetForwardingBuffers()->dp_input_buffer);
   if (need_add_residual_before_attn) {  // Adding the residual should have been done after mlp in the previous layer for
                                         // better performance.
     pre_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
@@ -93,7 +93,7 @@ Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, 
     input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
   }
 
-  if (forwarding_context.attn_data_parallel_size_ > 1) {
+  if (forwarding_context.GetAttentionDataParallelSize() > 1) {
     mla_->DataParallelForward(hidden_buffer_tensors_0, reduce_buffer_tensors, extra_buffer_tensors, forwarding_context);
   } else {
     mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, extra_buffer_tensors, forwarding_context);
@@ -108,12 +108,12 @@ Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, 
 
   // Mlp all reduce
   if (!enable_full_shared_expert_ || !is_moe_) {
-    ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.rank_);
+    ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.GetCurrentRank());
     tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
     ProfileEvent::PopEvent();
   }
 
-  size_t world_size = forwarding_context.context_->GetExpertParallelWorldSize();
+  size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
   if (is_moe_ && world_size > 1) ep_data_transfer_->FreeHiddenUnitDeviceBuffer(forwarding_context);
 
   // Mlp residual add
@@ -134,10 +134,10 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
   size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
 
   ProfileEvent::PushEvent(fmt::format("DS_CommonMlp_seq_len_{}_hidden_units_{}", seq_len, hidden_units),
-                          forwarding_context.rank_);
+                          forwarding_context.GetCurrentRank());
 
   if (!is_moe_) {
-    ProfileEvent::PushEvent("CommonMlp", forwarding_context.rank_);
+    ProfileEvent::PushEvent("CommonMlp", forwarding_context.GetCurrentRank());
     mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
     ProfileEvent::PopEvent();
   } else {
@@ -148,19 +148,19 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
     auto& gated_buffer_ = common_mlp_buffer_tensors;
 
     // Expert gating MatMul
-    ProfileEvent::PushEvent("gate", forwarding_context.rank_);
+    ProfileEvent::PushEvent("gate", forwarding_context.GetCurrentRank());
     STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
     ProfileEvent::PopEvent();
 
-    ProfileEvent::PushEvent("MOE", forwarding_context.rank_);
+    ProfileEvent::PushEvent("MOE", forwarding_context.GetCurrentRank());
     STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors));
     ProfileEvent::PopEvent();
 
-    size_t expert_node_rank = forwarding_context.context_->GetExpertParallelExpertNodeRank();
-    size_t world_size = forwarding_context.context_->GetExpertParallelWorldSize();
+    size_t expert_node_rank = forwarding_context.GetContext()->GetExpertParallelExpertNodeRank();
+    size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
 
     KLLM_LOG_DEBUG << fmt::format("Send moe_buffer_tensors rank_: {}, shape: {} {}, dtype: {}, refer_ptr: {}",
-                                  forwarding_context.rank_, reduce_buffer_tensors[0].shape[0],
+                                  forwarding_context.GetCurrentRank(), reduce_buffer_tensors[0].shape[0],
                                   reduce_buffer_tensors[0].shape[1], reduce_buffer_tensors[0].ToString(),
                                   reduce_buffer_tensors[0].GetPtr<void>());
 
@@ -200,13 +200,13 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
         KLLM_LOG_DEBUG << "Recv remote_mlp_input shape: " << remote_mlp_input[0].shape[0]
                        << remote_mlp_input[0].shape[1] << ", dtype: " << remote_mlp_input[0].ToString()
                        << ", refer_ptr " << remote_mlp_input[0].GetPtr<void>()
-                       << ", rank: " << forwarding_context.rank_;
+                       << ", rank: " << forwarding_context.GetCurrentRank();
         // Expert gating MatMul
-        ProfileEvent::PushEvent("gate", forwarding_context.rank_);
+        ProfileEvent::PushEvent("gate", forwarding_context.GetCurrentRank());
         STATUS_CHECK_RETURN(expert_gate_->Forward(remote_mlp_input, gated_buffer_));
         ProfileEvent::PopEvent();
 
-        ProfileEvent::PushEvent("MOE", forwarding_context.rank_);
+        ProfileEvent::PushEvent("MOE", forwarding_context.GetCurrentRank());
         STATUS_CHECK_RETURN(moe_->Forward(remote_mlp_input[0], gated_buffer_[0], common_mlp_buffer_tensors));
         ProfileEvent::PopEvent();
       }
@@ -221,7 +221,7 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
           // Stage 4.1 Send moe results to other nodes.
           ep_data_transfer_->SendHiddenUnitBufferForEP(common_mlp_buffer_tensors, forwarding_context, true);
           KLLM_LOG_DEBUG << fmt::format("Send moe_buffer_tensors rank_: {},  shape: {} {}, dtype: {}, refer_ptr: {}",
-                                        forwarding_context.rank_, common_mlp_buffer_tensors[0].shape[0],
+                                        forwarding_context.GetCurrentRank(), common_mlp_buffer_tensors[0].shape[0],
                                         common_mlp_buffer_tensors[0].shape[1], common_mlp_buffer_tensors[0].ToString(),
                                         common_mlp_buffer_tensors[0].GetPtr<void>());
 
@@ -229,10 +229,11 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
           // Stage 4.2 Revc moe results from other expert-parallel nodes.
           remote_residual_buffer_result = ep_data_transfer_->RecvHiddenUnitBufferForEP(forwarding_context);
 
-          KLLM_LOG_DEBUG << fmt::format(
-              "Recv moe_buffer_tensors rank_: {}, shape: {} {}, dtype: {}, refer_ptr: {}", forwarding_context.rank_,
-              remote_residual_buffer_result[0].shape[0], remote_residual_buffer_result[0].shape[1],
-              remote_residual_buffer_result[0].ToString(), remote_residual_buffer_result[0].GetPtr<void>());
+          KLLM_LOG_DEBUG << fmt::format("Recv moe_buffer_tensors rank_: {}, shape: {} {}, dtype: {}, refer_ptr: {}",
+                                        forwarding_context.GetCurrentRank(), remote_residual_buffer_result[0].shape[0],
+                                        remote_residual_buffer_result[0].shape[1],
+                                        remote_residual_buffer_result[0].ToString(),
+                                        remote_residual_buffer_result[0].GetPtr<void>());
         }
       }
 
@@ -241,13 +242,13 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
           add_->Forward(reduce_buffer_tensors[0], remote_residual_buffer_result[0], reduce_buffer_tensors));
     }
 
-    ProfileEvent::PushEvent("CommonShareMlp", forwarding_context.rank_);
+    ProfileEvent::PushEvent("CommonShareMlp", forwarding_context.GetCurrentRank());
     STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, common_mlp_buffer_tensors, is_multi_token_forward,
                                              forwarding_context));
     ProfileEvent::PopEvent();
 
     if (enable_full_shared_expert_) {
-      ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.rank_);
+      ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.GetCurrentRank());
       tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
       ProfileEvent::PopEvent();
     }
@@ -270,8 +271,8 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
      *     SharedExpertOutput saved in common_mlp_buffer_tensors
      *     CommonMlp Output = hidden_buffer_tensors_0 + common_mlp_buffer_tensors
      */
-    ProfileEvent::PushEvent("add_layer", forwarding_context.rank_);
-    if (forwarding_context.model_communicator_) {
+    ProfileEvent::PushEvent("add_layer", forwarding_context.GetCurrentRank());
+    if (forwarding_context.GetModelCommunicator()) {
       if (enable_full_shared_expert_) {
         STATUS_CHECK_RETURN(
             add_->Forward(hidden_buffer_tensors_0[0], common_mlp_buffer_tensors[0], hidden_buffer_tensors_0));
@@ -319,19 +320,19 @@ DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationCont
 
 template <typename T>
 Status DeepSeekV3MtpLayer<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
-  RecordRequestSchedEvents(forwarding_context.batch_event_info, forwarding_context.rank_,
-                           forwarding_context.model_input_->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
-  auto& mtp_hidden_buffer = forwarding_context.buffers_->mtp_hidden_buffer_tensors;
-  const auto& model_input = forwarding_context.model_input_;
+  RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
+                           forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
+  auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;
+  const auto& model_input = forwarding_context.GetModelInput();
   {
-    CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.buffers_->shared_buffer);
+    CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
     // Embedding Norm
     enorm_->Forward(residual_buffer, residual_buffer);
 
     // gather last token hidden
     STATUS_CHECK_RETURN(gather_layer_->Forward(
-        {mtp_hidden_buffer[0], forwarding_context.model_input_->nextn_hidden_idx_uint64_tensor}, shared_buffer));
+        {mtp_hidden_buffer[0], forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor}, shared_buffer));
 
     // last token hidden norm
     hnorm_->Forward(shared_buffer, mtp_hidden_buffer);
@@ -348,9 +349,9 @@ Status DeepSeekV3MtpLayer<T>::Forward(std::vector<Tensor>& residual_buffer, Forw
                                               /* need_add_residual_before_attn */ false,
                                               /* need_add_residual_after_mlp */ true));
 
-  StreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
-  RecordRequestSchedEvents(forwarding_context.batch_event_info, forwarding_context.rank_,
-                           forwarding_context.model_input_->attn_dp_group_id_, "MTP", RequestEventPhase::End);
+  StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
+  RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
+                           forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::End);
   return Status();
 }
 
@@ -416,25 +417,25 @@ Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_contex
 
 template <typename T>
 Status DeepSeekV3Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
-  ProfileEvent::PushEvent("DS_LayerForward", forwarding_context.rank_);
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
-  const bool need_recv = !forwarding_context.context_->IsChief() && run_mode == RunMode::kMain;
+  ProfileEvent::PushEvent("DS_LayerForward", forwarding_context.GetCurrentRank());
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  const bool need_recv = !forwarding_context.GetContext()->IsChief() && run_mode == RunMode::kMain;
 
   if (run_mode == RunMode::kMain) {
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(forwarding_context, need_recv);
-    for (int layer_idx = forwarding_context.pipeline_config_.lower_layer_idx;
-         layer_idx <= forwarding_context.pipeline_config_.upper_layer_idx; ++layer_idx) {
+    for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
+         layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(layers_[layer_idx]->Forward(
           residual_buffer, is_multi_token_forward, forwarding_context,
-          /* need_add_residual_before_attn */ layer_idx != forwarding_context.pipeline_config_.lower_layer_idx,
-          /* need_add_residual_after_mlp */ layer_idx == forwarding_context.pipeline_config_.upper_layer_idx));
+          /* need_add_residual_before_attn */ layer_idx != forwarding_context.GetPipelineConfig().lower_layer_idx,
+          /* need_add_residual_after_mlp */ layer_idx == forwarding_context.GetPipelineConfig().upper_layer_idx));
     }
     SetHiddenUnitBuffer(residual_buffer, forwarding_context);
   } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
-    forwarding_context.is_forwarding_layers = false;  // Don't record ForwardingLayers event
+    forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(forwarding_context, need_recv);
-    for (int layer_idx = forwarding_context.pipeline_config_.lower_nextn_layer_idx;
-         layer_idx <= forwarding_context.pipeline_config_.upper_nextn_layer_idx; ++layer_idx) {
+    for (int layer_idx = forwarding_context.GetPipelineConfig().lower_nextn_layer_idx;
+         layer_idx <= forwarding_context.GetPipelineConfig().upper_nextn_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(nextn_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
     }
   }

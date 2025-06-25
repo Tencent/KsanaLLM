@@ -146,9 +146,9 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
 
     // Create send_thread_
     ForwardingContext<float> forwarding_context = ForwardingContext<float>();
-    forwarding_context.rank_ = 0;
-    forwarding_context.context_ = context_;
-    forwarding_context.model_input_ = model_input_;
+    forwarding_context.SetCurrentRank(0);
+    forwarding_context.SetContext(context_);
+    forwarding_context.GetModelInput() = model_input_;
 
     // Create unique id and set to pipeline config.
     nccl_data_channel_->Listen();
@@ -253,9 +253,9 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
 
     nccl_data_channel_->Connect();
     ForwardingContext<float> forwarding_context = ForwardingContext<float>();
-    forwarding_context.rank_ = 0;
-    forwarding_context.context_ = context_;
-    forwarding_context.model_input_ = model_input_;
+    forwarding_context.SetCurrentRank(0);
+    forwarding_context.SetContext(context_);
+    forwarding_context.GetModelInput() = model_input_;
 
     // forwarding_context.expert_parallel_config = expert_parallel_config_;
     std::vector<Tensor> recv_tensor = ep_data_transfer_->RecvHiddenUnitBufferForEP(forwarding_context);

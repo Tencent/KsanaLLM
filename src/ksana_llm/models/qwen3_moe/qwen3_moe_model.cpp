@@ -41,8 +41,8 @@ Qwen3MoeDecoderLayer<T>::Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_b
 template <typename T>
 Status Qwen3MoeDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
                                         ForwardingContext<T>& forwarding_context) {
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.buffers_->hidden_buffer_0);
-  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.buffers_->shared_buffer);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
 
   input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
@@ -93,17 +93,17 @@ Status Qwen3Moe<T>::CreateLayers(LayerCreationContext<T>& creation_context,
   moe_buffer_ = creation_context.buffer_mgr_->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
-    decoder_layers_[layer_idx] = std::make_shared<Qwen3MoeDecoderLayer<T>>(layer_idx, moe_buffer_,
-                                                                           creation_context, model_creation_config);
+    decoder_layers_[layer_idx] =
+        std::make_shared<Qwen3MoeDecoderLayer<T>>(layer_idx, moe_buffer_, creation_context, model_creation_config);
   }
   return Status();
 }
 
 template <typename T>
 Status Qwen3Moe<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
-  for (int layer_idx = forwarding_context.pipeline_config_.lower_layer_idx;
-       layer_idx <= forwarding_context.pipeline_config_.upper_layer_idx; ++layer_idx) {
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
+       layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
     STATUS_CHECK_RETURN(
         decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
   }
@@ -138,7 +138,7 @@ Status Qwen3MoeModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 template <typename T>
 Status Qwen3MoeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
-      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.context_->IsChief());
+      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(qwen3moe_.Forward(residual_buffer, forwarding_context));
   SetHiddenUnitBuffer(residual_buffer, forwarding_context);
 

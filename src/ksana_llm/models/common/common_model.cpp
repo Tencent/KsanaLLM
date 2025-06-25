@@ -24,8 +24,8 @@ namespace ksana_llm {
 template <typename T>
 void RecordRequestSchedEventWithFContext(ForwardingContext<T>& forwarding_context, const char* type,
                                          RequestEventPhase phase) {
-  RecordRequestSchedEvents(forwarding_context.batch_event_info, forwarding_context.rank_,
-                           forwarding_context.model_input_->attn_dp_group_id_, type, phase);
+  RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
+                           forwarding_context.GetModelInput()->attn_dp_group_id_, type, phase);
 }
 
 template <typename T>
@@ -180,16 +180,16 @@ template <typename T>
 float* CommonModel<T>::GetLogitsPtr(size_t schedule_id) {
   SetDevice(rank_);
   ForwardingContext<T>* forwarding_context = GetForwardingContext(schedule_id);
-  return forwarding_context->model_output_->logits_tensor.template GetPtr<float>();
+  return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>();
 }
 
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                                          ForwardingContext<T>& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
-  memcpy(input_tokens_ptr, forwarding_context.model_input_->input_ids_cpu.data(),
-         forwarding_context.model_input_->input_ids_cpu.size() * sizeof(int));
-  cpu_input_tokens_tensor_.shape = {forwarding_context.model_input_->input_ids_cpu.size()};
+  memcpy(input_tokens_ptr, forwarding_context.GetModelInput()->input_ids_cpu.data(),
+         forwarding_context.GetModelInput()->input_ids_cpu.size() * sizeof(int));
+  cpu_input_tokens_tensor_.shape = {forwarding_context.GetModelInput()->input_ids_cpu.size()};
 
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
   cpu_emb_lookup_layer_->Forward({cpu_input_tokens_tensor_, cpu_tokens_emb_tensor_, embedding_weight}, residual_buffer);
@@ -199,36 +199,36 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext<T>& forwarding_context) {
   // Wait the computation of input_ids.
-  StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.model_input_->input_ids_event);
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->input_ids_event);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.model_input_->rotary_embedding_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
     STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-        {forwarding_context.model_input_->input_ids, forwarding_context.model_input_->input_offset_uint64_tensor,
-         forwarding_context.model_input_->input_prefix_uint64_tensor, embedding_weight,
-         forwarding_context.model_input_->flash_input.rotary_embedding_pos},
+        {forwarding_context.GetModelInput()->input_ids, forwarding_context.GetModelInput()->input_offset_uint64_tensor,
+         forwarding_context.GetModelInput()->input_prefix_uint64_tensor, embedding_weight,
+         forwarding_context.GetModelInput()->flash_input.rotary_embedding_pos},
         residual_buffer));
   } else {
     STATUS_CHECK_RETURN(emb_lookup_layer_->Forward(
-        {forwarding_context.model_input_->input_ids, forwarding_context.model_input_->input_offset_uint64_tensor,
-         forwarding_context.model_input_->input_prefix_uint64_tensor, embedding_weight},
+        {forwarding_context.GetModelInput()->input_ids, forwarding_context.GetModelInput()->input_offset_uint64_tensor,
+         forwarding_context.GetModelInput()->input_prefix_uint64_tensor, embedding_weight},
         residual_buffer));
   }
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(forwarding_context.model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetCommStreams()[rank_], forwarding_context.model_output_->compute_ready_event);
+    EventRecord(forwarding_context.GetModelOutput()->compute_ready_event, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetCommStreams()[rank_], forwarding_context.GetModelOutput()->compute_ready_event);
   }
 
-  if (forwarding_context.model_communicator_) {
-    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.buffers_->hidden_buffer_1);
-    forwarding_context.model_communicator_->AllGather({residual_buffer[0], hidden_buffer_tensors_1[0]},
-                                                      residual_buffer);
+  if (forwarding_context.GetModelCommunicator()) {
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+    forwarding_context.GetModelCommunicator()->AllGather({residual_buffer[0], hidden_buffer_tensors_1[0]},
+                                                         residual_buffer);
   }
   return Status();
 }
@@ -304,8 +304,8 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>
   }
 
 #ifdef ENABLE_ACL
-  if (forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT) {
-    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.schedule_id);
+  if (forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT) {
+    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId());
     if (distributed_device_buffer_prefill_.empty()) {
       distributed_device_buffer_prefill_.push_back(device_buffer->prefill_tensors[rank_]);
     } else {
@@ -320,7 +320,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>
     return distributed_device_buffer_prefill_;
   } else {
 #endif
-    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.schedule_id);
+    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId());
     if (distributed_device_buffer_.empty()) {
       distributed_device_buffer_.push_back(device_buffer->tensors[rank_]);
     } else {
@@ -343,23 +343,23 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext<T>& f
   if (do_recv) {
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::Begin);
     // Wait recv if first layer and not chief, SetCurrentHiddenUnitBuffer will be called.
-    Status status = RecvHiddenUnits(forwarding_context.rank_ == 0, forwarding_context.schedule_id);
+    Status status = RecvHiddenUnits(forwarding_context.GetCurrentRank() == 0, forwarding_context.GetScheduleId());
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
     }
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
-    bool is_prefill = forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT;
-    CopyFromHiddenUnitBuffer(residual_buffer[0], GetCurrentHiddenUnitBuffer(forwarding_context.schedule_id),
-                             forwarding_context.rank_, is_prefill);
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
+    CopyFromHiddenUnitBuffer(residual_buffer[0], GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId()),
+                             forwarding_context.GetCurrentRank(), is_prefill);
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::End);
 
-    if (forwarding_context.is_forwarding_layers) {
+    if (forwarding_context.IsForwardingLayers()) {
       RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::Begin);
     }
 
     return residual_buffer;
   } else {
-    if (forwarding_context.is_forwarding_layers) {
+    if (forwarding_context.IsForwardingLayers()) {
       RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::Begin);
     }
     return GetHiddenUnitBufferRef(forwarding_context);
@@ -390,7 +390,7 @@ Status CommonModel<T>::AllocResources(size_t schedule_id) {
     if (!is_assigned) {
       // Assign this context to the schedule_id
       schedule_to_context_map_[schedule_id] = i;
-      forwarding_context_buffer_[i]->schedule_id = schedule_id;
+      forwarding_context_buffer_[i]->SetScheduleId(schedule_id);
       return Status();
     }
   }
@@ -419,18 +419,18 @@ Status CommonModel<T>::FreeResources(size_t schedule_id) {
 template <typename T>
 void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer,
                                          ForwardingContext<T>& forwarding_context) {
-  if (forwarding_context.is_forwarding_layers) {
+  if (forwarding_context.IsForwardingLayers()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::End);
   }
   // Copy to hidden_unit_buffer if not standalone.
-  if (!forwarding_context.context_->IsStandalone()) {
+  if (!forwarding_context.GetContext()->IsStandalone()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::Begin);
-    bool is_prefill = forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT;
-    StreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
+    StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
     RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::End);
 
-    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(forwarding_context.schedule_id), residual_buffer[0],
-                           forwarding_context.rank_, is_prefill);
+    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId()), residual_buffer[0],
+                           forwarding_context.GetCurrentRank(), is_prefill);
   }
 }
 
@@ -452,13 +452,14 @@ Status CommonModel<T>::Forward(size_t schedule_id, std::shared_ptr<ksana_llm::Ba
                                std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
   // Get the forwarding context for this schedule_id
   ForwardingContext<T>* forwarding_context = GetForwardingContext(schedule_id);
-  forwarding_context->batch_event_info = BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs, schedule_id);
-  ProfileEvent::PushEvent("CommonModel_Forward", forwarding_context->rank_);
+  forwarding_context->GetBatchRequestSchedInfo() =
+      BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs, schedule_id);
+  ProfileEvent::PushEvent("CommonModel_Forward", forwarding_context->GetCurrentRank());
 
   forwarding_context->UpdateBeforeForward(forward_reqs, run_mode);
 
   // Set shape and type of hidden unit.
-  SetHiddenUnitMeta({forwarding_context->model_input_->input_ids.shape[0], model_config_.hidden_units},
+  SetHiddenUnitMeta({forwarding_context->GetModelInput()->input_ids.shape[0], model_config_.hidden_units},
                     model_config_.weight_data_type);
   if (context_->IsChief()) {
     RecordRequestSchedEventWithFContext(*forwarding_context, "PrepareForwarding", RequestEventPhase::End);
@@ -469,9 +470,9 @@ Status CommonModel<T>::Forward(size_t schedule_id, std::shared_ptr<ksana_llm::Ba
       LookupEmbedding(*forwarding_context, base_weight, forward_reqs);
       RecordRequestSchedEventWithFContext(*forwarding_context, "EmbLookup", RequestEventPhase::End);
     }
-    forwarding_context->is_forwarding_layers = true;
+    forwarding_context->SetIsForwardingLayers(true);
     LayerForward(*forwarding_context, run_mode);
-    forwarding_context->is_forwarding_layers = false;
+    forwarding_context->SetIsForwardingLayers(false);
   }
 
   // Invode lm head only in standalone mode.
@@ -486,7 +487,7 @@ template <typename T>
 Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
                                        std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
-  ProfileEvent::PushEvent("CommonModel_LookupEmbedding", forwarding_context.rank_);
+  ProfileEvent::PushEvent("CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
   // CPU embedding lookup
   // The output is stored in `residual_buffer` for residual connection in common
   // decoder.
@@ -495,9 +496,9 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
     EmbedTokensUseCpu(embedding_weight, forward_reqs, forwarding_context);
   }
 
-  if (forwarding_context.model_input_->is_cudagraph_capture_request) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.model_input_->kvcache_offset_event);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.model_input_->rotary_embedding_event);
+  if (forwarding_context.GetModelInput()->is_cudagraph_capture_request) {
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->kvcache_offset_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   // GPU embedding lookup
@@ -508,11 +509,11 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
   }
 
   // refit input needs to be processed only in the multi-token forwarding.
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
-    input_refit_layer_->Forward({forwarding_context.model_input_->cpu_input_refit_tensor.pos_pair_tensor,
-                                 forwarding_context.model_input_->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
+    input_refit_layer_->Forward({forwarding_context.GetModelInput()->cpu_input_refit_tensor.pos_pair_tensor,
+                                 forwarding_context.GetModelInput()->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
                                 residual_buffer);
   }
   ProfileEvent::PopEvent();
@@ -523,13 +524,13 @@ template <typename T>
 Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
                               std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(
       forwarding_context, !context_->IsStandalone() && context_->IsChief() && run_mode == RunMode::kMain);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
   // save hidden result if enable MTP model
   if (model_run_config_.return_hidden_states && context_->IsChief() && run_mode == RunMode::kMain) {
-    auto& mtp_hidden_tensor = forwarding_context.buffers_->mtp_hidden_buffer_tensors[0];
+    auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
     mtp_hidden_tensor.shape = residual_buffer[0].shape;
     mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
     MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
@@ -559,35 +560,35 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
     }
   }
 
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.buffers_->hidden_buffer_0);
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.buffers_->hidden_buffer_1);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
 // assemble last token
 // The input is stored in `residual_buffer`.
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-      {residual_buffer[0], forwarding_context.model_input_->logits_idx_uint64_tensor}, hidden_buffer_tensors_0));
+      {residual_buffer[0], forwarding_context.GetModelInput()->logits_idx_uint64_tensor}, hidden_buffer_tensors_0));
 #elif defined(ENABLE_ACL)
   STATUS_CHECK_RETURN(assemble_tokens_hidden_layer_->Forward(
-      {residual_buffer[0], forwarding_context.model_input_->last_token_index_tensor,
-       forwarding_context.model_input_->input_prefix_uint64_tensor},
+      {residual_buffer[0], forwarding_context.GetModelInput()->last_token_index_tensor,
+       forwarding_context.GetModelInput()->input_prefix_uint64_tensor},
       hidden_buffer_tensors_0));
 #endif
 
   // lm_head
-  ProfileEvent::PushEvent("CommonModel_LmHead", forwarding_context.rank_);
+  ProfileEvent::PushEvent("CommonModel_LmHead", forwarding_context.GetCurrentRank());
   STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(forwarding_context.model_output_->compute_ready_event, context_->GetComputeStreams()[rank_]);
-    StreamWaitEvent(context_->GetCommStreams()[rank_], forwarding_context.model_output_->compute_ready_event);
+    EventRecord(forwarding_context.GetModelOutput()->compute_ready_event, context_->GetComputeStreams()[rank_]);
+    StreamWaitEvent(context_->GetCommStreams()[rank_], forwarding_context.GetModelOutput()->compute_ready_event);
   }
 
-  if (forwarding_context.model_communicator_) {
-    forwarding_context.model_communicator_->AllGather({hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]},
-                                                      hidden_buffer_tensors_0);
+  if (forwarding_context.GetModelCommunicator()) {
+    forwarding_context.GetModelCommunicator()->AllGather({hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]},
+                                                         hidden_buffer_tensors_0);
   }
   ProfileEvent::PopEvent();
 
@@ -599,9 +600,9 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
   }
 
   forwarding_context.UpdateAfterForward(forward_reqs);
-  std::vector<Tensor> logits_buffer{forwarding_context.model_output_->logits_tensor};
-  STATUS_CHECK_RETURN(
-      cast_layer_->Forward({hidden_buffer_tensors_0[0], forwarding_context.attn_ctx_.forward_shape}, logits_buffer));
+  std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
+  STATUS_CHECK_RETURN(cast_layer_->Forward(
+      {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
 
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::End);

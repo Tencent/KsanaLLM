@@ -40,7 +40,7 @@ Status Fp8MoeLayer<T, WT>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& wor
 template <typename T, typename WT>
 Status Fp8MoeLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
   bool is_fp8 = true;
-  size_t best_config_index_ = InvokeMoeGemmConfigProfile<WT, WT, T>(is_fp8);
+  best_config_index_ = InvokeMoeGemmConfigProfile<WT, WT, T>(is_fp8);
   return Status();
 }
 

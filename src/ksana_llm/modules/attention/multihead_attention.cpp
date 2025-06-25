@@ -42,7 +42,7 @@ Status MultiHeadAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors
                                       std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                       ForwardingContext<T>& forwarding_context) {
   {
-    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.buffers_->hidden_buffer_1);
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     // Attn proj MatMul
     STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
 

@@ -26,7 +26,7 @@ class CrossLayerAttention {
 
   // Input tensors: hidden_buffer_tensors_0
   // Output tensors: hidden_buffer_tensors_0
-  //                 or reduce_buffer_tensors if have forwarding_context.model_communicator_
+  //                 or reduce_buffer_tensors if have forwarding_context.GetModelCommunicator()
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
 

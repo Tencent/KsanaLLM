@@ -33,9 +33,9 @@ Status Baichuan<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 
 template <typename T>
 Status Baichuan<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
-  const bool is_multi_token_forward = forwarding_context.model_input_->multi_token_request_num > 0;
-  for (int layer_idx = forwarding_context.pipeline_config_.lower_layer_idx;
-       layer_idx <= forwarding_context.pipeline_config_.upper_layer_idx; ++layer_idx) {
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
+       layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
     STATUS_CHECK_RETURN(
         decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
   }
@@ -69,7 +69,7 @@ Status BaichuanModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 template <typename T>
 Status BaichuanModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
-      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.context_->IsChief());
+      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(baichuan_.Forward(residual_buffer, forwarding_context));
   SetHiddenUnitBuffer(residual_buffer, forwarding_context);
 

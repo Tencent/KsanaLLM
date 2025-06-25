@@ -1154,7 +1154,6 @@ void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash
       }
     }
 
-
     if (!is_page && req.logits_custom_length > 0) {  // Specify the range of logits required
       for (const auto& [l, r] : req.request_target->at("logits").slice_pos) {
         std::iota(logits_idx_list.begin() + logits_idx_list_idx,

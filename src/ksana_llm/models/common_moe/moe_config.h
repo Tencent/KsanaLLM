@@ -156,7 +156,7 @@ inline void PrepareLlama4Attributes(const nlohmann::json &config_json, ModelConf
     model_config.moe_config.moe_layers = config_json["moe_layers"].get<std::vector<size_t>>();
   }
   if (model_config.moe_config.moe_layers.empty()) {
-    for (int layer_idx = interleave_moe_layer_step - 1; layer_idx < model_config.num_layer;
+    for (size_t layer_idx = interleave_moe_layer_step - 1; layer_idx < static_cast<size_t>(model_config.num_layer);
          layer_idx += interleave_moe_layer_step) {
       model_config.moe_config.moe_layers.push_back(layer_idx);
     }
@@ -168,7 +168,7 @@ inline void PrepareLlama4Attributes(const nlohmann::json &config_json, ModelConf
   }
   if (model_config.no_rope_layers.empty()) {
     size_t no_rope_layer_interval = 4;
-    for (int layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
+    for (size_t layer_idx = 0; layer_idx < static_cast<size_t>(model_config.num_layer); layer_idx++) {
       model_config.no_rope_layers.push_back((layer_idx + 1) % no_rope_layer_interval != 0);
     }
   }

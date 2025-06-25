@@ -14,30 +14,30 @@ Status TpCommunicator<T>::AllReduce(std::vector<Tensor>& reduce_buffer_tensors,
                                     ForwardingContext<T>& forwarding_context) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
-  if (!forwarding_context.context_->IsRunContextDecodeAndDecodeSerially()) {
-    EventRecord(forwarding_context.model_output_->compute_ready_event,
-                forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
-    StreamWaitEvent(forwarding_context.context_->GetCommStreams()[forwarding_context.rank_],
-                    forwarding_context.model_output_->compute_ready_event);
+  if (!forwarding_context.GetContext()->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(forwarding_context.GetModelOutput()->compute_ready_event,
+                forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
+    StreamWaitEvent(forwarding_context.GetContext()->GetCommStreams()[forwarding_context.GetCurrentRank()],
+                    forwarding_context.GetModelOutput()->compute_ready_event);
   }
 
   // AllReduceSum
-  if (forwarding_context.model_communicator_) {
-    forwarding_context.model_communicator_->ReduceSum(reduce_buffer_tensors, hidden_buffer_tensors_0,
-                                                      is_multi_token_forward, /*use_custom*/ true);
+  if (forwarding_context.GetModelCommunicator()) {
+    forwarding_context.GetModelCommunicator()->ReduceSum(reduce_buffer_tensors, hidden_buffer_tensors_0,
+                                                         is_multi_token_forward, /*use_custom*/ true);
   }
   return Status();
 }
 
 template <typename T>
 Status TpCommunicator<T>::AllGather(Tensor& gather_tensor, Tensor& buffer, ForwardingContext<T>& forwarding_context) {
-  if (!forwarding_context.model_communicator_) {
+  if (!forwarding_context.GetModelCommunicator()) {
     return Status();
   }
 
   std::vector<Tensor> input{gather_tensor, buffer};
   std::vector<Tensor> output{gather_tensor};
-  forwarding_context.model_communicator_->AllGather(input, output);
+  forwarding_context.GetModelCommunicator()->AllGather(input, output);
   gather_tensor = std::move(output[0]);
   return Status();
 }

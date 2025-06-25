@@ -103,7 +103,7 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
   hidden_buffer_1 = buffer_mgr->CreateBufferTensor("hidden_buffer_1", buffers_shape_map["hidden_buffer_1"], weight_type,
                                                    ksana_llm::LOCATION_DEVICE);
   shared_buffer = buffer_mgr->CreateBufferTensor("shared_buffer", buffers_shape_map["shared_buffer"], weight_type,
-                                                 ksana_llm::LOCATION_DEVICE, stream);
+                                                 ksana_llm::LOCATION_DEVICE);
   dp_input_buffer = buffer_mgr->CreateBufferTensor("dp_input_buffer", buffers_shape_map["dp_input_buffer"], weight_type,
                                                    ksana_llm::LOCATION_DEVICE, stream);
   kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
@@ -174,7 +174,7 @@ void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, cons
   rank_ = rank;
   attn_data_parallel_size_ = model_config.attn_data_para_size;
   buffers_ = buffers;
-  pp_batch_idx = pp_batch_idx;
+  pp_batch_idx_ = pp_batch_idx;
 
   vocab_size_ = model_config.vocab_size;
   vocab_size_pad_ = DivRoundUp(model_config.vocab_size, model_config.tensor_para_size) * model_config.tensor_para_size;

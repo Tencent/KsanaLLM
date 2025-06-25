@@ -110,7 +110,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
                       model_config_.weight_data_type);
 
     // create forward shape tensor
-    forwarding_context_->attn_ctx_.forward_shape.shape = {
+    forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {
         forwarding_context_->model_input_->multi_token_request_num,
         forwarding_context_->model_input_->multi_token_request_max_tokens,
         forwarding_context_->model_input_->flash_input.kv_cache_block_num,
@@ -130,23 +130,23 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_->buffers_->shared_buffer);
     CREATE_BUFFER_SCOPE(paged_buffer_tensors, forwarding_context_->buffers_->dp_input_buffer);
 
-    forwarding_context_->attn_ctx_.flag_tensor.template GetPtr<bool>()[0] =
+    forwarding_context_->GetAttentionForwardContext().flag_tensor.template GetPtr<bool>()[0] =
         forwarding_context_->model_input_->use_cache;
-    auto& attention_input = hidden_buffer_tensors_0;
     hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0], 2048};
     std::vector<float> input_data(hidden_buffer_tensors_0[0].GetElementNumber());
-    for (int i = 0; i < input_data.size(); i++) {
+    for (size_t i = 0; i < input_data.size(); i++) {
       input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
     }
     AssignFromVector(hidden_buffer_tensors_0[0], input_data);
     Status status =
         mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, paged_buffer_tensors, *forwarding_context_);
-    forwarding_context_->attn_ctx_.forward_shape.shape = {0, 1, 1};
+    forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);
       hidden_buffer_tensors_1[0].Fill(0);
       STATUS_CHECK_RETURN(cast_layer_->Forward(
-          {hidden_buffer_tensors_0[0], forwarding_context_->attn_ctx_.forward_shape}, hidden_buffer_tensors_1));
+          {hidden_buffer_tensors_0[0], forwarding_context_->GetAttentionForwardContext().forward_shape},
+          hidden_buffer_tensors_1));
       Memcpy(input_data.data(), hidden_buffer_tensors_1[0].template GetPtr<void>(),
              sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
     }
@@ -161,7 +161,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
       }
     }
 
-    for (int i = 0; i < output.size(); i++) {
+    for (size_t i = 0; i < output.size(); i++) {
       float diff = std::fabs((input_data[i] - output[i]) / output[i]);
       EXPECT_TRUE(diff < 0.05);
     }
@@ -201,7 +201,7 @@ class MultiHeadLatentAttentionTestWeight : public CommonMlaWeight<T> {
       tensor_manager_->AddWeightTensor(tensor_name, shape, weight_type);
       Tensor& tensor = weights_map_[tensor_name];
       std::vector<float> input_data(tensor.GetElementNumber());
-      for (int i = 0; i < input_data.size(); i++) {
+      for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
       }
       AssignFromVector(tensor, input_data);

@@ -71,7 +71,7 @@ template <typename T>
 Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                  std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                  ForwardingContext<T>& forwarding_context) {
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.buffers_->hidden_buffer_1);
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (fuse_gate_up_proj_) {
     // Mlp gate_up_proj MatMul
     STATUS_CHECK_RETURN(mlp_gate_up_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
@@ -100,7 +100,7 @@ Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
   }
 
   // Mlp down_proj MatMul
-  if (forwarding_context.model_communicator_) {
+  if (forwarding_context.GetModelCommunicator()) {
     // Put output to `reduce_buffer_tensors` to ensure that the input for custom reduce sum is
     // always in `reduce_buffer_tensors`.
     STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));

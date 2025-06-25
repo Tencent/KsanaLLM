@@ -20,7 +20,7 @@ ExpertParallelDataTransfer<T>::ExpertParallelDataTransfer() {}
 template <typename T>
 void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
                                                               ForwardingContext<T>& forwarding_context, bool is_sync) {
-  if (forwarding_context.context_->IsExpertParallelStandalone()) return;
+  if (forwarding_context.GetContext()->IsExpertParallelStandalone()) return;
 
   // Send comm meta.
   expert_parallel_comm_meta meta;
@@ -39,20 +39,20 @@ void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<
   HiddenUnitDeviceBuffer* hidden_unit = SetHiddenUnitBufferForEP(residual_buffer, forwarding_context);
 
   // Memcpy use the default stream.
-  StreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
+  StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
 
   KLLM_LOG_DEBUG << fmt::format("SendHiddenUnitBufferForEP hidden_unit_meta rank_: {},  shape: {} {}, dtype: {}",
-                                forwarding_context.rank_, hidden_unit_meta->tensors[forwarding_context.rank_].shape[0],
-                                hidden_unit_meta->tensors[forwarding_context.rank_].shape[1],
-                                hidden_unit_meta->tensors[forwarding_context.rank_].ToString());
+                                forwarding_context.GetCurrentRank(),
+                                hidden_unit_meta->tensors[forwarding_context.GetCurrentRank()].shape[0],
+                                hidden_unit_meta->tensors[forwarding_context.GetCurrentRank()].shape[1],
+                                hidden_unit_meta->tensors[forwarding_context.GetCurrentRank()].ToString());
 
-  // CUDA_CHECK(cudaStreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_].Get()));
-  //  Need, to avoid potential data race when using wait-notify.
+  // Need, to avoid potential data race when using wait-notify.
   // rank 0 ---> ResetExpertWaiter ---> ExpertNotify().notify
   // rank 1 ----------------------------------------------------> ResetExpertWaiter --> ExpertWait();
   GetExpertHiddenUnitBufferPool()->ExpertBarrier();
 
-  if (forwarding_context.rank_ == 0) {
+  if (forwarding_context.GetCurrentRank() == 0) {
     SendExpertHiddenUnits(hidden_unit_meta, false /*is_sync*/);
     KLLM_LOG_DEBUG << "SendHiddenUnitBufferForEP send comm meta finished";
 
@@ -69,23 +69,22 @@ template <typename T>
 std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(
     ForwardingContext<T>& forwarding_context) {
   static std::vector<Tensor> empty;
-  if (forwarding_context.context_->IsExpertParallelStandalone()) {
+  if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
   }
   // Receive: collect hidden_state from other nodes. not need?
 
   // rank = 0, receive hidden_states from other nodes.
-  HiddenUnitDeviceBuffer* hidden_unit = RecvExpertHiddenUnits(forwarding_context.rank_);
+  HiddenUnitDeviceBuffer* hidden_unit = RecvExpertHiddenUnits(forwarding_context.GetCurrentRank());
   if (hidden_unit != nullptr) {
     hidden_device_buffer_.push_back(hidden_unit);
-    size_t rank = forwarding_context.rank_;
+    size_t rank = forwarding_context.GetCurrentRank();
     KLLM_LOG_DEBUG << fmt::format(
         "RecvHiddenUnitBufferForEP rank: {}, shape: {} {}, dtype: {} ptr: {}, tensors.size: {}",
-        forwarding_context.rank_, hidden_unit->tensors[rank].shape[0], hidden_unit->tensors[rank].shape[1],
+        forwarding_context.GetCurrentRank(), hidden_unit->tensors[rank].shape[0], hidden_unit->tensors[rank].shape[1],
         hidden_unit->tensors[rank].ToString(), hidden_unit->tensors[rank].GetPtr<void>(), hidden_unit->tensors.size());
 
     std::vector<Tensor>& buffer = GetExpertRecvHiddenUnitBufferRef(hidden_unit, forwarding_context);
-    // std::vector<Tensor>& buffer = {GetCurrentExpertRecvHiddenUnitBuffer()->tensors[forwarding_context.rank_]};
 
     return buffer;
   } else {
@@ -98,14 +97,14 @@ template <typename T>
 std::vector<Tensor>& ExpertParallelDataTransfer<T>::AsyncRecvHiddenUnitBufferForEP(
     ForwardingContext<T>& forwarding_context) {
   static std::vector<Tensor> empty;
-  if (forwarding_context.context_->IsExpertParallelStandalone()) {
+  if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
   }
   // Receive: collect hidden_state from other nodes. not need?
   ResetExpertReceiveWaiter();
 
   // rank = 0, receive hidden_states from other nodes.
-  HiddenUnitDeviceBuffer* hidden_unit = AsyncRecvExpertHiddenUnits(forwarding_context.rank_);
+  HiddenUnitDeviceBuffer* hidden_unit = AsyncRecvExpertHiddenUnits(forwarding_context.GetCurrentRank());
   if (hidden_unit != nullptr) {
     hidden_device_buffer_.push_back(hidden_unit);
 
@@ -131,19 +130,19 @@ void ExpertParallelDataTransfer<T>::CombineHiddenUnitBufferForEP(std::vector<Ten
 template <typename T>
 std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBufferRef(
     HiddenUnitDeviceBuffer* hidden_unit, ForwardingContext<T>& forwarding_context) {
-  if (forwarding_context.context_->IsExpertParallelStandalone()) {
+  if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     // Should not execute here.
     KLLM_LOG_INFO << "Not expert parallel mode, return empty result.";
     return local_residual_buffer_;
   }
 
 #ifdef ENABLE_ACL
-  if (forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT) {
+  if (forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT) {
     if (distributed_device_buffer_prefill_.empty()) {
       HiddenUnitDeviceBuffer* device_buffer = hidden_unit;
       if (!distributed_device_buffer_.empty()) distributed_device_buffer_.clear();
 
-      distributed_device_buffer_prefill_.push_back(device_buffer->prefill_tensors[forwarding_context.rank_]);
+      distributed_device_buffer_prefill_.push_back(device_buffer->prefill_tensors[forwarding_context.GetCurrentRank()]);
     }
 
     return distributed_device_buffer_prefill_;
@@ -151,8 +150,8 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBuffe
 #endif
     if (!distributed_device_buffer_.empty()) distributed_device_buffer_.clear();
 
-    distributed_device_buffer_.push_back(hidden_unit->tensors[forwarding_context.rank_]);
-    KLLM_LOG_DEBUG << "GetExpertRecvHiddenUnitBufferRef rank: " << forwarding_context.rank_
+    distributed_device_buffer_.push_back(hidden_unit->tensors[forwarding_context.GetCurrentRank()]);
+    KLLM_LOG_DEBUG << "GetExpertRecvHiddenUnitBufferRef rank: " << forwarding_context.GetCurrentRank()
                    << ", dtype: " << distributed_device_buffer_[0].ToString() << ", refer_ptr "
                    << distributed_device_buffer_[0].GetPtr<void>();
 
@@ -167,16 +166,18 @@ template <typename T>
 HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
     const std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
-  if (!forwarding_context.context_->IsExpertParallelStandalone()) {
-    bool is_prefill = forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT;
-    StreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
+  if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
+    StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
 
-    HiddenUnitDeviceBuffer* hidden_unit = GetExpertHiddenUnitBufferPool()->GetDeviceBuffer(forwarding_context.rank_);
+    HiddenUnitDeviceBuffer* hidden_unit =
+        GetExpertHiddenUnitBufferPool()->GetDeviceBuffer(forwarding_context.GetCurrentRank());
     if (!hidden_unit) {
       KLLM_LOG_WARNING << "SetHiddenUnitBufferForEP no device buffer got for sending data.";
       return nullptr;
     }
-    CopyToHiddenUnitBuffer(hidden_unit, const_cast<Tensor&>(residual_buffer[0]), forwarding_context.rank_, is_prefill);
+    CopyToHiddenUnitBuffer(hidden_unit, const_cast<Tensor&>(residual_buffer[0]), forwarding_context.GetCurrentRank(),
+                           is_prefill);
 
     return hidden_unit;
   }
@@ -187,22 +188,22 @@ template <typename T>
 HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBufferForEP(
     expert_parallel_comm_meta& meta_data, DataType dtype, ForwardingContext<T>& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
-  if (!forwarding_context.context_->IsExpertParallelStandalone()) {
-    bool is_prefill = forwarding_context.model_input_->infer_stage == InferStage::STAGE_CONTEXT;
+  if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
 
     // Not need.
-    StreamSynchronize(forwarding_context.context_->GetComputeStreams()[forwarding_context.rank_]);
+    StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
     KLLM_LOG_DEBUG << fmt::format("SetCommMetaHiddenUnitBufferForEP meta shape: {} {}, rank: {}", meta_data.shape_0,
-                                  meta_data.shape_1, forwarding_context.rank_);
+                                  meta_data.shape_1, forwarding_context.GetCurrentRank());
     HiddenUnitDeviceBuffer* hidden_unit =
-        GetExpertHiddenUnitBufferPool()->GetCommMetaDeviceBuffer(forwarding_context.rank_);
+        GetExpertHiddenUnitBufferPool()->GetCommMetaDeviceBuffer(forwarding_context.GetCurrentRank());
     if (!hidden_unit) {
       KLLM_LOG_WARNING << "SetCommMetaHiddenUnitBufferForEP no device buffer got for sending data.";
       return nullptr;
     }
     CopyHostMemToHiddenUnitBuffer(hidden_unit, reinterpret_cast<void*>(&meta_data),
                                   {sizeof(expert_parallel_comm_meta), 1}, DataType::TYPE_UINT8,
-                                  forwarding_context.rank_, is_prefill);
+                                  forwarding_context.GetCurrentRank(), is_prefill);
 
     return hidden_unit;
   }
@@ -211,7 +212,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBuff
 
 template <typename T>
 void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext<T>& forwarding_context) {
-  if (forwarding_context.rank_ == 0) {
+  if (forwarding_context.GetCurrentRank() == 0) {
     while (!hidden_device_buffer_.empty()) {
       HiddenUnitDeviceBuffer* hidden_unit_buffer = hidden_device_buffer_.back();
       FreeExpertRecvHiddenUnits(hidden_unit_buffer);
