@@ -15,8 +15,9 @@
 #include <vector>
 #include "ksana_llm/connector/communicator/communicator_manager.h"
 #include "ksana_llm/connector/config.h"
-#include "ksana_llm/connector/task_manager.h"
+#include "ksana_llm/connector/task_key.h"
 #include "ksana_llm/runtime/threadpool.h"
+#include "ksana_llm/transfer/transfer_types.h"
 
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/connector/cuda_buffer_pool.h"
@@ -25,9 +26,10 @@
 #endif
 
 namespace ksana_llm {
-// Forward declarations only - 避免头文件依赖传递
+
+class TaskManager;       // forward declare
 class ZmqCommunicator;   // forward declare
-class NcclCommunicator;  // forward declare - 只在NCCL模式下使用
+class NcclCommunicator;  // forward declare
 /**
  * @class TaskDispatcher
  * @brief Dispatches tasks across different communication protocols

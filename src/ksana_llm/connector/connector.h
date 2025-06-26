@@ -13,11 +13,12 @@
 #include "ksana_llm/connector/communicator/communicator_manager.h"
 #include "ksana_llm/connector/config.h"
 #include "ksana_llm/connector/task_dispatcher.h"
-#include "ksana_llm/connector/task_manager.h"
 #include "ksana_llm/transfer/transfer_types.h"
 #include "ksana_llm/utils/environment.h"
 
 namespace ksana_llm {
+
+class TaskManager;  // forward declare
 
 class Connector {
  public:

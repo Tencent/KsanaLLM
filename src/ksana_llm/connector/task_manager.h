@@ -2,266 +2,291 @@
 
 ==============================================================================*/
 #pragma once
+
+#include <oneapi/tbb/blocked_range.h>
+#include <oneapi/tbb/concurrent_hash_map.h>
+#include <oneapi/tbb/concurrent_priority_queue.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/parallel_invoke.h>
+#include <oneapi/tbb/task_arena.h>
+
+#include <array>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "ksana_llm/connector/task_key.h"
 #include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/transfer/transfer_types.h"
-#include "ksana_llm/utils/blocking_queue.h"
+#include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 
-#define TASK_MANAGER_DEFAULT_EXPIRE_MINUTES 15
+// Default expiration time for tasks in seconds
+constexpr int TASK_MANAGER_DEFAULT_EXPIRE_SECONDS = 900;  // 15 minutes
 
-struct TaskKey {
-  int req_id;
-  int block_idx;
-  int layer_idx;
-  int device_idx;
-  int tensor_size;
-  int token;  // 可选：用于存储token数量
-  std::time_t start_time_us;
-
-  TaskKey() : req_id(0), block_idx(0), layer_idx(0), device_idx(0), tensor_size(0), token(0), start_time_us(0) {}
-  TaskKey(int req, int block, int layer, int device, int tsize = 0, int ttoken = 0, std::time_t timestamp_us = 0)
-      : req_id(req),
-        block_idx(block),
-        layer_idx(layer),
-        device_idx(device),
-        tensor_size(tsize),
-        token(ttoken),
-        start_time_us(timestamp_us) {}
-  TaskKey(const TaskKey& other) = default;
-  TaskKey(TaskKey&& other) noexcept = default;
-  TaskKey& operator=(const TaskKey& other) = default;
-  TaskKey& operator=(TaskKey&& other) noexcept = default;
-  bool operator==(const TaskKey& other) const {
-    return req_id == other.req_id && block_idx == other.block_idx && layer_idx == other.layer_idx &&
-           device_idx == other.device_idx && tensor_size == other.tensor_size;
-  }
-  std::string ToString() const {
-    std::ostringstream oss;
-    oss << "req_id=" << req_id << ", block_idx=" << block_idx << ", layer_idx=" << layer_idx
-        << ", device_idx=" << device_idx << ", tensor_size=" << tensor_size << ", token=" << token;
-    return oss.str();
-  }
-  struct NoTokenHash {
-    size_t operator()(const TaskKey& key) const {
-      return std::hash<int>()(key.req_id) ^ (std::hash<int>()(key.block_idx) << 1) ^
-             (std::hash<int>()(key.layer_idx) << 2) ^ (std::hash<int>()(key.device_idx) << 3) ^
-             (std::hash<int>()(key.tensor_size) << 4);
-    }
-  };
-
-  // Serialize TaskKey to binary data
-  std::vector<uint8_t> Serialize() const {
-    std::vector<uint8_t> data(sizeof(TaskKey));
-    memcpy(data.data(), this, sizeof(TaskKey));
-    return data;
-  }
-
-  // Deserialize binary data to TaskKey
-  static TaskKey Deserialize(const std::vector<uint8_t>& data) {
-    TaskKey key;
-    if (data.size() >= sizeof(TaskKey)) {
-      memcpy(&key, data.data(), sizeof(TaskKey));
-    }
-    return key;
-  }
-
-  // 批量反序列化：根据长度自动判断
-  static std::vector<TaskKey> DeserializeBatch(const std::vector<uint8_t>& data) {
-    std::vector<TaskKey> result;
-    size_t n = data.size() / sizeof(TaskKey);
-    if (n == 0 || data.size() % sizeof(TaskKey) != 0) return result;
-    result.resize(n);
-    memcpy(result.data(), data.data(), n * sizeof(TaskKey));
-    return result;
-  }
-
-  // 批量反序列化：根据长度自动判断
-  static std::vector<TaskKey> DeserializeTaskKeys(const char* data, size_t size) {
-    std::vector<TaskKey> result;
-    if (size == sizeof(TaskKey)) {
-      std::vector<uint8_t> buf(data, data + size);
-      result.push_back(TaskKey::Deserialize(buf));
-    } else if (size % sizeof(TaskKey) == 0) {
-      std::vector<uint8_t> buf(data, data + size);
-      result = TaskKey::DeserializeBatch(buf);
-    }
-    return result;
-  }
-
-  // 批量序列化
-  static std::vector<uint8_t> BatchSerialize(const std::vector<TaskKey>& keys) {
-    std::vector<uint8_t> buf;
-    buf.reserve(keys.size() * sizeof(TaskKey) + sizeof(std::time_t));
-    for (const auto& k : keys) {
-      auto single = k.Serialize();
-      buf.insert(buf.end(), single.begin(), single.end());
-    }
-    return buf;
-  }
-};
-
+/**
+ * @brief Shard-based high-performance task manager for distributed tensor transfer operations
+ *
+ * TaskManager provides a thread-safe, singleton-based system for managing transfer tasks
+ * in a distributed LLM inference environment. It uses sharded data structures based on
+ * req_id for optimal concurrent access and scalability.
+ *
+ * Key features:
+ * - Sharded data structures based on req_id for better concurrency
+ * - Lock-free operations using TBB concurrent containers
+ * - Promise-based task synchronization between prefill and decode phases
+ * - Automatic cleanup of expired tasks with parallel processing
+ * - High-performance batch operations
+ * - Configurable shard size based on circular_bucket_num
+ */
 class TaskManager {
  public:
   using TaskNotifyCallback = std::function<void()>;
+  using GroupDevKey = std::pair<std::string, int>;  ///< (group_key, device_idx) pair
 
-  TaskManager() : send_waiter_(std::make_shared<Waiter>(1)) {
-    task_map_.reserve(100000000);
-    prefill_pending_tasks_.reserve(10000000);
-    decode_confirmed_tasks_.reserve(10000000);
-  }
+  /**
+   * @brief Task shard containing all data structures for a subset of req_ids
+   */
+  struct TaskShard {
+    // Core task storage
+    tbb::concurrent_hash_map<TaskKey, std::shared_ptr<TransferTask>, TaskKey::HashCompare> request_map;
+
+    // Promise synchronization maps
+    tbb::concurrent_hash_map<TaskKey, std::time_t, TaskKey::HashCompare> prefill_pending_tasks;
+    tbb::concurrent_hash_map<TaskKey, std::time_t, TaskKey::HashCompare> decode_confirmed_tasks;
+
+    TaskShard() = default;
+    TaskShard(const TaskShard&) = delete;
+    TaskShard& operator=(const TaskShard&) = delete;
+    TaskShard(TaskShard&&) = default;
+    TaskShard& operator=(TaskShard&&) = default;
+  };
+
+  /**
+   * @brief Construct TaskManager with specified parameters
+   * @param circular_bucket_num Maximum number of concurrent batches (determines shard count)
+   * @param bucket_size_hint Initial bucket size hint for hash tables
+   */
+  explicit TaskManager(int circular_bucket_num, int bucket_size_hint = 16384, int circular_thread_num = 4);
+
   ~TaskManager() = default;
 
-  // 记录淘汰时间默认（15分钟）
-  static constexpr std::chrono::minutes kDefaultExpire = std::chrono::minutes(TASK_MANAGER_DEFAULT_EXPIRE_MINUTES);
+  // Disable copy operations
+  TaskManager(const TaskManager&) = delete;
+  TaskManager& operator=(const TaskManager&) = delete;
 
-  TaskKey CreateTaskKey(std::shared_ptr<TransferTask> const& task) {
-    int tsize = 0;
-    if (task && !task->tensor.shape.empty()) {
-      tsize = task->tensor.GetElementNumber() * GetTypeSize(task->tensor.dtype);
-    }
-    return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.device_idx, tsize,
-                   task->token, ProfileTimer::GetCurrentTimeInUs());
-  }
+  /**
+   * @brief Get singleton instance of TaskManager
+   * @param circular_bucket_num Maximum number of concurrent batches (default: 256)
+   * @param bucket_size_hint Hash table bucket size hint (default: 16384)
+   * @return Shared pointer to TaskManager singleton instance
+   */
+  static std::shared_ptr<TaskManager> GetInstance(int circular_bucket_num = 16, int bucket_size_hint = 16384);
 
-  using GroupDevKey = std::pair<std::string, int>;
+  //=============================================================================
+  // Processing Buffer Operations (Priority Queue Interface)
+  //=============================================================================
+
+  /**
+   * @brief Add a task to the processing buffer
+   * @param task_key TaskKey to add to the processing buffer
+   */
+  void PutProcessingBuffer(const TaskKey& task_key);
+
+  /**
+   * @brief Get a task from the processing buffer (round-robin across shards)
+   * @return TaskKey with highest priority, or default TaskKey if empty
+   */
+  TaskKey GetProcessingBuffer();
+
+  /**
+   * @brief Get tasks from multiple shards in parallel
+   * @param batch_size Maximum number of tasks to retrieve
+   * @return Vector of TaskKeys from different shards
+   */
+  std::vector<TaskKey> GetProcessingBufferBatch(int batch_size);
+
+  /**
+   * @brief Check if all processing buffers are empty
+   * @return true if all buffers are empty, false otherwise
+   */
+  bool IsProcessingBufferEmpty() const;
+
+  /**
+   * @brief Get the total size of all processing buffers
+   * @return Number of tasks across all processing buffers
+   */
+  size_t GetProcessingBufferSize() const;
+
+  //=============================================================================
+  // Core Task Management Operations
+  //=============================================================================
+
+  /**
+   * @brief Create a TaskKey from a TransferTask
+   * @param task Source transfer task
+   * @return Generated TaskKey with computed tensor size and timestamp
+   */
+  TaskKey CreateTaskKey(const std::shared_ptr<TransferTask>& task);
+
+  /**
+   * @brief Add a task to the manager
+   * @param key TaskKey identifier
+   * @param task Shared pointer to the TransferTask
+   */
+  void AddTask(const TaskKey& key, std::shared_ptr<TransferTask> task);
+
+  /**
+   * @brief Retrieve a task by its key
+   * @param key TaskKey to look up
+   * @return Shared pointer to TransferTask, or nullptr if not found
+   */
+  std::shared_ptr<TransferTask> GetTask(const TaskKey& key);
+
+  /**
+   * @brief Retrieve multiple tasks in a single operation
+   * @param keys Vector of TaskKeys to look up
+   * @return Vector of shared pointers (nullptr for missing tasks)
+   */
+  std::vector<std::shared_ptr<TransferTask>> GetTasksBatch(const std::vector<TaskKey>& keys);
+
+  /**
+   * @brief Mark a task as completed and remove it from the manager
+   * @param key TaskKey of the task to complete
+   */
+  void CompleteTask(const TaskKey& key);
+
+  /**
+   * @brief Get total number of tasks across all shards
+   * @return Total task count
+   */
+  size_t GetTaskCount() const;
+
+  /**
+   * @brief Get hash table load factor for performance monitoring
+   * @return Average load factor across all shards
+   */
+  float GetLoadFactor() const;
+
+  //=============================================================================
+  // Promise-based Task Synchronization
+  //=============================================================================
+
+  /**
+   * @brief Register confirmed tasks from decode phase
+   * @param task_keys Vector of TaskKeys confirmed by decode phase
+   */
+  void RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_keys);
+
+  /**
+   * @brief Add a task to the prefill pending queue
+   * @param task_key TaskKey to add to pending queue
+   */
+  void AddPrefillPendingTask(const TaskKey& task_key);
+
+  /**
+   * @brief Try to activate a pending task
+   * @param task_key TaskKey to try to activate
+   * @return true if task was activated, false if it needs to wait
+   */
+  bool TryActivatePendingTask(const TaskKey& task_key);
+
+  //=============================================================================
+  // Batch Operations and Utilities
+  //=============================================================================
+
+  /**
+   * @brief Hash function for GroupDevKey (group_key, device_idx) pairs
+   */
   struct GroupDevKeyHash {
     std::size_t operator()(const GroupDevKey& k) const {
       return std::hash<std::string>()(k.first) ^ (std::hash<int>()(k.second) << 1);
     }
   };
 
+  /**
+   * @brief Group tasks by their destination group and device
+   * @param batch Vector of TaskKeys to group
+   * @return Map of (group_key, device_idx) -> vector of TaskKeys
+   */
   std::unordered_map<GroupDevKey, std::vector<TaskKey>, GroupDevKeyHash> GroupByGroupKeyAndDevice(
-      const std::vector<TaskKey>& batch) {
-    std::unordered_map<GroupDevKey, std::vector<TaskKey>, GroupDevKeyHash> grouped;
-    for (const auto& tk : batch) {
-      auto task = GetTask(tk);
-      if (task == nullptr) {
-        KLLM_LOG_ERROR << "Skipping task_key without corresponding task: " << tk.ToString();
-        continue;
-      }
-      const std::string& group_key = task->addr;
-      int device_idx = tk.device_idx;
+      const std::vector<TaskKey>& batch);
 
-      grouped[{group_key, device_idx}].push_back(tk);
-    }
-    return grouped;
-  }
+  //=============================================================================
+  // Maintenance Operations
+  //=============================================================================
 
-  void AddTask(const TaskKey& key, std::shared_ptr<TransferTask> task) {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    task_map_[key] = task;
-  }
+  /**
+   * @brief Clean up expired tasks using parallel processing
+   * @param timeout_seconds Age threshold for task expiration
+   */
+  void CleanupExpiredTasks(int timeout_seconds = TASK_MANAGER_DEFAULT_EXPIRE_SECONDS);
 
-  std::shared_ptr<TransferTask> GetTask(const TaskKey& key) {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    auto it = task_map_.find(key);
-    if (it != task_map_.end()) {
-      return it->second;
-    }
-    return nullptr;
-  }
+  /**
+   * @brief Shutdown the task manager and clean up all resources
+   */
+  void Shutdown();
 
-  void CompleteTask(const TaskKey& key) {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    auto it = task_map_.find(key);
-    if (it != task_map_.end() && it->second != nullptr) {
-      it->second->is_completed = true;
-      task_map_.erase(it);
-    }
-  }
+  /**
+   * @brief Set task notification callback
+   * @param waiter Shared pointer to waiter for notifications
+   */
+  void SetNotificationWaiter(std::shared_ptr<Waiter> waiter);
 
-  void Shutdown() {
-    std::lock_guard<std::mutex> lock(buffer_mutex_);
-    task_map_.clear();
-    prefill_pending_tasks_.clear();
-    decode_confirmed_tasks_.clear();
-    processing_buffer_.Stop();
-  }
+  //=============================================================================
+  // Public Member Variables
+  //=============================================================================
 
-  // Promise 同步相关方法
-  void CleanupExpiredTasks(int timeout_seconds) {
-    std::lock_guard<std::mutex> lock(promises_mutex_);
+  // Notification system (public for direct access)
+  std::shared_ptr<Waiter> notification_waiter_;  ///< Notifies when new tasks are available
 
-    const auto now = ProfileTimer::GetCurrentTime();
+ private:
+  //=============================================================================
+  // Member Variables
+  //=============================================================================
 
-    // 清理 prefill_pending_tasks_ 中的过期条目
-    auto pending_it = prefill_pending_tasks_.begin();
-    while (pending_it != prefill_pending_tasks_.end()) {
-      if (now - pending_it->second > timeout_seconds) {
-        // Note: 这里应该有日志，但为了避免依赖问题，暂时省略
-        pending_it = prefill_pending_tasks_.erase(pending_it);
-      } else {
-        ++pending_it;
-      }
-    }
+  // Sharded data structures
+  std::vector<std::unique_ptr<TaskShard>> shards_;  ///< Task shards indexed by req_id % circular_bucket_num
+  const int circular_bucket_num_;                   ///< Maximum batch size (number of shards)
 
-    // 清理 decode_confirmed_tasks_ 中的过期条目
-    auto request_it = decode_confirmed_tasks_.begin();
-    while (request_it != decode_confirmed_tasks_.end()) {
-      if (now - request_it->second > timeout_seconds) {
-        // Note: 这里应该有日志，但为了避免依赖问题，暂时省略
-        request_it = decode_confirmed_tasks_.erase(request_it);
-      } else {
-        ++request_it;
-      }
-    }
-  }
+  // Task arena for parallel operations
+  mutable tbb::task_arena task_arena_;  ///< Arena for controlling parallel operations
+  mutable std::atomic<size_t> round_robin_counter_{0};
+  std::atomic<bool> shutdown_{false};  // 防止重复 Shutdown
 
-  // Promise 同步相关方法
-  void RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_keys) {
-    std::lock_guard<std::mutex> lock(promises_mutex_);
-    const auto now = ProfileTimer::GetCurrentTime();
-    for (const auto& task_key : task_keys) {
-      decode_confirmed_tasks_[task_key] = now;
-      auto it = prefill_pending_tasks_.find(task_key);
-      if (it != prefill_pending_tasks_.end()) {
-        TaskKey actual_key = it->first;
-        prefill_pending_tasks_.erase(it);
-        processing_buffer_.Put(actual_key);
-        if (send_waiter_) {
-          send_waiter_->Notify();
-        }
-      }
-    }
-  }
+  // Processing buffer (priority queue)
+  tbb::concurrent_priority_queue<TaskKey> processing_buffer_;
+  //=============================================================================
+  // Private Methods
+  //=============================================================================
 
-  void AddPrefillPendingTask(const TaskKey& task_key) {
-    std::lock_guard<std::mutex> lock(promises_mutex_);
-    const auto now = ProfileTimer::GetCurrentTime();
-    prefill_pending_tasks_[task_key] = now;
-  }
+  /**
+   * @brief Get shard index for a request ID
+   * @param req_id Request ID
+   * @return Shard index in the range [0, circular_bucket_num)
+   */
+  size_t GetShardIndex(int req_id) const { return static_cast<size_t>(req_id) % circular_bucket_num_; }
 
-  bool TryActivatePendingTask(const TaskKey& task_key) {
-    std::lock_guard<std::mutex> lock(promises_mutex_);
-    if (decode_confirmed_tasks_.find(task_key) != decode_confirmed_tasks_.end()) {
-      // 如果找到匹配的TaskKey，从两个映射中移除
-      prefill_pending_tasks_.erase(task_key);
-      decode_confirmed_tasks_.erase(task_key);
-      return true;  // 可以激活
-    }
-    return false;  // 不能激活，需要等待
-  }
+  /**
+   * @brief Get shard for a request ID
+   * @param req_id Request ID
+   * @return Reference to the corresponding TaskShard
+   */
+  TaskShard& GetShard(int req_id) { return *shards_[GetShardIndex(req_id)]; }
 
-  // Prefill端等待Decode确认的任务映射，存储TaskKey和插入时间戳
-  std::unordered_map<TaskKey, std::time_t, TaskKey::NoTokenHash> prefill_pending_tasks_;
-  // Decode端已确认的任务映射，存储TaskKey和插入时间戳
-  std::unordered_map<TaskKey, std::time_t, TaskKey::NoTokenHash> decode_confirmed_tasks_;
-
-  std::mutex promises_mutex_;
-
-  BlockingQueue<TaskKey> processing_buffer_;
-  std::shared_ptr<Waiter> send_waiter_ = nullptr;
-  std::unordered_map<TaskKey, std::shared_ptr<TransferTask>, TaskKey::NoTokenHash> task_map_;
-  std::mutex buffer_mutex_;
+  /**
+   * @brief Get shard for a request ID (const version)
+   * @param req_id Request ID
+   * @return Const reference to the corresponding TaskShard
+   */
+  const TaskShard& GetShard(int req_id) const { return *shards_[GetShardIndex(req_id)]; }
 };
 
 }  // namespace ksana_llm

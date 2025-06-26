@@ -11,6 +11,7 @@
 #include <vector>
 #include "ksana_llm/connector/config.h"
 #include "ksana_llm/connector/router_client/http_router_client.h"
+#include "ksana_llm/connector/task_manager.h"
 #include "ksana_llm/transfer/transfer_types.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -41,9 +42,13 @@ Connector::Connector(const ConnectorConfig& config, int attn_tensor_para_size, i
 
   // 3. 创建 CommunicatorManager
   comm_manager_ = std::make_shared<CommunicatorManager>(config_, coordinator_);
+  int circular_bucket_num = config_.circular_bucket_num;
+  if (circular_bucket_num >= env->GetMaxBatchSize()) {
+    circular_bucket_num = env->GetMaxBatchSize();
+  }
+  task_manager_ =
+      std::make_shared<TaskManager>(circular_bucket_num, config_.circular_bucket_size, config_.circular_thread_num);
 
-  task_manager_ = std::make_shared<TaskManager>();
-  // task_manager_->send_waiter_ = std::make_shared<Waiter>(1);
   //  4. 注册/创建所有需要的 task_dispatcher_
   task_dispatcher_ = std::make_shared<TaskDispatcher>(config_, task_manager_, comm_manager_);
 
@@ -74,6 +79,7 @@ Status Connector::Initialize(GroupRole group_role) {
 }
 
 void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {
+  std::time_t start_time = ProfileTimer::GetCurrentTimeInUs();
   if (!task || !task_manager_) {
     KLLM_LOG_ERROR << "Received null task or task_manager_ null, cannot push task";
     return;
@@ -90,25 +96,23 @@ void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {
 
   TaskKey task_key = task_manager_->CreateTaskKey(task);
   task_manager_->AddTask(task_key, task);
-  task_manager_->processing_buffer_.Put(task_key);
-  task_manager_->send_waiter_->Notify();
-
+  task_manager_->PutProcessingBuffer(task_key);
   KLLM_LOG_DEBUG << "Pushed task: " << task_key.ToString() << ", total tasks: " << task->tensor.dtype
-                 << ", shape: " << task->tensor.shape.size();
+                 << ", shape: " << task->tensor.shape.size() << ProfileTimer::GetCurrentTimeInUs() - start_time;
 }
 
 Connector::~Connector() {
   if (task_dispatcher_) {
     task_dispatcher_->Shutdown();
   }
+  if (task_manager_) {
+    task_manager_->Shutdown();
+  }
   if (comm_manager_) {
     comm_manager_->Shutdown();
   }
   if (coordinator_) {
     coordinator_->Shutdown();
-  }
-  if (task_manager_) {
-    task_manager_->Shutdown();
   }
 }
 }  // namespace ksana_llm

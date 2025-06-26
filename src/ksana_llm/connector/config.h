@@ -84,11 +84,14 @@ struct ConnectorConfig {
   std::string inference_addr = ""; /**< @brief Inference address (IP:port format) */
 
   int node_rank = -1;
-  int device_count = -1;         /**< @brief Number of devices in the group, used for attention. */
-  int world_size = -1;           /**< @brief Total number of devices for group prefill and decode. */
-  int transfer_batch = 16;       /**< @brief Batch size for transfer */
-  int send_thread_num = 4;       /**< @brief Number of threads for sending tasks */
-  int connector_waiting_sec = 3; /**< @brief Timeout for connector operations in milliseconds */
+  int device_count = -1;            /**< @brief Number of devices in the group, used for attention. */
+  int world_size = -1;              /**< @brief Total number of devices for group prefill and decode. */
+  int transfer_batch = 16;          /**< @brief Batch size for transfer */
+  int send_thread_num = 4;          /**< @brief Number of threads for sending tasks */
+  int connector_waiting_sec = 3;    /**< @brief Timeout for connector operations in milliseconds */
+  int circular_bucket_size = 16384; /**< @brief Size of the circular buffer for task keys */
+  int circular_bucket_num = 16;     /**< @brief Number of buckets for task management, used for circular buffer */
+  int circular_thread_num = 4;      /**< @brief Number of threads for TBB task arena, used for parallel operations */
 
   /**
    * @brief Convert CommunicationType enum to string representation

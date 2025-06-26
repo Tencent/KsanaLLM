@@ -5,6 +5,7 @@
 # import external dependencies
 include(external/abseil-cpp)
 include(external/protobuf)
+include(external/tbb)
 include(external/fmt)
 include(external/loguru)
 include(external/gflags)

@@ -16,10 +16,10 @@
 
 namespace ksana_llm {
 
-class Communicator;
-class ZmqCommunicator;  // 只声明，不 include
+class Communicator;     // forward declare
+class ZmqCommunicator;  // forward declare
 #ifdef ENABLE_CUDA
-class NcclCommunicator;
+class NcclCommunicator;  // forward declare
 #endif
 /**
  * @class CommunicatorManager

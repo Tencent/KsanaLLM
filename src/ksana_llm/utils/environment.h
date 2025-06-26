@@ -613,6 +613,8 @@ class Environment {
 
   bool IsCudagraphEnabled() { return cuda_graph_; }
 
+  size_t GetMaxBatchSize() const { return batch_scheduler_config_.max_batch_size; }
+
   bool IsFlashMlaEnable() {
     const char *const enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
     return enable_flash_mla != nullptr && strcmp(std::getenv("ENABLE_FLASH_MLA"), "1") == 0;

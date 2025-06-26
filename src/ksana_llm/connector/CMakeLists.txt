@@ -2,55 +2,30 @@
 #
 #== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
 
-#初始化变量
 set(CONNECTOR_SRCS "")
 set(CONNECTOR_HDRS "")
 
-#添加子目录
 add_subdirectory(coordinator)
 add_subdirectory(communicator)
 add_subdirectory(router_client)
 
-#收集顶层 connector 目录的源文件
 file(GLOB BASE_CONNECTOR_SRCS *.cpp)
 list(FILTER BASE_CONNECTOR_SRCS EXCLUDE REGEX ".*test.cpp")
 file(GLOB BASE_CONNECTOR_HDRS *.h)
 list(FILTER BASE_CONNECTOR_HDRS EXCLUDE REGEX ".*test.h")
 
-#收集 pipe / utils 子目录源文件
-file(GLOB_RECURSE PIPE_CONNECTOR_SRCS pipe/*.cpp)
-list(FILTER PIPE_CONNECTOR_SRCS EXCLUDE REGEX ".*test.cpp")
-file(GLOB_RECURSE UTILS_CONNECTOR_SRCS utils/*.cpp)
-list(FILTER UTILS_CONNECTOR_SRCS EXCLUDE REGEX ".*test.cpp")
-file(GLOB_RECURSE PIPE_CONNECTOR_HDRS pipe/*.h)
-list(FILTER PIPE_CONNECTOR_HDRS EXCLUDE REGEX ".*test.h")
-file(GLOB_RECURSE UTILS_CONNECTOR_HDRS utils/*.h)
-list(FILTER UTILS_CONNECTOR_HDRS EXCLUDE REGEX ".*test.h")
-
-# 合并所有源文件
 list(APPEND CONNECTOR_SRCS
     ${BASE_CONNECTOR_SRCS}
     ${COORDINATOR_SOURCES}
     ${COMMUNICATOR_SOURCES}
     ${ROUTER_CLIENT_SOURCES}
-    ${PIPE_CONNECTOR_SRCS}
-    ${UTILS_CONNECTOR_SRCS}
 )
 list(APPEND CONNECTOR_HDRS
     ${BASE_CONNECTOR_HDRS}
     ${COORDINATOR_HEADERS}
     ${COMMUNICATOR_HEADERS}
     ${ROUTER_CLIENT_HEADERS}
-    ${PIPE_CONNECTOR_HDRS}
-    ${UTILS_CONNECTOR_HDRS}
 )
-
-# 只有在 WITH_CUDA 开启时才包含 NCCL 相关文件（communicator 目录已自动处理）
-if(WITH_CUDA)
-  message(STATUS "CUDA enabled, including NCCL communicator files")
-else()
-  message(STATUS "CUDA not enabled, excluding NCCL communicator files")
-endif()
 
 message(STATUS "CONNECTOR_SRCS: ${CONNECTOR_SRCS}")
 message(STATUS "CONNECTOR_HDRS: ${CONNECTOR_HDRS}")
@@ -76,6 +51,7 @@ target_link_libraries(connector PUBLIC
     utils
     cppzmq
     libzmq
+    TBB::tbb
 )
 
 if(WITH_CUDA)
@@ -87,10 +63,6 @@ target_link_libraries(connector PUBLIC ${CURL_LIBRARIES})
 get_target_property(_inc_dirs connector INCLUDE_DIRECTORIES)
 message(STATUS "connector include dirs: ${_inc_dirs}")
 
-# Note: Mock libraries are not needed as tests use in-file mock functions
-# with dlsym(RTLD_NEXT, ...) for API interception.
-# Mock control is via testing_internal::EnableNcclMock(true/false) and
-# testing_internal::EnableZmqMock(true/false)
 
 # Add testing if enabled
 if(WITH_TESTING)

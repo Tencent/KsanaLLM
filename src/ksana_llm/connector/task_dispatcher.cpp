@@ -3,12 +3,16 @@
 ==============================================================================*/
 
 #include "ksana_llm/connector/task_dispatcher.h"
+#include <tbb/concurrent_vector.h>
+#include <tbb/parallel_for_each.h>
+#include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <unordered_map>
 #include "ksana_llm/connector/communicator/communicator_manager.h"
+#include "ksana_llm/connector/task_manager.h"
 #include "ksana_llm/utils/device_types.h"
 
-// 只在具体实现中包含细节头文件
 #include "ksana_llm/connector/communicator/zmq/zmq_communicator.h"
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/connector/communicator/nvida/nccl_communicator.h"
@@ -32,11 +36,6 @@ void TaskDispatcher::Shutdown() {
   }
   // 先设置 running_ = false，通知线程退出
   running_ = false;
-
-  // 通知等待的线程（如条件变量），避免死等
-  if (task_manager_ && task_manager_->send_waiter_) {
-    task_manager_->send_waiter_->Stop();
-  }
 
   // 等待所有线程结束 - 修复：检查线程是否joinable而不是角色
   if (decode_process_thread_.joinable()) {
@@ -133,18 +132,18 @@ Status TaskDispatcher::Initialize() {
 
 void TaskDispatcher::SendToPrefill() {
   while (running_) {
-    if (task_manager_->processing_buffer_.Empty()) {
-      task_manager_->send_waiter_->Wait();
-      task_manager_->send_waiter_->Reset(1);
+    if (task_manager_->IsProcessingBufferEmpty()) {
+      task_manager_->notification_waiter_->Wait();
+      task_manager_->notification_waiter_->Reset(1);
       continue;
     }
-
+    std::time_t start_time = ProfileTimer::GetCurrentTimeInUs();
     std::vector<TaskKey> batch = BatchTasks(config_.transfer_batch);
-    KLLM_LOG_DEBUG << "Fetched batch of size: " << batch.size();
+    KLLM_LOG_DEBUG << "Fetched batch of size: " << batch.size()
+                   << " GetTask batch time is: " << ProfileTimer::GetCurrentTimeInUs() - start_time;
     if (batch.empty()) continue;
 
     auto group_batches = task_manager_->GroupByGroupKeyAndDevice(batch);
-
     if (!send_thread_pool_) {
       KLLM_LOG_ERROR << "Thread pool is not initialized. Cannot process task batches.";
       continue;
@@ -180,11 +179,9 @@ void TaskDispatcher::HandlePrefillGroupBatch(
 
   if (config_.communication_type == CommunicationType::ZMQ) {
     for (const TaskKey& tk : group_vec) {
-      auto it = task_manager_->task_map_.find(tk);
-      if (it != task_manager_->task_map_.end() && it->second) {
-        const TaskKey& tk = it->first;
+      auto task = task_manager_->GetTask(tk);
+      if (task) {
         KLLM_LOG_DEBUG << "Step_3: Prefill preparing send task_keys and tensors: " << tk.ToString();
-        auto& task = it->second;
         std::vector<char> buf(sizeof(TaskKey) + tk.tensor_size);
         memcpy(buf.data(), &tk, sizeof(TaskKey));
         if (tk.tensor_size > 0) {
@@ -234,7 +231,7 @@ void TaskDispatcher::RegisterPrefillRecv() {
     return;
   }
   zmq_communicator_->SetReceiveCallback([this](const char* data, size_t size, uint64_t job_id, void* /*user_data*/) {
-    std::vector<TaskKey> received = TaskKey::DeserializeTaskKeys(data, size);
+    std::vector<TaskKey> received = TaskKey::DeserializeBatch(data, size);
     if (received.empty()) {
       return;
     }
@@ -249,16 +246,16 @@ void TaskDispatcher::ProcessPrefillReceivedTasks() {
   KLLM_LOG_INFO << "ProcessPrefillReceivedTasks thread started";
 
   while (running_) {
-    if (task_manager_->processing_buffer_.Empty()) {
-      task_manager_->send_waiter_->Wait();
-      task_manager_->send_waiter_->Reset(1);
+    if (task_manager_->IsProcessingBufferEmpty()) {
+      task_manager_->notification_waiter_->Wait();
+      task_manager_->notification_waiter_->Reset(1);
       continue;
     }
-
+    std::time_t start_time = ProfileTimer::GetCurrentTimeInUs();
     std::vector<TaskKey> batch = BatchTasks(config_.transfer_batch);
-    KLLM_LOG_DEBUG << "Fetched batch of size: " << batch.size();
+    KLLM_LOG_DEBUG << "Fetched batch of size: " << batch.size()
+                   << " GetTask batch time is: " << ProfileTimer::GetCurrentTimeInUs() - start_time;
     if (batch.empty()) continue;
-
     PrefillProcessGroupBatches(batch);
   }
 }
@@ -369,8 +366,7 @@ void TaskDispatcher::RetryFailedTasks(const std::string& group_key, int device_i
   // Re-queue failed tasks immediately without detached threads
   // This avoids the use-after-free issues that detached threads can cause
   for (const auto& task_key : failed_tasks) {
-    task_manager_->processing_buffer_.Put(task_key);
-    task_manager_->send_waiter_->Notify();
+    task_manager_->PutProcessingBuffer(task_key);
   }
 }
 
@@ -483,27 +479,65 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
   // 定期清理过期的promise条目
   task_manager_->CleanupExpiredTasks(config_.connector_waiting_sec);
 
+  // Use the new circular buffer batch method - naturally parallel by req_id
+  std::vector<TaskKey> raw_tasks = task_manager_->GetProcessingBufferBatch(batch_size);
+
+  if (raw_tasks.empty()) {
+    return std::vector<TaskKey>();
+  }
+
+  // For decode role, simply return all tasks
+  if (config_.group_role != GroupRole::PREFILL) {
+    KLLM_LOG_DEBUG << "Taking " << raw_tasks.size() << " tasks from circular processing buffers for decode role";
+    return raw_tasks;
+  }
+
+  // For prefill role, process tasks by req_id groups in parallel
   std::vector<TaskKey> batch;
-  batch.reserve(batch_size);
+  batch.reserve(raw_tasks.size());
 
-  // 批量取任务，最多取batch_size个
-  for (int i = 0; i < batch_size; ++i) {
-    if (task_manager_->processing_buffer_.Empty()) {
-      break;
-    }
-    auto task_key = task_manager_->processing_buffer_.Get();
-    KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
+  // Group by req_id for parallel processing
+  std::unordered_map<uint64_t, std::vector<TaskKey>> grouped_by_req_id;
+  for (const auto& task_key : raw_tasks) {
+    grouped_by_req_id[task_key.req_id].push_back(task_key);
+  }
 
-    if (config_.group_role == GroupRole::PREFILL) {
+  // Use adaptive threshold: parallel processing for multiple req_id groups
+  if (grouped_by_req_id.size() <= 1) {
+    // Serial processing for single req_id group
+    for (const auto& task_key : raw_tasks) {
+      KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
       if (task_manager_->TryActivatePendingTask(task_key)) {
         batch.push_back(task_key);
       } else {
         task_manager_->AddPrefillPendingTask(task_key);
       }
-    } else {
-      KLLM_LOG_DEBUG << "Taking task from processing buffer, current size: " << i;
-      batch.push_back(task_key);
     }
+  } else {
+    // Parallel processing for multiple req_id groups
+    tbb::concurrent_vector<TaskKey> concurrent_batch;
+
+    // Process each req_id group in parallel
+    tbb::parallel_for_each(grouped_by_req_id.begin(), grouped_by_req_id.end(), [&](const auto& req_group) {
+      const auto& req_tasks = req_group.second;
+
+      // Process all tasks for this req_id serially (maintain order within req_id)
+      for (const auto& task_key : req_tasks) {
+        KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
+        if (task_manager_->TryActivatePendingTask(task_key)) {
+          concurrent_batch.push_back(task_key);
+        } else {
+          task_manager_->AddPrefillPendingTask(task_key);
+        }
+      }
+    });
+
+    // Convert concurrent_vector to regular vector
+    batch.assign(concurrent_batch.begin(), concurrent_batch.end());
+
+    // Sort by timestamp to maintain priority order across req_ids
+    std::sort(batch.begin(), batch.end(),
+              [](const TaskKey& a, const TaskKey& b) { return a.start_time_us < b.start_time_us; });
   }
 
   return batch;

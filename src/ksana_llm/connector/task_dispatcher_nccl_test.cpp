@@ -121,13 +121,14 @@ class TaskDispatcherTest : public ::testing::Test {
     config_.node_rank = 0;
     config_.world_size = 2;
     config_.device_count = 1;
+    config_.circular_bucket_size = 128;
     mock_zmq_communicator_ = std::make_shared<MockCommunicator>();
     mock_nccl_communicator_ = std::make_shared<MockCommunicator>();
     ::testing::Mock::AllowLeak(mock_zmq_communicator_.get());
     ::testing::Mock::AllowLeak(mock_nccl_communicator_.get());
     mock_comm_manager_ = std::make_shared<MockCommunicatorManager>(mock_zmq_communicator_, mock_nccl_communicator_);
     ::testing::Mock::AllowLeak(mock_comm_manager_.get());
-    task_manager_ = std::make_shared<TaskManager>();
+    task_manager_ = TaskManager::GetInstance(128, config_.circular_bucket_size);
     SetDefaultExpectations();
   }
 
@@ -230,7 +231,7 @@ class TaskDispatcherTest : public ::testing::Test {
       auto task = CreateMockTask(key.req_id, key.block_idx, key.layer_idx, key.device_idx, key.tensor_size);
       task_manager_->AddTask(key, task);
       // Add to processing buffer to simulate pending tasks
-      task_manager_->processing_buffer_.Put(key);
+      task_manager_->PutProcessingBuffer(key);
     }
   }
 
@@ -375,7 +376,7 @@ TEST_F(TaskDispatcherTest, SendToPrefillWithTasks) {
     // Run SendToPrefill for a short time
     auto start = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - start < std::chrono::seconds(2)) {
-      if (task_manager_->processing_buffer_.Empty()) {
+      if (task_manager_->IsProcessingBufferEmpty()) {
         break;  // Exit if no more tasks to process
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -540,7 +541,7 @@ TEST_F(TaskDispatcherTest, ZMQSendAndRecv) {
   int* data_ptr = nullptr;
   cudaMalloc(&data_ptr, sizeof(int));
   task->dst_ptr = data_ptr;
-  memcpy(test_data.data(), &task_key, sizeof(TaskKey) + sizeof(int));
+  memcpy(test_data.data(), &task_key, sizeof(TaskKey));
   memcpy(test_data.data() + sizeof(TaskKey), &token, sizeof(token));
   captured_callback(test_data.data(), test_data.size(), 0, nullptr);
   token = 0;

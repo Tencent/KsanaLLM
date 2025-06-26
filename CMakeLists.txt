@@ -4,6 +4,32 @@
 
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 
+# Dynamically detect GCC version and set the compiler path for compilation
+execute_process(COMMAND /usr/bin/gcc --version OUTPUT_VARIABLE GCC_VERSION_USR_BIN ERROR_QUIET)
+execute_process(COMMAND /usr/local/bin/gcc --version OUTPUT_VARIABLE GCC_VERSION_USR_LOCAL ERROR_QUIET)
+
+# Extract version numbers
+string(REGEX MATCH "[0-9]+\.[0-9]+\.[0-9]+" GCC_VERSION_USR_BIN "${GCC_VERSION_USR_BIN}")
+string(REGEX MATCH "[0-9]+\.[0-9]+\.[0-9]+" GCC_VERSION_USR_LOCAL "${GCC_VERSION_USR_LOCAL}")
+
+# Check if default GCC version is less than 11 (requires GCC 11+)
+string(REGEX MATCH "^[0-9]+" GCC_MAJOR_VERSION_USR_BIN "${GCC_VERSION_USR_BIN}")
+if(GCC_MAJOR_VERSION_USR_BIN LESS 11)
+    if(GCC_VERSION_USR_LOCAL GREATER GCC_VERSION_USR_BIN)
+        set(CMAKE_C_COMPILER /usr/local/bin/gcc)
+        set(CMAKE_CXX_COMPILER /usr/local/bin/g++)
+        message(STATUS "Using newer GCC from /usr/local/bin (version ${GCC_VERSION_USR_LOCAL})")
+    else()
+        set(CMAKE_C_COMPILER /usr/bin/gcc)
+        set(CMAKE_CXX_COMPILER /usr/bin/g++)
+        message(STATUS "Using system GCC from /usr/bin (version ${GCC_VERSION_USR_BIN})")
+    endif()
+else()
+    message(STATUS "Using system GCC (version ${GCC_VERSION_USR_BIN}) - meets minimum requirements")
+endif()
+
+message(STATUS "Using compiler: ${CMAKE_CXX_COMPILER}")
+
 # support NVIDIA GPU
 option(WITH_CUDA "Enable CUDA" ON)
 
