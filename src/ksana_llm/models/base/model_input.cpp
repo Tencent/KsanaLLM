@@ -984,9 +984,8 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   }
 
   Stream stream = context_->GetH2DStreams()[rank_];
-  const int head_num = model_config_.head_num;
-  const int tensor_para_size = model_config_.tensor_para_size;
-  const int head_num_per_tp = head_num / tensor_para_size;
+  static const int head_num_per_tp =
+      model_config_.head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
   GetNumSmParts(flash_mla_workspace_map, head_num_per_tp, 1, rank_, stream.Get());
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();

@@ -11,15 +11,6 @@
 namespace ksana_llm {
 
 template <typename T>
-uint32_t MultiHeadLatentAttention<T>::qk_nope_head_dim_ = 0;
-
-template <typename T>
-uint32_t MultiHeadLatentAttention<T>::kv_lora_rank_ = 0;
-
-template <typename T>
-int MultiHeadLatentAttention<T>::head_num_per_tp_ = 0;
-
-template <typename T>
 MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neox,
                                                       LayerCreationContext<T>& creation_context,
                                                       ModelCreationConfig& model_creation_config,

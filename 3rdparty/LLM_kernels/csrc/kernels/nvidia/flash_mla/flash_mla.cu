@@ -150,7 +150,7 @@ void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_ta
   // softmax_lse_accum [batch_size, num_sm_parts, num_heads, q_seq_per_hk] Float
   // out_accum [batch_size + num_sm_parts, num_heads, q_seq_per_hk, head_size_v] Float
   FlashMlaWorkspaceMap workspace_param = {};
-  GetNumSmParts(workspace_param, seqlen_q_ori * num_heads_q / num_heads_k, num_heads_k, rank, stream);
+  GetNumSmParts(workspace_param, num_heads_q / num_heads_k, num_heads_k, rank, stream);
   ApplyWorkspaceBuffer(workspace, workspace_param, batch_size, num_heads, q_seq_per_hk, head_size_v);
   if (tile_scheduler_metadata_ptr == nullptr || num_splits_ptr == nullptr) {
     InvokeGetMlaMetadata(reinterpret_cast<int*>(b_seqlen), workspace_param, batch_size, stream);

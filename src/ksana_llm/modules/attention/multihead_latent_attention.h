@@ -98,9 +98,9 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Bmm<T>> attn_w_uk_t_bmm_;
   std::shared_ptr<FlashMlaAttention<T>> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention<T>> paged_mla_attention_layers_;
-  static uint32_t qk_nope_head_dim_;
-  static uint32_t kv_lora_rank_;
-  static int head_num_per_tp_;
+  inline static uint32_t qk_nope_head_dim_ = 0;
+  inline static uint32_t kv_lora_rank_ = 0;
+  inline static int head_num_per_tp_ = 0;
 
   std::shared_ptr<Layernorm<T>> kv_a_layernorms_;
   std::shared_ptr<Layernorm<T>> q_a_layernorms_;

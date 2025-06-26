@@ -51,7 +51,7 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, Tensor cos_sin_
   attn_config.num_kv_heads_per_tp = num_kv_heads_per_tp;
   attn_config.size_per_head = size_per_head;
   attn_config.stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
-  attn_config.tensor_para_size = model_config_.tensor_para_size;
+  attn_config.tensor_para_size = env->GetAttentionTensorParallel();
   attn_config.data_para_size = model_config_.attn_data_para_size;
   attn_config.data_type = model_config_.weight_data_type;
   attn_config.rotary_embedding = model_config_.rotary_embedding;
