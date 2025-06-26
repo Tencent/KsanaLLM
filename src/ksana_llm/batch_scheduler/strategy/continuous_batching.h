@@ -125,7 +125,14 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   // For one schedule instance.
   size_t dp_max_step_token_num_;
+  // 在标准场景用于限制dp分组下最大的batch。
+  // 在PD分离场景
+  // Deocde节点：增加了预传输的batch大小，使用dp_max_decode_batch_size_参数限制dp分组下最大的batch。
+  // Prefill节点：与标准场景保持一致。
   size_t dp_max_batch_size_;
+  // 仅在PD分离时作用于Decode节点(不影响标准场景与Prefill节点)
+  // 用于限制dp分组下最大的batch，等同于标准场景的dp_max_batch_size_.
+  size_t dp_max_decode_batch_size_;
   size_t dp_max_logits_num_;
 };
 

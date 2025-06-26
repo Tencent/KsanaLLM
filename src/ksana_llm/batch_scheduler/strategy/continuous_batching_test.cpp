@@ -40,6 +40,18 @@ class ContinuousBatchingTest : public testing::Test {
     constexpr int kAttnDpNum = 2;
     BatchSchedulerConfig batch_scheduler_config;
     batch_scheduler_config.split_fuse_token_num = 256;
+    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const std::string test_name = test_info->name();
+    if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos) {
+      auto env = Singleton<Environment>::GetInstance();
+      ConnectorConfig connector_config;
+      connector_config.group_role = GroupRole::DECODE;
+      connector_config.router_endpoint = "127.0.0.1:13579";
+      env->SetConnectorConfigs(connector_config);
+      BlockManagerConfig block_manager_config;
+      block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP16;
+      env->SetBlockManagerConfig(block_manager_config);
+    }
     continuous_batching_strategy_ = std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config, kTpNum);
     size_t pp_batch_idx = 0;
     continuous_batching_strategy_->SetBatchState(std::make_shared<BatchState>(pp_batch_idx, batch_scheduler_config));
@@ -70,6 +82,17 @@ class ContinuousBatchingTest : public testing::Test {
   ~ContinuousBatchingTest() {
     DestroyScheduleOutputPool();
     TransferEngine::GetInstance()->CleanupTransferMeta(123);
+    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const std::string test_name = test_info->name();
+    if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos) {
+      auto env = Singleton<Environment>::GetInstance();
+      ConnectorConfig connector_config;
+      connector_config.group_role = GroupRole::NONE;
+      connector_config.router_endpoint = "127.0.0.1:13579";
+      env->SetConnectorConfigs(connector_config);
+      BlockManagerConfig block_manager_config;
+      env->SetBlockManagerConfig(block_manager_config);
+    }
   }
 
   void SetUp() {}
@@ -245,9 +268,6 @@ TEST_F(ContinuousBatchingTest, AddTransferMetaTest) {
 
 // 测试ProcessDecodeTransferQueue函数
 TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
-  // 设置为DECODE节点
-  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
-
   // 创建测试请求
   auto ksana_python_input = std::make_shared<KsanaPythonInput>();
   auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
@@ -272,6 +292,36 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
+
+  for (int i = 0; i < 20; ++i) {
+    auto req = std::make_shared<InferRequest>(request, 0);
+    req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+    // 设置KV缓存块
+    req->kv_cache_blocks.resize(2);
+    for (size_t i = 0; i < 2; ++i) {
+      req->kv_cache_blocks[i].resize(3);
+      for (size_t j = 0; j < 3; ++j) {
+        req->kv_cache_blocks[i][j] = j + i * 10;
+      }
+    }
+    req->kv_comm_request_id = 123 + i;
+    std::vector<std::shared_ptr<InferRequest>> queue;
+    queue.push_back(req);
+
+    // 调用AddTransferMeta函数
+    continuous_batching_strategy_->AddTransferMeta(queue);
+    continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+  }
+  // 调用ProcessDecodeTransferQueue函数
+  continuous_batching_strategy_->ProcessDecodeTransferQueue();
+  // 验证结果, 计算8个预传输12个
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 12);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 8);
+
+  for (int i = 0; i < 20; ++i) {
+    TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
+  }
 }
 
 // 测试ProcessPrefillTransferQueue函数

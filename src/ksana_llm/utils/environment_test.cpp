@@ -976,4 +976,301 @@ TEST_F(EnvironmentTest, ParseModelQuantConfig) {
   }
 }
 
+// 测试GetTransferLayerChunkSize方法
+TEST_F(EnvironmentTest, GetTransferLayerChunkSize) {
+  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
+
+  // 测试默认值
+  size_t chunk_size = env_.GetTransferLayerChunkSize();
+  EXPECT_GT(chunk_size, 0);  // 应该大于0
+
+  // 默认值应该是1（如果配置文件中没有设置）
+  EXPECT_EQ(chunk_size, 1);
+}
+
+// 测试BatchSchedulerConfig中的transfer_layer_chunk_size配置
+TEST_F(EnvironmentTest, BatchSchedulerConfigTransferLayerChunkSize) {
+  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
+
+  ksana_llm::BatchSchedulerConfig config;
+  auto status = env_.GetBatchSchedulerConfig(config);
+  EXPECT_TRUE(status.OK());
+
+  // 验证transfer_layer_chunk_size字段存在且有效
+  EXPECT_GT(config.transfer_layer_chunk_size, 0);
+
+  // 验证默认值
+  EXPECT_EQ(config.transfer_layer_chunk_size, 1);
+}
+
+// 测试BatchSchedulerConfig中的max_pretransfer_batch_size配置
+TEST_F(EnvironmentTest, BatchSchedulerConfigMaxPretransferBatchSize) {
+  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
+
+  ksana_llm::BatchSchedulerConfig config;
+  auto status = env_.GetBatchSchedulerConfig(config);
+  EXPECT_TRUE(status.OK());
+
+  // 验证max_pretransfer_batch_size字段存在且有效
+  EXPECT_GT(config.max_pretransfer_batch_size, 0);
+
+  // 验证默认值
+  EXPECT_EQ(config.max_pretransfer_batch_size, 64);
+}
+
+// 测试自定义chunk传输配置
+TEST_F(EnvironmentTest, CustomChunkTransferConfig) {
+  // 创建一个包含自定义chunk传输配置的临时YAML文件
+  auto create_chunk_config_yaml = []() -> std::string {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "ksana_chunk_config_test.yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+
+    std::filesystem::path model_dir = temp_dir / "ksana_test_chunk_model_dir";
+    try {
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+      std::filesystem::create_directory(model_dir);
+
+      std::ofstream file(temp_file_path);
+      if (!file.is_open()) {
+        return "";
+      }
+
+      // 添加包含chunk传输配置的YAML内容
+      file << "setting:\n";
+      file << "  global:\n";
+      file << "    tensor_para_size: 1\n";
+      file << "    pipeline_para_size: 1\n";
+      file << "  batch_scheduler:\n";
+      file << "    max_waiting_queue_len: 100\n";
+      file << "    max_token_len: 4096\n";
+      file << "    max_step_tokens: 4096\n";
+      file << "    max_batch_size: 32\n";
+      file << "    max_pretransfer_batch_size: 128\n";  // 自定义值
+      file << "    transfer_layer_chunk_size: 4\n";     // 自定义值
+      file << "  block_manager:\n";
+      file << "    block_token_num: 16\n";
+      file << "    reserved_device_memory_ratio: 0.01\n";
+      file << "model_spec:\n";
+      file << "  base_model:\n";
+      file << "    model_dir: \"" << model_dir.string() << "\"\n";
+
+      file.close();
+
+      // 创建模型配置文件
+      std::ofstream config_json(model_dir / "config.json");
+      if (config_json.is_open()) {
+        config_json << "{\n";
+        config_json << "  \"architectures\": [\"LlamaForCausalLM\"],\n";
+        config_json << "  \"model_type\": \"llama\",\n";
+        config_json << "  \"torch_dtype\": \"float16\",\n";
+        config_json << "  \"vocab_size\": 32000,\n";
+        config_json << "  \"hidden_size\": 4096,\n";
+        config_json << "  \"intermediate_size\": 11008,\n";
+        config_json << "  \"num_attention_heads\": 32,\n";
+        config_json << "  \"num_key_value_heads\": 32,\n";
+        config_json << "  \"num_hidden_layers\": 32,\n";
+        config_json << "  \"max_position_embeddings\": 4096,\n";
+        config_json << "  \"bos_token_id\": 1,\n";
+        config_json << "  \"eos_token_id\": 2,\n";
+        config_json << "  \"pad_token_id\": 0\n";
+        config_json << "}\n";
+        config_json.close();
+      }
+
+      return temp_file_path.string();
+    } catch (const std::exception& e) {
+      return "";
+    }
+  };
+
+  std::string yaml_path = create_chunk_config_yaml();
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  Environment test_env;
+  ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+  // 测试自定义的chunk大小
+  size_t chunk_size = test_env.GetTransferLayerChunkSize();
+  EXPECT_EQ(chunk_size, 4);
+
+  // 测试BatchSchedulerConfig中的自定义值
+  ksana_llm::BatchSchedulerConfig config;
+  auto status = test_env.GetBatchSchedulerConfig(config);
+  EXPECT_TRUE(status.OK());
+  EXPECT_EQ(config.transfer_layer_chunk_size, 4);
+  EXPECT_EQ(config.max_pretransfer_batch_size, 128);
+
+  // 清理临时文件
+  try {
+    std::filesystem::path yaml_file_path(yaml_path);
+    std::filesystem::path temp_dir = yaml_file_path.parent_path();
+    std::filesystem::path model_dir = temp_dir / "ksana_test_chunk_model_dir";
+
+    if (std::filesystem::exists(yaml_path)) {
+      std::filesystem::remove(yaml_path);
+    }
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Exception during cleanup: " << e.what() << std::endl;
+  }
+}
+
+// 测试chunk传输配置的边界值
+TEST_F(EnvironmentTest, ChunkTransferConfigBoundaryValues) {
+  // 测试chunk_size为1的情况（最小值）
+  auto create_boundary_yaml = [](size_t chunk_size, size_t max_pretransfer_batch_size) -> std::string {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "ksana_boundary_test_" + std::to_string(chunk_size) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+
+    std::filesystem::path model_dir = temp_dir / ("ksana_test_boundary_model_dir_" + std::to_string(chunk_size));
+    try {
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+      std::filesystem::create_directory(model_dir);
+
+      std::ofstream file(temp_file_path);
+      if (!file.is_open()) {
+        return "";
+      }
+
+      file << "setting:\n";
+      file << "  global:\n";
+      file << "    tensor_para_size: 1\n";
+      file << "    pipeline_para_size: 1\n";
+      file << "  batch_scheduler:\n";
+      file << "    max_waiting_queue_len: 100\n";
+      file << "    max_token_len: 4096\n";
+      file << "    max_step_tokens: 4096\n";
+      file << "    max_batch_size: 32\n";
+      file << "    max_pretransfer_batch_size: " << max_pretransfer_batch_size << "\n";
+      file << "    transfer_layer_chunk_size: " << chunk_size << "\n";
+      file << "  block_manager:\n";
+      file << "    block_token_num: 16\n";
+      file << "    reserved_device_memory_ratio: 0.01\n";
+      file << "model_spec:\n";
+      file << "  base_model:\n";
+      file << "    model_dir: \"" << model_dir.string() << "\"\n";
+
+      file.close();
+
+      // 创建模型配置文件
+      std::ofstream config_json(model_dir / "config.json");
+      if (config_json.is_open()) {
+        config_json << "{\n";
+        config_json << "  \"architectures\": [\"LlamaForCausalLM\"],\n";
+        config_json << "  \"model_type\": \"llama\",\n";
+        config_json << "  \"torch_dtype\": \"float16\",\n";
+        config_json << "  \"vocab_size\": 32000,\n";
+        config_json << "  \"hidden_size\": 4096,\n";
+        config_json << "  \"intermediate_size\": 11008,\n";
+        config_json << "  \"num_attention_heads\": 32,\n";
+        config_json << "  \"num_key_value_heads\": 32,\n";
+        config_json << "  \"num_hidden_layers\": 32,\n";
+        config_json << "  \"max_position_embeddings\": 4096,\n";
+        config_json << "  \"bos_token_id\": 1,\n";
+        config_json << "  \"eos_token_id\": 2,\n";
+        config_json << "  \"pad_token_id\": 0\n";
+        config_json << "}\n";
+        config_json.close();
+      }
+
+      return temp_file_path.string();
+    } catch (const std::exception& e) {
+      return "";
+    }
+  };
+
+  // 测试最小值
+  {
+    std::string yaml_path = create_boundary_yaml(1, 1);
+    ASSERT_FALSE(yaml_path.empty());
+
+    Environment test_env;
+    ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+    EXPECT_EQ(test_env.GetTransferLayerChunkSize(), 1);
+
+    ksana_llm::BatchSchedulerConfig config;
+    auto status = test_env.GetBatchSchedulerConfig(config);
+    EXPECT_TRUE(status.OK());
+    EXPECT_EQ(config.transfer_layer_chunk_size, 1);
+    EXPECT_EQ(config.max_pretransfer_batch_size, 1);
+
+    // 清理
+    try {
+      std::filesystem::path yaml_file_path(yaml_path);
+      std::filesystem::path temp_dir = yaml_file_path.parent_path();
+      std::filesystem::path model_dir = temp_dir / "ksana_test_boundary_model_dir_1";
+
+      if (std::filesystem::exists(yaml_path)) {
+        std::filesystem::remove(yaml_path);
+      }
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Exception during cleanup: " << e.what() << std::endl;
+    }
+  }
+
+  // 测试较大值
+  {
+    std::string yaml_path = create_boundary_yaml(16, 512);
+    ASSERT_FALSE(yaml_path.empty());
+
+    Environment test_env;
+    ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+    EXPECT_EQ(test_env.GetTransferLayerChunkSize(), 16);
+
+    ksana_llm::BatchSchedulerConfig config;
+    auto status = test_env.GetBatchSchedulerConfig(config);
+    EXPECT_TRUE(status.OK());
+    EXPECT_EQ(config.transfer_layer_chunk_size, 16);
+    EXPECT_EQ(config.max_pretransfer_batch_size, 512);
+
+    // 清理
+    try {
+      std::filesystem::path yaml_file_path(yaml_path);
+      std::filesystem::path temp_dir = yaml_file_path.parent_path();
+      std::filesystem::path model_dir = temp_dir / "ksana_test_boundary_model_dir_16";
+
+      if (std::filesystem::exists(yaml_path)) {
+        std::filesystem::remove(yaml_path);
+      }
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Exception during cleanup: " << e.what() << std::endl;
+    }
+  }
+}
+
+// 测试chunk传输配置的合理性验证
+TEST_F(EnvironmentTest, ChunkTransferConfigValidation) {
+  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
+
+  ksana_llm::BatchSchedulerConfig config;
+  auto status = env_.GetBatchSchedulerConfig(config);
+  EXPECT_TRUE(status.OK());
+
+  // 验证配置的合理性
+  EXPECT_GT(config.transfer_layer_chunk_size, 0);
+  EXPECT_LE(config.transfer_layer_chunk_size, 1024);  // 合理的上限
+
+  EXPECT_GT(config.max_pretransfer_batch_size, 0);
+  EXPECT_LE(config.max_pretransfer_batch_size, 10240);  // 合理的上限
+
+  // 验证chunk大小不应该超过max_batch_size的某个倍数（合理性检查）
+  EXPECT_LE(config.transfer_layer_chunk_size, config.max_batch_size * 10);
+}
+
 }  // namespace ksana_llm

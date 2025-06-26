@@ -38,6 +38,16 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
   dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num / env->GetAttnDataParallelSize();
   dp_max_batch_size_ = batch_scheduler_config_.max_batch_size / env->GetAttnDataParallelSize();
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
+  if (connector_config_.group_role == GroupRole::DECODE) {
+    dp_max_decode_batch_size_ = dp_max_batch_size_;
+    // 增加预参数的大小
+    dp_max_batch_size_ = (batch_scheduler_config_.max_batch_size + batch_scheduler_config_.max_pretransfer_batch_size) /
+                         env->GetAttnDataParallelSize();
+    // Decode 无需限制 dp_max_step_token_num_
+    dp_max_step_token_num_ *= dp_max_batch_size_;
+    KLLM_LOG_INFO << "decode dp_max_batch_size_:" << dp_max_batch_size_
+                  << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
+  }
 }
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {

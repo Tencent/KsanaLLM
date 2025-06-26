@@ -20,6 +20,9 @@ class MockEnvironment : public Environment {
 
     block_manager_config_.device_allocator_config.block_size = 4096;
     block_manager_config_.device_allocator_config.kv_cache_dtype = TYPE_FP32;
+
+    // 设置默认的chunk传输配置
+    batch_scheduler_config_.transfer_layer_chunk_size = 1;
   }
 
   Status GetPipelineConfig(PipelineConfig& pipeline_config) const {
@@ -34,9 +37,15 @@ class MockEnvironment : public Environment {
 
   size_t GetTensorParallelSize() const { return 2; }
 
+  size_t GetTransferLayerChunkSize() { return batch_scheduler_config_.transfer_layer_chunk_size; }
+
+  // 用于测试的配置设置方法
+  void SetTransferLayerChunkSize(size_t chunk_size) { batch_scheduler_config_.transfer_layer_chunk_size = chunk_size; }
+
  private:
   PipelineConfig pipeline_config_;
   BlockManagerConfig block_manager_config_;
+  BatchSchedulerConfig batch_scheduler_config_;
 };
 
 // 创建一个继承自TransferEngine的模拟类
@@ -66,6 +75,7 @@ class MockTransferEngine : public TransferEngine {
     layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
     block_size_ = block_manager_config_.device_allocator_config.block_size;
     kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
+    transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
   }
 };
 
@@ -523,6 +533,257 @@ TEST_F(TransferEngineTest, CleanupNonExistentTransferMeta) {
 
   // 验证结果（应该返回false，因为元数据不存在）
   ASSERT_FALSE(result);
+}
+
+// ==================== 新增的Chunk传输功能测试 ====================
+
+// 测试chunk传输配置
+TEST_F(TransferEngineTest, ChunkTransferConfiguration) {
+  // 设置不同的chunk大小
+  mock_env_->SetTransferLayerChunkSize(3);
+
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  // 创建一个设备，一个块
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 验证元数据存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
+}
+
+// 测试chunk传输的发送逻辑
+TEST_F(TransferEngineTest, ChunkTransferSendLogic) {
+  // 设置chunk大小为2
+  mock_env_->SetTransferLayerChunkSize(2);
+
+  // 初始化引擎为PREFILL角色
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  // 创建一个设备，一个块
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 测试发送不同层的数据
+  // 根据chunk逻辑，只有chunk的最后一层或模型的最后一层才会触发传输
+
+  // layer_idx = 0 (offset = 0): 不是chunk末尾，不应该发送
+  transfer_engine_->Send(0, 0);
+
+  // layer_idx = 1 (offset = 1): 是第一个chunk的末尾，应该发送
+  transfer_engine_->Send(0, 1);
+
+  // layer_idx = 2 (offset = 2): 不是chunk末尾，不应该发送
+  transfer_engine_->Send(0, 2);
+
+  // layer_idx = 3 (offset = 3): 是最后一层，应该发送
+  transfer_engine_->Send(0, 3);
+
+  // 验证元数据仍然存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
+}
+
+// 测试chunk传输的接收任务数量计算
+TEST_F(TransferEngineTest, ChunkTransferReceiveTaskCount) {
+  // 设置chunk大小为3
+  mock_env_->SetTransferLayerChunkSize(3);
+
+  // 初始化引擎为DECODE角色
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  // 创建2个设备，每个设备2个块
+  gpu_blocks.resize(2);
+  for (size_t i = 0; i < 2; ++i) {
+    gpu_blocks[i].resize(2);
+    for (size_t j = 0; j < 2; ++j) {
+      gpu_blocks[i][j] = malloc(4096);
+    }
+  }
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 检查接收是否完成
+  // 对于4层（layer_num_=4）和chunk_size=3，应该有2个chunk：
+  // chunk1: layers 0-2 (3层)
+  // chunk2: layer 3 (1层)
+  // 预期任务数 = block_num(2) * chunks_per_device(2) * device_num(2) = 8
+  int result = transfer_engine_->IsRecvDone(request_id);
+
+  // 由于没有实际接收到任务，应该返回-1
+  ASSERT_EQ(result, -1);
+
+  // 清理
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  for (size_t i = 0; i < 2; ++i) {
+    for (size_t j = 0; j < 2; ++j) {
+      free(meta->gpu_blocks[i][j]);
+    }
+  }
+}
+
+// 测试边界情况：chunk大小等于层数
+TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeEqualsLayerNum) {
+  // 设置chunk大小等于层数
+  mock_env_->SetTransferLayerChunkSize(4);  // layer_num_ = 4
+
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 只有最后一层应该触发传输
+  transfer_engine_->Send(0, 0);  // 不应该发送
+  transfer_engine_->Send(0, 1);  // 不应该发送
+  transfer_engine_->Send(0, 2);  // 不应该发送
+  transfer_engine_->Send(0, 3);  // 应该发送（最后一层）
+
+  // 验证元数据存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
+}
+
+// 测试边界情况：chunk大小大于层数
+TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeGreaterThanLayerNum) {
+  // 设置chunk大小大于层数
+  mock_env_->SetTransferLayerChunkSize(10);  // layer_num_ = 4
+
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 只有最后一层应该触发传输
+  transfer_engine_->Send(0, 0);  // 不应该发送
+  transfer_engine_->Send(0, 1);  // 不应该发送
+  transfer_engine_->Send(0, 2);  // 不应该发送
+  transfer_engine_->Send(0, 3);  // 应该发送（最后一层）
+
+  // 验证元数据存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
+}
+
+// 测试chunk大小为1的情况（默认行为）
+TEST_F(TransferEngineTest, ChunkTransferDefaultBehavior) {
+  // 使用默认chunk大小1
+  mock_env_->SetTransferLayerChunkSize(1);
+
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 每一层都应该触发传输（因为每个chunk只有1层）
+  transfer_engine_->Send(0, 0);  // 应该发送
+  transfer_engine_->Send(0, 1);  // 应该发送
+  transfer_engine_->Send(0, 2);  // 应该发送
+  transfer_engine_->Send(0, 3);  // 应该发送
+
+  // 验证元数据存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
+}
+
+// 测试CreateTransferTasksForDecodeNode的chunk逻辑
+TEST_F(TransferEngineTest, ChunkTransferCreateTasksForDecodeNode) {
+  // 设置chunk大小为2
+  mock_env_->SetTransferLayerChunkSize(2);
+
+  // 初始化引擎为DECODE角色
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+
+  // 创建1个设备，1个块
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+
+  // 获取元数据并验证
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 清理
+  free(meta->gpu_blocks[0][0]);
 }
 
 }  // namespace ksana_llm

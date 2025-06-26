@@ -435,7 +435,7 @@ bool TaskDispatcher::CheckConnection(const std::string& group_key, int device_id
   if (config_.communication_type == CommunicationType::NCCL) {
     if (nccl_communicator_->IsConnectionReady(group_key, device_idx) &&
         zmq_communicator_->IsConnectionReady(group_key, device_idx)) {
-      KLLM_LOG_INFO << "Connection " << connection_id << " is ready for both ZMQ and NCCL.";
+      KLLM_LOG_DEBUG << "Connection " << connection_id << " is ready for both ZMQ and NCCL.";
       std::lock_guard<std::mutex> lock(retry_counts_mutex_);
       task_retry_counts_[connection_id] = 1;  // 重置重试计数
       return true;
@@ -448,7 +448,7 @@ bool TaskDispatcher::CheckConnection(const std::string& group_key, int device_id
   }
 #endif
   if (zmq_communicator_->IsConnectionReady(group_key, device_idx)) {
-    KLLM_LOG_INFO << "Connection " << connection_id << " is ready for ZMQ.";
+    KLLM_LOG_DEBUG << "Connection " << connection_id << " is ready for ZMQ.";
     std::lock_guard<std::mutex> lock(retry_counts_mutex_);
     task_retry_counts_[connection_id] = 1;  // 重置重试计数
     return true;

@@ -46,17 +46,21 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
   KLLM_LOG_DEBUG << "ProcessDecodeTransferQueue invoked, transfer queue size:" << batch_state_->transfer_queue.size();
 
   if (batch_state_->transfer_queue.empty()) {
+    KLLM_LOG_DEBUG << "transfer queue empty, return";
     return;
   }
-
   auto transfer_engine = TransferEngine::GetInstance();
 
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
+    // 检查是否达到最大的batch
+    if (batch_state_->schedule_output->running_reqs.size() >= dp_max_decode_batch_size_) {
+      KLLM_LOG_DEBUG << "max batch size reached, stop processing transfer queue";
+      return;
+    }
     auto req = *it;
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
     int first_token = transfer_engine->IsRecvDone(req->kv_comm_request_id);
-    bool queue_enough = batch_state_->schedule_output->running_reqs.size() < batch_scheduler_config_.max_batch_size;
-    if (first_token != -1 && queue_enough) {
+    if (first_token != -1) {
       // 接收完成，更新请求状态
       req->kv_cached_token_num = req->forwarding_tokens.size();
       req->prefix_cache_len = req->kv_cached_token_num;
@@ -69,6 +73,9 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       // 接收未完成，继续检查下一个请求
       ++it;
     }
+  }
+  if (batch_state_->schedule_output->running_reqs.size() == 0) {
+    KLLM_LOG_DEBUG << "no req in running queue, return";
   }
 }
 

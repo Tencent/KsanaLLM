@@ -313,6 +313,12 @@ struct BatchSchedulerConfig {
   // enabled, a single request will compute multiple tokens.
   size_t max_decode_tokens_per_req = 1;
 
+  // The max batch size for pre-transfer operations.
+  size_t max_pretransfer_batch_size = 64;
+
+  // The number of layers to pack together for each transfer operation (chunk transfer).
+  size_t transfer_layer_chunk_size = 1;
+
   bool enable_speculative_decoding = false;
   bool enable_mtp_module = false;
 };
@@ -558,6 +564,8 @@ class Environment {
 
   bool IsMTPEnabled();
 
+  size_t GetTransferLayerChunkSize();
+
   // Get the config of block manager.
   Status GetBlockManagerConfig(BlockManagerConfig &block_manager_config);
 
@@ -656,6 +664,11 @@ class Environment {
     }
     connector_config = connector_config_;
     return Status();
+  }
+
+  void SetConnectorConfigs(const ConnectorConfig &connector_config) {
+    connector_config_ = connector_config;
+    return;
   }
 
   // Init disaggregating prefill and decode connector config

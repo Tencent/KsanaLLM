@@ -45,7 +45,7 @@ void TransferEngine::Initialize(GroupRole group_role) {
   layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
   block_size_ = block_manager_config_.device_allocator_config.block_size;
   kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
-
+  transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
   // 判断是否处于不需要prefill的decode状态
   decode_node_benchmark =
       (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) && (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
@@ -147,12 +147,17 @@ int TransferEngine::IsRecvDone(int request_id) {
       return -1;
     }
 
-    // 计算预期的任务数量
+    // 计算预期的任务数量 - 现在按chunk传输，任务数量会减少
+    const int device_num = meta->gpu_blocks.size();
     const int block_num = meta->gpu_blocks[0].size();
-    const size_t expected_tasks = block_num * layer_num_ * tensor_parallel_size_;
+    const size_t chunks_per_device =
+        (layer_num_ + transfer_layer_chunk_size_ - 1) / transfer_layer_chunk_size_;  // 向上取整
+    const size_t expected_tasks = block_num * chunks_per_device * device_num;
 
     KLLM_LOG_DEBUG << "TransferTask IsDone? request id:" << request_id
-                   << " finished:" << meta->finished_tasks_deque_.size() << " expected:" << expected_tasks;
+                   << " finished:" << meta->finished_tasks_deque_.size() << " expected:" << expected_tasks
+                   << " (block_num:" << block_num << ", chunks_per_device:" << chunks_per_device
+                   << ", device_num:" << device_num << ")";
 
     if (decode_node_benchmark) {
       meta->first_token = 10;  // 模拟从prefill获取的首token
@@ -194,7 +199,22 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
   }
 
   const int layer_offset = CalculateLayerOffset(layer_idx);
+
+  // 计算chunk传输：只有chunk的最后一层或模型的最后一层才触发传输
+  const int chunk_start_layer_offset = (layer_offset / transfer_layer_chunk_size_) * transfer_layer_chunk_size_;
+  const size_t actual_chunk_size =
+      std::min(transfer_layer_chunk_size_, static_cast<size_t>(layer_num_ - chunk_start_layer_offset));
+  const int chunk_end_layer_offset = chunk_start_layer_offset + actual_chunk_size - 1;
+  const bool is_model_last_layer = (layer_offset == layer_num_ - 1);
+
+  if (layer_offset != chunk_end_layer_offset && !is_model_last_layer) {
+    // 不是chunk的最后一层，也不是模型的最后一层，跳过传输
+    KLLM_LOG_DEBUG << "Skipping layer " << layer_idx << " (offset " << layer_offset
+                   << "), not chunk end (chunk end offset: " << chunk_end_layer_offset << ") and not model last layer";
+    return;
+  }
   const size_t element_size = block_size_ / layer_num_;
+  const size_t chunk_element_size = element_size * actual_chunk_size;
 
   // 处理所有请求
   std::lock_guard<std::mutex> meta_lock(meta_map_mutex_);
@@ -243,33 +263,41 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
       task->req_id = request_id;
       task->addr = meta->kv_comm_group_key;  // 设置通信组键
       task->tensor.block_idx = block_idx;
-      task->tensor.layer_idx = layer_idx;
+      task->tensor.layer_idx = layer_idx;  // 保持原始layer_idx用于标识
       task->tensor.device_idx = device_idx;
 
-      // 设置张量属性
-      task->tensor.shape = {block_size_ / layer_num_ / GetTypeSize(kv_cache_dtype_), 1};
+      // 设置张量属性 - 现在传输多层数据
+      task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
       task->tensor.dtype = kv_cache_dtype_;
 
-      // 如果block_idx有效，设置源指针
+      // 如果block_idx有效，设置源指针 - 从chunk起始层开始
       if (block_idx < meta->gpu_blocks[device_idx].size()) {
         task->tensor.src_ptr =
-            static_cast<char*>(meta->gpu_blocks[device_idx][block_idx]) + layer_offset * element_size;
+            static_cast<char*>(meta->gpu_blocks[device_idx][block_idx]) + chunk_start_layer_offset * element_size;
       } else {
         KLLM_LOG_WARNING << "Invalid block_idx: " << block_idx << " for device: " << device_idx;
         continue;
       }
 
-      // 将任务标记为已发送并添加到传输任务
+      // 将chunk中的所有层标记为已发送
       {
         std::lock_guard<std::mutex> lock(meta->mutex_);
-        meta->sent_tasks_[device_idx][block_idx][layer_offset] = true;
+        for (size_t i = 0; i < actual_chunk_size; ++i) {
+          const int chunk_layer_offset = chunk_start_layer_offset + i;
+          if (chunk_layer_offset < layer_num_) {
+            meta->sent_tasks_[device_idx][block_idx][chunk_layer_offset] = true;
+          }
+        }
         meta->transfer_tasks_deque_.push_back(task);
       }
 
       // 将任务推送到连接器队列
       connector_->PushTask(task);
-      KLLM_LOG_DEBUG << "Sent transfer task for request " << request_id << ", device: " << device_idx
-                     << ", layer: " << layer_idx << ", block: " << block_idx;
+      KLLM_LOG_DEBUG << "Sent chunk transfer task for request " << request_id << ", device: " << device_idx
+                     << ", trigger layer: " << layer_idx << " (offset " << layer_offset << ")"
+                     << ", chunk range: [" << chunk_start_layer_offset << "-" << chunk_end_layer_offset << "]"
+                     << ", chunk size: " << actual_chunk_size << ", block: " << block_idx
+                     << ", is_model_last_layer: " << is_model_last_layer;
     }
   }
 }
@@ -322,27 +350,36 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
                  << ", device_num: " << device_num << ", block_num: " << block_num;
   const size_t element_size = block_size_ / layer_num_;
 
-  // 为每个设备、块和层创建任务
+  // 为每个设备、块和chunk创建任务
   for (size_t device_idx = 0; device_idx < device_num; ++device_idx) {
     for (size_t block_idx = 0; block_idx < block_num; ++block_idx) {
-      for (size_t layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx;
-           ++layer_idx) {
+      // 按chunk处理层 - 使用layer_offset而不是layer_idx来确保正确处理边界
+      for (int chunk_start_offset = 0; chunk_start_offset < layer_num_;
+           chunk_start_offset += transfer_layer_chunk_size_) {
+        const size_t layer_idx = pipeline_config_.lower_layer_idx + chunk_start_offset;
+
+        // 计算实际要接收的层数（考虑边界情况）
+        // 例如：layer_num_=10, transfer_layer_chunk_size_=3, chunk_start_offset=9
+        // 则 actual_chunk_size = min(3, 10-9) = min(3, 1) = 1
+        const size_t actual_chunk_size =
+            std::min(transfer_layer_chunk_size_, static_cast<size_t>(layer_num_ - chunk_start_offset));
+        const size_t chunk_element_size = element_size * actual_chunk_size;
+
         auto task = std::make_shared<TransferTask>();
         task->req_id = request_id;
         task->addr = transfer_meta->kv_comm_group_key;
         task->tensor.block_idx = block_idx;
-        task->tensor.layer_idx = layer_idx;
+        task->tensor.layer_idx = layer_idx + actual_chunk_size - 1;  // chunk的最后一层layer_idx用于标识
         task->tensor.device_idx = device_idx;
 
-        // 设置张量形状和数据类型
-        task->tensor.shape = {block_size_ / layer_num_ / GetTypeSize(kv_cache_dtype_), 1};
+        // 设置张量形状和数据类型 - 现在接收多层数据
+        task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
         task->tensor.dtype = kv_cache_dtype_;
 
-        // 如果block_idx有效，设置目标指针
+        // 如果block_idx有效，设置目标指针 - 从chunk起始层开始
         if (block_idx < transfer_meta->gpu_blocks[device_idx].size()) {
-          const int layer_offset = CalculateLayerOffset(layer_idx);
           task->dst_ptr =
-              static_cast<char*>(transfer_meta->gpu_blocks[device_idx][block_idx]) + layer_offset * element_size;
+              static_cast<char*>(transfer_meta->gpu_blocks[device_idx][block_idx]) + chunk_start_offset * element_size;
         } else {
           KLLM_LOG_WARNING << "Invalid block_idx: " << block_idx << " for device: " << device_idx;
           continue;
@@ -355,6 +392,10 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
           std::lock_guard<std::mutex> lock(transfer_meta->mutex_);
           transfer_meta->transfer_tasks_deque_.push_back(std::move(task));
         }
+
+        KLLM_LOG_DEBUG << "Created chunk receive task for request " << request_id << ", device: " << device_idx
+                       << ", chunk start layer: " << layer_idx << ", chunk size: " << actual_chunk_size
+                       << ", block: " << block_idx << ", chunk_start_offset: " << chunk_start_offset;
       }
     }
   }

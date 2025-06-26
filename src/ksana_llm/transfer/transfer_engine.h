@@ -176,6 +176,8 @@ class TransferEngine {
   BlockManagerConfig block_manager_config_;
 
   int layer_num_ = 0;
+  // 每次传输的层数量
+  size_t transfer_layer_chunk_size_ = 1;
 
   size_t block_size_ = 0;
 

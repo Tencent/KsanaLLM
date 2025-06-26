@@ -519,6 +519,10 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_step_tokens", 4096);
   batch_scheduler_config_.max_batch_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_batch_size", 128);
+  batch_scheduler_config_.max_pretransfer_batch_size = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pretransfer_batch_size", 64);
+  batch_scheduler_config_.transfer_layer_chunk_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.transfer_layer_chunk_size", 1);
   batch_scheduler_config_.max_pp_batch_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pp_batch_num", 1);
   batch_scheduler_config_.swapout_block_threshold =
@@ -1260,6 +1264,8 @@ bool Environment::IsSpeculativeDecodingEnabled() { return batch_scheduler_config
 bool Environment::IsPrefillDecodeSeparation() { return connector_config_.group_role != GroupRole::NONE; }
 
 bool Environment::IsMTPEnabled() { return batch_scheduler_config_.enable_mtp_module; }
+
+size_t Environment::GetTransferLayerChunkSize() { return batch_scheduler_config_.transfer_layer_chunk_size; }
 
 void Environment::InitializeExpertParallelConfig() {
   const char *expert_master_host = std::getenv("EXPERT_MASTER_HOST");
