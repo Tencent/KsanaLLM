@@ -15,11 +15,11 @@ RUN git clone http://github.com/vllm-project/flash-attention.git \
     && cd .. && rm -rf flash-attention
 
 RUN git clone https://github.com/protocolbuffers/utf8_range.git \
-    && cd utf8-range \
+    && cd utf8_range \
     && cmake -Dutf8_range_ENABLE_TESTS=off -DCMAKE_INSTALL_PREFIX=/usr . -B build \
     && cd build \
     && make -j \
     && make install -j \
-    && cd ../.. && rm -rf utf8-range \
+    && cd ../.. && rm -rf utf8_range \
     && ln -s /usr/lib/x86_64-linux-gnu/libutf8_validity.a /usr/lib/libutf8_validity.a \
     && ln -s /usr/lib/x86_64-linux-gnu/libutf8_range.a /usr/lib/libutf8_range.a
