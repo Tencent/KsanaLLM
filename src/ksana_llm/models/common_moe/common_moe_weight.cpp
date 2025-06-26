@@ -110,23 +110,21 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
     }
 
     // cast TYPE_FP32 to weight_data_type_.
-    torch::Tensor weight_cpu_tensor;
     if (weight_data_type == TYPE_FP32) {
-      auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
+      torch::Tensor weight_cpu_tensor;
+      const auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
       torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
       weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
       if (weight_data_type_ == TYPE_FP16) {
         weight_cpu_tensor = in.to(torch::kFloat16);
-        weight_ptr = weight_cpu_tensor.data_ptr();
-        weight_data_type = weight_data_type_;
       } else if (weight_data_type_ == TYPE_BF16) {
         weight_cpu_tensor = in.to(torch::kBFloat16);
-        weight_ptr = weight_cpu_tensor.data_ptr();
-        weight_data_type = weight_data_type_;
       } else {
         KLLM_LOG_WARNING << "Weight " << tensor_name << " data type " << weight_data_type << " can't cast to type "
                          << weight_data_type_;
       }
+      weight_ptr = weight_cpu_tensor.data_ptr();
+      weight_data_type = weight_data_type_;
     } else if (weight_data_type != TYPE_FP16 && weight_data_type != TYPE_BF16 &&
                (model_config_.quant_config.method != QUANT_GPTQ || weight_data_type != TYPE_INT32) &&
                weight_data_type != TYPE_FP8_E4M3) {

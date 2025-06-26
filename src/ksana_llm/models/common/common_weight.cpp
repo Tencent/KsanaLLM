@@ -490,7 +490,7 @@ Status CommonWeight<T>::PermuteSingleTensorOfQKVWeight(void* qkv_src, void* qkv_
               context_->GetMemoryManageStreams()[rank_]);
   Permute(q_in_tensor, q_out_tensor, {2, 0, 1}, context_->GetMemoryManageStreams()[rank_]);
 
-#ifdef ENALBE_CUDA
+#ifdef ENABLE_CUDA
   Memcpy2DAsync(qkv_dst, qkv_dst_shape[1] * sizeof(T), q_out_tensor.GetPtr<void>(), data_shape[1] * sizeof(T),
                 data_shape[1] * sizeof(T), data_shape[2], MEMCPY_DEVICE_TO_DEVICE,
                 context_->GetMemoryManageStreams()[rank_]);

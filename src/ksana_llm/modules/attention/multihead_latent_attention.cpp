@@ -323,29 +323,26 @@ Status MultiHeadLatentAttention<T>::DataParallelForward(std::vector<Tensor>& hid
                                                         ForwardingContext<T>& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
 
-  int total_token_num = hidden_buffer_tensors_0[0].shape[0];
-  size_t token_hidden_stat_bytes = hidden_buffer_tensors_0[0].GetTotalBytes() / total_token_num;
-  size_t org_token_size = hidden_buffer_tensors_0[0].shape[0];
+  const size_t org_token_size = hidden_buffer_tensors_0[0].shape[0];
+  const size_t token_hidden_stat_bytes = hidden_buffer_tensors_0[0].GetTotalBytes() / org_token_size;
 
   // Make corrent shape for no-request group, otherwise the all reduce will hang.
   reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
-
-  int dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
-  std::vector<int>& dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_;
-  std::vector<size_t>& token_offsets = forwarding_context.GetModelInput()->dp_input_offset_list_uint64;
 
   // The tensors vector maybe swapped, so save it first.
   std::vector<Tensor> context_hidden_buffer_tensors_0 = hidden_buffer_tensors_0;
   std::vector<Tensor> context_hidden_buffer_tensors_1 = hidden_buffer_tensors_1;
   std::vector<Tensor> context_reduce_buffer_tensors = reduce_buffer_tensors;
 
-  int prefill_beg = dp_token_offset[dp_group_id * 4];
-  int prefill_end = dp_token_offset[dp_group_id * 4 + 1];
-  int decode_beg = dp_token_offset[dp_group_id * 4 + 2];
-  int decode_end = dp_token_offset[dp_group_id * 4 + 3];
+  const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
+  const std::vector<int>& dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_;
+  const int prefill_beg = dp_token_offset[dp_group_id * 4];
+  const int prefill_end = dp_token_offset[dp_group_id * 4 + 1];
+  const int decode_beg = dp_token_offset[dp_group_id * 4 + 2];
+  const int decode_end = dp_token_offset[dp_group_id * 4 + 3];
 
   if (forwarding_context.GetModelInput()->dp_multi_token_request_num > 0) {
-    size_t tensor_offset = prefill_beg * token_hidden_stat_bytes;
+    const size_t tensor_offset = prefill_beg * token_hidden_stat_bytes;
 
     context_hidden_buffer_tensors_0[0].shape[0] = prefill_end - prefill_beg;
     context_hidden_buffer_tensors_0[0].offset = tensor_offset;
@@ -371,7 +368,7 @@ Status MultiHeadLatentAttention<T>::DataParallelForward(std::vector<Tensor>& hid
 
   if (forwarding_context.GetModelInput()->dp_single_token_request_num > 0) {
     // Fake a context part, so that the decode part could be work fine.
-    size_t tensor_offset = (decode_beg - (prefill_end - prefill_beg)) * token_hidden_stat_bytes;
+    const size_t tensor_offset = (decode_beg - (prefill_end - prefill_beg)) * token_hidden_stat_bytes;
 
     // The shape should include faked part.
     hidden_buffer_tensors_0[0].shape[0] = (prefill_end - prefill_beg) + (decode_end - decode_beg);
@@ -504,15 +501,11 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
     ProfileEvent::PushEvent("context_tokens q_b_nope_proj", rank);
     STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(prefill_hidden_buffer_1, prefill_q_buffer_tensors));
     ProfileEvent::PopEvent();
-  }
 
-  if (context_tokens) {
     ProfileEvent::PushEvent("FlashAttentionForward", rank);
-
     FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
                           prefill_buffer_tensors, prefill_q_buffer_tensors[0], q_rope_buffer_tensors[0],
                           kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
-
     ProfileEvent::PopEvent();
   }
 
@@ -530,7 +523,7 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
                                                   std::vector<Tensor>& reduce_buffer_tensors,
                                                   std::vector<Tensor>& paged_buffer_tensors,
                                                   ForwardingContext<T>& forwarding_context) {
-  int rank = forwarding_context.GetCurrentRank();
+  const int rank = forwarding_context.GetCurrentRank();
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
   const size_t hidden_units = input.shape[1];
@@ -707,12 +700,12 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
     CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
 
     // Process seq1 and seq2 separately
-    if (!forwarding_context.GetModelInput()->page_single_input.reqs.empty()) {
+    if (!forwarding_context.GetModelInput()->page_single_input.dp_reqs.empty()) {
       Tensor decode_one_seq(decode_q_buffer_tensor.location, decode_q_buffer_tensor.dtype,
                             std::vector<size_t>(decode_q_buffer_tensor.shape), decode_q_buffer_tensor.device_id,
                             decode_q_buffer_tensor.GetPtr<void>() +
                                 decode_q_buffer_tensor.GetTotalBytes() / decode_q_buffer_tensor.shape[0] *
-                                    forwarding_context.GetModelInput()->page_dual_input.reqs.size() * 2);
+                                    forwarding_context.GetModelInput()->page_dual_input.dp_reqs.size() * 2);
 
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
           hidden_buffer_tensors_0, forwarding_context.GetModelInput()->page_single_input, hidden_buffer_tensors_1,
@@ -721,7 +714,7 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
           decode_one_seq, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
     }
 
-    if (!forwarding_context.GetModelInput()->page_dual_input.reqs.empty()) {
+    if (!forwarding_context.GetModelInput()->page_dual_input.dp_reqs.empty()) {
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
           hidden_buffer_tensors_0, forwarding_context.GetModelInput()->page_dual_input, hidden_buffer_tensors_1,
           kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(),

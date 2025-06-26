@@ -17,6 +17,7 @@
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/transfer/transfer_engine.h"
+#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/critical_zone.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
@@ -258,8 +259,14 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
     const int a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
     const int b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
 
+    const static size_t decode_threshold_len =
+        IsAbsorbWeightsEnabled() && Singleton<Environment>::GetInstance()->IsFlashMlaEnable() ? 2 : 1;
+
+    const bool is_a_decode = a_token_num <= decode_threshold_len && a->kv_cached_token_num != 0;
+    const bool is_b_decode = b_token_num <= decode_threshold_len && b->kv_cached_token_num != 0;
+
     // Both prefill or decode, the a_token_num or b_token_num may be zero.
-    if ((a_token_num > 1 && b_token_num > 1) || (a_token_num <= 1 && b_token_num <= 1)) {
+    if (is_a_decode == is_b_decode) {
       if (a->attn_dp_group_id != b->attn_dp_group_id) {
         return a->attn_dp_group_id < b->attn_dp_group_id;
       } else {
@@ -272,8 +279,8 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
         return a->req_id < b->req_id;
       }
     } else {
-      // One is prefill, another is decode
-      return a_token_num > b_token_num;
+      // One is prefill, another is decode, prefill before decode
+      return !is_a_decode;
     }
   });
   ProfileEvent::PopEvent();

@@ -28,6 +28,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   PipelineConfig pipeline_config;
   env->GetPipelineConfig(pipeline_config);
   env->GetAttnBackendConfig(attn_backend_config_);
+  enable_flash_mla_ = env->IsFlashMlaEnable();
 
   block_size_ = env->GetBlockSize();
   const size_t max_batch_size = model_config_.max_batch_size;
@@ -37,9 +38,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
     layer_num_on_node_ += pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1;
     KLLM_LOG_INFO << "ModelInput add next n, now layer: " << layer_num_on_node_;
   }
-
-  const char* const enable_flash_mla_env = std::getenv("ENABLE_FLASH_MLA");
-  enable_flash_mla_ = (enable_flash_mla_env != nullptr && strcmp(enable_flash_mla_env, "1") == 0);
 
   attn_dp_group_id_ = rank_ / env->GetAttentionTensorParallel();
   attn_dp_rank_id_ = rank_ % env->GetAttentionTensorParallel();
@@ -229,41 +227,36 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   dp_total_prefix_len = 0;
   infer_stage = forward_reqs.front().infer_stage;  // for NPU
 
-  if (run_mode == RunMode::kMain) {
-    mtp_req_id_to_pos_.clear();
-  }
-
   flash_input.Reset();
   page_single_input.Reset();
   page_dual_input.Reset();
 
   SetDevice(rank_);
-
-  for (const auto& forward_req : forward_reqs) {
+  for (const auto& req : forward_reqs) {
     // select input_info type
-    const size_t input_ids_len = forward_req.forwarding_tokens->size() - forward_req.kv_cached_token_num;
+    const size_t input_ids_len = req.forwarding_tokens->size() - req.kv_cached_token_num;
     input_info* target_input = nullptr;
     if (input_ids_len == 1) {
       target_input = &page_single_input;
-    } else if (input_ids_len == 2 && IsAbsorbWeightsEnabled() && forward_req.kv_cached_token_num != 0) {
+    } else if (input_ids_len == 2 && IsAbsorbWeightsEnabled() && enable_flash_mla_ && req.kv_cached_token_num != 0) {
       target_input = &page_dual_input;
     } else {
       target_input = &flash_input;
 
-      total_prefix_len += forward_req.prefix_cache_len;
-      multi_token_request_total_seq_len += forward_req.forwarding_tokens->size();
-      if (forward_req.attn_dp_group_id == attn_dp_group_id_) {
-        dp_total_prefix_len += forward_req.prefix_cache_len;
-        dp_multi_token_request_total_seq_len += forward_req.forwarding_tokens->size();
+      total_prefix_len += req.prefix_cache_len;
+      multi_token_request_total_seq_len += req.forwarding_tokens->size();
+      if (req.attn_dp_group_id == attn_dp_group_id_) {
+        dp_total_prefix_len += req.prefix_cache_len;
+        dp_multi_token_request_total_seq_len += req.forwarding_tokens->size();
       }
     }
 
-    target_input->reqs.emplace_back(const_cast<ForwardRequest*>(&forward_req));
-    if (forward_req.attn_dp_group_id == attn_dp_group_id_) {
-      target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&forward_req));
+    target_input->reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+    if (req.attn_dp_group_id == attn_dp_group_id_) {
+      target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
     }
 
-    total_sampling_token_num_ += forward_req.sampling_token_num;
+    total_sampling_token_num_ += req.sampling_token_num;
   }
 
   multi_token_request_num = flash_input.reqs.size();
@@ -355,10 +348,13 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
 
 void ModelInput::PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   ProfileEvent::PushEvent("PrepareNetxnGatherIdx", rank_);
+  if (run_mode == RunMode::kMain) {
+    mtp_req_id_to_pos_.clear();
+  }
+
   std::vector<size_t> mtp_hidden_gather_idx;
   size_t total_len = 0;
-  for (size_t i = 0; i < forward_reqs.size(); ++i) {
-    const auto& req = forward_reqs[i];
+  for (const auto& req : forward_reqs) {
     const size_t input_ids_len =
         req.forwarding_tokens->size() - std::max(req.kv_cached_token_num, req.prefix_cache_len);
     if (run_mode == RunMode::kMain) {  // record len before nextn
@@ -1135,9 +1131,9 @@ void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash
       multi_token_request_max_tokens = std::max(multi_token_request_max_tokens, input_length);
       input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_length);
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back() + skip_token_num);
-      dp_multi_token_request_max_tokens = std::max(dp_multi_token_request_max_tokens, in_dp_group ? input_length : 0);
       group_prefill_count[req.attn_dp_group_id] += input_ids_len;
       if (in_dp_group) {
+        dp_multi_token_request_max_tokens = std::max(dp_multi_token_request_max_tokens, input_length);
         dp_prefill_q_offset.emplace_back(dp_prefill_q_offset.back() + input_ids_len);
         dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + input_length);
         dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back() + skip_token_num);
@@ -1146,9 +1142,9 @@ void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash
       single_token_request_max_tokens = std::max(single_token_request_max_tokens, input_length);
       input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_ids_len);
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back());
-      dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, in_dp_group ? input_length : 0);
       group_decode_count[req.attn_dp_group_id] += input_ids_len;
       if (in_dp_group) {
+        dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, input_length);
         dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + 1);
         dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back());
       }
