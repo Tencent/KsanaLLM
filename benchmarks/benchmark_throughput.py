@@ -781,6 +781,7 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
     headers = {
         "User-Agent": "Benchmark Client",
         "Content-Type": "application/json",
+        "req_id": str(req_id),
     }
 
     # Set a timeout of 3 hours for the aiohttp client
@@ -815,7 +816,10 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                         chunk_bytes = chunk_bytes.strip(b'\x00')
                         if not chunk_bytes:
                             continue
-                        chunk = chunk_bytes.decode("utf-8")
+                        try:
+                            chunk = chunk_bytes.decode("utf-8")
+                        except UnicodeDecodeError:
+                            continue
                         # Remove the optional prefix "data: " for the first chunk
                         if chunk_acc == "" and chunk.startswith("data: "):
                             chunk = chunk[len("data: "):]
