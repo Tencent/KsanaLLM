@@ -548,7 +548,7 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
 }
 
 Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) {
-  KLLM_LOG_DEBUG << "llm runtime StepOnWorker invoked.";
+  KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", llm runtime StepOnWorker invoked.";
   ProfileEvent::PushEvent(fmt::format("StepOnWorker", epilogue));
   EnterDeviceComputingCriticalZone();
   // Worker always pass result to next step
@@ -558,46 +558,66 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
 
   for (size_t dp_swapout_req_block_ids_idx = 0;
        dp_swapout_req_block_ids_idx < schedule_output->swapout_req_block_ids.size(); ++dp_swapout_req_block_ids_idx) {
+    std::stringstream so_ss;
     if (!schedule_output->swapout_req_block_ids[dp_swapout_req_block_ids_idx].empty()) {
       for (auto it = schedule_output->swapout_req_block_ids[dp_swapout_req_block_ids_idx].begin();
            it != schedule_output->swapout_req_block_ids[dp_swapout_req_block_ids_idx].end(); ++it) {
+        so_ss << it->first << ", ";
         Status status =
             cache_managers_[dp_swapout_req_block_ids_idx]->SwapoutRequestMemoryBlockAsync(it->first, it->second);
         if (!status.OK()) {
           return status;
         }
       }
+      KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", dp_idx=" << dp_swapout_req_block_ids_idx
+                     << ", SwapoutRequestMemoryBlockAsync req_ids=(" << so_ss.str() << ")";
     }
+  }
+
+  for (size_t dp_merged_swapout_req_ids_idx = 0;
+       dp_merged_swapout_req_ids_idx < schedule_output->merged_swapout_req_ids.size();
+       ++dp_merged_swapout_req_ids_idx) {
+    auto& dp_merged_swapout_req_ids = schedule_output->merged_swapout_req_ids[dp_merged_swapout_req_ids_idx];
+    if (dp_merged_swapout_req_ids.empty()) {
+      continue;
+    }
+    KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id
+                   << ", WaitSwapoutRequestMemoryBlock dp_idx=" << dp_merged_swapout_req_ids_idx
+                   << ", req num=" << dp_merged_swapout_req_ids.size()
+                   << ", ids=" << Vector2Str(dp_merged_swapout_req_ids);
+    cache_managers_[dp_merged_swapout_req_ids_idx]->WaitSwapoutRequestMemoryBlock(dp_merged_swapout_req_ids);
   }
 
   for (size_t dp_swapin_req_block_ids_idx = 0;
        dp_swapin_req_block_ids_idx < schedule_output->swapin_req_block_ids.size(); ++dp_swapin_req_block_ids_idx) {
+    std::stringstream si_ss;
     if (!schedule_output->swapin_req_block_ids[dp_swapin_req_block_ids_idx].empty()) {
       for (auto it = schedule_output->swapin_req_block_ids[dp_swapin_req_block_ids_idx].begin();
            it != schedule_output->swapin_req_block_ids[dp_swapin_req_block_ids_idx].end(); ++it) {
+        si_ss << it->first << ", ";
+
         Status status =
             cache_managers_[dp_swapin_req_block_ids_idx]->SwapinRequestMemoryBlockAsync(it->first, it->second);
         if (!status.OK()) {
           return status;
         }
       }
+      KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", dp_idx=" << dp_swapin_req_block_ids_idx
+                     << ", SwapinRequestMemoryBlockAsync req_ids=(" << si_ss.str() << ")";
     }
-  }
-
-  // For worker, Waiting necessary swappiness finished.
-  // Must invoked after SwapxxxRequestMemoryBlockAsync,
-  // because we may need swap and wait same block id in one step.
-  for (size_t dp_merged_swapout_req_ids_idx = 0;
-       dp_merged_swapout_req_ids_idx < schedule_output->merged_swapout_req_ids.size();
-       ++dp_merged_swapout_req_ids_idx) {
-    cache_managers_[dp_merged_swapout_req_ids_idx]->WaitSwapoutRequestMemoryBlock(
-        schedule_output->merged_swapout_req_ids[dp_merged_swapout_req_ids_idx]);
   }
 
   for (size_t dp_merged_swapin_req_ids_idx = 0;
        dp_merged_swapin_req_ids_idx < schedule_output->merged_swapin_req_ids.size(); ++dp_merged_swapin_req_ids_idx) {
-    cache_managers_[dp_merged_swapin_req_ids_idx]->WaitSwapinRequestMemoryBlock(
-        schedule_output->merged_swapin_req_ids[dp_merged_swapin_req_ids_idx]);
+    auto& dp_merged_swapin_req_ids = schedule_output->merged_swapin_req_ids[dp_merged_swapin_req_ids_idx];
+    if (dp_merged_swapin_req_ids.empty()) {
+      continue;
+    }
+    KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id
+                   << ", WaitSwapinRequestMemoryBlock dp_idx=" << dp_merged_swapin_req_ids_idx
+                   << ", req num=" << dp_merged_swapin_req_ids.size()
+                   << ", ids=" << Vector2Str(dp_merged_swapin_req_ids);
+    cache_managers_[dp_merged_swapin_req_ids_idx]->WaitSwapinRequestMemoryBlock(dp_merged_swapin_req_ids);
   }
 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->worker_running_reqs[0]->model_instance;

@@ -20,6 +20,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) override;
 
+  virtual void UpdateSwapPendingRequests() override;
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);

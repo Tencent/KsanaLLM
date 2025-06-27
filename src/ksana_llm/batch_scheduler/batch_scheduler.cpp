@@ -121,6 +121,18 @@ bool BatchScheduler::IsIdle(size_t pp_batch_idx) {
 void BatchScheduler::WaitUntilHaveReqs(size_t pp_batch_idx) {
   while (IsIdle(pp_batch_idx) && !terminating_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    {
+      std::lock_guard<std::mutex> guard(schedule_mutex_);
+      // Update requests in swapin/swapout pending queue
+      for (size_t i = 0; i < dp_num_; i++) {
+        auto batch_state = batch_states_[i][pp_batch_idx];
+        if (batch_state->swapin_pending_requests_.empty() && batch_state->swapout_pending_requests_.empty()) {
+          continue;
+        }
+        schedule_strategies_[i]->SetBatchState(batch_state);
+        schedule_strategies_[i]->UpdateSwapPendingRequests();
+      }
+    }
   }
 }
 

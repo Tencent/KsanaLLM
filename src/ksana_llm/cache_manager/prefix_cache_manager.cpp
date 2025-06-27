@@ -928,7 +928,11 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
                                               std::vector<std::vector<int>>& req_block_ids,
                                               std::vector<int>& swapped_memory_block_ids) {
   if (!swapout_task_queue_.empty() || !swapout_cached_block_buffer_.empty() || !finish_swapout_request_.empty()) {
-    return Status(RET_RUNTIME_FAILED, FormatStr("Swap in req %d error, some swapout jobs is in progress.", req_id));
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("Swap in req %d error, some swapout jobs is in progress. swapout_task_queue_=%d, "
+                            "swapout_cached_block_buffer_=%d, finish_swapout_request_=%d",
+                            req_id, swapout_task_queue_.size(), swapout_cached_block_buffer_.size(),
+                            finish_swapout_request_.size()));
   }
 
   auto it = cached_requests_.find(req_id);

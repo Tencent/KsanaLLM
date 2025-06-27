@@ -115,6 +115,7 @@ class BaseCacheManager {
     req_ids.clear();
     if (task_queue.empty()) {
       left_task_num = 0;
+      req_ids = finish_task_request;
       return Status();
     }
 

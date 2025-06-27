@@ -21,6 +21,8 @@ class BaseScheduleStrategy {
 
   virtual void UpdateRunningRequests() = 0;
 
+  virtual void UpdateSwapPendingRequests() = 0;
+
   // Get the next infer reqs that ready to run.
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;
 

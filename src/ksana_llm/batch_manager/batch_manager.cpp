@@ -16,6 +16,7 @@
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tensor.h"
+#include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 

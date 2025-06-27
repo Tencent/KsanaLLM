@@ -58,11 +58,29 @@ struct BatchState {
     }
   }
 
-  void MergeRunningPendingReqs() {
+  void MergeRunningPendingReqs(size_t max_batch_size) {
     std::lock_guard<std::mutex> guard(queue_mutex);
-    schedule_output->running_reqs.insert(schedule_output->running_reqs.end(), running_pending_reqs.begin(),
-                                         running_pending_reqs.end());
-    running_pending_reqs.clear();
+
+    // Calculate how many requests we can add without exceeding max_batch_size
+    size_t current_size = schedule_output->running_reqs.size();
+    size_t available_slots = 0;
+
+    if (current_size < max_batch_size) {
+      available_slots = max_batch_size - current_size;
+    }
+
+    // If we have available slots and pending requests
+    if (available_slots > 0 && !running_pending_reqs.empty()) {
+      // Determine how many requests to move
+      size_t requests_to_move = std::min(available_slots, running_pending_reqs.size());
+
+      // Insert only the calculated number of requests
+      schedule_output->running_reqs.insert(schedule_output->running_reqs.end(), running_pending_reqs.begin(),
+                                           running_pending_reqs.begin() + requests_to_move);
+
+      // Remove the moved requests from running_pending_reqs
+      running_pending_reqs.erase(running_pending_reqs.begin(), running_pending_reqs.begin() + requests_to_move);
+    }
   }
 
   void ResetInfoBeforeSchedule() {
@@ -104,6 +122,9 @@ struct BatchState {
 
   // The buffer queue used to save finished swapin request temporary.
   std::vector<std::shared_ptr<InferRequest>> running_pending_reqs;
+
+  std::vector<int64_t> merged_swapout_req_ids;
+  std::vector<int64_t> merged_swapin_req_ids;
 
   // The swapped queue, sorted map.
   std::map<int, std::shared_ptr<InferRequest>> swapped_queue;
