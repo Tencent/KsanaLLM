@@ -4,7 +4,7 @@ uvicorn[standard]==0.29.0
 fastapi==0.110.0
 protobuf==3.20.3
 rouge_score==0.1.2
-aiohttp==3.9.5
+aiohttp==3.10.11
 msgpack>=1.0.8
 orjson>=3.10.7
 uvloop>=0.20.0
