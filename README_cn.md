@@ -52,14 +52,15 @@
 ```bash
 # 请先根据https://github.com/NVIDIA/nvidia-container-toolkit安装nvidia-docker
 cd docker
-nvidia-docker build -f Dockerfile.gpu -t ksanallm-gpu .
-nvidia-docker run \
+docker build -f Dockerfile.gpu -t ksanallm-gpu .
+docker run \
     -u root \
     -itd --privileged \
     --shm-size=50g \
     --network host \
     --cap-add=SYS_ADMIN \
     --cap-add=SYS_PTRACE \
+    --gpus all \
     ksanallm-gpu bash
 
 # 进入KsanaLLM根目录 

@@ -51,14 +51,15 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 ```bash
 # need install nvidia-docker from https://github.com/NVIDIA/nvidia-container-toolkit
 cd docker
-nvidia-docker build -f Dockerfile.gpu -t ksanallm-gpu .
-nvidia-docker run \
+docker build -f Dockerfile.gpu -t ksanallm-gpu .
+docker run \
     -u root \
     -itd --privileged \
     --shm-size=50g \
     --network host \
     --cap-add=SYS_ADMIN \
     --cap-add=SYS_PTRACE \
+    --gpus all \
     ksanallm-gpu bash
 
 # goto KsanaLLM root directory 
