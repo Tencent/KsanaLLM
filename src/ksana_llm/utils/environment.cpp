@@ -430,7 +430,7 @@ std::tuple<size_t, size_t> Environment::GetCacheBlockSize(const ModelConfig &mod
 
 Status Environment::ParseConfig(const std::string &config_file, const std::string &model_dir_override) {
   YamlReader yaml_reader;
-  Status status = yaml_reader.LoadFile(config_file);
+  const Status status = yaml_reader.LoadFile(config_file);
   if (!status.OK()) {
     KLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage();
     return status;
@@ -466,17 +466,15 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
                     "cause libtorch blocked, please unset it."));
   }
 
-  if (tensor_parallel_size_ < attn_data_parallel_size_) {
-    KLLM_THROW(
-        fmt::format("Tensor Para Size(tensor_para_size) {} should >= Attention Data Para Size(attn_data_para_size) {}",
-                    tensor_parallel_size_, attn_data_parallel_size_));
-  }
+  KLLM_CHECK_WITH_INFO(
+      tensor_parallel_size_ >= attn_data_parallel_size_,
+      fmt::format("Tensor Para Size(tensor_para_size) {} should >= Attention Data Para Size(attn_data_para_size) {}",
+                  tensor_parallel_size_, attn_data_parallel_size_));
 
-  if (tensor_parallel_size_ % attn_data_parallel_size_ != 0) {
-    KLLM_THROW(
-        fmt::format("Tensor Para Size(tensor_para_size) {} % Attention Data Para Size(attn_data_para_size) {} != 0",
-                    tensor_parallel_size_, attn_data_parallel_size_));
-  }
+  KLLM_CHECK_WITH_INFO(
+      tensor_parallel_size_ % attn_data_parallel_size_ == 0,
+      fmt::format("Tensor Para Size(tensor_para_size) {} % Attention Data Para Size(attn_data_para_size) {} != 0",
+                  tensor_parallel_size_, attn_data_parallel_size_));
 
 #if (defined(ENABLE_ACL) || defined(ENABLE_TOPS))
   if (attn_data_parallel_size_ > 1) {
@@ -490,7 +488,7 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
   // the previous task, device0 on node0 sends data to device0 on node1, and device1 on node0 sends data to device1 on
   // node1. The "scatter" mode is the scatter mode. When node0 completes the inference of the previous task, device0 on
   // node0 sends data to device0, device1, device2, etc., on node1.
-  std::string pp_comm_type_str = yaml_reader.GetScalar<std::string>(
+  const std::string &pp_comm_type_str = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.global.pipeline_para_comm_type", "default");
   if (pp_comm_type_str == "scatter") {
     PipelineConfig pipeline_config;
@@ -543,13 +541,21 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
   // When MTP is enabled, each request requires calculating 2 tokens while decoding.
   batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.enable_mtp_module ? 2 : 1;
 
+  if (attn_data_parallel_size_ > 1) {
+    KLLM_CHECK_WITH_INFO(
+        batch_scheduler_config_.max_step_token_num / attn_data_parallel_size_ >= batch_scheduler_config_.max_token_len,
+        fmt::format("max_step_token_num({}) / attn_data_para_size({}) must >= max_token_len({})",
+                    batch_scheduler_config_.max_step_token_num, attn_data_parallel_size_,
+                    batch_scheduler_config_.max_token_len));
+  }
+
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
 
-  static const char *enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
+  const char *enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
   if (enable_flash_mla != nullptr && strcmp(enable_flash_mla, "1") == 0) {
     block_manager_config_.host_allocator_config.block_token_num = 64;
     block_manager_config_.device_allocator_config.block_token_num = 64;
@@ -596,8 +602,8 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
 
   auto attributes = yaml_reader.GetMap(yaml_reader.GetRootNode(), "setting.profiler.attributes");
   for (auto it = attributes.begin(); it != attributes.end(); ++it) {
-    std::string key = it->first.as<std::string>();
-    std::string value = it->second.as<std::string>();
+    const std::string &key = it->first.as<std::string>();
+    const std::string &value = it->second.as<std::string>();
     profiler_config_.resource_attributes[key] = value;
   }
   // quantization_config in yaml takes effect when quantization_config in
@@ -628,7 +634,7 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
   if (tokenizer_dir.empty()) {
     tokenizer_dir = base_model_dir;
   }
-  if (model_dir_override.size()) {
+  if (!model_dir_override.empty()) {
     base_model_dir = model_dir_override;
     tokenizer_dir = model_dir_override;
   }
@@ -679,7 +685,7 @@ void Environment::InitConnectorConfig(
   std::string role_str =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.group_role", "none");
 
-  bool decode_node_benchmark =
+  const bool decode_node_benchmark =
       (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) && (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
   if (decode_node_benchmark) {
     role_str = "decode";

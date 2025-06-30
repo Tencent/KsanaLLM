@@ -91,7 +91,7 @@ Status NewDeepSeekV3WeightImpl<T>::GetExpertsIdx(const std::string& expert_name,
                                                   size_t & layer_idx_,
                                                   size_t & expert_idx_) {
   // Get the index of the moe layer and the index of each expert
-  std::regex re(R"(\d+)");
+  static const std::regex re(R"(\d+)");
   std::sregex_iterator next(expert_name.begin(), expert_name.end(), re);
   std::sregex_iterator end;
   if (next != end) {
@@ -114,11 +114,11 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessGateUpProjWeight(std::string& file_wei
   std::string replacement = "gate_up_proj";
   if (file_weight_name_.find("gate_proj") != std::string::npos) {
     concat_offset = 0;
-    std::regex pattern("gate_proj");
+    static const std::regex pattern("gate_proj");
     file_weight_name_ = std::regex_replace(file_weight_name_, pattern, replacement);
   } else {
     concat_offset = 1;
-    std::regex pattern("up_proj");
+    static const std::regex pattern("up_proj");
     file_weight_name_ = std::regex_replace(file_weight_name_, pattern, replacement);
   }
 

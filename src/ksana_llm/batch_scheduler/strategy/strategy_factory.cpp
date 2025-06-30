@@ -9,10 +9,10 @@
 namespace ksana_llm {
 
 std::shared_ptr<BaseScheduleStrategy> ScheduleStrategyFactory::CreateScheduleStrategy(
-    const BatchSchedulerConfig &batch_scheduler_config, int tp_num) {
+    const BatchSchedulerConfig &batch_scheduler_config) {
   if (batch_scheduler_config.schedule_strategy == ScheduleStrategy::CONTINUOUS_BATCHING) {
     KLLM_LOG_DEBUG << "Continuous-batching scheduler created.";
-    return std::make_shared<ContinuousBatchingStrategy>(batch_scheduler_config, tp_num);
+    return std::make_shared<ContinuousBatchingStrategy>(batch_scheduler_config);
   }
   return nullptr;
 }

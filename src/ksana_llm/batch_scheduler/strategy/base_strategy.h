@@ -16,8 +16,8 @@ namespace ksana_llm {
 
 class BaseScheduleStrategy {
  public:
-  BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config, int tp_num)
-      : batch_scheduler_config_(batch_scheduler_config), tp_num_(tp_num) {}
+  explicit BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config)
+      : batch_scheduler_config_(batch_scheduler_config) {}
 
   virtual void UpdateRunningRequests() = 0;
 
@@ -41,7 +41,6 @@ class BaseScheduleStrategy {
 
   // the config and context.
   BatchSchedulerConfig batch_scheduler_config_;
-  int tp_num_;
 
   std::shared_ptr<StopChecker> stop_checker_;
 };

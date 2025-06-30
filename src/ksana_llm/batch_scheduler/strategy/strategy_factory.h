@@ -11,7 +11,7 @@ class ScheduleStrategyFactory {
  public:
   // Create a scheduler strategy.
   static std::shared_ptr<BaseScheduleStrategy> CreateScheduleStrategy(
-      const BatchSchedulerConfig &batch_scheduler_config, int tp_num);
+      const BatchSchedulerConfig &batch_scheduler_config);
 };
 
 }  // namespace ksana_llm

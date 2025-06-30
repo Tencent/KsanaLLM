@@ -55,7 +55,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   dp_waiting_reqs_.resize(dp_num);
 
   for (int i = 0; i < dp_num; i++) {
-    schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, tp_num);
+    schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_);
     batch_states_[i].resize(pp_batch_num_);
     for (int j = 0; j < pp_batch_num_; j++) {
       batch_states_[i][j] = std::make_shared<BatchState>(j, batch_scheduler_config_);
@@ -88,7 +88,8 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
     KLLM_LOG_ERROR << "req_id: " << infer_request->req_id
                    << "input len or logits_custom_length is too long inference failed.";
 
-    auto finish_status = Status(RET_INPUT_LENGTH_EXCEEDED, "input length or logits_custom_length exceeds the limit.");
+    const auto finish_status =
+        Status(RET_INPUT_LENGTH_EXCEEDED, "input length or logits_custom_length exceeds the limit.");
     infer_request->finish_status = finish_status;
     for (auto& infer_request : infer_request_group) {
       infer_request->finished = true;

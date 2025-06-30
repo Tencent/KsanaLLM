@@ -22,9 +22,9 @@
 
 namespace ksana_llm {
 
-ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config, int tp_num)
-    : BaseScheduleStrategy(batch_scheduler_config, tp_num) {
-  auto env = Singleton<Environment>::GetInstance();
+ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config)
+    : BaseScheduleStrategy(batch_scheduler_config) {
+  const auto env = Singleton<Environment>::GetInstance();
 
   env->GetConnectorConfigs(connector_config_);
   if (connector_config_.group_role != GroupRole::NONE) {
