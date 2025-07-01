@@ -21,6 +21,7 @@ Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_
   model_config = new_deepseek_v3_config;
 
   auto env = Singleton<Environment>::GetInstance();
+  env->GetExpertParallelConfig(new_deepseek_v3_config->expert_parallel_config);
   new_deepseek_v3_config->tensor_para_size = env->GetTensorParallelSize();
   new_deepseek_v3_config->attn_data_para_size = env->GetAttnDataParallelSize();
   size_t ep = env->GetExpertParallelSize();

@@ -370,15 +370,6 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
                                                 new_deepseek_v3_config->quant_config.method == QUANT_BLOCK_FP8_E4M3)) {
         return false;
       }
-      if (new_deepseek_v3_config->attn_data_para_size > 1 || new_deepseek_v3_config->expert_para_size > 1) {
-        return false;
-      }
-
-      // Due to loading performance issues, the old version implementation is temporarily being used when launching with
-      // 8 cards.
-      if (new_deepseek_v3_config->tensor_para_size == 8) {
-        return false;
-      }
 
       return true;
     }

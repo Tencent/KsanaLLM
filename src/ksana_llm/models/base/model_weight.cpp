@@ -29,25 +29,4 @@ std::vector<std::string> ModelWeight::GetWeightNames() const {
   return weight_names;
 }
 
-Status ModelWeight::BindQuantWeightScales() {
-  for (auto & [weight_name, weight_tensor] : weights_map_) {
-    if (weight_name.find("proj.weight") != std::string::npos &&
-        weight_name.find("proj.weight_scale_inv") == std::string::npos) {
-      std::string weight_scale_name = weight_name + "_scale_inv";
-      auto scale_iter = weights_map_.find(weight_scale_name);
-      if (scale_iter != weights_map_.end()) {
-        weight_tensor.weight_scales = &(scale_iter->second);
-        KLLM_LOG_INFO << fmt::format("bind {}, shape: {} to {}, shape: {}\n",
-                                      weight_scale_name,
-                                      Vector2Str(std::vector<size_t>(weight_tensor.weight_scales->shape)),
-                                      weight_name,
-                                      Vector2Str(std::vector<size_t>(weight_tensor.shape)));
-      } else {
-        KLLM_LOG_INFO << fmt::format("weight scale not found: {}", weight_scale_name);
-      }
-    }
-  }
-  return Status();
-}
-
 }  // namespace ksana_llm

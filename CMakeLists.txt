@@ -217,7 +217,7 @@ if(WITH_EVENT_RECORD)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_RECORD_EVENT")
 endif()
 
-# NOTE(karlluo): for PyTorch 2.7.1, torch/share/cmake/Caffe2/public/cuda.cmake's nvtx path depends on 
+# NOTE(karlluo): for PyTorch 2.7.1, torch/share/cmake/Caffe2/public/cuda.cmake's nvtx path depends on
 # variable USE_SYSTEM_NVTX, we set it on to use system nvtx.
 set(USE_SYSTEM_NVTX ON)
 

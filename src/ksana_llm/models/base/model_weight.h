@@ -45,9 +45,6 @@ class ModelWeight : public BaseWeight {
   virtual void PrintDebugMessage() override {}
   // //////////////////////////////////////////////////////////////////////////////////////////
 
-  // currently used for deepseek v3 and will support other models in the future
-  Status BindQuantWeightScales();
-
  private:
   using BaseWeight::weights_map_;
   Tensor empty_tensor_;

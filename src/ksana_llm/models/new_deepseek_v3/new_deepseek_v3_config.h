@@ -71,6 +71,7 @@ struct NewDeepSeekV3Config : public BaseModelConfig {
   bool is_moe = false;
   bool has_shared_experts = false;
   MoeConfig moe_config;
+  ExpertParallelConfig expert_parallel_config;
 
   // Config for mla
   bool use_mla = false;

@@ -90,10 +90,19 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
   for (auto& task : load_weight_tasks) {
     task.get();
   }
+  load_weight_tasks.clear();
 
   // post process
-  for (size_t i = 0; i < tp_size; i++) {
-    model_weight_loader->PostProcessModelWeights(dev_weights[i]->weights_map_, i);
+  for (size_t dev_rank = 0; dev_rank < tp_size; dev_rank++) {
+    load_weight_tasks.emplace_back(weight_loader_threadpool_->Submit([&, dev_rank]() {
+      SetDevice(dev_rank);
+      model_weight_loader->PostProcessModelWeights(dev_weights[dev_rank]->weights_map_, dev_rank);
+      StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
+    }));
+  }
+
+  for (auto& task : load_weight_tasks) {
+    task.get();
   }
 
   const std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start_time;

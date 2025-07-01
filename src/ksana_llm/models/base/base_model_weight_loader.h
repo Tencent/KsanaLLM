@@ -47,6 +47,8 @@ class BaseModelWeightLoader {
   // cast device tensor type.
   Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank);
 
+  Status CastDeviceTensorTypePytorch(Tensor& input_tensor, DataType new_dtype, int dev_rank);
+
   // Copy host tensor to device.
   Status CopyHostTensorToDevice(const Tensor host_tensor, int dev_rank, Tensor& dev_tensor);
 

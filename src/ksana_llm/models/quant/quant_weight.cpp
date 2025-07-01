@@ -1096,7 +1096,8 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
           down_experts_scale_shape[2] * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
       size_t expert_scale_pitch =
           down_experts_scale_shape[2] * down_experts_scale_shape[1] * GetTypeSize(weight_data_type);
-      size_t src_down_offset = expert_para_size_ > 1 ? 0 : rank_ * dst_pitch;
+      size_t src_down_offset =
+          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
       Memcpy2DAsync(
           weights_map_[down_experts_scale_name].GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_scale_pitch,
           dst_pitch, weight_ptr + src_down_offset, src_pitch, dst_pitch, down_experts_scale_shape[1],

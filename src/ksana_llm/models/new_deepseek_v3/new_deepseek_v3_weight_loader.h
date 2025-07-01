@@ -33,7 +33,7 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
                   int dev_rank) override;
 
  private:
-  Status InitQuantWeightLoader(std::shared_ptr<NewDeepSeekV3Config> & new_deepseek_v3_config);
+  Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config> & new_deepseek_v3_config);
 
  private:
   PipelineConfig pipeline_config_;

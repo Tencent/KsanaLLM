@@ -26,6 +26,7 @@ class ContextT {
 
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
   size_t GetAttnDataParallelSize() { return attn_data_parallel_size_; }
+  size_t GetAttentionTensorParallelSize() { return tensor_parallel_size_ / attn_data_parallel_size_; }
 
   inline bool IsRunContextDecodeAndDecodeSerially() { return is_contextdecode_and_decode_run_serially_; }
 
