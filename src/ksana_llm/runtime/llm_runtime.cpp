@@ -518,9 +518,6 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
 
   if (!epilogue) {
     // Alloc resources before forwarding
-    KLLM_LOG_DEBUG << "Start EnterDeviceComputingCriticalZone. schedule_id=" << schedule_output->schedule_id;
-    EnterDeviceComputingCriticalZone();
-    KLLM_LOG_DEBUG << "EnterDeviceComputingCriticalZone success. schedule_id=" << schedule_output->schedule_id;
     model_instance->AllocResources(schedule_output->schedule_id);
   }
 

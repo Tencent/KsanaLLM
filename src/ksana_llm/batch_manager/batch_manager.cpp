@@ -12,6 +12,7 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/utils/critical_zone.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/string_utils.h"
@@ -137,8 +138,11 @@ Status BatchManager::MainProcess(size_t pp_batch_idx) {
 
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
-      ProfileEvent::PushEvent("BroadcastScheduleOutput");
-      KLLM_LOG_DEBUG << "Broadcast schedule output schedule_id=" << schedule_output.schedule_id << " to all workers.";
+      ProfileEvent::PushEvent("LockAndBroadcastScheduleOutput");
+      KLLM_LOG_DEBUG << "Start EnterDeviceComputingCriticalZone. schedule_id=" << schedule_output.schedule_id;
+      EnterDeviceComputingCriticalZone();
+      KLLM_LOG_DEBUG << "EnterDeviceComputingCriticalZone success. Broadcast schedule_id="
+                     << schedule_output.schedule_id << " to all workers.";
       BroadcastScheduleOutput(&schedule_output);
       InitHiddenUnits(schedule_output.schedule_id);
       ProfileEvent::PopEvent();
