@@ -1,29 +1,47 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
+include(ExternalProject)
 
-include(FetchContent)
-
-# Declare TBB
-FetchContent_Declare(
-  tbb
-  GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-  GIT_TAG v2022.2.0-rc1
+set(TBB_CMAKE_ARGS
+    -DBUILD_SHARED_LIBS=ON
+    -DTBB_TEST=OFF
+    -DTBB_EXAMPLES=OFF
+    -DTBBMALLOC_BUILD=OFF
+    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+    -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/tbb_install
+    -DCMAKE_INSTALL_LIBDIR=lib64
+    -DCMAKE_CXX_FLAGS=-Wno-stringop-overflow\ -Wno-error
 )
 
-# Set TBB options BEFORE making it available
-set(TBB_STRICT OFF CACHE BOOL "Disable strict compilation for TBB")
-set(TBB_TEST OFF CACHE BOOL "Disable TBB tests")
-set(TBB_EXAMPLES OFF CACHE BOOL "Disable TBB examples")
+execute_process(
+    COMMAND bash -c "lscpu | grep 'Vendor ID' | grep -i 'AuthenticAMD'"
+    RESULT_VARIABLE IS_AMD_CPU
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
 
-# Set compiler flags BEFORE making TBB available
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-stringop-overflow -Wno-error")
-
-# Now make TBB available
-FetchContent_MakeAvailable(tbb)
-
-message(STATUS "Simplified TBB configuration without CET checks.")
-
-if(NOT TARGET TBB::tbb)
-    message(FATAL_ERROR "TBB::tbb target is NOT defined. Please check TBB FetchContent.")
+if(IS_AMD_CPU EQUAL 0)
+    message(STATUS "AMD CPU detected, disabling IPO for TBB.")
+    list(APPEND TBB_CMAKE_ARGS -DTBB_ENABLE_IPO=OFF)
+else()
+    message(STATUS "Non-AMD CPU detected, using default TBB settings.")
 endif()
+
+ExternalProject_Add(tbb_external
+    GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
+    GIT_TAG v2022.2.0
+    CMAKE_ARGS ${TBB_CMAKE_ARGS}
+    BUILD_BYPRODUCTS ${CMAKE_BINARY_DIR}/tbb_install/lib64/libtbb.so.12
+    INSTALL_COMMAND ${CMAKE_COMMAND} --build . --target install
+)
+
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/tbb_install/include)
+
+add_library(TBB::tbb SHARED IMPORTED)
+set_target_properties(TBB::tbb PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_BINARY_DIR}/tbb_install/lib64/libtbb.so.12
+    INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_BINARY_DIR}/tbb_install/include
+)
+
+add_dependencies(TBB::tbb tbb_external)

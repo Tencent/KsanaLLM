@@ -47,7 +47,7 @@ target_include_directories(connector
         ${CPPZMQ_INCLUDE_DIR}
 )
 
-target_link_libraries(connector PUBLIC
+target_link_libraries(connector PRIVATE
     utils
     cppzmq
     libzmq
@@ -55,10 +55,10 @@ target_link_libraries(connector PUBLIC
 )
 
 if(WITH_CUDA)
-    target_link_libraries(connector PUBLIC ${NCCL_LIBRARIES})
+    target_link_libraries(connector PRIVATE ${NCCL_LIBRARIES})
 endif()
 
-target_link_libraries(connector PUBLIC ${CURL_LIBRARIES})
+target_link_libraries(connector PRIVATE ${CURL_LIBRARIES})
 
 get_target_property(_inc_dirs connector INCLUDE_DIRECTORIES)
 message(STATUS "connector include dirs: ${_inc_dirs}")
@@ -77,6 +77,7 @@ if(WITH_TESTING)
     
     if(WITH_CUDA)
         target_link_libraries(connector_test
+            PRIVATE
             connector
             gtest
             runtime
@@ -84,15 +85,18 @@ if(WITH_TESTING)
             gmock
             ${CURL_LIBRARIES}
             cuda
+            TBB::tbb
         )
     else()
         target_link_libraries(connector_test
+            PRIVATE
             connector
             gtest
             gtest_main
             gmock
             runtime
             ${CURL_LIBRARIES}
+            TBB::tbb
         )
     endif()
     add_test(NAME connector_test COMMAND connector_test)
