@@ -86,7 +86,7 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   void* prefix_kv_buffer = input_tensors[32].GetPtr<void>();
   void* prefix_k_up_buffer = input_tensors[33].GetPtr<void>();
   void* prefix_v_up_buffer = input_tensors[34].GetPtr<void>();
-  void* prefill_extra_buffer = input_tensors[35].GetPtr<void>();
+  void* workspace_buffer = input_tensors[35].GetPtr<void>();
 
   int64_t kv_cache_block_num = *(input_tensors[19].GetPtr<int64_t>());
   void** layer_kv_cache_ptr = input_tensors[19].GetPtr<void*>() + 1;
@@ -105,11 +105,11 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   void* seqlens_q_ptr = input_tensors[4].GetPtr<void>();
 
   MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
-      prefill_extra_buffer, q_nope_ptr, q_pe_ptr, k_pe_ptr, compressed_kv_ptr, kv_b_nope_proj_weight,
+      output_tensors[0].GetPtr<void>(), q_nope_ptr, q_pe_ptr, k_pe_ptr, compressed_kv_ptr, kv_b_nope_proj_weight,
       v_head_proj_weight, o_proj_weight, kv_b_nope_weight_scale, v_head_weight_scale, o_weight_scale, o_proj_dim,
       fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
       this->context_->ext->GetCublasLtHandles()[this->rank_], input_tensors[6].GetPtr<void>(),
-      input_tensors[7].GetPtr<void>(), output_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(),
+      input_tensors[7].GetPtr<void>(), workspace_buffer, input_tensors[1].GetPtr<void>(),
       this->attn_scale_, this->rotary_embedding_cuda_, total_tokens, max_tokens, batch_size, this->num_heads_,
       this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_,
       this->head_size_, this->stride_size_, this->k_scale_, this->v_scale_, this->attn_dp_atp_size_, this->is_causal_,

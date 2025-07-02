@@ -130,6 +130,7 @@ class MatMulLayerFactory {
     if (model_config_.is_quant &&
         (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
       size_t tp = model_config_.tensor_para_size;
+      size_t attn_tp = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
       size_t hidden_size = model_config_.hidden_units;
       size_t inter_size = model_config_.inter_size;
       size_t shared_expert_inter_size_per_rank = model_config_.enable_full_shared_expert
@@ -148,20 +149,23 @@ class MatMulLayerFactory {
       size_t qkv_size = model_config_.size_per_head * (model_config_.head_num + 2 * model_config_.num_key_value_heads);
       // Because the layout convertion, we can't get n/k from weight shape, and have to calculate it.
       std::map<std::string, std::tuple<size_t, size_t, bool>> kn_pairs;
-      kn_pairs["query_key_value"] = std::make_tuple(hidden_size, qkv_size / tp, true);
-      kn_pairs["o_proj"] = std::make_tuple(hidden_size / tp, hidden_size, false);
+      // mlp
       kn_pairs["mlp.gate_proj"] = std::make_tuple(hidden_size, inter_size / tp, true);
       kn_pairs["mlp.up_proj"] = kn_pairs["mlp.gate_proj"];
       kn_pairs["mlp.down_proj"] = std::make_tuple(inter_size / tp, hidden_size, false);
       kn_pairs["mlp.shared_expert.gate_proj"] = std::make_tuple(hidden_size, shared_expert_inter_size_per_rank, true);
       kn_pairs["mlp.shared_expert.up_proj"] = kn_pairs["mlp.shared_expert.gate_proj"];
       kn_pairs["mlp.shared_expert.down_proj"] = std::make_tuple(shared_expert_inter_size_per_rank, hidden_size, false);
+      kn_pairs["query_key_value"] = std::make_tuple(hidden_size, qkv_size / attn_tp, true);
+
+      // attn
       kn_pairs["q_a_proj"] = std::make_tuple(hidden_size, q_lora_rank, false);
       kn_pairs["kv_a_lora_proj"] = std::make_tuple(hidden_size, kv_lora_rank, false);
       kn_pairs["kv_a_rope_proj"] = std::make_tuple(hidden_size, qk_rope_head_dim, false);
-      kn_pairs["q_b_nope_proj"] = std::make_tuple(q_lora_rank, head_num / tp * qk_nope_head_dim, true);
-      kn_pairs["q_b_rope_proj"] = std::make_tuple(q_lora_rank, head_num / tp * qk_rope_head_dim, true);
-      kn_pairs["v_head_proj"] = std::make_tuple(kv_lora_rank, head_num / tp * v_head_dim, true);
+      kn_pairs["q_b_nope_proj"] = std::make_tuple(q_lora_rank, head_num / attn_tp * qk_nope_head_dim, true);
+      kn_pairs["q_b_rope_proj"] = std::make_tuple(q_lora_rank, head_num / attn_tp * qk_rope_head_dim, true);
+      kn_pairs["v_head_proj"] = std::make_tuple(kv_lora_rank, head_num / attn_tp * v_head_dim, true);
+      kn_pairs["self_attn.o_proj"] = std::make_tuple(head_num / attn_tp * v_head_dim, hidden_size, false);
       for (const auto& kn : kn_pairs) {
         if (weight_name.find(kn.first) != std::string::npos) {
           std::vector<std::any> group_matmul_param;

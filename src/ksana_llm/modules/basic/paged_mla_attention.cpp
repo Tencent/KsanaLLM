@@ -73,7 +73,6 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
       fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
   attn_o_proj_weight_ =
       creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
-
   if (absorb_type == AbsorbWeightsType::kAbsorbTypeUKV) {
     attn_w_q_uk_weight_ = creation_context.base_weight->GetModelWeights(
         fmt::format("model.layers.{}.self_attn.w_q_uk.weight", layer_idx));
@@ -92,7 +91,7 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                      Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                      Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor) {
   Tensor query_layernorm_weight, key_layernorm_weight;  // qk_norm not supported, use dummy tensor
-  STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward({hidden_buffer_tensors_0[0],
+  STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward({hidden_buffer_tensors_1[0],
                                                            page_input.input_length,
                                                            page_input.kv_list,
                                                            page_input.kv_cache_offset,
@@ -118,7 +117,7 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            page_input.num_splits,
                                                            page_input.metadata,
                                                            attn_w_uv_weight_},
-                                                          hidden_buffer_tensors_1));
+                                                          hidden_buffer_tensors_0));
 
   return Status();
 }

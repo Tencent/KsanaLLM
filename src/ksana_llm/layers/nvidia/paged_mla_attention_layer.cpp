@@ -34,7 +34,7 @@ template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType K
 Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
                                                                     std::vector<Tensor>& output_tensors) {
   auto input_iter = input_tensors.cbegin();
-  const Tensor& query = *input_iter++;
+  const Tensor& hidden_buffer1 = *input_iter++;
   const Tensor& kv_seq_len = *input_iter++;  // kv seq len (len of forwarding_tokens)
   const Tensor& kv_list = *input_iter++;
   const Tensor& cache_offset = *input_iter++;
@@ -114,11 +114,11 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   const size_t o_proj_dim =
       this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3 ? o_proj_weight.shape[0] : o_proj_weight.shape[1];
 
-  out.dtype = query.dtype;
-  out.shape = {query.shape[0], o_proj_dim};
+  auto skipped_hidden_buffer1_ptr =
+      hidden_buffer1.GetPtr<void>() + skip_tokens_num * (hidden_buffer1.GetTotalBytes() / hidden_buffer1.shape[0]);
+  const size_t o_proj_k_dim = this->v_head_dim_ * this->num_heads_;
+  auto skipped_output_ptr = out.GetPtr<void>() + skip_tokens_num * o_proj_k_dim * out.GetDTypeSize();
 
-  auto skipped_context_out_ptr = out.GetPtr<void>() + skip_tokens_num * (out.GetTotalBytes() / out.shape[0]);
-  auto skipped_context_query_ptr = query.GetPtr<void>() + skip_tokens_num * (query.GetTotalBytes() / query.shape[0]);
   std::shared_ptr<Tensor>& work_buffer = this->workspace_buffer_;
   void* fp8_work_buffer = work_buffer == nullptr ? nullptr : work_buffer->GetPtr<void>();
 
@@ -143,10 +143,10 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
       KLLM_LOG_DEBUG << "kv_cache_block_num " << kv_cache_block_num;
     }
     InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-        skipped_context_out_ptr, skipped_context_query_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
-        skipped_compressed_kv_ptr, skipped_k_pe_ptr, w_q_uk_weight_ptr, nullptr, w_uv_weight_ptr, o_proj_weight_ptr,
-        o_weight_scale, w_uv_o_weight_ptr, w_q_uk_weight_scale, nullptr, w_uv_o_weight_scale, o_proj_dim,
-        fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
+        skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
+        skipped_compressed_kv_ptr, skipped_k_pe_ptr, w_q_uk_weight_ptr, nullptr, w_uv_weight_ptr,
+        o_proj_weight_ptr, o_weight_scale, w_uv_o_weight_ptr, w_q_uk_weight_scale, nullptr, w_uv_o_weight_scale,
+        o_proj_dim, fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
         this->context_->ext->GetCublasLtHandles()[this->rank_], k_list, v_list, kv_seq_len.GetPtr<void>(),
         this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size,
         this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_,
@@ -157,11 +157,11 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
         query_norm_weight.GetPtr<void>(), key_norm_weight.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
         this->alibi_slopes_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr,
         kv_cache_block_num, max_blocks_per_seq, q_seq_len, skiped_decode_q_token,
-        query.shape[0] - skip_tokens_num - total_tokens, this->mm_quant_mode_);
+        out.shape[0] - skip_tokens_num - total_tokens, this->mm_quant_mode_);
     return Status();
   }
   InvokeMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-      skipped_context_out_ptr, skipped_context_query_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
+      skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
       skipped_compressed_kv_ptr, skipped_k_pe_ptr, kv_b_nope_proj_weight_ptr, v_head_proj_weight_ptr, o_proj_weight_ptr,
       kv_b_nope_weight_scale, v_head_weight_scale, o_weight_scale, o_proj_dim, fp8_work_buffer,
       this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],

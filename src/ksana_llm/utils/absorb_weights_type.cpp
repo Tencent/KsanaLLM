@@ -12,7 +12,7 @@ AbsorbWeightsType ReadAbsorbWeightsType() {
   int absorb_type = 0;
   if (enable_absort != nullptr) {
     if (strcmp(enable_absort, "1") == 0) {
-      absorb_type = 1;
+      KLLM_THROW("ENABLE_COMPRESSED_KV=1 is deprecated, please use ENABLE_COMPRESSED_KV=2 instead");
     } else if (strcmp(enable_absort, "2") == 0) {
       absorb_type = 2;
     } else if (strcmp(enable_absort, "0") == 0) {

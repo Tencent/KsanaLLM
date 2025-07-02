@@ -23,7 +23,7 @@ class FlashMlaAttention {
                  Tensor& prefill_q_buffer_tensor, Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
                  Tensor& k_rope_buffer_tensor, Tensor& prefix_k_buffer_tensor, Tensor& prefix_v_buffer_tensor,
                  Tensor& prefix_o_buffer_tensor, Tensor& prefix_kv_buffer_tensor, Tensor& prefix_k_up_buffer_tensor,
-                 Tensor& prefix_v_up_buffer_tensor, Tensor& prefill_buffer_tensor);
+                 Tensor& prefix_v_up_buffer_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
   std::shared_ptr<BaseLayer> flash_mla_attention_layer_;
