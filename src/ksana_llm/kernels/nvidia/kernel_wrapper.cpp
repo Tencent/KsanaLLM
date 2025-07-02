@@ -1245,6 +1245,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                     const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
                     const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
                     const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
+                    const_null_tensor,    // indices that the KV cache starts. [batch_size,], nullptr, default 0
                     block_table_tensor,   // batch_size x max_num_blocks_per_seq
                     alibi_slopes_tensor,  // num_heads or batch_size x num_heads
                     out_tensor,           // batch_size x seqlen_q x num_heads x head_size
