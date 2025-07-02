@@ -1,9 +1,5 @@
 # Copyright 2024 Tencent Inc.All rights reserved.
 
-if(SM STREQUAL "90" OR SM STREQUAL "90a")
-    add_definitions(-DENABLE_FLASHINFER=ON)
-endif()
-
 # set kernels target
 file(GLOB_RECURSE FUSED_ADD_NORM_SRCS *.cu)
 list(FILTER FUSED_ADD_NORM_SRCS EXCLUDE REGEX ".*test.cu")

@@ -45,10 +45,9 @@ class LlamaNvidiaFusedAddNormTestSuit : public NvidiaTestSuitBase {
 
   template <typename T>
   void TestAddNorm(const size_t m, const size_t n) {
-    if (cuda_driver_version_ <= MIN_CUDA_DRIVER_VERSION) {
-      GTEST_SKIP() << "Skipping fused_add_norm test for CUDA driver version " << cuda_driver_version_
-                   << ", requires at least " << MIN_CUDA_DRIVER_VERSION;
-    }
+#if !defined(ENABLE_FLASHINFER)
+    GTEST_SKIP() << "ENABLE_FLASHINFER is not defined. skipping invoke flashinfer Kernel Test." << std::endl;
+#endif
     std::string type_str = "float";
     float tol = 1e-5f;
     if (std::is_same<T, half>::value) {

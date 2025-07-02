@@ -347,6 +347,7 @@ def args_config():
             "Note: No Triton kernel will be generated in this mode; instead, a JSON file with the best configuration will be saved."
         )
     )
+    parser.add_argument("--num_iters", type=int, default=5)
     parser.add_argument("--tp_size", type=int, default=1)
     args = parser.parse_args()
     if args.compute_type == "FP16":
@@ -494,6 +495,44 @@ def get_weight_block_size_safety(config, default_value=None):
         return quantization_config.get('weight_block_size', default_value)
     return default_value
 
+# Adapted from vLLM: removed some unneeded code
+# https://github.com/vllm-project/vllm/blob/main/benchmarks/kernels/benchmark_moe.py#L287
+def if_skip_config(M, N, config):
+    large_gemm = False
+    if M >= 2048 and N >= 2048:
+        large_gemm = True
+
+    BLOCK_SIZE_M = config["BLOCK_SIZE_M"]
+    BLOCK_SIZE_N = config["BLOCK_SIZE_N"]
+    BLOCK_SIZE_K = config["BLOCK_SIZE_K"]
+    GROUP_M = config["GROUP_SIZE_M"]
+    num_warps = config["num_warps"]
+    
+    # some layouts could not work properly in case
+    # number elements per thread is less 1
+    if BLOCK_SIZE_M * BLOCK_SIZE_N < 64:
+        return True
+    # Skip BLOCK_SIZE that is too large compare to M/N
+    # unless BLOCK_SIZE is already small enough
+    if M * 2 < BLOCK_SIZE_M and BLOCK_SIZE_M != 16:
+        return True
+    if N * 2 < BLOCK_SIZE_N and BLOCK_SIZE_N != 16:
+        return True
+    # skip large GROUP_M
+    if GROUP_M * BLOCK_SIZE_M > M and GROUP_M != 1:
+        return True
+    # Skip small block sizes and num_warps for large gemm
+    # For fp16 and f8, we want to only use BLOCK_SIZE >= 64
+    if large_gemm:
+        if BLOCK_SIZE_M < 64 or BLOCK_SIZE_N < 64:
+            return True
+        if BLOCK_SIZE_K < 64:
+            return True
+        if num_warps < 4:
+            return True
+
+    return False
+
 # get expert_ids, sorted_ids, token_post_pad according to block_size_m, token_post_pad will influence the MOE execution latency
 def moe_align_block_cpu(topk_ids, expert_ids, sorted_ids, token_post_pad, token_num, topk, expert_num, block_size):
     cumsum = [0] * (expert_num + 1)
@@ -543,14 +582,16 @@ if __name__ == "__main__":
     block_shape = [args.group_n, args.group_k]
     use_fp8_w8a8 = args.use_fp8_w8a8
     use_int8_w8a16 = args.use_int8_w8a16
-    num_iters = 20
+    num_iters = args.num_iters
 
     if args.model_path != "":
         model_config = AutoConfig.from_pretrained(
             args.model_path, trust_remote_code=True)
-        block_shape_override = get_weight_block_size_safety(model_config)
         if (model_config.architectures[0] == "DeepseekV3ForCausalLM"
                 or model_config.architectures[0] == "DeepseekV2ForCausalLM"):
+            block_shape_override = get_weight_block_size_safety(model_config)
+            if block_shape_override is None:
+                block_shape_override = [0, 0]
             logging.info(
                 "Load model config - these inputs will be ignored and have been overridden: \n"
                 "k:{}->{}, n:{}->{}, num_experts:{}->{}, topk:{}->{}, block_shape(groupn,groupk):[{},{}]-> [{},{}].".format(
@@ -739,6 +780,8 @@ if __name__ == "__main__":
                                         "num_warps": num_warps,
                                         "num_stages": num_stages,
                                     }
+                                    if if_skip_config(m, n, opt_config):
+                                        continue
                                     try:
                                         if args.deep_tune:
                                             kernel_time = performance_two_step_fused_moe(
