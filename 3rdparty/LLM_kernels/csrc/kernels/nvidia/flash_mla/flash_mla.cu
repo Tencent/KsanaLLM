@@ -54,9 +54,9 @@ inline std::vector<size_t> GetStride(std::vector<int> shape) {
   return strides;
 }
 
-static int sm_count = 0;
 void GetNumSmParts(FlashMlaWorkspaceMap& workspace_param, const int num_heads_per_head_k, const int num_heads_k,
                    int rank, cudaStream_t stream) {
+  static int sm_count = 0;
   if (sm_count == 0) {
     cudaDeviceProp dprops;
     cudaGetDeviceProperties(&dprops, rank);
@@ -112,16 +112,19 @@ void InvokeGetMlaMetadata(int* b_seqlen, FlashMlaWorkspaceMap& workspace_param, 
   params.block_size_n = Config::PAGE_BLOCK_SIZE;
   params.fixed_overhead_num_blocks = Config::FIXED_OVERHEAD_NUM_BLOCKS;
   params.num_sm_parts = workspace_param.num_sm_parts;
-  llm_kernels::nvidia::run_get_mla_metadata_kernel(params, stream);
+  llm_kernels::nvidia::GetMlaMetadata(params, stream);
+}
+
+void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream) {
+  llm_kernels::nvidia::SetMlaMetadataKernelAttribute(max_batch_size, stream);
 }
 
 template <typename T>
-void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_table_ptr, void* b_seqlen,
+void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, void* b_seqlen,
                     void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out,
                     int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
                     int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream) {
   // q [batch_size, seqlen_q_ori, num_heads_q, head_size_k]
-  const int seqlen_q_ori = q_len;
   const int num_heads_q = num_heads;
   const int head_size_k = kv_lora_rank + qk_rope_head_dim;  // must 576
   const bool is_casal = seqlen_q_ori != 1;
@@ -137,12 +140,12 @@ void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_ta
   num_heads = num_heads_k;
 
   // block_table [batch_size, max_blocks_per_seq]
-  const std::vector<size_t> block_table_stride = GetStride({batch_size, max_blocks_per_seq});
+  const std::vector<size_t>& block_table_stride = GetStride({batch_size, max_blocks_per_seq});
   // o [batch_size, q_seq_per_hk, num_heads, head_size_v] T
   // softmax_lse [batch_size, num_heads, q_seq_per_hk] Float
-  const std::vector<size_t> o_stride = GetStride({batch_size, q_seq_per_hk, num_heads, head_size_v});
-  const std::vector<size_t> q_stride = GetStride({batch_size, q_seq_per_hk, num_heads, head_size_k});
-  const std::vector<size_t> kcache_stride =
+  const std::vector<size_t>& o_stride = GetStride({batch_size, q_seq_per_hk, num_heads, head_size_v});
+  const std::vector<size_t>& q_stride = GetStride({batch_size, q_seq_per_hk, num_heads, head_size_k});
+  const std::vector<size_t>& kcache_stride =
       GetStride({static_cast<int>(block_num), page_size, num_heads_k, head_size_k});
 
   // tile_scheduler_metadata [num_sm_parts, TileSchedulerMetaDataSize]
@@ -152,12 +155,8 @@ void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_ta
   FlashMlaWorkspaceMap workspace_param = {};
   GetNumSmParts(workspace_param, num_heads_q / num_heads_k, num_heads_k, rank, stream);
   ApplyWorkspaceBuffer(workspace, workspace_param, batch_size, num_heads, q_seq_per_hk, head_size_v);
-  if (tile_scheduler_metadata_ptr == nullptr || num_splits_ptr == nullptr) {
-    InvokeGetMlaMetadata(reinterpret_cast<int*>(b_seqlen), workspace_param, batch_size, stream);
-  } else {
-    workspace_param.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(tile_scheduler_metadata_ptr);
-    workspace_param.num_splits_ptr = reinterpret_cast<int*>(num_splits_ptr);
-  }
+  workspace_param.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(tile_scheduler_metadata_ptr);
+  workspace_param.num_splits_ptr = reinterpret_cast<int*>(num_splits_ptr);
 
   const int total_num_splits = batch_size + workspace_param.num_sm_parts;
 
@@ -213,12 +212,12 @@ void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_ta
   }
 }
 
-#  define INVOKE_FLASH_MLA(T)                                                                                          \
-    template void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_table_ptr, void* b_seqlen,  \
-                                 void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace,             \
-                                 void* att_out, int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, \
-                                 int page_size, int max_blocks_per_seq, int rank, size_t block_num,                    \
-                                 cudaStream_t stream)
+#  define INVOKE_FLASH_MLA(T)                                                                                      \
+    template void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, \
+                                 void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr,          \
+                                 void* workspace, void* att_out, int tokens_num, int num_heads, int kv_lora_rank,  \
+                                 int qk_rope_head_dim, int page_size, int max_blocks_per_seq, int rank,            \
+                                 size_t block_num, cudaStream_t stream)
 INVOKE_FLASH_MLA(half);
 INVOKE_FLASH_MLA(float);
 INVOKE_FLASH_MLA(__nv_bfloat16);
@@ -238,22 +237,23 @@ INVOKE_FLASH_MLA(__nv_bfloat16);
 #  include <device_launch_parameters.h>
 namespace llm_kernels {
 namespace nvidia {
+void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream) {}
 void InvokeGetMlaMetadata(int* b_seqlen, FlashMlaWorkspaceMap& workspace_param, int tokens_num, cudaStream_t stream) {}
 void GetNumSmParts(FlashMlaWorkspaceMap& workspace_param, const int num_heads_per_head_k, const int num_heads_k,
                    int rank, cudaStream_t stream) {}
 
 template <typename T>
-void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_table_ptr, void* b_seqlen,
+void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, void* b_seqlen,
                     void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out,
                     int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
                     int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream) {}
 
-#  define INVOKE_FLASH_MLA(T)                                                                                          \
-    template void InvokeFlashMla(T* q, T* k_buffer, int q_len, float sm_scale, void* block_table_ptr, void* b_seqlen,  \
-                                 void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace,             \
-                                 void* att_out, int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, \
-                                 int page_size, int max_blocks_per_seq, int rank, size_t block_num,                    \
-                                 cudaStream_t stream)
+#  define INVOKE_FLASH_MLA(T)                                                                                      \
+    template void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, \
+                                 void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr,          \
+                                 void* workspace, void* att_out, int tokens_num, int num_heads, int kv_lora_rank,  \
+                                 int qk_rope_head_dim, int page_size, int max_blocks_per_seq, int rank,            \
+                                 size_t block_num, cudaStream_t stream)
 INVOKE_FLASH_MLA(half);
 INVOKE_FLASH_MLA(float);
 INVOKE_FLASH_MLA(__nv_bfloat16);

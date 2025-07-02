@@ -33,6 +33,10 @@
 namespace llm_kernels {
 namespace nvidia {
 void run_get_mla_metadata_kernel(Mla_metadata_params &params, cudaStream_t stream);
-}
+
+// Ksana function
+void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream);
+void GetMlaMetadata(Mla_metadata_params &params, cudaStream_t stream);
+}  // namespace nvidia
 }  // namespace llm_kernels
 #endif

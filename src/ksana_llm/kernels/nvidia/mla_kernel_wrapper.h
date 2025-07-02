@@ -81,4 +81,6 @@ template <typename T>
 void MlaAbsorbWeight(void* w_q, void* w_uk, void* w_uv, void* w_o, void* w_q_uk, void* w_uv_o, size_t q, size_t n,
                      size_t d, size_t l, size_t h, bool transpose_matrix, int rank, cudaStream_t& stream);
 
+void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream);
+
 }  // namespace ksana_llm

@@ -749,9 +749,9 @@ void InvokeMlaPagedAttention(
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
   // 可能会有softmax_scale的问题（也不调用）
   PagedAttentionOp<SCALAR_T, CACHE_T, KV_DTYPE>(num_heads, head_size, num_kv_heads, stride_size, block_size, k_scale,
-                                              v_scale, output_ptr, q_tensor_ptr, key_cache_ptrs, value_cache_ptrs,
-                                              cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream,
-                                              workspace_ptr, work_size, alibi_slopes_ptr);
+                                                v_scale, output_ptr, q_tensor_ptr, key_cache_ptrs, value_cache_ptrs,
+                                                cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream,
+                                                workspace_ptr, work_size, alibi_slopes_ptr);
 #endif
   //  当 v_tensor 被 pad 时调用, 取out_tensor 的 v_head_dim 大小
   size_t dst_pitch = v_head_dim * sizeof(SCALAR_T);
@@ -1091,5 +1091,9 @@ MLA_ABSORB_WEIGHT(half);
 MLA_ABSORB_WEIGHT(__nv_bfloat16);
 #endif
 #undef MLA_ABSORB_WEIGHT
+
+void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {
+  llm_kernels::nvidia::SetFlashMlaAttribute(max_batch_size, stream);
+}
 
 }  // namespace ksana_llm

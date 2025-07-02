@@ -5,7 +5,6 @@
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
 
 #include "ksana_llm/profiler/profile_event.h"
-
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
@@ -77,7 +76,6 @@ Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, con
   const size_t max_token_num = attn_config.model_config.max_step_token_num;
   const size_t head_num = attn_config.model_config.head_num;
   const size_t max_decode_tokens = attn_config.model_config.max_batch_size * attn_config.max_decode_tokens_per_req;
-  const size_t tensor_para_size = attn_config.model_config.tensor_para_size;
   const uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
@@ -149,10 +147,10 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
                                             ForwardingContext<T>& forwarding_context) {
   reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
 
-  int rank = forwarding_context.GetCurrentRank();
-  int attn_dp_atp_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-  int attn_dp_group_id = rank / attn_dp_atp_size;
-  int attn_dp_rank_id = rank % attn_dp_atp_size;
+  const int rank = forwarding_context.GetCurrentRank();
+  const int attn_dp_atp_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+  const int attn_dp_group_id = rank / attn_dp_atp_size;
+  const int attn_dp_rank_id = rank % attn_dp_atp_size;
 
   // if no request in this dp group, skip.
   if (forwarding_context.GetModelInput()->dp_multi_token_request_num +
@@ -429,7 +427,7 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
   CREATE_BUFFER_SCOPE(q_buffer_tensors, mla_buffers_.q_buffer);
   CREATE_BUFFER_SCOPE(q_rope_buffer_tensors, mla_buffers_.q_rope_buffer);
 
-  int rank = forwarding_context.GetCurrentRank();
+  const int rank = forwarding_context.GetCurrentRank();
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
   const size_t hidden_units = input.shape[1];

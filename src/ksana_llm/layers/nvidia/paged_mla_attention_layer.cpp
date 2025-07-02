@@ -13,7 +13,13 @@ namespace ksana_llm {
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
                                                                  std::shared_ptr<Context> context, int rank) {
-  return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+  AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+
+  // index 25 is max_batch_size in PagedMlaAttention, disgusting code, be careful.
+  const size_t max_batch_size = std::any_cast<const size_t>(parameters[25]);
+  SetMlaMetadataKernelAttribute(max_batch_size, context->GetComputeStreams()[rank].Get());
+
+  return Status();
 }
 
 /*

@@ -42,12 +42,13 @@ struct FlashMlaWorkspaceMap {
   int num_sm_parts = 1;
 };
 
+void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream);
 void InvokeGetMlaMetadata(int *b_seqlen, FlashMlaWorkspaceMap &workspace_param, int tokens_num, cudaStream_t stream);
 void GetNumSmParts(FlashMlaWorkspaceMap &workspace_param, const int num_heads_per_head_k, const int num_heads_k,
                    int rank, cudaStream_t stream);
 
 template <typename T>
-void InvokeFlashMla(T *q, T *k_buffer, int q_len, float sm_scale, void *block_table_ptr, void *b_seqlen,
+void InvokeFlashMla(T *q, T *k_buffer, const int seqlen_q_ori, float sm_scale, void *block_table_ptr, void *b_seqlen,
                     void *tile_scheduler_metadata_ptr, void *num_splits_ptr, void *workspace, void *att_out,
                     int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
                     int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream);

@@ -77,7 +77,7 @@ class MultiHeadLatentAttention {
                                ForwardingContext<T>& forwarding_context);
 
  private:
-  int layer_idx_;
+  const int layer_idx_;
   MlaBuffers& mla_buffers_;
 
  protected:
