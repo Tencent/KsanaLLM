@@ -28,14 +28,15 @@ HiddenUnitBufferPool* GetHiddenUnitBufferPool();
 // Set and get current device buffer for compute thread.
 void SetCurrentHiddenUnitBuffer(HiddenUnitDeviceBuffer* hidden_unit_buffer);
 
-HiddenUnitDeviceBuffer* GetCurrentHiddenUnitBuffer(size_t schedule_id);
+HiddenUnitDeviceBuffer* GetCurrentHiddenUnitBuffer(size_t multi_batch_id);
 
 Status CopyFromHiddenUnitBuffer(Tensor& tensor, HiddenUnitDeviceBuffer* device_buffer, int rank, bool is_prefill);
-Status CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, Tensor& tensor, int rank, bool is_prefill);
+Status CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, Tensor& tensor, int rank, bool is_prefill,
+                              Stream working_stream);
 Status CopyToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, void* device_ptr, std::vector<size_t> shape,
-                              DataType dtype, int rank, bool is_prefill);
+                              DataType dtype, int rank, bool is_prefill, Stream working_stream);
 Status CopyHostMemToHiddenUnitBuffer(HiddenUnitDeviceBuffer* device_buffer, void* host_ptr, std::vector<size_t> shape,
-                                  DataType dtype, int rank, bool is_prefill);
+                                     DataType dtype, int rank, bool is_prefill);
 Status CopyHiddenUnitBufferToHostMem(void* host_ptr, HiddenUnitDeviceBuffer* device_buffer, std::vector<size_t> shape,
                                      DataType dtype, int rank, bool is_prefill);
 
@@ -43,23 +44,28 @@ Status CopyHiddenUnitBufferToHostMem(void* host_ptr, HiddenUnitDeviceBuffer* dev
 Status BroadcastScheduleOutput(ScheduleOutput* schedule_output);
 
 // Set default current hidden units.
-Status InitHiddenUnits(size_t schedule_id);
+Status InitHiddenUnits(size_t multi_batch_id);
+
+// Status SetHiddenUnitMeta(ScheduleOutput* schedule_output);
+
+Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
+                         std::shared_ptr<ModelInstance> model_instance);
+Status SetHiddenUnitMeta(size_t multi_batch_id,
+                         const std::vector<std::shared_ptr<WorkerInferRequest>>& worker_running_reqs,
+                         std::shared_ptr<ModelInstance> model_instance);
 
 // Send hidden_units to downstream.
-Status SendHiddenUnits(size_t schedule_id);
-
-// Reset waiter for recv operation.
-Status ResetReceiveWaiter();
-
-// Recv from remote and set as current device buffer.
-Status RecvHiddenUnits(bool do_recv, size_t schedule_id);
+Status SendHiddenUnits(size_t multi_batch_id);
+// Recv hidden_unit from upstream.
+Status RecvHiddenUnits(size_t multi_batch_id);
 
 // Free current hidden_unit.
-Status FreeHiddenUnits(size_t schedule_id);
+Status FreeHiddenUnits(size_t multi_batch_id);
 
 // Set and get hidden unit.
-Status GetHiddenUnitMeta(std::vector<size_t>& shape, DataType& data_type);
-Status SetHiddenUnitMeta(const std::vector<size_t>& shape, DataType data_type);
+void InitHiddenUnitsMetaInfoMap(int max_pp_batch_num);
+Status GetHiddenUnitMeta(const size_t multi_batch_id, std::vector<size_t>& shape, DataType& data_type);
+Status SetHiddenUnitMeta(const size_t multi_batch_id, const std::vector<size_t>& shape, DataType data_type);
 
 // Get and set model instance.
 Status SetModelInstance(const std::string model_name, std::shared_ptr<ModelInstance> model_instance);

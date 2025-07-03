@@ -455,6 +455,10 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
   size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize();
   size_t expert_world_size = Singleton<Environment>::GetInstance()->GetExpertWorldSize();
   int total_num_experts = num_experts * expert_para_size * expert_world_size;
+
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
+#endif
   if (use_grouped_topk) {
     InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk,
                          renormalize, num_expert_group, topk_group, scoring_func_, e_bias, routed_scaling_factor, rank,
@@ -465,7 +469,9 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
                          renormalize, num_expert_group, topk_group, scoring_func_, e_bias, routed_scaling_factor, rank,
                          stream);
   }
-
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  InvokeSetTorchStream(torch_stream, rank);
+#endif
   // Expert parallel.
   // hidden_state[num_tokens][hidden_dim]
   // topk_ids_ptr[num_tokens][topk]

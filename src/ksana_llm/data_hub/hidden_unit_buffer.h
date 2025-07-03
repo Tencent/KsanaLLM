@@ -20,8 +20,12 @@ namespace ksana_llm {
 
 // Describe the hidden_units buffer
 struct HiddenUnitDeviceBuffer {
+ public:
+  ~HiddenUnitDeviceBuffer();
+  void NotifyFinished();
+
   // The unique id for one schedule step.
-  size_t schedule_id = DEFAULT_SCHEDULE_ID;
+  size_t multi_batch_id = DEFAULT_MULTI_BATCH_ID;
 
   // The device Tensor.
   std::vector<Tensor> tensors;
@@ -33,6 +37,8 @@ struct HiddenUnitDeviceBuffer {
   std::vector<Tensor> prefill_tensors;
 #endif
 
+  std::shared_ptr<Waiter> waiter = nullptr;
+  // The communication type,
   // Can been used for pipeline parallel, expert parallel, data parallel.
   DistributedCommunicationType comm_type = DistributedCommunicationType::DEFAULT;
   // In scatter mode, rank 0 is the source of all downstream ranks
@@ -45,7 +51,7 @@ struct HiddenUnitDeviceBuffer {
 // or hidden units from device bdefore send to network.
 struct HiddenUnitHostBuffer {
   // The unique id for one schedule step.
-  size_t schedule_id = DEFAULT_SCHEDULE_ID;
+  size_t multi_batch_id = DEFAULT_MULTI_BATCH_ID;
 
   // hidden unit shape, for one device, [max_token_num, hidden_unit_size]
   size_t shape_dims[2];
@@ -84,13 +90,17 @@ class HiddenUnitBufferPool {
   Status PutToHostRecvQueue(Packet* packet);
   Packet* GetFromHostRecvQueue();
 
-  // Put to and get from device received buffer.
-  Status PutToDeviceRecvQueue(HiddenUnitDeviceBuffer* hidden_unit);
-  HiddenUnitDeviceBuffer* GetFromDeviceRecvQueue(size_t schedule_id);
+  // After put the buffer to the pendding queue, then the buffer is valid, so need to get the buffer again.
+  Status PutToDeviceRecvedQueue(HiddenUnitDeviceBuffer* hidden_unit);
+  HiddenUnitDeviceBuffer* GetFromDeviceRecvedQueue(size_t multi_batch_id);
 
-  // Put to and get from send buffer.
-  Status PutToSendQueue(HiddenUnitDeviceBuffer* hidden_unit);
-  HiddenUnitDeviceBuffer* GetFromSendQueue();
+  // Put to and get from pending send buffer.
+  Status PutToPendingSendQueue(HiddenUnitDeviceBuffer* hidden_unit);
+  HiddenUnitDeviceBuffer* GetFromPendingSendQueue();
+
+  // Put to and get from pending recv buffer.
+  Status PutToPendingRecvQueue(HiddenUnitDeviceBuffer* hidden_unit);
+  HiddenUnitDeviceBuffer* GetFromPendingRecvQueue();
 
   Status ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* hidden_unit_dev, HiddenUnitHostBuffer* hidden_unit_host);
   Status ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hidden_unit_host, HiddenUnitDeviceBuffer* hidden_unit_dev);
@@ -104,13 +114,9 @@ class HiddenUnitBufferPool {
   // Whether current buffer pool is stopped.
   bool Stopped();
 
-  // Wait until computation finished, and ready to receive data from remote.
-  void WaitUtilReadyToRecv();
-  void NotifySendFinished();
   void SetCommType(DistributedCommunicationType comm_type) { comm_type_ = comm_type; }
   size_t GetFreeDeviceBufferSize() { return free_device_buffers_.Size(); }
-  size_t GetSendDeviceBufferSize() { return send_device_buffers_.Size(); }
-  size_t GetRecvDeviceBufferSize() { return recv_device_buffers_.Size(); }
+  size_t GetSendDeviceBufferSize() { return pending_send_device_buffers_.Size(); }
 
  private:
   // Initialize hidden unit device buffer, for max possible memory size.
@@ -125,29 +131,17 @@ class HiddenUnitBufferPool {
   size_t hidden_unit_size_;
   DistributedCommunicationType comm_type_ = DistributedCommunicationType::DEFAULT;
 
-  // A waiter used to notify data receiving.
-  std::shared_ptr<Waiter> recv_waiter_ = nullptr;
-
-  // Make send operation blocked until finished.
-  std::shared_ptr<Waiter> send_waiter_ = nullptr;
-
-  // Mutex to protect pending_recv_count_
-  std::mutex recv_mutex_;
-
-  // Count of pending receives (GetFromDeviceRecvQueue calls that need matching WaitUtilReadyToRecv calls)
-  int pending_recv_count_ = 0;
-
   // free device buffer, resuable.
   BlockingQueue<HiddenUnitDeviceBuffer*> free_device_buffers_;
 
   // received device buffer.
-  BlockingQueueWithId<HiddenUnitDeviceBuffer*, size_t> recv_device_buffers_;
-
+  BlockingQueueWithId<HiddenUnitDeviceBuffer*, size_t> recved_device_buffers_;
   // Recv buffer.
   BlockingQueue<Packet*> recv_host_buffers_;
 
-  // Send buffer.
-  BlockingQueue<HiddenUnitDeviceBuffer*> send_device_buffers_;
+  // Pending Send/Recv buffer.
+  BlockingQueue<HiddenUnitDeviceBuffer*> pending_send_device_buffers_;
+  BlockingQueue<HiddenUnitDeviceBuffer*> pending_recv_device_buffers_;
 
   // no used buffers.
   BlockingQueue<Packet*> free_host_buffers_;

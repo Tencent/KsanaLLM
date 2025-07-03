@@ -76,16 +76,16 @@ class CommonModel : public BaseModel {
   // Initialize the run config.
   void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
 
-  float* GetLogitsPtr(size_t schedule_id) override;
+  float* GetLogitsPtr(size_t multi_batch_id) override;
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
-  Status Forward(size_t schedule_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+  Status Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                  std::vector<ForwardRequest>& forward_reqs, bool epilogue,
                  const RunMode run_mode = RunMode::kMain) override;
 
-  Status AllocResources(size_t schedule_id);
-  Status FreeResources(size_t schedule_id);
+  Status AllocResources(size_t multi_batch_id);
+  Status FreeResources(size_t multi_batch_id);
 
   // Update response. Stop inference when the return value is true.
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
@@ -116,7 +116,7 @@ class CommonModel : public BaseModel {
   // Set hidden state, it will be send  to next pipeline block
   void SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context);
 
-  ForwardingContext<T>* GetForwardingContext(size_t schedule_id);
+  ForwardingContext<T>* GetForwardingContext(size_t multi_batch_id);
 
  public:
   using BaseModel::context_;
@@ -163,7 +163,7 @@ class CommonModel : public BaseModel {
   ModelBuffers model_buffers_;
   // Buffer of forwarding contexts for parallel batch processing
   std::vector<std::unique_ptr<ForwardingContext<T>>> forwarding_context_buffer_;
-  // Map from schedule_id to index in the forwarding_context_buffer_
+  // Map from multi_batch_id to index in the forwarding_context_buffer_
   std::unordered_map<size_t, size_t> schedule_to_context_map_;
   // Mutex to protect access to the buffer and map
   std::mutex forwarding_context_mutex_;

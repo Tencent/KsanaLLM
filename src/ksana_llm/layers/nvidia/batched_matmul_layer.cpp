@@ -38,7 +38,6 @@ Status BatchedMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   } else {
     cublas_workspace = workspace_buffer_->GetPtr<void>();
     workspace_size = workspace_buffer_->GetTotalBytes();
-    KLLM_LOG_DEBUG << "workspace size: " << workspace_size;
   }
 
   // Note(TJ): can get best workspace_size and algo from cublasLtMatmulAlgoGetHeuristic

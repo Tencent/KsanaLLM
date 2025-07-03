@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/forward_request.h"
@@ -57,9 +58,10 @@ static std::unordered_map<InferStage, InferStage> kGroupStageMap = {
 #endif
 
 void LlmRuntime::BuildForwardRequests(
-    size_t schedule_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+    size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
-  ProfileEvent::PushEvent("BuildForwardRequests_A");
+  PROFILE_EVENT_SCOPE(BuildForwardRequests, fmt::format("BuildForwardRequests_{}", multi_batch_id));
+  // maybe async
   int logits_offset = 0;
   for (auto& req_ptr : reqs) {
     req_ptr->step += 1;
@@ -79,10 +81,9 @@ void LlmRuntime::BuildForwardRequests(
 
     ForwardRequest forward_req;
     BuildForwardRequestFromInferRequest(forward_req, req_ptr, req_ptr->model_instance->GetLayerNum(),
-                                        key->GetLogitsPtr(schedule_id));
+                                        key->GetLogitsPtr(multi_batch_id));
     grouped_reqs[key][grouped_stage].push_back(forward_req);
   }
-  ProfileEvent::PopEvent();
 }
 
 void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req,
@@ -125,7 +126,7 @@ void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<WorkerInferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   int logits_offset = 0;
-  ProfileEvent::PushEvent("BuildForwardRequests_B");
+  PROFILE_EVENT_SCOPE(BuildForwardRequests, "BuildForwardRequests");
   for (size_t i = 0; i < reqs.size(); ++i) {
     std::shared_ptr<WorkerInferRequest>& req_ptr = reqs[i];
     req_ptr->step += 1;
@@ -171,7 +172,6 @@ void LlmRuntime::BuildForwardRequests(
 #endif
     grouped_reqs[key][grouped_stage].push_back(forward_req);
   }
-  ProfileEvent::PopEvent();
 }
 
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
@@ -227,15 +227,15 @@ void LlmRuntime::BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<st
 #endif
 
 Status LlmRuntime::RunSerially(
-    size_t schedule_id,
+    size_t multi_batch_id,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
     bool epilogue, RunMode run_mode) {
-  ProfileEvent::PushEvent("RunSerially");
+  PROFILE_EVENT_SCOPE(RunSerially_, fmt::format("RunSerially_{}_{}", multi_batch_id, epilogue));
   Status result_status = Status();
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
     for (auto& [stage, vec_req] : stage_vec_reqs) {
       std::vector<std::future<Status>> inst_results =
-          model_inst->ForwardAsync(schedule_id, worker_group_, stage, vec_req, epilogue, run_mode);
+          model_inst->ForwardAsync(multi_batch_id, worker_group_, stage, vec_req, epilogue, run_mode);
       for (auto& worker_result : inst_results) {
         Status status = worker_result.get();
         if (!status.OK()) {
@@ -244,13 +244,12 @@ Status LlmRuntime::RunSerially(
       }
     }
   }
-  ProfileEvent::PopEvent();
   return result_status;
 }
 
 template <typename T>
 void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
-  ProfileEvent::PushEvent("ReorderInferRequests");
+  PROFILE_EVENT_SCOPE(ReorderInferRequests, "ReorderInferRequests");
   // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
   // the requests are first sorted to utilize contiguous space for accelerated inference.
   // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
@@ -283,37 +282,38 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
       return !is_a_decode;
     }
   });
-  ProfileEvent::PopEvent();
 }
 
-Status LlmRuntime::Forward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>>& reqs, bool epilogue,
+Status LlmRuntime::Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs, bool epilogue,
                            RunMode run_mode) {
   std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
-  BuildForwardRequests(schedule_id, reqs, grouped_reqs);
-  return AuxForward(schedule_id, grouped_reqs, epilogue, run_mode);
+  BuildForwardRequests(multi_batch_id, reqs, grouped_reqs);
+  return AuxForward(multi_batch_id, grouped_reqs, epilogue, run_mode);
 }
 
-Status LlmRuntime::Forward(size_t schedule_id, std::vector<std::shared_ptr<WorkerInferRequest>>& reqs, bool epilogue) {
+Status LlmRuntime::Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>>& reqs,
+                           bool epilogue) {
   std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
   BuildForwardRequests(reqs, grouped_reqs);
-  return AuxForward(schedule_id, grouped_reqs, epilogue);
+  return AuxForward(multi_batch_id, grouped_reqs, epilogue);
 }
 
 Status LlmRuntime::AuxForward(
-    size_t schedule_id,
+    size_t multi_batch_id,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
     bool epilogue, RunMode run_mode) {
-  ProfileEvent::PushEvent("AuxForward");
+  PROFILE_EVENT_SCOPE(AuxForward_, fmt::format("AuxForward_{}_{}", multi_batch_id, epilogue));
   // context decode and decode run serially in single thread
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     // Wait all instances done and check status.
-    return RunSerially(schedule_id, grouped_reqs, epilogue, run_mode);
+    auto ret = RunSerially(multi_batch_id, grouped_reqs, epilogue, run_mode);
+    return ret;
   }
 
   std::vector<std::vector<std::future<Status>>> results;
   for (auto& [model_inst, stage_vec_reqs] : grouped_reqs) {
     for (auto& [stage, vec_req] : stage_vec_reqs) {
-      results.push_back(model_inst->ForwardAsync(schedule_id, worker_group_, stage, vec_req, epilogue, run_mode));
+      results.push_back(model_inst->ForwardAsync(multi_batch_id, worker_group_, stage, vec_req, epilogue, run_mode));
     }
   }
 
@@ -327,11 +327,10 @@ Status LlmRuntime::AuxForward(
       }
     }
   }
-  ProfileEvent::PopEvent();
   return result_status;
 }
 
-void LlmRuntime::BuildSamplingRequest(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                                       std::vector<SamplingRequest>& sampling_reqs) {
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
@@ -346,7 +345,7 @@ void LlmRuntime::BuildSamplingRequest(size_t schedule_id, std::vector<std::share
     sampling_req.request_target = &(req_ptr->request_target);
     sampling_req.logprobs = &(req_ptr->logprobs);
     sampling_req.logits_offset = req_ptr->logits_offset;
-    sampling_req.logits_buf = req_ptr->model_instance->GetLogitsPtr(schedule_id);
+    sampling_req.logits_buf = req_ptr->model_instance->GetLogitsPtr(multi_batch_id);
     sampling_req.sampling_config = &(req_ptr->sampling_config);
     sampling_req.req_group = &(req_ptr->req_group);
     sampling_req.req_ctx = req_ptr->req_ctx;
@@ -362,13 +361,14 @@ void LlmRuntime::BuildSamplingRequest(size_t schedule_id, std::vector<std::share
   }
 }
 
-Status LlmRuntime::Sampling(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>>& reqs) {
+Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs) {
   std::vector<SamplingRequest> sampling_reqs;
-  BuildSamplingRequest(schedule_id, reqs, sampling_reqs);
+  BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs);
 
   std::vector<std::future<Status>> results;
   for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group_->GetWorker(worker_id)->SamplingAsync(samplers_[worker_id], sampling_reqs));
+    results.push_back(
+        worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs));
   }
 
   // Wait all instances done and check status.
@@ -430,7 +430,7 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
   TransferEngine::GetInstance()->Send(reqs_tokens);
 }
 
-Status LlmRuntime::MTPForward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                               const bool epilogue) {
   if (!mtp_forward_ || !context_->IsChief()) {
     return Status();
@@ -468,8 +468,8 @@ Status LlmRuntime::MTPForward(size_t schedule_id, std::vector<std::shared_ptr<In
   }
 
   ReorderInferRequests(mtp_reqs);
-  Forward(schedule_id, mtp_reqs, epilogue, RunMode::kNextN);
-  Sampling(schedule_id, mtp_reqs);
+  Forward(multi_batch_id, mtp_reqs, epilogue, RunMode::kNextN);
+  Sampling(multi_batch_id, mtp_reqs);
 
   for (size_t i = 0; i < mtp_reqs.size(); ++i) {
     auto& req = mtp_reqs[i];
@@ -509,45 +509,53 @@ Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
 }
 
 Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
-  KLLM_LOG_DEBUG << "Enter llm runtime StepOnChief. schedule_id=" << schedule_output->schedule_id
+  KLLM_LOG_DEBUG << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;
-  ProfileEvent::PushEvent(fmt::format("StepOnChief_{}_{}", schedule_output->schedule_id, epilogue));
+  PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->running_reqs[0]->model_instance;
   ReorderInferRequests(schedule_output->running_reqs);
 
   if (!epilogue) {
     // Alloc resources before forwarding
-    model_instance->AllocResources(schedule_output->schedule_id);
+    KLLM_LOG_DEBUG << "Start EnterDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
+    model_instance->AllocResources(schedule_output->multi_batch_id);
   }
-
   // Inference forward.
-  Forward(schedule_output->schedule_id, schedule_output->running_reqs, epilogue);
+  time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  if (epilogue && !context_->IsStandalone()) {
+    LeaveDeviceComputingCriticalZone();
+    KLLM_LOG_DEBUG << "LeaveDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
+    SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
+    RecvHiddenUnits(schedule_output->multi_batch_id);
+    EnterDeviceComputingCriticalZone();
+  }
+  Forward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
+  time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  KLLM_LOG_DEBUG << "LlmRuntime Forward multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue
+                 << ", time cost=" << end_time_ms - start_time_ms << "ms";
 
   // Sampling only in standalone mode or epilogue=true in distributed mode
   if (context_->IsStandalone() || epilogue) {
-    ProfileEvent::PushEvent("SamplingAndMTP");
-    Sampling(schedule_output->schedule_id, schedule_output->running_reqs);
+    PROFILE_EVENT_SCOPE(SamplingAndMTP_, fmt::format("SamplingAndMTP_{}", schedule_output->multi_batch_id));
+    Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs);
     DraftTokenFilter(schedule_output->running_reqs);
-    MTPForward(schedule_output->schedule_id, schedule_output->running_reqs, epilogue);
+    MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
     GenerateDraftToken(schedule_output->running_reqs);
 
     // Forwarding finished, free resources.
-    model_instance->FreeResources(schedule_output->schedule_id);
+    model_instance->FreeResources(schedule_output->multi_batch_id);
     LeaveDeviceComputingCriticalZone();
-    KLLM_LOG_DEBUG << "LeaveDeviceComputingCriticalZone. schedule_id=" << schedule_output->schedule_id;
-    ProfileEvent::PopEvent();
+    KLLM_LOG_DEBUG << "LeaveDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
   }
-  KLLM_LOG_DEBUG << "Leave llm runtime StepOnChief. schedule_id=" << schedule_output->schedule_id
+  KLLM_LOG_DEBUG << "Leave llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;
-  ProfileEvent::PopEvent();
   return Status();
 }
 
 Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) {
-  KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", llm runtime StepOnWorker invoked.";
-  ProfileEvent::PushEvent(fmt::format("StepOnWorker", epilogue));
-  EnterDeviceComputingCriticalZone();
+  KLLM_LOG_DEBUG << "llm runtime StepOnWorker invoked multi_batch_id=" << schedule_output->multi_batch_id;
+  PROFILE_EVENT_SCOPE(StepOnWorker_, fmt::format("StepOnWorker_{}_{}", schedule_output->multi_batch_id, epilogue));
   // Worker always pass result to next step
   KLLM_CHECK(epilogue == false);
 
@@ -566,8 +574,9 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
           return status;
         }
       }
-      KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", dp_idx=" << dp_swapout_req_block_ids_idx
-                     << ", SwapoutRequestMemoryBlockAsync req_ids=(" << so_ss.str() << ")";
+      KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
+                     << ", dp_idx=" << dp_swapout_req_block_ids_idx << ", SwapoutRequestMemoryBlockAsync req_ids=("
+                     << so_ss.str() << ")";
     }
   }
 
@@ -578,7 +587,7 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
     if (dp_merged_swapout_req_ids.empty()) {
       continue;
     }
-    KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id
+    KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
                    << ", WaitSwapoutRequestMemoryBlock dp_idx=" << dp_merged_swapout_req_ids_idx
                    << ", req num=" << dp_merged_swapout_req_ids.size()
                    << ", ids=" << Vector2Str(dp_merged_swapout_req_ids);
@@ -599,8 +608,9 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
           return status;
         }
       }
-      KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id << ", dp_idx=" << dp_swapin_req_block_ids_idx
-                     << ", SwapinRequestMemoryBlockAsync req_ids=(" << si_ss.str() << ")";
+      KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
+                     << ", dp_idx=" << dp_swapin_req_block_ids_idx << ", SwapinRequestMemoryBlockAsync req_ids=("
+                     << si_ss.str() << ")";
     }
   }
 
@@ -610,7 +620,7 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
     if (dp_merged_swapin_req_ids.empty()) {
       continue;
     }
-    KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id
+    KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
                    << ", WaitSwapinRequestMemoryBlock dp_idx=" << dp_merged_swapin_req_ids_idx
                    << ", req num=" << dp_merged_swapin_req_ids.size()
                    << ", ids=" << Vector2Str(dp_merged_swapin_req_ids);
@@ -620,11 +630,12 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->worker_running_reqs[0]->model_instance;
 
   // Inference forward.
-  model_instance->AllocResources(schedule_output->schedule_id);
-  Forward(schedule_output->schedule_id, schedule_output->worker_running_reqs, epilogue);
-  model_instance->FreeResources(schedule_output->schedule_id);
-  LeaveDeviceComputingCriticalZone();
-  ProfileEvent::PopEvent();
+  model_instance->AllocResources(schedule_output->multi_batch_id);
+
+  SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->worker_running_reqs, model_instance);
+  RecvHiddenUnits(schedule_output->multi_batch_id);
+  Forward(schedule_output->multi_batch_id, schedule_output->worker_running_reqs, epilogue);
+  model_instance->FreeResources(schedule_output->multi_batch_id);
   return Status();
 }
 

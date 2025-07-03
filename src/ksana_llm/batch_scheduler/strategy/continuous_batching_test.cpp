@@ -40,6 +40,7 @@ class ContinuousBatchingTest : public testing::Test {
     InitializeScheduleOutputPool();
     constexpr int kTpNum = 2;
     constexpr int kAttnDpNum = 2;
+    constexpr int kMultiBatchNum = 1;
     BatchSchedulerConfig batch_scheduler_config;
     batch_scheduler_config.split_fuse_token_num = 256;
     const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
@@ -55,8 +56,8 @@ class ContinuousBatchingTest : public testing::Test {
       env->SetBlockManagerConfig(block_manager_config);
     }
     continuous_batching_strategy_ = std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config);
-    size_t pp_batch_idx = 0;
-    continuous_batching_strategy_->SetBatchState(std::make_shared<BatchState>(pp_batch_idx, batch_scheduler_config));
+    size_t multi_batch_id = 0;
+    continuous_batching_strategy_->SetBatchState(std::make_shared<BatchState>(multi_batch_id, batch_scheduler_config));
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0, 1};
@@ -67,7 +68,7 @@ class ContinuousBatchingTest : public testing::Test {
     BlockAllocatorManagerConfig block_allocator_manager_config;
     block_allocator_manager_config[1] = group_1_config;
 
-    std::shared_ptr<Context> context = std::make_shared<Context>(kTpNum, kAttnDpNum);
+    std::shared_ptr<Context> context = std::make_shared<Context>(kTpNum, kAttnDpNum, kMultiBatchNum);
     std::shared_ptr<MemoryAllocator> memory_allocator_ = std::make_shared<MemoryAllocator>();
     BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context);
 

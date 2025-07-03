@@ -212,6 +212,7 @@ void ModelInput::CreateVLTensors() {
 
 void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   // NOTE(karlluo): check batch size
+  PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
   batch_size = forward_reqs.size();
   if (batch_size == 0) {
     KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
@@ -273,7 +274,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
                  << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
                  << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
 
-  ProfileEvent::PushEvent("StartPrepareReqs", rank_);
   PrepareFlexibleCache(flash_input);
   CheckUseCache(forward_reqs);
 
@@ -299,7 +299,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, multi_token_request_num > 0);
 #endif
-  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PrepareMetadata() {
@@ -328,7 +327,7 @@ void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_
 }
 
 void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs) {
-  ProfileEvent::PushEvent("PrepareVLRequest", rank_);
+  PROFILE_EVENT_SCOPE(PrepareVLRequest, "PrepareVLRequest", rank_);
   is_mask = false;
   if (model_config_.type == "internlmxcomposer2") {
     size_t pos_num = cpu_input_refit_tensor.pos_pair_tensor.shape[0];
@@ -343,11 +342,10 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
 #endif
     }
   }
-  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
-  ProfileEvent::PushEvent("PrepareNextNGatherIdx", rank_);
+  PROFILE_EVENT_SCOPE(PrepareNetxnGatherIdx, "PrepareNetxnGatherIdx", rank_);
   if (run_mode == RunMode::kMain) {
     mtp_req_id_to_pos_.clear();
   }
@@ -369,7 +367,6 @@ void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forwar
   }
 
   if (run_mode == RunMode::kMain) {
-    ProfileEvent::PopEvent();
     return;
   }
 
@@ -378,7 +375,6 @@ void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forwar
               mtp_hidden_gather_idx.size() * sizeof(decltype(mtp_hidden_gather_idx)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
   KLLM_LOG_DEBUG << "mtp_hidden_gather_idx: " << mtp_hidden_gather_idx;
-  ProfileEvent::PopEvent();
 }
 
 #ifdef ENABLE_CUDA
@@ -750,6 +746,7 @@ void ModelInput::PrepareImgMask(size_t pos_num) {
 #endif
 
 void ModelInput::PreparePageInput(input_info& input) {
+  PROFILE_EVENT_SCOPE(PreparePageInput, "PreparePageInput", rank_);
   const auto reqs = input.dp_reqs;
 
   std::vector<int> input_length_host(reqs.size());
@@ -765,6 +762,7 @@ void ModelInput::PreparePageInput(input_info& input) {
 }
 
 void ModelInput::PrepareKVCacheBlocks(input_info& info) {
+  PROFILE_EVENT_SCOPE(PrepareKVCacheBlocks, "PrepareKVCacheBlocks", rank_);
   const auto& reqs = info.dp_reqs;
 
   std::vector<int> kv_cache_offset_host(reqs.size() + 1);
@@ -808,6 +806,7 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
 }
 
 void ModelInput::PrepareDecodeRotary(input_info& input) {
+  PROFILE_EVENT_SCOPE(PrepareDecodeRotary, "PrepareDecodeRotary", rank_);
   size_t total_input_len = 0;
   for (const auto& req : input.dp_reqs) {
     total_input_len += req->forwarding_tokens->size() - req->kv_cached_token_num;
@@ -906,6 +905,7 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
 }
 
 void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
+  PROFILE_EVENT_SCOPE(PrepareKVCacheBlockTable, "PrepareKVCacheBlockTable", rank_);
   if (!attn_backend_config_.enable_blocked_multi_token_forwarding_kv) {
     return;
   }
@@ -982,7 +982,7 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   if (!enable_flash_mla_ || model_config_.mla_config.kv_lora_rank == 0 || input.dp_reqs.empty()) {
     return;
   }
-
+  PROFILE_EVENT_SCOPE(PrepareFlashMla, "PrepareFlashMla", rank_);
   Stream stream = context_->GetH2DStreams()[rank_];
   static const int head_num_per_tp =
       model_config_.head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
@@ -992,7 +992,7 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
   flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
   InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, input.dp_reqs.size(), stream.Get());
-#endif
+  #endif
 }
 
 void ModelInput::PrepareSingleDecode() {
@@ -1000,13 +1000,12 @@ void ModelInput::PrepareSingleDecode() {
     KLLM_LOG_DEBUG << "page_single_input empty";
     return;
   }
-  ProfileEvent::PushEvent("PrepareSingleDecode", rank_);
+  PROFILE_EVENT_SCOPE(PrepareSingleDecode, "PrepareSingleDecode", rank_);
   PreparePageInput(page_single_input);
   PrepareKVCacheBlocks(page_single_input);
   PrepareKVCacheBlockTable(page_single_input);
   PrepareDecodeRotary(page_single_input);
   PrepareFlashMla(page_single_input);
-  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PrepareDualDecode() {
@@ -1014,13 +1013,12 @@ void ModelInput::PrepareDualDecode() {
     KLLM_LOG_DEBUG << "page_dual_input empty";
     return;
   }
-  ProfileEvent::PushEvent("PrepareDualDecode", rank_);
+  PROFILE_EVENT_SCOPE(PrepareDualDecode, "PrepareDualDecode", rank_);
   PreparePageInput(page_dual_input);
   PrepareKVCacheBlocks(page_dual_input);
   PrepareKVCacheBlockTable(page_dual_input);
   PrepareDecodeRotary(page_dual_input);
   PrepareFlashMla(page_dual_input);
-  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PreparePrefill() {
@@ -1029,14 +1027,13 @@ void ModelInput::PreparePrefill() {
     return;
   }
 
-  ProfileEvent::PushEvent("PreparePrefill", rank_);
+  PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
   if (use_cache) {
     PrepareKVCacheBlocks(flash_input);
     PrepareKVCacheBlockTable(flash_input);
   }
 
   PrepareFlashRotary(flash_input);
-  ProfileEvent::PopEvent();
 }
 
 void ModelInput::PrepareFlexibleCache(input_info& input) {
@@ -1095,6 +1092,7 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
 
 void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash_inputs,
                                  const std::initializer_list<input_info*>& page_inputs) {
+  PROFILE_EVENT_SCOPE(PrepareInputIds, "PrepareInputIds", rank_);
   input_ids_cpu.clear();
   input_offset_list_uint64.assign(1, 0);
   input_prefix_list_uint64.assign(1, 0);

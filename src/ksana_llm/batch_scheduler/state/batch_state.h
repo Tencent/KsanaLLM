@@ -16,8 +16,8 @@
 namespace ksana_llm {
 
 struct BatchState {
-  explicit BatchState(size_t pp_batch_idx, const BatchSchedulerConfig& batch_scheduler_config)
-      : pp_batch_idx_(pp_batch_idx), batch_scheduler_config_(batch_scheduler_config) {
+  explicit BatchState(size_t multi_batch_id, const BatchSchedulerConfig& batch_scheduler_config)
+      : multi_batch_id_(multi_batch_id), batch_scheduler_config_(batch_scheduler_config) {
     schedule_output = GetScheduleOutputPool()->GetScheduleOutput();
 
     schedule_output->running_reqs.reserve(batch_scheduler_config_.max_batch_size);
@@ -51,7 +51,7 @@ struct BatchState {
         processed_count++;
       }
     }
-    KLLM_LOG_DEBUG << "pp_batch_idx: " << pp_batch_idx_ << " : Merged " << processed_count << " waiting requests";
+    KLLM_LOG_DEBUG << "multi_batch_id: " << multi_batch_id_ << " : Merged " << processed_count << " waiting requests";
     // Remove the processed requests from waiting_reqs
     if (processed_count > 0) {
       waiting_reqs.erase(waiting_reqs.begin(), waiting_reqs.begin() + processed_count);
@@ -89,12 +89,12 @@ struct BatchState {
 
     // Reset all swap info.
     schedule_output->Reset();
-    schedule_output->schedule_id += 1;
+    schedule_output->multi_batch_id += 1;
   }
 
   std::string ToString() const {
     std::ostringstream oss;
-    oss << " BatchState(pp_batch_idx:" << pp_batch_idx_
+    oss << " BatchState(multi_batch_id:" << multi_batch_id_
         << ", running_queue_size:" << schedule_output->running_reqs.size()
         << ", waiting_queue_size:" << waiting_queue.size() << ", running_pending_reqs:" << running_pending_reqs.size()
         << ", swapped_queue_size:" << swapped_queue.size()
@@ -109,7 +109,7 @@ struct BatchState {
     return os;
   }
 
-  size_t pp_batch_idx_;
+  size_t multi_batch_id_;
 
   // The config of batch scheduler.
   BatchSchedulerConfig batch_scheduler_config_;

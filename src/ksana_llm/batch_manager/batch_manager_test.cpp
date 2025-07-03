@@ -24,7 +24,7 @@ class BatchManagerTest : public testing::Test {
   void SetUp() override {
     std::string config_file = GetTestConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     batch_manager_ = std::make_unique<BatchManager>(context_, PP_BATCH_NUM);
     memory_allocator_ = std::make_shared<MemoryAllocator>();
   }
@@ -102,15 +102,15 @@ class BatchManagerTest : public testing::Test {
 TEST_F(BatchManagerTest, HiddenUnitBufferTest) {
   InitializeHiddenUnitBufferPool();
   HiddenUnitDeviceBuffer* hidden_unit_buffer = nullptr;
-  const size_t test_schedule_id = 123;  // Define a test schedule_id
+  const size_t test_multi_batch_id = 123;  // Define a test multi_batch_id
 
   hidden_unit_buffer = GetHiddenUnitBufferPool()->GetDeviceBuffer();
   EXPECT_TRUE(hidden_unit_buffer != nullptr);
 
-  // Set the schedule_id for the buffer
-  hidden_unit_buffer->schedule_id = test_schedule_id;
+  // Set the multi_batch_id for the buffer
+  hidden_unit_buffer->multi_batch_id = test_multi_batch_id;
   SetCurrentHiddenUnitBuffer(hidden_unit_buffer);
-  EXPECT_TRUE(GetCurrentHiddenUnitBuffer(test_schedule_id) == hidden_unit_buffer);
+  EXPECT_TRUE(GetCurrentHiddenUnitBuffer(test_multi_batch_id) == hidden_unit_buffer);
 
   GetHiddenUnitBufferPool()->FreeDeviceBuffer(hidden_unit_buffer);
   EXPECT_TRUE(GetHiddenUnitBufferPool()->GetDeviceBuffer() == hidden_unit_buffer);

@@ -44,7 +44,7 @@ def parse_csv(csv_file_path: str) -> List[Dict[str, Any]]:
             row["req_id"] = int(row["req_id"])
             row["time_ns"] = int(row["time_ns"])
             row["rank"] = int(row["rank"])
-            row["pp_batch_idx"] = int(row["pp_batch_idx"])
+            row["multi_batch_id"] = int(row["multi_batch_id"])
             row["attn_dp_group_id"] = int(row["attn_dp_group_id"])
 
             # These fields might be empty for some events
@@ -214,7 +214,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"req_num batch {event['pp_batch_idx']}",
+                    "tid": f"req_num batch {event['multi_batch_id']}",
                     "ts": event["time_ns"] / 1000,
                     "cname": "thread_state_sleeping",
                 }
@@ -226,7 +226,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"forwarding_token_num batch {event['pp_batch_idx']}",
+                    "tid": f"forwarding_token_num batch {event['multi_batch_id']}",
                     "ts": event["time_ns"] / 1000,
                     "cname": "thread_state_runnable",
                 }
@@ -238,7 +238,7 @@ def convert_to_chrome_trace_format(
                     "cat": "INFO",
                     "ph": phase,
                     "pid": "metrics",
-                    "tid": f"seq_len batch {event['pp_batch_idx']}",
+                    "tid": f"seq_len batch {event['multi_batch_id']}",
                     "ts": event["time_ns"] / 1000,
                     "cname": "grey",
                 }
@@ -247,9 +247,9 @@ def convert_to_chrome_trace_format(
             # Add event record
             if node_first:
                 pid = f"Node {event['node_rank']}"
-                tid = f"batch {event['pp_batch_idx']}"
+                tid = f"batch {event['multi_batch_id']}"
             else:
-                pid = f"batch {event['pp_batch_idx']}"
+                pid = f"batch {event['multi_batch_id']}"
                 tid = f"Node {event['node_rank']}"
 
             trace_event = {

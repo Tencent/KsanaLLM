@@ -16,7 +16,7 @@ namespace ksana_llm {
 class TransLayoutTest : public testing::Test {
  protected:
   void SetUp() override {
-    context = std::make_shared<Context>(1, 1);
+    context = std::make_shared<Context>(1, 1, 1);
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";

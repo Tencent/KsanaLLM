@@ -77,12 +77,13 @@ class ForwardingContext {
   ~ForwardingContext() {}
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
             const PipelineConfig& pipeline_config, ForwardingBuffers* buffers, BufferManager* buffer_mgr,
-            size_t pp_batch_idx);
+            size_t multi_batch_id);
 
   void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
 
+ public:
   ForwardingBuffers* GetForwardingBuffers() { return buffers_; }
 
   AttentionForwardContext& GetAttentionForwardContext() { return attn_ctx_; }
@@ -95,9 +96,9 @@ class ForwardingContext {
 
   std::shared_ptr<ModelInput>& GetModelInput() { return model_input_; }
 
-  inline const size_t GetScheduleId() { return schedule_id_; }
+  inline const size_t GetMultiBatchId() const { return multi_batch_id_; }
 
-  inline void SetScheduleId(size_t schedule_id) { schedule_id_ = schedule_id; }
+  inline void SetMultiBatchId(size_t multi_batch_id) { multi_batch_id_ = multi_batch_id; }
 
   inline BatchRequestSchedInfo& GetBatchRequestSchedInfo() { return batch_event_info_; }
 
@@ -122,8 +123,8 @@ class ForwardingContext {
   // Current inference context
   std::shared_ptr<Context> context_;
 
-  // Current inference task related schedule id
-  size_t schedule_id_ = DEFAULT_SCHEDULE_ID;
+  // Current inference task related Multi-batch id
+  size_t multi_batch_id_ = DEFAULT_MULTI_BATCH_ID;
 
   // The model input information.
   std::shared_ptr<ModelInput> model_input_;
@@ -139,9 +140,6 @@ class ForwardingContext {
 
   // Pipeline parallel configuration
   PipelineConfig pipeline_config_;
-
-  // fwd context related pp batch idx.
-  size_t pp_batch_idx_ = 0;
 
   // Attention data parallel size
   size_t attn_data_parallel_size_ = 1;

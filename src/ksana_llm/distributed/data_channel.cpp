@@ -147,9 +147,6 @@ Status DataChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
 
 Status DataChannel::ProcessHostToDeviceLoop() {
   while (!terminated_) {
-    // Wait util recv invoked.
-    hidden_unit_buffer_pool_->WaitUtilReadyToRecv();
-
     // Waiting host buffer.
     Packet* packet = hidden_unit_buffer_pool_->GetFromHostRecvQueue();
     if (!packet) {
@@ -158,7 +155,7 @@ Status DataChannel::ProcessHostToDeviceLoop() {
     }
 
     // Waiting usable device buffer
-    HiddenUnitDeviceBuffer* hidden_unit_dev = hidden_unit_buffer_pool_->GetDeviceBuffer();
+    HiddenUnitDeviceBuffer* hidden_unit_dev = hidden_unit_buffer_pool_->GetFromPendingRecvQueue();
     if (!hidden_unit_dev) {
       KLLM_LOG_WARNING << "ProcessHostToDeviceLoop empty packet from host send queue, break..";
       break;
@@ -167,9 +164,11 @@ Status DataChannel::ProcessHostToDeviceLoop() {
     HiddenUnitHostBuffer* hidden_unit_host = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
 
     hidden_unit_buffer_pool_->ConvertHostBufferToDevice(hidden_unit_dev, hidden_unit_host);
-    KLLM_LOG_DEBUG << "DataChannel::ProcessHostToDeviceLoop. schedule_id=" << hidden_unit_dev->schedule_id
+    KLLM_LOG_DEBUG << "DataChannel::ProcessHostToDeviceLoop. multi_batch_id=" << hidden_unit_dev->multi_batch_id
                    << ", hidden_unit_dev=" << hidden_unit_dev;
-    hidden_unit_buffer_pool_->PutToDeviceRecvQueue(hidden_unit_dev);
+
+    hidden_unit_dev->NotifyFinished();
+    hidden_unit_buffer_pool_->PutToDeviceRecvedQueue(hidden_unit_dev);
 
     // Free host packet.
     hidden_unit_buffer_pool_->FreeHostBuffer(packet);
@@ -181,7 +180,7 @@ Status DataChannel::ProcessHostToDeviceLoop() {
 Status DataChannel::ProcessSendPacketLoop() {
   while (!terminated_) {
     // Blocked, waiting util packet is ready.
-    HiddenUnitDeviceBuffer* hidden_unit = hidden_unit_buffer_pool_->GetFromSendQueue();
+    HiddenUnitDeviceBuffer* hidden_unit = hidden_unit_buffer_pool_->GetFromPendingSendQueue();
     if (!hidden_unit) {
       KLLM_LOG_WARNING << "ProcessSendPacketLoop empty hidden_unit from device send queue, break..";
       break;
@@ -204,27 +203,28 @@ Status DataChannel::ProcessSendPacketLoop() {
     std::string downstream_host = pipeline_config.downstream_host;
     uint16_t downstream_port = pipeline_config.downstream_port;
 
-    time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
-    ProfileEvent::PushEvent(fmt::format("Send_buffer_id_{}_shape_{}_{}", hidden_unit->schedule_id,
-                                        hidden_unit_host->shape_dims[0], hidden_unit_host->shape_dims[1]));
-    Status status = client_raw_socket_->Send({downstream_host, downstream_port}, packet);
-    ProfileEvent::PopEvent();
-    time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send packet schedule_id:" << hidden_unit->schedule_id
-                   << " cost time: " << end_time_ms - start_time_ms << " ms, shape:" << hidden_unit_host->shape_dims[0]
-                   << ", " << hidden_unit_host->shape_dims[1];
-
-    if (!status.OK()) {
-      KLLM_LOG_ERROR << "DataChannel process send packet loop error, send packet failed. schedule_id="
-                     << hidden_unit->schedule_id << ", info:" << status.GetMessage();
+    {
+      time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+      PROFILE_EVENT_SCOPE(Send_buffer_id_,
+                          fmt::format("Send_buffer_id_{}_shape_{}_{}", hidden_unit->multi_batch_id,
+                                      hidden_unit_host->shape_dims[0], hidden_unit_host->shape_dims[1]));
+      Status status = client_raw_socket_->Send({downstream_host, downstream_port}, packet);
+      time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+      KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send packet multi_batch_id:" << hidden_unit->multi_batch_id
+                     << " cost time: " << end_time_ms - start_time_ms
+                     << " ms, shape:" << hidden_unit_host->shape_dims[0] << ", " << hidden_unit_host->shape_dims[1];
+      if (!status.OK()) {
+        KLLM_LOG_ERROR << "DataChannel process send packet loop error, send packet failed. multi_batch_id="
+                       << hidden_unit->multi_batch_id << ", info:" << status.GetMessage();
+      }
     }
-    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send success. schedule_id=" << hidden_unit->schedule_id;
+    KLLM_LOG_DEBUG << "DataChannel::ProcessSendPacketLoop send success. multi_batch_id=" << hidden_unit->multi_batch_id;
 
     // Resue the packet buffer
     hidden_unit_buffer_pool_->FreeHostBuffer(packet);
 
     // Notify that send operation finished.
-    hidden_unit_buffer_pool_->NotifySendFinished();
+    hidden_unit->NotifyFinished();
   }
 
   return Status();

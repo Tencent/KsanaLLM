@@ -22,7 +22,7 @@
 using namespace ksana_llm;
 
 // For data verification.
-constexpr size_t SCHEDULE_ID = 235;
+constexpr size_t TEST_MULTI_BATCH_ID = 235;
 
 class DataHubTest : public testing::Test {
  protected:
@@ -43,16 +43,16 @@ TEST_F(DataHubTest, TestDataHub) {
   EXPECT_TRUE(GetScheduleOutputPool() != nullptr);
   EXPECT_TRUE(GetHiddenUnitBufferPool() != nullptr);
 
-  // Initialize hidden units with schedule_id
-  Status status = InitHiddenUnits(SCHEDULE_ID);
+  // Initialize hidden units with multi_batch_id
+  Status status = InitHiddenUnits(TEST_MULTI_BATCH_ID);
   EXPECT_TRUE(status.OK());
 
-  HiddenUnitDeviceBuffer* cur_dev_hidden_unit = GetCurrentHiddenUnitBuffer(SCHEDULE_ID);
-  EXPECT_EQ(cur_dev_hidden_unit->schedule_id, SCHEDULE_ID);
+  HiddenUnitDeviceBuffer* cur_dev_hidden_unit = GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID);
+  EXPECT_EQ(cur_dev_hidden_unit->multi_batch_id, TEST_MULTI_BATCH_ID);
 
   // Get schedule output.
   ScheduleOutput* schedule_output = GetScheduleOutputPool()->GetScheduleOutput();
-  schedule_output->schedule_id = SCHEDULE_ID;
+  schedule_output->multi_batch_id = TEST_MULTI_BATCH_ID;
 
   // Broadcast schedule output.
   BroadcastScheduleOutput(schedule_output);
@@ -63,29 +63,30 @@ TEST_F(DataHubTest, TestDataHub) {
   ScheduleOutput* send_schedule_output = new ScheduleOutput();
   ScheduleOutputParser::DeserializeScheduleOutput(send_schedule_output_packet->body, send_schedule_output);
 
-  EXPECT_EQ(send_schedule_output->schedule_id, SCHEDULE_ID);
+  EXPECT_EQ(send_schedule_output->multi_batch_id, TEST_MULTI_BATCH_ID);
 
   // get from conv queue
   HiddenUnitDeviceBuffer* send_dev_hidden_unit;
   auto send_fn = [&]() {
-    send_dev_hidden_unit = GetHiddenUnitBufferPool()->GetFromSendQueue();
-    GetHiddenUnitBufferPool()->NotifySendFinished();
+    send_dev_hidden_unit = GetHiddenUnitBufferPool()->GetFromPendingSendQueue();
+    send_dev_hidden_unit->NotifyFinished();
   };
   std::thread send_thread(send_fn);
 
-  SendHiddenUnits(SCHEDULE_ID);
+  SendHiddenUnits(TEST_MULTI_BATCH_ID);
 
   send_thread.join();
-  EXPECT_EQ(send_dev_hidden_unit->schedule_id, SCHEDULE_ID);
+  EXPECT_EQ(send_dev_hidden_unit->multi_batch_id, TEST_MULTI_BATCH_ID);
 
   Tensor tmp_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, GetCurrentHiddenUnitBuffer(SCHEDULE_ID)->tensors[rank].dtype,
-             GetCurrentHiddenUnitBuffer(SCHEDULE_ID)->tensors[rank].shape, rank);
-  CopyFromHiddenUnitBuffer(tmp_tensor, GetCurrentHiddenUnitBuffer(SCHEDULE_ID), rank, is_prefill);
-  CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(SCHEDULE_ID), tmp_tensor, rank, is_prefill);
+      Tensor(MemoryLocation::LOCATION_DEVICE, GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID)->tensors[rank].dtype,
+             GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID)->tensors[rank].shape, rank);
+  CopyFromHiddenUnitBuffer(tmp_tensor, GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID), rank, is_prefill);
+  Stream working_stream(rank);
+  CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID), tmp_tensor, rank, is_prefill, working_stream);
 
   // Test FreeHiddenUnits
-  Status free_status = FreeHiddenUnits(SCHEDULE_ID);
+  Status free_status = FreeHiddenUnits(TEST_MULTI_BATCH_ID);
   EXPECT_TRUE(free_status.OK());
 
   GetScheduleOutputPool()->FreeScheduleOutput(schedule_output);

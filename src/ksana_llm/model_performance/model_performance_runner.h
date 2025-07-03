@@ -51,7 +51,7 @@ class ModelPerformanceRunner {
   // runner_config
   size_t rounds_ = 0;
   size_t warmp_up_rounds_ = 0;
-  size_t schedule_id_ = DEFAULT_SCHEDULE_ID;
+  size_t multi_batch_id_ = DEFAULT_MULTI_BATCH_ID;
 
   // requests
   std::vector<ForwardRequest> forward_reqs_;

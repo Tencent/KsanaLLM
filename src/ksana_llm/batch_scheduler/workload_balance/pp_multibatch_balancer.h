@@ -12,7 +12,7 @@ class PPMultibatchWorkloadBalancer {
   explicit PPMultibatchWorkloadBalancer(PPMultibatchWBStrategy pp_multibatch_wb_strategy);
 
   // Balance requests between batch states, considering waiting_reqs
-  void BalancePPMultiBatchReqs(size_t pp_batch_idx, std::vector<std::shared_ptr<InferRequest>>& waiting_reqs,
+  void BalancePPMultiBatchReqs(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& waiting_reqs,
                                std::vector<std::shared_ptr<BatchState>>& batch_states);
 
  private:
@@ -21,7 +21,7 @@ class PPMultibatchWorkloadBalancer {
                              std::vector<std::shared_ptr<BatchState>>& batch_states);
 
   // Offload batch load
-  void OffloadBatchWorkload(size_t pp_batch_idx, std::vector<std::shared_ptr<BatchState>>& batch_states);
+  void OffloadBatchWorkload(size_t multi_batch_id, std::vector<std::shared_ptr<BatchState>>& batch_states);
 
   // Calculate workload for a single request
   int CalculateWorkload(const std::shared_ptr<InferRequest>& req);

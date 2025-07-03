@@ -174,14 +174,14 @@ TEST_F(BalanceReqsTest, DifferentWorkloadsTest) {
 TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   int dp_num = 3;
   CommonSetUp(dp_num);
-  size_t pp_batch_idx = 0;
+  size_t multi_batch_id = 0;
   // 创建一些请求
   std::vector<std::shared_ptr<InferRequest>> requests;
   InitReqs(dp_num * 5 + 1, requests);
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
-    test_batch_scheduler_->batch_states_[i][pp_batch_idx]->waiting_queue.clear();
-    test_batch_scheduler_->batch_states_[i][pp_batch_idx]->schedule_output->running_reqs.resize(i + 1);
-    test_batch_scheduler_->batch_states_[i][pp_batch_idx]->swapped_queue.clear();
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->swapped_queue.clear();
   }
 
   // 添加请求到waiting_reqs_
@@ -202,7 +202,7 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[0].size(), test_batch_scheduler_->dp_waiting_reqs_[1].size());
   EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[1].size(), test_batch_scheduler_->dp_waiting_reqs_[2].size());
 
-  EXPECT_TRUE(test_batch_scheduler_->IsIdle(pp_batch_idx));
+  EXPECT_TRUE(test_batch_scheduler_->IsIdle(multi_batch_id));
 }
 
 }  // namespace ksana_llm

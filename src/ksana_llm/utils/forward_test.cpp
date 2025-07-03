@@ -45,7 +45,7 @@ bool ExpectNearRelative(float expected, float actual, float rel_error) {
 class ForwardTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json，初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -125,7 +125,7 @@ class ForwardTest : public testing::Test {
     llama_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<LlamaModel<weight_data_type>> llama =
         std::make_shared<LlamaModel<weight_data_type>>(model_config, 0, context_, llama_weight);
-    llama->AllocResources(schedule_id);
+    llama->AllocResources(multi_batch_id);
 
     return {llama, llama_weight};
   }
@@ -168,7 +168,7 @@ class ForwardTest : public testing::Test {
 
     // 执行 Forward
     std::vector<ForwardRequest> forward_reqs = {forward};
-    Status status = llama->Forward(schedule_id, llama_weight, forward_reqs, false);
+    Status status = llama->Forward(multi_batch_id, llama_weight, forward_reqs, false);
     EXPECT_TRUE(status.OK()) << "Forward failed: " << status.GetMessage();
 
     // 输出 ForwardRequest 的 response
@@ -288,7 +288,7 @@ class ForwardTest : public testing::Test {
 
     // 执行 Forward
     std::vector<ForwardRequest> forward_reqs = {forward};
-    Status status = llama->Forward(schedule_id, llama_weight, forward_reqs, false);
+    Status status = llama->Forward(multi_batch_id, llama_weight, forward_reqs, false);
     EXPECT_TRUE(status.OK()) << "Forward failed: " << status.GetMessage();
 
     // 输出 ForwardRequest 的 response
@@ -365,7 +365,7 @@ class ForwardTest : public testing::Test {
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
   std::shared_ptr<PrefixCacheManager> cache_manager_ = nullptr;
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
 };
 
 TEST_F(ForwardTest, LogitsGatherAllTest) {

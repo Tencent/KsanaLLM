@@ -21,7 +21,8 @@ struct ExtensionTypeTraits {
 template <int T>
 class ContextT {
  public:
-  explicit ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size);
+  explicit ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size,
+                    const size_t max_multi_batch_size);
   ~ContextT();
 
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
@@ -32,6 +33,8 @@ class ContextT {
 
   std::vector<Stream>& GetMemoryManageStreams() { return memory_manage_streams_; }
 
+  size_t GetMaxMultiBatchSize() const { return max_multi_batch_size_; }
+
   std::vector<Stream>& GetComputeStreams() { return compute_streams_; }
 
   std::vector<Stream>& GetH2DStreams() { return h2d_streams_; }
@@ -41,6 +44,9 @@ class ContextT {
   std::vector<Stream>& GetD2DStreams() { return d2d_streams_; }
 
   std::vector<Stream>& GetCommStreams() { return comm_streams_; }
+
+  std::vector<Stream>& GetCommSendStreams() { return comm_send_streams_; }
+  std::vector<Stream>& GetCommRecvStreams() { return comm_recv_streams_; }
 
   const std::set<int>& GetSupportedCudaGraphCaptureSizes() { return cudagraph_captured_batchsizes; }
 
@@ -77,13 +83,20 @@ class ContextT {
   bool is_gemm_fp8_supported_{false};
   const std::set<int> cudagraph_captured_batchsizes = {1, 2, 3};
 
+  size_t max_multi_batch_size_;
+
   // streams
   std::vector<Stream> memory_manage_streams_;
   std::vector<Stream> compute_streams_;
+  // these comm_streams seems not in use
+  std::vector<Stream> comm_streams_;
+
+  std::vector<Stream> comm_send_streams_;
+  std::vector<Stream> comm_recv_streams_;
+
   std::vector<Stream> h2d_streams_;
   std::vector<Stream> d2h_streams_;
   std::vector<Stream> d2d_streams_;
-  std::vector<Stream> comm_streams_;
 
   // pipeline config.
   PipelineConfig pipeline_config_;

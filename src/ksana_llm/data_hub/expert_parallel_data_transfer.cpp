@@ -168,7 +168,8 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
-    StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
+    auto working_stream = forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()];
+    StreamSynchronize(working_stream);
 
     HiddenUnitDeviceBuffer* hidden_unit =
         GetExpertHiddenUnitBufferPool()->GetDeviceBuffer(forwarding_context.GetCurrentRank());
@@ -177,7 +178,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
       return nullptr;
     }
     CopyToHiddenUnitBuffer(hidden_unit, const_cast<Tensor&>(residual_buffer[0]), forwarding_context.GetCurrentRank(),
-                           is_prefill);
+                           is_prefill, working_stream);
 
     return hidden_unit;
   }

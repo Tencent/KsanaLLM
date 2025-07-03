@@ -99,7 +99,7 @@ class FakeTinyWeightTest : public testing::Test {
   std::string model_config_dir_name_;
 
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();

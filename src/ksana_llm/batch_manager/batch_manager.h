@@ -45,7 +45,7 @@ class BatchManager {
   // In distributed mode,
   // the master node is responsible for lookup embedding, layers forward, and the final lm head and sampling,
   // the worker node is responsible for layers forward only.
-  Status MainProcess(size_t pp_batch_idx);
+  Status MainProcess(size_t multi_batch_id);
 
   // Process received request in distributed mode.
   // Used only for worker node of distributed mode.
@@ -56,6 +56,9 @@ class BatchManager {
 
   // Stop the batch manager.
   Status Stop();
+
+ private:
+  std::vector<size_t> GetHiddenUnitShape(ScheduleOutput *schedule_output);
 
  private:
   // The global context.

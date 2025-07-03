@@ -38,7 +38,7 @@ TEST_F(ExpertParallelDataHubTest, TestExpertParallelDataHub) {
 
   EXPECT_TRUE(GetExpertHiddenUnitBufferPool() != nullptr);
 
-  // Initialize hidden units with schedule_id
+  // Initialize hidden units with multi_batch_id
   Status status = InitExpertHiddenUnits();
   EXPECT_TRUE(status.OK());
 
@@ -72,8 +72,8 @@ TEST_F(ExpertParallelDataHubTest, TestExpertParallelDataHub) {
   HiddenUnitDeviceBuffer* send_hidden_unit;
   Tensor tmp_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, cur_dev_hidden_unit->tensors[rank].dtype,
                              cur_dev_hidden_unit->tensors[rank].shape, rank);
-  // CopyFromHiddenUnitBuffer(tmp_tensor, GetCurrentHiddenUnitBuffer(SCHEDULE_ID), rank, is_prefill);
-  // CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(SCHEDULE_ID), tmp_tensor, rank, is_prefill);
+  // CopyFromHiddenUnitBuffer(tmp_tensor, GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID), rank, is_prefill);
+  // CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(TEST_MULTI_BATCH_ID), tmp_tensor, rank, is_prefill);
 
   // Test FreeHiddenUnits
   Status free_status = FreeExpertRecvHiddenUnits(cur_dev_hidden_unit);

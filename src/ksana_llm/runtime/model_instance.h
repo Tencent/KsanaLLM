@@ -43,10 +43,10 @@ class ModelInstance {
   std::string name;
   std::string type;
 
-  std::vector<Status> Forward(size_t schedule_id, std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
+  std::vector<Status> Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
                               std::vector<ForwardRequest>& forward_reqs, bool epilogue);
 
-  std::vector<std::future<Status>> ForwardAsync(size_t schedule_id, std::shared_ptr<WorkerGroup> worker_group,
+  std::vector<std::future<Status>> ForwardAsync(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
                                                 InferStage stage, std::vector<ForwardRequest>& forward_reqs,
                                                 bool epilogue, RunMode run_mode = RunMode::kMain);
 
@@ -54,7 +54,7 @@ class ModelInstance {
   DataType GetWeightDataType() { return model_config_.weight_data_type; }
 
   // Get the base ptr of model's logits buf.
-  std::vector<float*> GetLogitsPtr(size_t schedule_id);
+  std::vector<float*> GetLogitsPtr(size_t multi_batch_id);
 
   const ModelConfig& GetModelConfig() { return model_config_; }
 
@@ -79,11 +79,11 @@ class ModelInstance {
     weight_instance_ = nullptr;
   }
 
-  // Allocate resources for a specific schedule_id
-  Status AllocResources(size_t schedule_id);
+  // Allocate resources for a specific multi_batch_id
+  Status AllocResources(size_t multi_batch_id);
 
-  // Free resources for a specific schedule_id
-  Status FreeResources(size_t schedule_id);
+  // Free resources for a specific multi_batch_id
+  Status FreeResources(size_t multi_batch_id);
 
  private:
   // The model config.

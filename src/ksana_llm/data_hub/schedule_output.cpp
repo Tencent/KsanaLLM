@@ -13,7 +13,7 @@ namespace ksana_llm {
 std::string ScheduleOutput::ToString() {
   std::string result;
   result += "{\n";
-  result += "  schedule_id: " + std::to_string(schedule_id) + "\n";
+  result += "  multi_batch_id: " + std::to_string(multi_batch_id) + "\n";
 
   result += "  finish_req_ids:\n";
   for (size_t finish_req_ids_on_attn_dp_idx = 0; finish_req_ids_on_attn_dp_idx < finish_req_ids.size();
@@ -68,7 +68,7 @@ std::string ScheduleOutput::ToString() {
 size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_output) {
   size_t serialized_bytes = 0;
 
-  // schedule_id
+  // multi_batch_id
   serialized_bytes += sizeof(size_t);
 
   // finish_req_ids
@@ -314,8 +314,8 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
 Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* schedule_output, void* data) {
   size_t offset = 0;
 
-  // schedule_id
-  std::memcpy(data + offset, &schedule_output->schedule_id, sizeof(size_t));
+  // multi_batch_id
+  std::memcpy(data + offset, &schedule_output->multi_batch_id, sizeof(size_t));
   offset += sizeof(size_t);
 
   size_t bytes;
@@ -375,8 +375,8 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
 Status ScheduleOutputParser::DeserializeScheduleOutput(void* data, ScheduleOutput* schedule_output) {
   size_t offset = 0;
 
-  // schedule_id
-  schedule_output->schedule_id = *reinterpret_cast<size_t*>(data + offset);
+  // multi_batch_id
+  schedule_output->multi_batch_id = *reinterpret_cast<size_t*>(data + offset);
   offset += sizeof(size_t);
 
   size_t bytes;

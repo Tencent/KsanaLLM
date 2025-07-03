@@ -43,7 +43,7 @@ class ModelLoaderTest : public testing::Test {
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
 
     // Initialize context, set tensor paralle to 2 and attn data parallel to 1.
-    context_ = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(2, 1, 1);
   }
 
   void TearDown() override { pybind11::finalize_interpreter(); }

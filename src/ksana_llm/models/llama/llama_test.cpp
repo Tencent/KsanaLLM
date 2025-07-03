@@ -27,7 +27,7 @@ using namespace ksana_llm;
 class LlamaTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -201,7 +201,7 @@ class LlamaTest : public testing::Test {
 
     std::vector<SamplingRequest> sample_reqs = {sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29871, sampling_result_tokens[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
@@ -211,7 +211,7 @@ class LlamaTest : public testing::Test {
     }
     // Decode
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29896, sampling_result_tokens[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
@@ -221,7 +221,7 @@ class LlamaTest : public testing::Test {
 
 #ifdef ENABLE_CUDA
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29929, sampling_result_tokens[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();

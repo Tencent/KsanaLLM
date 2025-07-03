@@ -221,8 +221,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager(int attn_dp_idx) { return dummy_cache_mgr_; }
 
-  std::shared_ptr<ScheduleOutputGroup> Schedule(size_t pp_batch_idx) override {
-    assert(pp_batch_idx == 0);  // only support one batch
+  std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) override {
+    assert(multi_batch_id == 0);  // only support one batch
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     KLLM_LOG_DEBUG << " ============= Schedule, step " << step_ << ", running_reqs.size=" << running_reqs.size()
                    << ", waiting_reqs.size=" << waiting_reqs.size();
@@ -313,9 +313,9 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int idx) override {}
 
-  virtual bool IsIdle(size_t pp_batch_idx) override { return false; }
+  virtual bool IsIdle(size_t multi_batch_id) override { return false; }
 
-  virtual void WaitUntilHaveReqs(size_t pp_batch_idx) override {}
+  virtual void WaitUntilHaveReqs(size_t multi_batch_id) override {}
 
   virtual void Stop() override {}
 

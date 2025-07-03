@@ -33,7 +33,9 @@ TEST(TensorTest, CommonTest) {
 
   constexpr size_t tensor_parallel_size = 1;
   constexpr int attn_data_parallel_size = 1;
-  std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, attn_data_parallel_size);
+  constexpr int multi_batch_num = 1;
+  std::shared_ptr<Context> context =
+      std::make_shared<Context>(tensor_parallel_size, attn_data_parallel_size, multi_batch_num);
   constexpr size_t ELEM_NUM = 16;
   constexpr int RANK = 0;
 

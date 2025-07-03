@@ -16,7 +16,7 @@ class Sampler {
  public:
   Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context);
   ~Sampler();
-  Status Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
+  Status Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
   Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
                                  SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 

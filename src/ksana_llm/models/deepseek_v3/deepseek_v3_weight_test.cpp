@@ -91,7 +91,7 @@ class DeepseekV3AbosrbWeightTest : public testing::Test {
     model_config_.mla_config.qk_nope_head_dim = 128;
     model_config_.mla_config.v_head_dim = 128;
     model_config_.head_num = 2;
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
 
     PipelineConfig pipeline_config;
     pipeline_config.lower_layer_idx = 0;

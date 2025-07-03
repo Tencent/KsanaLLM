@@ -45,7 +45,7 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
     Singleton<Environment>::GetInstance()->ParseConfig(config_path_relate);
 
     // Initialize context, set tensor paralle to 2 and attn data parallel to 1.
-    context_ = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(2, 1, 1);
     KLLM_LOG_INFO << "Initialize context success." << std::endl;
   }
 

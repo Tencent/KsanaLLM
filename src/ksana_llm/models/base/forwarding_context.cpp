@@ -168,13 +168,13 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
 template <typename T>
 void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
                                 const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
-                                BufferManager* buffer_mgr, size_t pp_batch_idx) {
+                                BufferManager* buffer_mgr, size_t multi_batch_id) {
   pipeline_config_ = pipeline_config;
   context_ = context;
   rank_ = rank;
   attn_data_parallel_size_ = model_config.attn_data_para_size;
   buffers_ = buffers;
-  pp_batch_idx_ = pp_batch_idx;
+  multi_batch_id_ = multi_batch_id;
 
   vocab_size_ = model_config.vocab_size;
   vocab_size_pad_ = DivRoundUp(model_config.vocab_size, model_config.tensor_para_size) * model_config.tensor_para_size;
@@ -221,7 +221,7 @@ void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, cons
 
 template <typename T>
 void ForwardingContext<T>::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
-  ProfileEvent::PushEvent("UpdateBeforeForward", rank_);
+  PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
   model_input_->ParseFromRequests(forward_reqs, run_mode);
 
   // create forward shape tensor
@@ -249,7 +249,6 @@ void ForwardingContext<T>::UpdateBeforeForward(std::vector<ForwardRequest>& forw
 #endif
   // Pass the `use_cache` flag to `flag_tensor_`.
   ((Tensor)attn_ctx_.flag_tensor).GetPtr<bool>()[0] = model_input_->use_cache;
-  ProfileEvent::PopEvent();
 }
 
 template <typename T>

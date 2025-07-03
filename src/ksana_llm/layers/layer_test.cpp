@@ -74,7 +74,7 @@ class LayerTest : public testing::Test {
     block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
     Singleton<Environment>::GetInstance()->SetBlockManagerConfig(block_manager_config);
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
   }
 
   // 在每个测试用例执行之后调用的函数
@@ -97,7 +97,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
 #endif
 
 #ifdef ENABLE_CUDA
-  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1);
+  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, 1);
   FlashAttentionLayer<half, half, llm_kernels::utils::KVCacheType::kAuto> flash_attention_layer;
   QuantMode quant_mode = QUANT_NONE;
   int head_num = 32;

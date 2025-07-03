@@ -41,7 +41,7 @@ class PrefixCacheManagerTest : public testing::Test {
                                                    convert_size);
     };
 
-    context_ = std::make_shared<Context>(tensor_para_size, attn_data_parallel_size);
+    context_ = std::make_shared<Context>(tensor_para_size, attn_data_parallel_size, 1);
     memory_allocator_ = std::make_shared<FakedMemoryAllocator>();
     BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_,
                                                   block_allocator_creation_fn_);

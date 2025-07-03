@@ -308,7 +308,6 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
 // Transfer sampling parameters to the device
 void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
                                         SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
-  ProfileEvent::PushEvent("SamplingParameterToDevice", rank_);
   if (use_top_k) {
     MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
                 stream);
@@ -326,13 +325,12 @@ void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use
                 MEMCPY_HOST_TO_DEVICE, stream);
     sampling_device_parameter.device_temperatures = device_temperatures_;
   }
-  ProfileEvent::PopEvent();
 }
 
 Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
                                                 SamplingDeviceParameter& sampling_device_parameter,
                                                 float*& device_logits, Stream& stream) {
-  ProfileEvent::PushEvent("PrepareDeviceLogitsAndParameter", rank_);
+  PROFILE_EVENT_SCOPE(PrepareDeviceLogitsAndParameter, "PrepareDeviceLogitsAndParameter", rank_);
   bool use_top_k = false;
   bool use_top_p = false;
   bool use_temperature = false;
@@ -396,16 +394,14 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
   // top_p and temperature are applyed on the logits after softmax.
   sampling_device_parameter.logits_softmax |= use_top_p | use_temperature;
   SamplingParameterToDevice(use_top_k, use_top_p, use_temperature, sampling_device_parameter, stream);
-  ProfileEvent::PopEvent();
   return Status();
 }
 
-Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
   if (rank_ != 0) {
     return Status();
   }
-  ProfileEvent::PushEvent("Sampling", rank_);
-
+  PROFILE_EVENT_SCOPE(Sampling_, fmt::format("Sampling_{}_{}", multi_batch_id, rank_), rank_);
   float* device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
   STATUS_CHECK_RETURN(PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream));
@@ -431,7 +427,6 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
   }
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
-  ProfileEvent::PopEvent();
   return Status();
 }
 

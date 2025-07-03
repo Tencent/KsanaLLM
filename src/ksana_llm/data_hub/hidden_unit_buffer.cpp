@@ -14,11 +14,20 @@
 
 namespace ksana_llm {
 
+HiddenUnitDeviceBuffer::~HiddenUnitDeviceBuffer() {
+  if (waiter) {
+    waiter->Stop();
+    waiter = nullptr;
+  }
+}
+void HiddenUnitDeviceBuffer::NotifyFinished() {
+  if (waiter) {
+    waiter->Notify();
+  }
+}
+
 HiddenUnitBufferPool::HiddenUnitBufferPool() {
   InitializeBufferSize();
-  recv_waiter_ = std::make_shared<Waiter>(1);
-  send_waiter_ = std::make_shared<Waiter>(1);
-  pending_recv_count_ = 0;
 }
 
 void HiddenUnitBufferPool::PreAllocateDeviceBuffer() {
@@ -29,7 +38,7 @@ void HiddenUnitBufferPool::PreAllocateDeviceBuffer() {
 
 Status HiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* hidden_unit_dev,
                                                        HiddenUnitHostBuffer* hidden_unit_host) {
-  hidden_unit_dev->schedule_id = hidden_unit_host->schedule_id;
+  hidden_unit_dev->multi_batch_id = hidden_unit_host->multi_batch_id;
 
   size_t buffer_bytes = hidden_unit_host->shape_dims[0] * hidden_unit_host->shape_dims[1] * GetTypeSize(weight_type_);
   std::vector<size_t> buffer_shape = {hidden_unit_host->shape_dims[0], hidden_unit_host->shape_dims[1]};
@@ -63,7 +72,7 @@ Status HiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* h
 
 Status HiddenUnitBufferPool::ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hidden_unit_host,
                                                        HiddenUnitDeviceBuffer* hidden_unit_dev) {
-  hidden_unit_host->schedule_id = hidden_unit_dev->schedule_id;
+  hidden_unit_host->multi_batch_id = hidden_unit_dev->multi_batch_id;
   hidden_unit_host->tensor_parallel = hidden_unit_dev->tensors.size();
 
   std::vector<size_t> buffer_shape = hidden_unit_dev->tensors[0].shape;
@@ -163,6 +172,7 @@ Status HiddenUnitBufferPool::InitializeHiddenUnitDeviceBuffer(HiddenUnitDeviceBu
 #endif
 
   hidden_unit_buffer->comm_type = comm_type_;
+  hidden_unit_buffer->waiter = std::make_shared<Waiter>(1);
 
   KLLM_LOG_DEBUG << "HiddenUnitBufferPool::InitializeHiddenUnitDeviceBuffe, shape:"
                  << Vector2Str(std::vector<size_t>(hidden_unit_buffer->tensors[0].shape))
@@ -231,69 +241,44 @@ Status HiddenUnitBufferPool::PutToHostRecvQueue(Packet* packet) {
 
 Packet* HiddenUnitBufferPool::GetFromHostRecvQueue() { return recv_host_buffers_.Get(); }
 
-Status HiddenUnitBufferPool::PutToDeviceRecvQueue(HiddenUnitDeviceBuffer* hidden_unit) {
-  recv_device_buffers_.Put(hidden_unit->schedule_id, hidden_unit);
+Status HiddenUnitBufferPool::PutToPendingSendQueue(HiddenUnitDeviceBuffer* hidden_unit) {
+  auto send_done_waiter = hidden_unit->waiter;
+  pending_send_device_buffers_.Put(hidden_unit);
+  send_done_waiter->Wait();
+  send_done_waiter->Reset(1);
   return Status();
 }
 
-void HiddenUnitBufferPool::WaitUtilReadyToRecv() {
-  bool should_wait = false;
-  {
-    std::lock_guard<std::mutex> lock(recv_mutex_);
-    // If no threads have called GetFromDeviceRecvQueue, we should wait
-    if (pending_recv_count_ <= 0) {
-      should_wait = true;
-    } else {
-      // The caller will add a buffer to device buffer, decrease in advance
-      pending_recv_count_--;
-    }
-  }
+HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromPendingSendQueue() { return pending_send_device_buffers_.Get(); }
 
-  // Release the mutex before waiting to avoid deadlock
-  if (should_wait) {
-    recv_waiter_->Wait();
-    recv_waiter_->Reset(1);
-    {
-      // After being notified, we need to decrement the counter
-      std::lock_guard<std::mutex> lock(recv_mutex_);
-      pending_recv_count_--;
-    }
-  }
-}
-
-void HiddenUnitBufferPool::NotifySendFinished() { send_waiter_->Notify(); }
-
-HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromDeviceRecvQueue(size_t schedule_id) {
-  {
-    std::lock_guard<std::mutex> lock(recv_mutex_);
-    // Increment the count of pending receives
-    pending_recv_count_++;
-  }
-  // Notify one waiter if any
-  recv_waiter_->Notify();
-  auto buffer = recv_device_buffers_.Get(schedule_id);
-
-  return buffer;
-}
-
-Status HiddenUnitBufferPool::PutToSendQueue(HiddenUnitDeviceBuffer* hidden_unit) {
-  send_device_buffers_.Put(hidden_unit);
-  send_waiter_->Wait();
-  send_waiter_->Reset(1);
+Status HiddenUnitBufferPool::PutToPendingRecvQueue(HiddenUnitDeviceBuffer* hidden_unit) {
+  auto recv_done_waiter = hidden_unit->waiter;
+  pending_recv_device_buffers_.Put(hidden_unit);
+  recv_done_waiter->Wait();
+  recv_done_waiter->Reset(1);
   return Status();
 }
 
-HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromSendQueue() { return send_device_buffers_.Get(); }
+HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromPendingRecvQueue() { return pending_recv_device_buffers_.Get(); }
+
+// After put the buffer to the pendding queue, then the buffer is valid, so need to get the buffer again.
+Status HiddenUnitBufferPool::PutToDeviceRecvedQueue(HiddenUnitDeviceBuffer* hidden_unit) {
+  recved_device_buffers_.Put(hidden_unit->multi_batch_id, hidden_unit);
+  return Status();
+}
+HiddenUnitDeviceBuffer* HiddenUnitBufferPool::GetFromDeviceRecvedQueue(size_t multi_batch_id) {
+  return recved_device_buffers_.Get(multi_batch_id);
+}
 
 Status HiddenUnitBufferPool::Stop() {
   free_device_buffers_.Stop();
-  recv_device_buffers_.Stop();
+  recved_device_buffers_.Stop();
 
   recv_host_buffers_.Stop();
-  send_device_buffers_.Stop();
+  pending_send_device_buffers_.Stop();
+  pending_recv_device_buffers_.Stop();
   free_host_buffers_.Stop();
 
-  recv_waiter_->Stop();
   is_stopped_ = true;
 
   return Status();

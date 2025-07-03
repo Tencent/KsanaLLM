@@ -13,7 +13,7 @@ class WeightInstanceTest : public ::testing::Test {
     InitLoguru();
     setenv("ENABLE_MODEL_CACHE", "1", 1);
     setenv("ENABLE_OLD_LOADER", "1", 1);
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";

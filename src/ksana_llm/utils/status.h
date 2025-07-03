@@ -92,6 +92,7 @@ class Status {
     return _status;                                                                                            \
   } while (0)
 
+#define DEFAULT_MULTI_BATCH_ID 0
 #define DEFAULT_SCHEDULE_ID 0
 
 }  // namespace ksana_llm

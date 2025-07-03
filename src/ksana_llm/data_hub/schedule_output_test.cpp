@@ -83,7 +83,7 @@ class ScheduleOutputTest : public testing::Test {
   }
 
   bool CheckScheduleOutput(ScheduleOutput* src_schedule_output, ScheduleOutput* dst_schedule_output) {
-    if (src_schedule_output->schedule_id != dst_schedule_output->schedule_id) {
+    if (src_schedule_output->multi_batch_id != dst_schedule_output->multi_batch_id) {
       return false;
     }
 
@@ -210,7 +210,7 @@ class ScheduleOutputTest : public testing::Test {
     GenerateRequest();
     GenerateInferRequest();
 
-    schedule_output->schedule_id = 5;
+    schedule_output->multi_batch_id = 5;
 
     schedule_output->finish_req_ids = {{1, 3, 5, 7}};
 
@@ -331,12 +331,12 @@ TEST_F(ScheduleOutputTest, ScheduleOutputPool) {
   EXPECT_TRUE(schedule_output != nullptr);
 
   // Set some value.
-  schedule_output->schedule_id = 235;
+  schedule_output->multi_batch_id = 235;
 
   // Put to recv and get again.
   GetScheduleOutputPool()->PutToRecvQueue(schedule_output);
   ScheduleOutput* recv_schedule_output = GetScheduleOutputPool()->GetFromRecvQueue();
-  EXPECT_EQ(schedule_output->schedule_id, recv_schedule_output->schedule_id);
+  EXPECT_EQ(schedule_output->multi_batch_id, recv_schedule_output->multi_batch_id);
 
   // Put to send and get again.
   GetScheduleOutputPool()->PutToSendQueue(schedule_output);
@@ -345,12 +345,12 @@ TEST_F(ScheduleOutputTest, ScheduleOutputPool) {
   ScheduleOutput* new_schedule_output = new ScheduleOutput();
   ScheduleOutputParser::DeserializeScheduleOutput(send_schedule_output_packet->body, new_schedule_output);
 
-  EXPECT_EQ(schedule_output->schedule_id, new_schedule_output->schedule_id);
+  EXPECT_EQ(schedule_output->multi_batch_id, new_schedule_output->multi_batch_id);
 
   // Free to pool.
   GetScheduleOutputPool()->FreeScheduleOutput(new_schedule_output);
   ScheduleOutput* free_schedule_output = GetScheduleOutputPool()->GetScheduleOutput();
-  EXPECT_EQ(schedule_output->schedule_id, free_schedule_output->schedule_id);
+  EXPECT_EQ(schedule_output->multi_batch_id, free_schedule_output->multi_batch_id);
 
   DestroyScheduleOutputPool();
 }

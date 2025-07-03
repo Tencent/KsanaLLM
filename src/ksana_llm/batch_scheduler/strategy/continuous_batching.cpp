@@ -963,20 +963,20 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
   size_t swapout_left_req_num = 0;
   do {
     if (blocking) {
-      KLLM_LOG_DEBUG << "pp_batch_idx=" << batch_state_->pp_batch_idx_
+      KLLM_LOG_DEBUG << "multi_batch_id=" << batch_state_->multi_batch_id_
                      << "before WaitSwapoutRequests with blocking=true, swapout_pending_requests_.size="
                      << batch_state_->swapout_pending_requests_.size();
     }
     std::vector<int64_t> swapout_req_ids;
     Status status = cache_manager_->WaitSwapoutRequests(swapout_req_ids, swapout_left_req_num, blocking);
     if (!status.OK()) {
-      KLLM_LOG_DEBUG << "pp_batch_idx=" << batch_state_->pp_batch_idx_
+      KLLM_LOG_DEBUG << "multi_batch_id=" << batch_state_->multi_batch_id_
                      << "Error MergePendingSwapoutRequests WaitSwapoutRequests failed. swapout_req_ids:"
                      << swapout_req_ids << ", info: " << status.GetMessage();
       return status;
     }
     if ((!swapout_req_ids.empty()) || blocking) {
-      KLLM_LOG_DEBUG << "pp_batch_idx=" << batch_state_->pp_batch_idx_
+      KLLM_LOG_DEBUG << "multi_batch_id=" << batch_state_->multi_batch_id_
                      << "finished swapout request size:" << swapout_req_ids.size();
     }
     for (int64_t req_id : swapout_req_ids) {
@@ -996,7 +996,7 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
       // Record merged swapout request.
       batch_state_->merged_swapout_req_ids.push_back(req->req_id);
 
-      KLLM_LOG_DEBUG << "pp_batch_idx=" << batch_state_->pp_batch_idx_ << "after finish swapout req " << req->req_id
+      KLLM_LOG_DEBUG << "multi_batch_id=" << batch_state_->multi_batch_id_ << "after finish swapout req " << req->req_id
                      << ", current_block_num:" << req->kv_cache_blocks[0].size() << batch_state_;
 
       batch_state_->swapped_queue[req->req_id] = req;

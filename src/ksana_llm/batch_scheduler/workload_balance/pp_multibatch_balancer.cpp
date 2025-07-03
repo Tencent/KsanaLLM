@@ -15,13 +15,13 @@ PPMultibatchWorkloadBalancer::PPMultibatchWorkloadBalancer(PPMultibatchWBStrateg
                        FormatStr("invalid pp_multibatch_wb_strategy: %d ", pp_multibatch_wb_strategy));
 }
 
-void PPMultibatchWorkloadBalancer::BalancePPMultiBatchReqs(size_t pp_batch_idx,
+void PPMultibatchWorkloadBalancer::BalancePPMultiBatchReqs(size_t multi_batch_id,
                                                            std::vector<std::shared_ptr<InferRequest>>& waiting_reqs,
                                                            std::vector<std::shared_ptr<BatchState>>& batch_states) {
   // First distribute waiting_reqs to batch states to balance workload
   DistributeWaitingReqs(waiting_reqs, batch_states);
   if (pp_multibatch_wb_strategy_ != PPMultibatchWBStrategy::NO_DYNAMIC_WB) {
-    OffloadBatchWorkload(pp_batch_idx, batch_states);
+    OffloadBatchWorkload(multi_batch_id, batch_states);
   }
 }
 
@@ -84,7 +84,7 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
     auto& reqs = req_list[i];
     if (reqs.empty()) {
     } else {
-      ss << "[ batch " << batch_states[i]->pp_batch_idx_ << " add " << reqs.size()
+      ss << "[ batch " << batch_states[i]->multi_batch_id_ << " add " << reqs.size()
          << " reqs, workload: " << current_workloads[i] << ", req ids: ";
       for (auto req_id : reqs) {
         ss << req_id << ", ";
@@ -97,7 +97,7 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
   ss.str("");
   for (size_t i = 0; i < batch_states.size(); i++) {
     auto& batch = batch_states[i];
-    ss << "[ batch " << batch->pp_batch_idx_ << ", workload:" << current_workloads[i]
+    ss << "[ batch " << batch->multi_batch_id_ << ", workload:" << current_workloads[i]
        << ", running:" << batch->schedule_output->running_reqs.size() << ", waiting:" << batch->waiting_queue.size()
        << " ] ";
   }
@@ -108,14 +108,14 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
   waiting_reqs.clear();
 }
 
-void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t pp_batch_idx,
+void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
                                                         std::vector<std::shared_ptr<BatchState>>& batch_states) {
   if (batch_states.size() <= 1) {
     // Nothing to balance with only one batch state
     return;
   }
   // Get the target batch state
-  auto& target_batch = batch_states[pp_batch_idx];
+  auto& target_batch = batch_states[multi_batch_id];
 
   // No need to offload if few requests left
   if ((target_batch->schedule_output->running_reqs.size() + target_batch->waiting_queue.size()) < 5) {
@@ -141,7 +141,7 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t pp_batch_idx,
       waiting_workload += CalculateWorkload(req);
     }
     batch_workload = running_workload + waiting_workload;
-    if (i == pp_batch_idx) {
+    if (i == multi_batch_id) {
       target_running_workload = running_workload;
       target_waiting_workload = waiting_workload;
     }
@@ -159,20 +159,20 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t pp_batch_idx,
   size_t threshold_workload = static_cast<size_t>(ideal_workload * threshold_factor_);
 
   // Check if target batch's workload exceeds the threshold
-  if (workloads[pp_batch_idx] <= threshold_workload) {
-    KLLM_LOG_DEBUG << "No need to balance workload. Target batch " << pp_batch_idx << " has workload "
-                   << workloads[pp_batch_idx] << "(running: " << target_running_workload
+  if (workloads[multi_batch_id] <= threshold_workload) {
+    KLLM_LOG_DEBUG << "No need to balance workload. Target batch " << multi_batch_id << " has workload "
+                   << workloads[multi_batch_id] << "(running: " << target_running_workload
                    << ", waiting:" << target_waiting_workload << "), which is below threshold " << threshold_workload;
     return;
   }
 
   // Calculate how much workload needs to be moved from the target batch
-  size_t workload_to_move = workloads[pp_batch_idx] - ideal_workload;
+  size_t workload_to_move = workloads[multi_batch_id] - ideal_workload;
 
-  KLLM_LOG_DEBUG << "Balancing workload. Target batch " << pp_batch_idx << " has workload " << workloads[pp_batch_idx]
-                 << "( running: " << target_running_workload << ", waiting:" << target_waiting_workload
-                 << " ), ideal_workload: " << ideal_workload << ", threshold_workload: " << threshold_workload
-                 << ", workload_to_move: " << workload_to_move;
+  KLLM_LOG_DEBUG << "Balancing workload. Target batch " << multi_batch_id << " has workload "
+                 << workloads[multi_batch_id] << "( running: " << target_running_workload
+                 << ", waiting:" << target_waiting_workload << " ), ideal_workload: " << ideal_workload
+                 << ", threshold_workload: " << threshold_workload << ", workload_to_move: " << workload_to_move;
 
   // Lock the target batch's queue mutex to safely access its queues
   std::lock_guard<std::mutex> target_guard(target_batch->queue_mutex);
@@ -225,12 +225,12 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t pp_batch_idx,
   // Create a vector of batch states excluding the target batch
   std::vector<std::shared_ptr<BatchState>> recipient_batches;
   for (size_t i = 0; i < batch_states.size(); ++i) {
-    if (i != pp_batch_idx) {
+    if (i != multi_batch_id) {
       recipient_batches.push_back(batch_states[i]);
     }
   }
   KLLM_LOG_DEBUG << "Migrating " << requests_to_migrate.size() << " requests with total workload " << migrated_workload
-                 << " from batch " << pp_batch_idx << ", target workload: (running:" << target_running_workload
+                 << " from batch " << multi_batch_id << ", target workload: (running:" << target_running_workload
                  << ", waiting:" << target_waiting_workload << " )";
   // Distribute the migrated requests to other batch states using DistributeWaitingReqs
   DistributeWaitingReqs(requests_to_migrate, recipient_batches);

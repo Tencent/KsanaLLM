@@ -41,7 +41,8 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
   Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 
   // init context
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize()));
+  constexpr int max_multi_batch_num = 1;
+  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(), max_multi_batch_num));
   KLLM_CHECK_WITH_INFO(!context_->IsStandalone(), "Failed to get batch scheduler config error");
 
   // init model_config
@@ -72,22 +73,22 @@ void CommunicationPerformanceRunner::Run() {
 void CommunicationPerformanceRunner::TestCommunicatePerformance(const std::vector<size_t>& shape, DataType data_type) {
   static constexpr size_t warm_up_rounds = 10;
   static constexpr size_t rounds = 100;
-  SetHiddenUnitMeta(shape, data_type);
+  SetHiddenUnitMeta(DEFAULT_MULTI_BATCH_ID, shape, data_type);
   if (context_->IsChief()) {  // master node send tensors
-    // Use DEFAULT_SCHEDULE_ID for performance testing
-    InitHiddenUnits(DEFAULT_SCHEDULE_ID);
+    // Use DEFAULT_MULTI_BATCH_ID for performance testing
+    InitHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     // warm up
     for (size_t i = 0; i < warm_up_rounds; ++i) {
-      SendHiddenUnits(DEFAULT_SCHEDULE_ID);
+      SendHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     }
     KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", rounds);
     auto start = std::chrono::high_resolution_clock::now();
     // send tensors
     for (size_t i = 0; i < rounds; ++i) {
-      SendHiddenUnits(DEFAULT_SCHEDULE_ID);
+      SendHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     }
     std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start;
-    FreeHiddenUnits(DEFAULT_SCHEDULE_ID);
+    FreeHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     std::cout << fmt::format("Master elapsed time: {} seconds of {} rounds\n", elapsed.count(), rounds);
     std::cout << fmt::format("Tensor shape: {}, Tensor dtype: {} TP: {}\n", Vector2Str(shape), GetTypeString(data_type),
                              model_config_.tensor_para_size);
@@ -95,17 +96,17 @@ void CommunicationPerformanceRunner::TestCommunicatePerformance(const std::vecto
 
   } else {  // worker node receive tensors
     // warm up
-    InitHiddenUnits(DEFAULT_SCHEDULE_ID);
+    InitHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     for (size_t i = 0; i < warm_up_rounds; ++i) {
-      RecvHiddenUnits(true, DEFAULT_SCHEDULE_ID);
+      RecvHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     }
     KLLM_LOG_INFO << fmt::format("Start Receive Tensors  of {} rounds", rounds);
     auto start = std::chrono::high_resolution_clock::now();
     // receive
     for (size_t i = 0; i < rounds; ++i) {
-      RecvHiddenUnits(true, DEFAULT_SCHEDULE_ID);
+      RecvHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     }
-    FreeHiddenUnits(DEFAULT_SCHEDULE_ID);
+    FreeHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start;
 
     std::cout << fmt::format("Worker elapsed time: {} seconds of {} rounds\n", elapsed.count(), rounds);

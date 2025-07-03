@@ -45,7 +45,7 @@ void ExpertParallelHiddenUnitBufferPool::PreAllocateDeviceBuffer() {
 
 Status ExpertParallelHiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitDeviceBuffer* hidden_unit_dev,
                                                                      HiddenUnitHostBuffer* hidden_unit_host) {
-  hidden_unit_dev->schedule_id = hidden_unit_host->schedule_id;
+  hidden_unit_dev->multi_batch_id = hidden_unit_host->multi_batch_id;
 
   size_t buffer_bytes = hidden_unit_host->shape_dims[0] * hidden_unit_host->shape_dims[1] * GetTypeSize(weight_type_);
   std::vector<size_t> buffer_shape = {hidden_unit_host->shape_dims[0], hidden_unit_host->shape_dims[1]};
@@ -82,7 +82,7 @@ Status ExpertParallelHiddenUnitBufferPool::ConvertHostBufferToDevice(HiddenUnitD
 
 Status ExpertParallelHiddenUnitBufferPool::ConvertDeviceBufferToHost(HiddenUnitHostBuffer* hidden_unit_host,
                                                                      HiddenUnitDeviceBuffer* hidden_unit_dev) {
-  hidden_unit_host->schedule_id = hidden_unit_dev->schedule_id;
+  hidden_unit_host->multi_batch_id = hidden_unit_dev->multi_batch_id;
   hidden_unit_host->tensor_parallel = hidden_unit_dev->tensors.size();
 
   std::vector<size_t> buffer_shape = hidden_unit_dev->tensors[0].shape;

@@ -145,25 +145,34 @@ TEST_F(DataChannelTest, TestDataChannel) {
   // Get a device buffer
   HiddenUnitDeviceBuffer* master_dev_hidden_unit = master_hidden_unit_buffer_pool_->GetDeviceBuffer();
   size_t master_schedule_id = 5;
-  master_dev_hidden_unit->schedule_id = master_schedule_id;
+  master_dev_hidden_unit->multi_batch_id = master_schedule_id;
 
   // Send from master to worker.
-  master_hidden_unit_buffer_pool_->PutToSendQueue(master_dev_hidden_unit);
+  KLLM_LOG_INFO << "master start send";
+  master_hidden_unit_buffer_pool_->PutToPendingSendQueue(master_dev_hidden_unit);
+  KLLM_LOG_INFO << "master send done";
 
   // Should be sent to worker, get it and check id.
-  HiddenUnitDeviceBuffer* worker_dev_hidden_unit =
-      worker_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue(master_schedule_id);
-  EXPECT_EQ(worker_dev_hidden_unit->schedule_id, master_schedule_id);
+  HiddenUnitDeviceBuffer* worker_dev_hidden_unit = worker_hidden_unit_buffer_pool_->GetDeviceBuffer();
+  worker_dev_hidden_unit->multi_batch_id = master_schedule_id;
+  KLLM_LOG_INFO << "master start recv";
+  worker_hidden_unit_buffer_pool_->PutToPendingRecvQueue(worker_dev_hidden_unit);
+  worker_dev_hidden_unit = worker_hidden_unit_buffer_pool_->GetFromDeviceRecvedQueue(master_schedule_id);
+  KLLM_LOG_INFO << "master recv done";
+
+  EXPECT_EQ(worker_dev_hidden_unit->multi_batch_id, master_schedule_id);
 
   // Change the id and send back from worker to master.
   size_t worker_schedule_id = 7;
-  worker_dev_hidden_unit->schedule_id = worker_schedule_id;
-  worker_hidden_unit_buffer_pool_->PutToSendQueue(worker_dev_hidden_unit);
+  worker_dev_hidden_unit->multi_batch_id = worker_schedule_id;
+  worker_hidden_unit_buffer_pool_->PutToPendingSendQueue(worker_dev_hidden_unit);
 
   // Should be sent to master, get it and check new id.
-  HiddenUnitDeviceBuffer* master_dev_hidden_unit_2 =
-      master_hidden_unit_buffer_pool_->GetFromDeviceRecvQueue(worker_schedule_id);
-  EXPECT_EQ(master_dev_hidden_unit_2->schedule_id, worker_schedule_id);
+  HiddenUnitDeviceBuffer* master_dev_hidden_unit_2 = worker_hidden_unit_buffer_pool_->GetDeviceBuffer();
+  master_dev_hidden_unit_2->multi_batch_id = worker_schedule_id;
+  master_hidden_unit_buffer_pool_->PutToPendingRecvQueue(master_dev_hidden_unit_2);
+  master_dev_hidden_unit_2 = master_hidden_unit_buffer_pool_->GetFromDeviceRecvedQueue(worker_schedule_id);
+  EXPECT_EQ(master_dev_hidden_unit_2->multi_batch_id, worker_schedule_id);
 
   master_data_channel_->Disconnect();
   worker_data_channel_->Disconnect();

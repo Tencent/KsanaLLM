@@ -33,7 +33,7 @@ class DeepSeekV3Test : public testing::Test {
     std::string yaml_path = "../../../../examples/llama7b/ksana_llm.yaml";
     setenv("ENABLE_FLASH_MLA", "1", 1);
     SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-    context = std::make_shared<Context>(1, 1);
+    context = std::make_shared<Context>(1, 1, 1);
 
     if (test_name.find("ForwardGPTQInt4Test") != std::string::npos) {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
@@ -96,7 +96,7 @@ class DeepSeekV3Test : public testing::Test {
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
   std::shared_ptr<PrefixCacheManager> cache_manager = nullptr;
   std::shared_ptr<Context> context{nullptr};
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
 
   template <typename weight_data_type>
   void TestDeepSeekV3Forward() {
@@ -141,7 +141,7 @@ class DeepSeekV3Test : public testing::Test {
     deepseek_v3_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<DeepSeekV3Model<weight_data_type>> deepseek_v3 =
         std::make_shared<DeepSeekV3Model<weight_data_type>>(model_config, device_id, context, deepseek_v3_weight);
-    deepseek_v3->AllocResources(schedule_id);
+    deepseek_v3->AllocResources(multi_batch_id);
 
     // ContextDecode
     ForwardRequest forward;
@@ -166,7 +166,7 @@ class DeepSeekV3Test : public testing::Test {
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);
-    forward.logits_buf[0] = deepseek_v3->GetLogitsPtr(schedule_id);
+    forward.logits_buf[0] = deepseek_v3->GetLogitsPtr(multi_batch_id);
     forward.logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
@@ -203,17 +203,17 @@ class DeepSeekV3Test : public testing::Test {
     Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
       KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;
     });
-    EXPECT_TRUE(deepseek_v3->Forward(schedule_id, deepseek_v3_weight, forward_reqs, false).OK());
+    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
     Singleton<LayerProgressTracker>::GetInstance()->Cleanup();
     std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
     // warmup
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(schedule_id, deepseek_v3_weight, multi_forward_reqs, false);
+      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
     }
     // test performance
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(schedule_id, deepseek_v3_weight, multi_forward_reqs, false);
+      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -258,7 +258,7 @@ class DeepSeekV3Test : public testing::Test {
 
     std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context);
-    sampler->Sampling(sample_reqs, context->GetComputeStreams()[device_id]);
+    sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
     EXPECT_EQ(5306, generated_tokens0[0]);
     EXPECT_EQ(5306, generated_tokens1[0]);
 
@@ -271,8 +271,8 @@ class DeepSeekV3Test : public testing::Test {
       forward_req.infer_stage = InferStage::STATE_DECODE;
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
-    EXPECT_TRUE(deepseek_v3->Forward(schedule_id, deepseek_v3_weight, forward_reqs, false).OK());
-    sampler->Sampling(sample_reqs, context->GetComputeStreams()[device_id]);
+    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
     EXPECT_EQ(13245, generated_tokens0[0]);
     EXPECT_EQ(13245, generated_tokens1[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
@@ -289,7 +289,7 @@ class DeepSeekV3Test : public testing::Test {
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(schedule_id, deepseek_v3_weight, multi_forward_reqs, false);
+      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -302,8 +302,8 @@ class DeepSeekV3Test : public testing::Test {
       forward_req.infer_stage = InferStage::STAGE_CONTEXT;
       forward_req.kv_cached_token_num = 0;
     }
-    EXPECT_TRUE(deepseek_v3->Forward(schedule_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN).OK());
-    sampler->Sampling(sample_reqs, context->GetComputeStreams()[device_id]);
+    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN).OK());
+    sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
 
     EXPECT_EQ(15354, generated_tokens0[0]);
     EXPECT_EQ(15354, generated_tokens1[0]);
@@ -313,7 +313,7 @@ class DeepSeekV3Test : public testing::Test {
 
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(schedule_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN);
+      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);

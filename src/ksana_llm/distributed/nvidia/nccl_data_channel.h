@@ -39,6 +39,9 @@ class NcclDataChannel : public DataChannelInterface {
   // Convert data type to nccl data type.
 #ifdef ENABLE_CUDA
   Status GetNcclDataType(DataType dtype, ncclDataType_t& nccl_dtype);
+  void SendRecvDeviceData(bool is_send, size_t multi_batch_id, int dev_id, DistributedCommunicationType comm_type,
+                          uint32_t scatter_sender_rank, std::vector<Stream>& streams, void* data_ptr, int64_t count,
+                          ncclDataType_t nccl_dtype);
 #endif
 
  private:
@@ -49,6 +52,12 @@ class NcclDataChannel : public DataChannelInterface {
   virtual Status ProcessRecvLoop();
   virtual Status ProcessSendLoop();
 
+  void NotifyRecvFinished(HiddenUnitDeviceBuffer* hidden_unit);
+  void NotifySendFinished(HiddenUnitDeviceBuffer* hidden_unit);
+
+  size_t GetRecordEventsBatchId(size_t multi_batch_id);
+  void WaitUtilRecvFinished(HiddenUnitDeviceBuffer* hidden_unit);
+
  private:
 #ifdef ENABLE_CUDA
   ncclUniqueId nccl_unique_id_;
@@ -57,6 +66,9 @@ class NcclDataChannel : public DataChannelInterface {
 #endif
 
   PipelineConfig pipeline_config_;
+
+  // [multi_batch_id, device_id]
+  std::vector< std::vector<Event>> recved_events_;
 
   // The rank ids of upstream and downstream device.
   std::vector<int> upstream_ranks_;

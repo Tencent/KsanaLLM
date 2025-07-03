@@ -24,12 +24,12 @@ namespace ksana_llm {
 ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path) {
   InitEnvs(config_path);
   LoadModel();
-  model_instance_->AllocResources(schedule_id_);
+  model_instance_->AllocResources(multi_batch_id_);
   InitRequests();
 }
 
 ModelPerformanceRunner::~ModelPerformanceRunner() {
-  model_instance_->FreeResources(schedule_id_);
+  model_instance_->FreeResources(multi_batch_id_);
   model_instance_->Reset();
   py::finalize_interpreter();
 }
@@ -43,7 +43,8 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   env->ParseConfig(config_path);
 
   // init context
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize()));
+  constexpr int max_multi_batch_num = 1;
+  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(), max_multi_batch_num));
 
   // init model_config
   env->GetModelConfig("", model_config_);
@@ -145,7 +146,7 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
   Status warmup_status = Status();
   for (size_t i = 0; i < warmp_up_rounds_; ++i) {
     std::vector<std::future<Status>> inst_results =
-        model_instance_->ForwardAsync(schedule_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
+        model_instance_->ForwardAsync(multi_batch_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
     for (auto& worker_result : inst_results) {
       Status status = worker_result.get();
       if (!status.OK()) {
@@ -161,7 +162,7 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
   EventRecord(start, context_->GetComputeStreams()[device_id]);
   for (size_t i = 0; i < rounds_; ++i) {
     std::vector<std::future<Status>> inst_results =
-        model_instance_->ForwardAsync(schedule_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
+        model_instance_->ForwardAsync(multi_batch_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
     for (auto& worker_result : inst_results) {
       Status status = worker_result.get();
       if (!status.OK()) {
@@ -211,7 +212,7 @@ void ModelPerformanceRunner::InitRequests() {
     req.draft_token_num = 0;
     req.flexible_cached_copy_tasks = &flexible_cached_copy_tasks_;
     req.input_refit_embedding = &embedding_slice_;
-    req.logits_buf = model_instance_->GetLogitsPtr(schedule_id_);
+    req.logits_buf = model_instance_->GetLogitsPtr(multi_batch_id_);
     req.logits_offset = 0;
     req.attn_dp_group_id = 0;
     if (req_id < multi_token_request_num_) {  // multi_token_request

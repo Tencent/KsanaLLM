@@ -177,14 +177,14 @@ TEST_F(HiddenUnitBufferTest, HiddenUnitBufferCommonTest) {
   InitializeHiddenUnitBufferPool();
   HiddenUnitDeviceBuffer* hidden_unit_buffer = nullptr;
 
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
 
   hidden_unit_buffer = GetHiddenUnitBufferPool()->GetDeviceBuffer();
   EXPECT_TRUE(hidden_unit_buffer != nullptr);
 
-  hidden_unit_buffer->schedule_id = schedule_id;
+  hidden_unit_buffer->multi_batch_id = multi_batch_id;
   SetCurrentHiddenUnitBuffer(hidden_unit_buffer);
-  EXPECT_TRUE(GetCurrentHiddenUnitBuffer(schedule_id) == hidden_unit_buffer);
+  EXPECT_TRUE(GetCurrentHiddenUnitBuffer(multi_batch_id) == hidden_unit_buffer);
 
   GetHiddenUnitBufferPool()->FreeDeviceBuffer(hidden_unit_buffer);
   EXPECT_TRUE(GetHiddenUnitBufferPool()->GetDeviceBuffer() == hidden_unit_buffer);
@@ -204,31 +204,31 @@ TEST_F(HiddenUnitBufferTest, TestHiddenUnitBufferPool) {
 
   // Assign a id.
   HiddenUnitHostBuffer* host_hidden_unit = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
-  host_hidden_unit->schedule_id = 235;
+  host_hidden_unit->multi_batch_id = 235;
 
   // Put to recv queue and get it.
   GetHiddenUnitBufferPool()->PutToHostRecvQueue(packet);
   Packet* recv_packet = GetHiddenUnitBufferPool()->GetFromHostRecvQueue();
   HiddenUnitHostBuffer* recv_host_hidden_unit = reinterpret_cast<HiddenUnitHostBuffer*>(recv_packet->body);
-  EXPECT_EQ(host_hidden_unit->schedule_id, recv_host_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, recv_host_hidden_unit->multi_batch_id);
 
   // Get a device buffer and converted from a host buffer.
   HiddenUnitDeviceBuffer* dev_hidden_unit = GetHiddenUnitBufferPool()->GetDeviceBuffer();
   GetHiddenUnitBufferPool()->ConvertHostBufferToDevice(dev_hidden_unit, recv_host_hidden_unit);
-  EXPECT_EQ(host_hidden_unit->schedule_id, dev_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, dev_hidden_unit->multi_batch_id);
 
   HiddenUnitDeviceBuffer* send_dev_hidden_unit;
   auto send_fn = [&]() {
-    send_dev_hidden_unit = GetHiddenUnitBufferPool()->GetFromSendQueue();
-    GetHiddenUnitBufferPool()->NotifySendFinished();
+    send_dev_hidden_unit = GetHiddenUnitBufferPool()->GetFromPendingSendQueue();
+    send_dev_hidden_unit->NotifyFinished();
   };
   std::thread send_thread(send_fn);
 
   // Put to send queue and get it.
-  GetHiddenUnitBufferPool()->PutToSendQueue(dev_hidden_unit);
+  GetHiddenUnitBufferPool()->PutToPendingSendQueue(dev_hidden_unit);
 
   send_thread.join();
-  EXPECT_EQ(host_hidden_unit->schedule_id, send_dev_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, send_dev_hidden_unit->multi_batch_id);
 
   // Get Preallocated device buffer.
   GetHiddenUnitBufferPool()->PreAllocateDeviceBuffer();
@@ -252,7 +252,6 @@ TEST_F(HiddenUnitBufferTest, TestMultiThreadRecvWait) {
     std::atomic<int> sender_iteration(0);
     std::vector<std::atomic<int>> receiver_counts(num_receivers);
 
-    // Sender thread: repeatedly calls WaitUtilReadyToRecv -> PutToDeviceRecvQueue
     auto sender_fn = [&]() {
       int total_iterations = 0;
       std::vector<int> sent_buffer_num(num_receivers);
@@ -267,13 +266,12 @@ TEST_F(HiddenUnitBufferTest, TestMultiThreadRecvWait) {
             continue;
           }
           // First wait until ready to receive
-          GetHiddenUnitBufferPool()->WaitUtilReadyToRecv();
-
           auto buffer = GetHiddenUnitBufferPool()->GetDeviceBuffer();
-          buffer->schedule_id = r;
+          buffer->multi_batch_id = r;
 
           // Then put buffer in the queue
-          GetHiddenUnitBufferPool()->PutToDeviceRecvQueue(buffer);
+          buffer->NotifyFinished();
+          GetHiddenUnitBufferPool()->PutToDeviceRecvedQueue(buffer);
 
           sent_buffer_num[r]++;
           total_iterations--;
@@ -297,9 +295,9 @@ TEST_F(HiddenUnitBufferTest, TestMultiThreadRecvWait) {
 
           // Try to get the buffer for the current iteration
           try {
-            HiddenUnitDeviceBuffer* received_buffer = GetHiddenUnitBufferPool()->GetFromDeviceRecvQueue(r);
+            HiddenUnitDeviceBuffer* received_buffer = GetHiddenUnitBufferPool()->GetFromDeviceRecvedQueue(r);
             // Verify the buffer and free it
-            EXPECT_EQ(received_buffer->schedule_id, r);
+            EXPECT_EQ(received_buffer->multi_batch_id, r);
 
             GetHiddenUnitBufferPool()->FreeDeviceBuffer(received_buffer);
             receiver_counts[r]++;

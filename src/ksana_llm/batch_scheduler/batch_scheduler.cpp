@@ -101,7 +101,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   return EnqueueWaitingBufferQueue(infer_request_group);
 }
 
-bool BatchScheduler::IsIdle(size_t pp_batch_idx) {
+bool BatchScheduler::IsIdle(size_t multi_batch_id) {
   bool waiting_buffer_emtpy = false;
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
@@ -110,7 +110,7 @@ bool BatchScheduler::IsIdle(size_t pp_batch_idx) {
 
   bool batch_state_queue_empty = true;
   for (auto& dp_batch_states : batch_states_) {
-    auto& batch_state = dp_batch_states[pp_batch_idx];
+    auto& batch_state = dp_batch_states[multi_batch_id];
     std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
     batch_state_queue_empty = batch_state_queue_empty && batch_state->swapped_queue.empty() &&
                               batch_state->waiting_queue.empty() && batch_state->transfer_queue.empty();
@@ -119,14 +119,14 @@ bool BatchScheduler::IsIdle(size_t pp_batch_idx) {
   return (waiting_buffer_emtpy && batch_state_queue_empty);
 }
 
-void BatchScheduler::WaitUntilHaveReqs(size_t pp_batch_idx) {
-  while (IsIdle(pp_batch_idx) && !terminating_) {
+void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
+  while (IsIdle(multi_batch_id) && !terminating_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     {
       std::lock_guard<std::mutex> guard(schedule_mutex_);
       // Update requests in swapin/swapout pending queue
       for (size_t i = 0; i < dp_num_; i++) {
-        auto batch_state = batch_states_[i][pp_batch_idx];
+        auto batch_state = batch_states_[i][multi_batch_id];
         if (batch_state->swapin_pending_requests_.empty() && batch_state->swapout_pending_requests_.empty()) {
           continue;
         }
@@ -223,11 +223,11 @@ void BatchScheduler::BalanceWaitingReqs() {
   balance_reqs_algo_->BalanceReqs(workload, waiting_reqs_with_index, dp_waiting_reqs_);
 }
 
-void BatchScheduler::BalancePPMultiBatchReqs(size_t pp_batch_idx) {
+void BatchScheduler::BalancePPMultiBatchReqs(size_t multi_batch_id) {
   if (!pp_multibatch_wl_balancer_) return;
 
   for (size_t i = 0; i < dp_num_; ++i) {
-    pp_multibatch_wl_balancer_->BalancePPMultiBatchReqs(pp_batch_idx, dp_waiting_reqs_[i], batch_states_[i]);
+    pp_multibatch_wl_balancer_->BalancePPMultiBatchReqs(multi_batch_id, dp_waiting_reqs_[i], batch_states_[i]);
   }
 }
 
@@ -251,26 +251,26 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state) {
   }
 }
 
-std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t pp_batch_idx) {
+std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch_id) {
   std::lock_guard<std::mutex> guard(schedule_mutex_);
 
-  KLLM_LOG_DEBUG << "Try scheduler pp_batch_idx=" << pp_batch_idx << ", waiting_reqs_size:" << waiting_reqs_.size();
+  KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
   Singleton<LayerProgressTracker>::GetInstance()->ResetState();
 
   // Update running requests before workload balance
   for (size_t i = 0; i < dp_num_; i++) {
-    schedule_strategies_[i]->SetBatchState(batch_states_[i][pp_batch_idx]);
+    schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
     schedule_strategies_[i]->UpdateRunningRequests();
   }
 
   BalanceWaitingReqs();
 
-  BalancePPMultiBatchReqs(pp_batch_idx);
+  BalancePPMultiBatchReqs(multi_batch_id);
 
   std::vector<std::future<void>> futures;
   for (size_t i = 0; i < dp_num_; i++) {
     futures.push_back(
-        threadpool_->Submit([this, i, pp_batch_idx] { schedule_strategies_[i]->Schedule(dp_waiting_reqs_[i]); }));
+        threadpool_->Submit([this, i, multi_batch_id] { schedule_strategies_[i]->Schedule(dp_waiting_reqs_[i]); }));
   }
 
   for (auto& future : futures) {
@@ -281,7 +281,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t pp_batch_id
   size_t total_waiting_size_in_batch_states = 0;
   size_t total_dp_waiting_queue_size = 0;
   for (size_t i = 0; i < dp_num_; i++) {
-    auto& batch_state = batch_states_[i][pp_batch_idx];
+    auto& batch_state = batch_states_[i][multi_batch_id];
     ReportBatchState(batch_state);
     schedule_output_group_->outputs[i] = batch_state->schedule_output;
     total_running_size += batch_state->schedule_output->running_reqs.size();
@@ -290,7 +290,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t pp_batch_id
   }
   schedule_output_group_->schedule_id++;
 
-  KLLM_LOG_DEBUG << "Finish schedule. pp_batch_idx=" << pp_batch_idx
+  KLLM_LOG_DEBUG << "Finish schedule. multi_batch_id=" << multi_batch_id
                  << ", schedule_id=" << schedule_output_group_->schedule_id
                  << ", running_req.size(): " << total_running_size
                  << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states

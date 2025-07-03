@@ -4,6 +4,7 @@
 
 #include "ksana_llm/layers/nccl_all_gather_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/profiler/profile_event.h"
 
 namespace ksana_llm {
 
@@ -24,17 +25,19 @@ Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   } else {
     stream = &(context_->GetCommStreams()[rank_].Get());
   }
-
-  NCCL_CHECK(ncclGroupStart());
-  ncclResult_t ncclError =
-      ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                    reinterpret_cast<void*>(input_tensors[1].GetPtr<void>()), input_tensors[0].GetElementNumber(),
-                    GetNcclDataType<T>(), context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
-  if (ncclError != ncclSuccess) {
-    KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
-    return Status(RetCode::RET_INFER_FAILED, "NCCL error");
+  {
+    PROFILE_EVENT_SCOPE(nccl_allgather_multi_batch_id_, "nccl_allgather_multi_batch_id_{}", rank_);
+    NCCL_CHECK(ncclGroupStart());
+    ncclResult_t ncclError =
+        ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
+                      reinterpret_cast<void*>(input_tensors[1].GetPtr<void>()), input_tensors[0].GetElementNumber(),
+                      GetNcclDataType<T>(), context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+    if (ncclError != ncclSuccess) {
+      KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
+      return Status(RetCode::RET_INFER_FAILED, "NCCL error");
+    }
+    NCCL_CHECK(ncclGroupEnd());
   }
-  NCCL_CHECK(ncclGroupEnd());
   InvokePermute<T>(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
                    *stream);
   output_tensors[0].shape = {h, tp_size * w_per};

@@ -24,7 +24,7 @@ struct BatchRequestSchedInfo {
     size_t forwarding_token_num;
     size_t seq_len;
   };
-  size_t pp_batch_idx;
+  size_t multi_batch_id;
   std::vector<RequestSchedInfo> req_info_list;
 };
 
@@ -63,9 +63,9 @@ class ScheduleEventTracer {
 };
 
 inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromInferReqs(
-    const std::vector<std::shared_ptr<InferRequest>>& reqs, size_t pp_batch_idx) {
+    const std::vector<std::shared_ptr<InferRequest>>& reqs, size_t multi_batch_id) {
   BatchRequestSchedInfo batch_info;
-  batch_info.pp_batch_idx = pp_batch_idx;
+  batch_info.multi_batch_id = multi_batch_id;
   batch_info.req_info_list.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); i++) {
     auto& req = reqs[i];
@@ -78,9 +78,9 @@ inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromInferReqs(
 }
 
 inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromForwardingReqs(const std::vector<ForwardRequest>& reqs,
-                                                                          size_t pp_batch_idx) {
+                                                                          size_t multi_batch_id) {
   BatchRequestSchedInfo batch_info;
-  batch_info.pp_batch_idx = pp_batch_idx;
+  batch_info.multi_batch_id = multi_batch_id;
   batch_info.req_info_list.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); i++) {
     auto& req = reqs[i];
@@ -115,17 +115,17 @@ inline void RecordRequestSchedEvents(BatchRequestSchedInfo& batch_sched_info, in
 }
 
 inline void RecordRequestSchedEvents(const std::vector<std::shared_ptr<InferRequest>>& reqs, int rank,
-                                     size_t pp_batch_idx, size_t attn_dp_group_id, const char* type,
+                                     size_t multi_batch_id, size_t attn_dp_group_id, const char* type,
                                      RequestEventPhase phase) {
   time_t time_ns = ProfileTimer::GetCurrentTimeInNs();
-  auto batch_info = BuildBatchRequestSchedInfoFromInferReqs(reqs, pp_batch_idx);
+  auto batch_info = BuildBatchRequestSchedInfoFromInferReqs(reqs, multi_batch_id);
   RecordRequestSchedEventsWithTime(batch_info, rank, attn_dp_group_id, type, phase, time_ns);
 }
 
 inline void RecordRequestSchedEventsWithStartTime(std::vector<std::shared_ptr<InferRequest>> reqs, int rank,
-                                                  size_t pp_batch_idx, size_t attn_dp_group_id, const char* type,
+                                                  size_t multi_batch_id, size_t attn_dp_group_id, const char* type,
                                                   time_t start_time_ns) {
-  auto batch_info = BuildBatchRequestSchedInfoFromInferReqs(reqs, pp_batch_idx);
+  auto batch_info = BuildBatchRequestSchedInfoFromInferReqs(reqs, multi_batch_id);
   RecordRequestSchedEventsWithTime(batch_info, rank, attn_dp_group_id, type, RequestEventPhase::Begin, start_time_ns);
   time_t time_ns = ProfileTimer::GetCurrentTimeInNs();
   RecordRequestSchedEventsWithTime(batch_info, rank, attn_dp_group_id, type, RequestEventPhase::End, time_ns);

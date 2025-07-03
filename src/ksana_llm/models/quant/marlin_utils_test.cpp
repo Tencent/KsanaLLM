@@ -11,7 +11,7 @@ class MarlinUtilsTest : public testing::Test {
  protected:
   // 在每个测试用例执行之前调用的函数
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     marlin_helper_ = std::make_shared<MarlinUtils>(context_, rank_, bits_, groupsize_);
   }
 

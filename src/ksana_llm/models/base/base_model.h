@@ -30,16 +30,16 @@ class BaseModel {
   virtual ~BaseModel();
 
   // Forward model.
-  virtual Status Forward(size_t schedule_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+  virtual Status Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                          std::vector<ForwardRequest>& forward_reqs, bool epilogue,
                          RunMode run_mode = RunMode::kMain) = 0;
 
-  // Manage resources for different schedule_id because Forward is invoked multiple times to serve a schedule_id
-  virtual Status AllocResources(size_t schedule_id) = 0;
-  virtual Status FreeResources(size_t schedule_id) = 0;
+  // Manage resources for different multi_batch_id because Forward is invoked multiple times to serve a multi_batch_id
+  virtual Status AllocResources(size_t multi_batch_id) = 0;
+  virtual Status FreeResources(size_t multi_batch_id) = 0;
 
   // The output logits pointer on device, used by sampler to avoid memory copy.
-  virtual float* GetLogitsPtr(size_t schedule_id) = 0;
+  virtual float* GetLogitsPtr(size_t multi_batch_id) = 0;
 
   // Implement this method if cuda graph is used.
   virtual Status WarmUpCudaGraph() { return Status(); }

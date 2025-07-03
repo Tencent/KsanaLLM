@@ -32,7 +32,7 @@ class DeepSeekV3DPTest : public testing::Test {
 
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
     std::string yaml_path = "../../../../examples/deepseekv2/ksana_llm_deepseek_v2_tp2_dp2.yaml";
-    context = std::make_shared<Context>(2, 2);
+    context = std::make_shared<Context>(2, 2, 1);
 
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -94,7 +94,7 @@ class DeepSeekV3DPTest : public testing::Test {
   std::vector<std::shared_ptr<BlockAllocatorGroupInterface>> block_allocator_groups;
   std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
   std::shared_ptr<Context> context{nullptr};
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
   std::vector<std::shared_ptr<DeepSeekV3Model<bfloat16>>> deepseek_v3_dps;
   std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
 
@@ -128,7 +128,7 @@ class DeepSeekV3DPTest : public testing::Test {
         deepseek_v3_weight->ProcessWeights();
         std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 =
             std::make_shared<DeepSeekV3Model<bfloat16>>(model_config, device_id, context, deepseek_v3_weight);
-        deepseek_v3->AllocResources(schedule_id);
+        deepseek_v3->AllocResources(multi_batch_id);
 
         deepseek_v3_dps.push_back(deepseek_v3);
         deepseek_v3_weight_dps.push_back(deepseek_v3_weight);
@@ -146,8 +146,8 @@ class DeepSeekV3DPTest : public testing::Test {
     forward.draft_token_num = 0;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(2);  // tp 2
-    forward.logits_buf[0] = deepseek_v3_dps[0]->GetLogitsPtr(schedule_id);
-    forward.logits_buf[1] = deepseek_v3_dps[1]->GetLogitsPtr(schedule_id);
+    forward.logits_buf[0] = deepseek_v3_dps[0]->GetLogitsPtr(multi_batch_id);
+    forward.logits_buf[1] = deepseek_v3_dps[1]->GetLogitsPtr(multi_batch_id);
     forward.logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
@@ -208,7 +208,7 @@ class DeepSeekV3DPTest : public testing::Test {
       forward_threads.emplace_back([&, this, device_id]() {
         SetDevice(device_id);
         EXPECT_TRUE(deepseek_v3_dps[device_id]
-                        ->Forward(schedule_id, deepseek_v3_weight_dps[device_id], forward_reqs, false)
+                        ->Forward(multi_batch_id, deepseek_v3_weight_dps[device_id], forward_reqs, false)
                         .OK());
       });
     }
@@ -265,7 +265,7 @@ class DeepSeekV3DPTest : public testing::Test {
     ExecuteForward(context_forward_reqs);
 
     // Chdck data hash.
-    float *logist_base_ptr = deepseek_v3_dps[0]->GetLogitsPtr(schedule_id);
+    float *logist_base_ptr = deepseek_v3_dps[0]->GetLogitsPtr(multi_batch_id);
     size_t context_hash0 = hash_fn(logist_base_ptr, model_config.vocab_size);
     size_t context_hash2 = hash_fn(logist_base_ptr + model_config.vocab_size, model_config.vocab_size);
     size_t context_hash1 = hash_fn(logist_base_ptr + (model_config.vocab_size * 2), model_config.vocab_size);

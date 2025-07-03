@@ -14,7 +14,7 @@ using namespace ksana_llm;
 class BlockAllocatorTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(device_num_, attn_dp_worker_num_);
+    context_ = std::make_shared<Context>(device_num_, attn_dp_worker_num_, multi_batch_num_);
     memory_allocator_ = std::make_shared<MemoryAllocator>();
   }
 
@@ -23,6 +23,7 @@ class BlockAllocatorTest : public testing::Test {
  protected:
   int device_num_ = 1;
   uint32_t attn_dp_worker_num_ = 1;
+  size_t multi_batch_num_ = 1;
 
   std::shared_ptr<BlockAllocatorInterface> block_allocator_ = nullptr;
 

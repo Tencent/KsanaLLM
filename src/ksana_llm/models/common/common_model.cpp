@@ -77,11 +77,11 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
     // Initialize all forwarding contexts in the buffer
     forwarding_context_buffer_.reserve(forwarding_context_buffer_size);
-    for (size_t pp_batch_idx = 0; pp_batch_idx < forwarding_context_buffer_size; ++pp_batch_idx) {
+    for (size_t multi_batch_id = 0; multi_batch_id < forwarding_context_buffer_size; ++multi_batch_id) {
       auto forwarding_context = std::make_unique<ForwardingContext<T>>();
       // TODO(karlluo): each forwarding_context binding different model buffer
       forwarding_context->Init(context_, rank_, model_config_, pipeline_config_, model_buffers_.buffers_.get(),
-                               GetBufferManager(), pp_batch_idx);
+                               GetBufferManager(), multi_batch_id);
       forwarding_context_buffer_.push_back(std::move(forwarding_context));
     }
 
@@ -177,9 +177,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 }
 
 template <typename T>
-float* CommonModel<T>::GetLogitsPtr(size_t schedule_id) {
+float* CommonModel<T>::GetLogitsPtr(size_t multi_batch_id) {
   SetDevice(rank_);
-  ForwardingContext<T>* forwarding_context = GetForwardingContext(schedule_id);
+  ForwardingContext<T>* forwarding_context = GetForwardingContext(multi_batch_id);
   return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>();
 }
 
@@ -199,9 +199,11 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext<T>& forwarding_context) {
   // Wait the computation of input_ids.
-  StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->input_ids_event);
+  StreamWaitEvent(context_->GetComputeStreams()[rank_],
+                  forwarding_context.GetModelInput()->input_ids_event);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_],
+                    forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
@@ -305,7 +307,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>
 
 #ifdef ENABLE_ACL
   if (forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT) {
-    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId());
+    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId());
     if (distributed_device_buffer_prefill_.empty()) {
       distributed_device_buffer_prefill_.push_back(device_buffer->prefill_tensors[rank_]);
     } else {
@@ -320,7 +322,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>
     return distributed_device_buffer_prefill_;
   } else {
 #endif
-    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId());
+    HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId());
     if (distributed_device_buffer_.empty()) {
       distributed_device_buffer_.push_back(device_buffer->tensors[rank_]);
     } else {
@@ -342,21 +344,15 @@ template <typename T>
 std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext<T>& forwarding_context, bool do_recv) {
   if (do_recv) {
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::Begin);
-    // Wait recv if first layer and not chief, SetCurrentHiddenUnitBuffer will be called.
-    Status status = RecvHiddenUnits(forwarding_context.GetCurrentRank() == 0, forwarding_context.GetScheduleId());
-    if (!status.OK()) {
-      KLLM_LOG_ERROR << status.ToString();
-    }
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
-    CopyFromHiddenUnitBuffer(residual_buffer[0], GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId()),
+    CopyFromHiddenUnitBuffer(residual_buffer[0], GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId()),
                              forwarding_context.GetCurrentRank(), is_prefill);
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::End);
 
     if (forwarding_context.IsForwardingLayers()) {
       RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::Begin);
     }
-
     return residual_buffer;
   } else {
     if (forwarding_context.IsForwardingLayers()) {
@@ -367,18 +363,18 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext<T>& f
 }
 
 template <typename T>
-Status CommonModel<T>::AllocResources(size_t schedule_id) {
+Status CommonModel<T>::AllocResources(size_t multi_batch_id) {
   std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
 
-  // Check if this schedule_id already has an allocated context
-  if (schedule_to_context_map_.find(schedule_id) != schedule_to_context_map_.end()) {
-    KLLM_LOG_DEBUG << "ForwardingContext for schedule_id=" << schedule_id << " already allocated";
+  // Check if this multi_batch_id already has an allocated context
+  if (schedule_to_context_map_.find(multi_batch_id) != schedule_to_context_map_.end()) {
+    KLLM_LOG_DEBUG << "ForwardingContext for multi_batch_id=" << multi_batch_id << " already allocated";
     return Status();
   }
 
   // Find an available context in the buffer
   for (size_t i = 0; i < forwarding_context_buffer_.size(); ++i) {
-    // Check if this context is not assigned to any schedule_id
+    // Check if this context is not assigned to any multi_batch_id
     bool is_assigned = false;
     for (const auto& pair : schedule_to_context_map_) {
       if (pair.second == i) {
@@ -388,27 +384,27 @@ Status CommonModel<T>::AllocResources(size_t schedule_id) {
     }
 
     if (!is_assigned) {
-      // Assign this context to the schedule_id
-      schedule_to_context_map_[schedule_id] = i;
-      forwarding_context_buffer_[i]->SetScheduleId(schedule_id);
+      // Assign this context to the multi_batch_id
+      schedule_to_context_map_[multi_batch_id] = i;
+      forwarding_context_buffer_[i]->SetMultiBatchId(multi_batch_id);
       return Status();
     }
   }
 
   // If we get here, all contexts are assigned
-  KLLM_LOG_ERROR << "No available ForwardingContext for schedule_id=" << schedule_id;
+  KLLM_LOG_ERROR << "No available ForwardingContext for multi_batch_id=" << multi_batch_id;
   return Status(RET_RUNTIME_FAILED, "No available ForwardingContext");
 }
 
 template <typename T>
-Status CommonModel<T>::FreeResources(size_t schedule_id) {
+Status CommonModel<T>::FreeResources(size_t multi_batch_id) {
   std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
 
-  // Check if this schedule_id has an allocated context
-  auto it = schedule_to_context_map_.find(schedule_id);
+  // Check if this multi_batch_id has an allocated context
+  auto it = schedule_to_context_map_.find(multi_batch_id);
   if (it == schedule_to_context_map_.end()) {
-    KLLM_LOG_ERROR << "No ForwardingContext found for schedule_id=" << schedule_id;
-    return Status(RET_RUNTIME_FAILED, "No ForwardingContext found for schedule_id");
+    KLLM_LOG_ERROR << "No ForwardingContext found for multi_batch_id=" << multi_batch_id;
+    return Status(RET_RUNTIME_FAILED, "No ForwardingContext found for multi_batch_id");
   }
 
   // Remove the context from the map
@@ -426,21 +422,22 @@ void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer,
   if (!forwarding_context.GetContext()->IsStandalone()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::Begin);
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
-    StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
-    RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::End);
 
-    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(forwarding_context.GetScheduleId()), residual_buffer[0],
-                           forwarding_context.GetCurrentRank(), is_prefill);
+    auto working_stream = forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()];
+    StreamSynchronize(working_stream);
+    RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::End);
+    CopyToHiddenUnitBuffer(GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId()), residual_buffer[0],
+                           forwarding_context.GetCurrentRank(), is_prefill, working_stream);
   }
 }
 
 template <typename T>
-ForwardingContext<T>* CommonModel<T>::GetForwardingContext(size_t schedule_id) {
+ForwardingContext<T>* CommonModel<T>::GetForwardingContext(size_t multi_batch_id) {
   {
     std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
-    auto it = schedule_to_context_map_.find(schedule_id);
+    auto it = schedule_to_context_map_.find(multi_batch_id);
     if (it == schedule_to_context_map_.end()) {
-      KLLM_LOG_ERROR << "No ForwardingContext found for schedule_id=" << schedule_id;
+      KLLM_LOG_ERROR << "No ForwardingContext found for multi_batch_id=" << multi_batch_id;
       return nullptr;
     }
     return forwarding_context_buffer_[it->second].get();
@@ -448,18 +445,26 @@ ForwardingContext<T>* CommonModel<T>::GetForwardingContext(size_t schedule_id) {
 }
 
 template <typename T>
-Status CommonModel<T>::Forward(size_t schedule_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
-  // Get the forwarding context for this schedule_id
-  ForwardingContext<T>* forwarding_context = GetForwardingContext(schedule_id);
+  // Get the forwarding context for this multi_batch_id
+  time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  ForwardingContext<T>* forwarding_context = GetForwardingContext(multi_batch_id);
+  KLLM_LOG_DEBUG << "start forward multi_batch_id=" << forwarding_context->GetMultiBatchId() << ", rank=" << rank_;
+
+  PROFILE_EVENT_SCOPE(
+      CommonModel_Forward,
+      fmt::format("CommonModel_Forward_{}_{}_rank{}", multi_batch_id, epilogue, forwarding_context->GetCurrentRank()),
+      forwarding_context->GetCurrentRank());
+
   forwarding_context->GetBatchRequestSchedInfo() =
-      BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs, schedule_id);
-  ProfileEvent::PushEvent("CommonModel_Forward", forwarding_context->GetCurrentRank());
+      BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs, multi_batch_id);
 
   forwarding_context->UpdateBeforeForward(forward_reqs, run_mode);
 
   // Set shape and type of hidden unit.
-  SetHiddenUnitMeta({forwarding_context->GetModelInput()->input_ids.shape[0], model_config_.hidden_units},
+  SetHiddenUnitMeta(multi_batch_id,
+                    {forwarding_context->GetModelInput()->input_ids.shape[0], model_config_.hidden_units},
                     model_config_.weight_data_type);
   if (context_->IsChief()) {
     RecordRequestSchedEventWithFContext(*forwarding_context, "PrepareForwarding", RequestEventPhase::End);
@@ -479,7 +484,10 @@ Status CommonModel<T>::Forward(size_t schedule_id, std::shared_ptr<ksana_llm::Ba
   if (context_->IsStandalone() || epilogue) {
     LmHead(*forwarding_context, base_weight, forward_reqs, run_mode);
   }
-  ProfileEvent::PopEvent();
+
+  time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  KLLM_LOG_DEBUG << "CommonModel Forward multi_batch_id=" << multi_batch_id << ", epilogue=" << epilogue
+                << ", time cost=" << end_time_ms - start_time_ms << "ms";
   return Status();
 }
 
@@ -487,7 +495,9 @@ template <typename T>
 Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
                                        std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
-  ProfileEvent::PushEvent("CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
+  KLLM_LOG_DEBUG << "start lookup embedding multi_batch_id=" << forwarding_context.GetMultiBatchId()
+                << ", rank=" << rank_ << "";
+  PROFILE_EVENT_SCOPE(CommonModel_LookupEmbedding, "CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
   // CPU embedding lookup
   // The output is stored in `residual_buffer` for residual connection in common
   // decoder.
@@ -497,8 +507,10 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
   }
 
   if (forwarding_context.GetModelInput()->is_cudagraph_capture_request) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->kvcache_offset_event);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_],
+                    forwarding_context.GetModelInput()->kvcache_offset_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_],
+                    forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   // GPU embedding lookup
@@ -516,7 +528,6 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
                                  forwarding_context.GetModelInput()->cpu_input_refit_tensor.emb_fp32_ptr_tensor},
                                 residual_buffer);
   }
-  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -534,7 +545,8 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
     mtp_hidden_tensor.shape = residual_buffer[0].shape;
     mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
     MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
-                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
+                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                context_->GetComputeStreams()[rank_]);
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -575,7 +587,8 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
 #endif
 
   // lm_head
-  ProfileEvent::PushEvent("CommonModel_LmHead", forwarding_context.GetCurrentRank());
+  PROFILE_EVENT_SCOPE(CommonModel_LmHead_, fmt::format("CommonModel_LmHead_{}", forwarding_context.GetMultiBatchId()),
+                          forwarding_context.GetCurrentRank());
   STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
@@ -590,7 +603,6 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
     forwarding_context.GetModelCommunicator()->AllGather({hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]},
                                                          hidden_buffer_tensors_0);
   }
-  ProfileEvent::PopEvent();
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
     if (UpdateResponse(forward_reqs, hidden_buffer_tensors_0[0], "logits")) {
@@ -599,6 +611,8 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
     }
   }
 
+  PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast_{}", forwarding_context.GetMultiBatchId()),
+                          forwarding_context.GetCurrentRank());
   forwarding_context.UpdateAfterForward(forward_reqs);
   std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
   STATUS_CHECK_RETURN(cast_layer_->Forward(

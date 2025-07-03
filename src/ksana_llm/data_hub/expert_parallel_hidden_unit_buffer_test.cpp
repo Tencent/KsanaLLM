@@ -181,12 +181,12 @@ TEST_F(ExpertParallelHiddenUnitBufferTest, HiddenUnitBufferCommonTest) {
   HiddenUnitDeviceBuffer* hidden_unit_buffer = nullptr;
 
   int rank = 0;
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
 
   hidden_unit_buffer = GetExpertHiddenUnitBufferPool()->GetDeviceBuffer(rank);
   EXPECT_TRUE(hidden_unit_buffer != nullptr);
 
-  hidden_unit_buffer->schedule_id = schedule_id;
+  hidden_unit_buffer->multi_batch_id = multi_batch_id;
   SetCurrentExpertRecvHiddenUnitBuffer(hidden_unit_buffer);
   EXPECT_TRUE(GetCurrentExpertRecvHiddenUnitBuffer() == hidden_unit_buffer);
 
@@ -210,18 +210,18 @@ TEST_F(ExpertParallelHiddenUnitBufferTest, TestHiddenUnitBufferPool) {
 
   // Assign a id.
   HiddenUnitHostBuffer* host_hidden_unit = reinterpret_cast<HiddenUnitHostBuffer*>(packet->body);
-  host_hidden_unit->schedule_id = 235;
+  host_hidden_unit->multi_batch_id = 235;
 
   // Put to recv queue and get it.
   GetExpertHiddenUnitBufferPool()->PutToHostRecvQueue(packet);
   Packet* recv_packet = GetExpertHiddenUnitBufferPool()->GetFromHostRecvQueue();
   HiddenUnitHostBuffer* recv_host_hidden_unit = reinterpret_cast<HiddenUnitHostBuffer*>(recv_packet->body);
-  EXPECT_EQ(host_hidden_unit->schedule_id, recv_host_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, recv_host_hidden_unit->multi_batch_id);
 
   // Get a device buffer and converted from a host buffer.
   HiddenUnitDeviceBuffer* dev_hidden_unit = GetExpertHiddenUnitBufferPool()->GetDeviceBuffer(rank);
   GetExpertHiddenUnitBufferPool()->ConvertHostBufferToDevice(dev_hidden_unit, recv_host_hidden_unit);
-  EXPECT_EQ(host_hidden_unit->schedule_id, dev_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, dev_hidden_unit->multi_batch_id);
 
   HiddenUnitDeviceBuffer* send_dev_hidden_unit;
   auto send_fn = [&]() {
@@ -234,7 +234,7 @@ TEST_F(ExpertParallelHiddenUnitBufferTest, TestHiddenUnitBufferPool) {
   GetExpertHiddenUnitBufferPool()->PutToSendQueue(dev_hidden_unit);
 
   send_thread.join();
-  EXPECT_EQ(host_hidden_unit->schedule_id, send_dev_hidden_unit->schedule_id);
+  EXPECT_EQ(host_hidden_unit->multi_batch_id, send_dev_hidden_unit->multi_batch_id);
 
   // Get Preallocated device buffer.
   GetExpertHiddenUnitBufferPool()->PreAllocateDeviceBuffer();

@@ -106,26 +106,26 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
 Status BatchManager::WaitAllDone() { return Status(); }
 
-Status BatchManager::MainProcess(size_t pp_batch_idx) {
+Status BatchManager::MainProcess(size_t multi_batch_id) {
   // Get block related information from device 0.
   // All devices have the same number of blocks.
   SetDevice(0);
   static time_t last_end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   while (!terminated_) {
     time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
-    std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(pp_batch_idx);
+    std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(multi_batch_id);
     ScheduleOutput schedule_output = MergeScheduleOutputGroup(schedule_output_group);
     if (schedule_output_group->RunningSize() == 0) {
-      if (batch_scheduler_->IsIdle(pp_batch_idx) && !terminated_) {
-        batch_scheduler_->WaitUntilHaveReqs(pp_batch_idx);
+      if (batch_scheduler_->IsIdle(multi_batch_id) && !terminated_) {
+        batch_scheduler_->WaitUntilHaveReqs(multi_batch_id);
       } else {
-        KLLM_LOG_DEBUG << "pp_batch_idx=" << pp_batch_idx << " not idle, sleep 100ms";
+        KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id << " not idle, sleep 100ms";
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
       continue;
     }
 
-    RecordRequestSchedEventsWithStartTime(schedule_output.running_reqs, 0, pp_batch_idx, 0, "Schedule",
+    RecordRequestSchedEventsWithStartTime(schedule_output.running_reqs, 0, multi_batch_id, 0, "Schedule",
                                           sched_start_time_ns);
     size_t forwarding_token_num = 0, total_seq_len = 0;
     for (auto &req : schedule_output.running_reqs) {
@@ -133,21 +133,20 @@ Status BatchManager::MainProcess(size_t pp_batch_idx) {
       total_seq_len += req->forwarding_tokens.size();
     }
 
-    schedule_output.schedule_id = pp_batch_idx;
+    schedule_output.multi_batch_id = multi_batch_id;
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
 
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
-      ProfileEvent::PushEvent("LockAndBroadcastScheduleOutput");
-      KLLM_LOG_DEBUG << "Start EnterDeviceComputingCriticalZone. schedule_id=" << schedule_output.schedule_id;
+      PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
       EnterDeviceComputingCriticalZone();
-      KLLM_LOG_DEBUG << "EnterDeviceComputingCriticalZone success. Broadcast schedule_id="
-                     << schedule_output.schedule_id << " to all workers.";
+      KLLM_LOG_DEBUG
+          << "EnterDeviceComputingCriticalZone success. epilogue=false, Broadcast schedule output multi_batch_id="
+          << schedule_output.multi_batch_id << " to all workers.";
       BroadcastScheduleOutput(&schedule_output);
-      InitHiddenUnits(schedule_output.schedule_id);
-      ProfileEvent::PopEvent();
+      InitHiddenUnits(schedule_output.multi_batch_id);
     }
-    RecordRequestSchedEvents(schedule_output.running_reqs, 0, schedule_output.schedule_id, 0, "PrepareForwarding",
+    RecordRequestSchedEvents(schedule_output.running_reqs, 0, schedule_output.multi_batch_id, 0, "PrepareForwarding",
                              RequestEventPhase::Begin);
     Status status = llm_runtime_->Step(&schedule_output, false);
     if (!status.OK()) {
@@ -158,27 +157,27 @@ Status BatchManager::MainProcess(size_t pp_batch_idx) {
 
     // Wait until last worker done.
     if (!context_->IsStandalone()) {
-      ProfileEvent::PushEvent("WaitUntilLastWorkerDone");
-      SendHiddenUnits(schedule_output.schedule_id);
+      PROFILE_EVENT_SCOPE(SendAndStepOnChief_,
+                          fmt::format("SendAndStepOnChief_{}_true", schedule_output.multi_batch_id));
+      SendHiddenUnits(schedule_output.multi_batch_id);
 
       // lm head & sampling
-      ResetReceiveWaiter();
-      RecordRequestSchedEvents(schedule_output.running_reqs, 0, schedule_output.schedule_id, 0, "PrepareForwarding",
+      RecordRequestSchedEvents(schedule_output.running_reqs, 0, schedule_output.multi_batch_id, 0, "PrepareForwarding",
                                RequestEventPhase::Begin);
       status = llm_runtime_->Step(&schedule_output, true);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
       // free again.
-      FreeHiddenUnits(schedule_output.schedule_id);
-      ProfileEvent::PopEvent();
+      FreeHiddenUnits(schedule_output.multi_batch_id);
     }
 
     time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
     int global_token_throughput =
         (end_time_ms - last_end_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - last_end_time_ms) : -1;
     int local_token_throuphput = forwarding_token_num * 1000 / (end_time_ms - start_time_ms);
-    KLLM_LOG_DEBUG << "pp_batch_idx=" << pp_batch_idx << ", running_reqs.size=" << schedule_output.running_reqs.size()
+    KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id
+                   << ", running_reqs.size=" << schedule_output.running_reqs.size()
                    << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
                    << ", 1st step " << (middle_time_ms - start_time_ms) << "ms, 2nd step "
                    << (end_time_ms - middle_time_ms) << "ms, total " << (end_time_ms - start_time_ms)
@@ -194,32 +193,34 @@ Status BatchManager::WorkerProcess() {
   SetDevice(0);
   while (!terminated_) {
     KLLM_LOG_DEBUG << "Wait schedule_output from upstream node.";
+    EnterDeviceComputingCriticalZone();
     ScheduleOutput *schedule_output = GetScheduleOutputPool()->GetFromRecvQueue();
     if (!schedule_output) {
       break;
     }
-    InitHiddenUnits(schedule_output->schedule_id);
+    KLLM_LOG_INFO << "WorkerProcess: start process schedule_output multi_batch_id=" << schedule_output->multi_batch_id;
+    InitHiddenUnits(schedule_output->multi_batch_id);
 
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
-    ResetReceiveWaiter();
     Status status = llm_runtime_->Step(schedule_output, false);
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
     }
     time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-    KLLM_LOG_DEBUG << "schedule_id=" << schedule_output->schedule_id
+    KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
                    << ", runningSize=" << schedule_output->running_reqs.size() << ", step cost "
                    << (end_time_ms - start_time_ms) << "ms";
+    LeaveDeviceComputingCriticalZone();
 
     // Send hidden units to downstream node.
-    SendHiddenUnits(schedule_output->schedule_id);
+    SendHiddenUnits(schedule_output->multi_batch_id);
 
     // Free schedule output and hidden_unit..
     KLLM_LOG_DEBUG << "Free schedule output and hidden_unit.";
     GetScheduleOutputPool()->FreeScheduleOutput(schedule_output);
 
     // Free hidden units.
-    FreeHiddenUnits(schedule_output->schedule_id);
+    FreeHiddenUnits(schedule_output->multi_batch_id);
   }
 
   return Status();
@@ -229,9 +230,9 @@ Status BatchManager::Start() {
   // Start main threads for standalone or master node of distributed mode.
   if (context_->IsChief()) {
     main_threads_.reserve(max_pp_batch_num_);
-    for (size_t pp_batch_idx = 0; pp_batch_idx < max_pp_batch_num_; ++pp_batch_idx) {
+    for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
       main_threads_.push_back(
-          std::unique_ptr<std::thread>(new std::thread(&BatchManager::MainProcess, this, pp_batch_idx)));
+          std::unique_ptr<std::thread>(new std::thread(&BatchManager::MainProcess, this, multi_batch_id)));
     }
   } else {
     // Start worker thread only if in distributed mode, for worker node only.
@@ -282,12 +283,12 @@ ScheduleOutput BatchManager::MergeScheduleOutputGroup(std::shared_ptr<ScheduleOu
   ScheduleOutput merged_schedule_output;
   if (schedule_output_group->outputs.size() == 1) {
     merged_schedule_output = *(schedule_output_group->outputs.at(0));
-    merged_schedule_output.schedule_id = schedule_output_group->schedule_id;
+    merged_schedule_output.multi_batch_id = schedule_output_group->schedule_id;
   } else if (schedule_output_group->outputs.size() == 0) {
     return merged_schedule_output;
   } else {
     // NOTE(karlluo): merge all schedule group outputs into one schedule output instance
-    merged_schedule_output.schedule_id = schedule_output_group->schedule_id;
+    merged_schedule_output.multi_batch_id = schedule_output_group->schedule_id;
 
     // schedule_output_group->outputs.size() equal to the number of attention data parallelism size
     merged_schedule_output.finish_req_ids.resize(schedule_output_group->outputs.size());

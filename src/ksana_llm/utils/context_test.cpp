@@ -26,7 +26,7 @@ TEST_F(ContextTest, NvidiaInitTest) {
   EXPECT_THROW(
       {
         try {
-          std::shared_ptr<Context> context = std::make_shared<Context>(100, 1);
+          std::shared_ptr<Context> context = std::make_shared<Context>(100, 1, 1);
         } catch (const std::runtime_error& e) {
           EXPECT_THAT(e.what(), testing::HasSubstr("tensor_parallel_size should not bigger than devices num:"));
           throw;
@@ -38,7 +38,9 @@ TEST_F(ContextTest, NvidiaInitTest) {
 TEST_F(ContextTest, NvidiaCommonTest) {
   constexpr size_t tensor_parallel_size = 2;
   constexpr int attn_data_parallel_size = 1;
-  std::shared_ptr<Context> context = std::make_shared<Context>(tensor_parallel_size, attn_data_parallel_size);
+  constexpr int multi_batch_num = 1;
+  std::shared_ptr<Context> context =
+      std::make_shared<Context>(tensor_parallel_size, attn_data_parallel_size, multi_batch_num);
   size_t total_rank_num = tensor_parallel_size;
 
   EXPECT_EQ(context->GetComputeStreams().size(), total_rank_num);

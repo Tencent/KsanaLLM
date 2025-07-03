@@ -27,7 +27,7 @@ using namespace ksana_llm;
 class HunyuanLargeTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -74,7 +74,7 @@ class HunyuanLargeTest : public testing::Test {
   ModelConfig model_config;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
   std::shared_ptr<Context> context_{nullptr};
-  size_t schedule_id = 123;
+  size_t multi_batch_id = 123;
 
   CacheManagerConfig cache_manager_config;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -122,7 +122,7 @@ class HunyuanLargeTest : public testing::Test {
     hunyuan_large_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<HunyuanLargeModel<weight_data_type>> hunyuan_large =
         std::make_shared<HunyuanLargeModel<weight_data_type>>(model_config, 0, context_, hunyuan_large_weight);
-    hunyuan_large->AllocResources(schedule_id);
+    hunyuan_large->AllocResources(multi_batch_id);
 
     // ContextDecode
     ForwardRequest forward;
@@ -133,7 +133,7 @@ class HunyuanLargeTest : public testing::Test {
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);
-    forward.logits_buf[0] = hunyuan_large->GetLogitsPtr(schedule_id);
+    forward.logits_buf[0] = hunyuan_large->GetLogitsPtr(multi_batch_id);
     forward.logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
@@ -170,11 +170,11 @@ class HunyuanLargeTest : public testing::Test {
     decode_forward.infer_stage = InferStage::STATE_DECODE;
     decode_forward.kv_cached_token_num = decode_forward.forwarding_tokens->size() - 1;
     std::vector<ForwardRequest> forward_reqs = {forward, decode_forward};
-    EXPECT_TRUE(hunyuan_large->Forward(schedule_id, hunyuan_large_weight, forward_reqs, false).OK());
+    EXPECT_TRUE(hunyuan_large->Forward(multi_batch_id, hunyuan_large_weight, forward_reqs, false).OK());
     std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
-      hunyuan_large->Forward(schedule_id, hunyuan_large_weight, multi_forward_reqs, false);
+      hunyuan_large->Forward(multi_batch_id, hunyuan_large_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -222,7 +222,7 @@ class HunyuanLargeTest : public testing::Test {
 
     std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(12, generated_tokens0[0]);
     EXPECT_EQ(12, generated_tokens1[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
@@ -234,8 +234,8 @@ class HunyuanLargeTest : public testing::Test {
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
     // Decode
-    EXPECT_TRUE(hunyuan_large->Forward(schedule_id, hunyuan_large_weight, forward_reqs, false).OK());
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    EXPECT_TRUE(hunyuan_large->Forward(multi_batch_id, hunyuan_large_weight, forward_reqs, false).OK());
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(71, generated_tokens0[0]);
     EXPECT_EQ(71, generated_tokens1[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
@@ -247,8 +247,8 @@ class HunyuanLargeTest : public testing::Test {
     }
 
 #ifdef ENABLE_CUDA
-    EXPECT_TRUE(hunyuan_large->Forward(schedule_id, hunyuan_large_weight, forward_reqs, false).OK());
-    sampler->Sampling(sample_reqs, context_->GetComputeStreams()[device_id]);
+    EXPECT_TRUE(hunyuan_large->Forward(multi_batch_id, hunyuan_large_weight, forward_reqs, false).OK());
+    sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(88, generated_tokens0[0]);
     EXPECT_EQ(88, generated_tokens1[0]);
     (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
@@ -262,7 +262,7 @@ class HunyuanLargeTest : public testing::Test {
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
-      hunyuan_large->Forward(schedule_id, hunyuan_large_weight, multi_forward_reqs, false);
+      hunyuan_large->Forward(multi_batch_id, hunyuan_large_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context_->GetComputeStreams()[device_id]);
     EventSynchronize(stop);

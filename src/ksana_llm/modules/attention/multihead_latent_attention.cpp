@@ -183,7 +183,8 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
   const size_t hidden_units = input.shape[1];
-  ProfileEvent::PushEvent(fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
+  PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
+                      fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
@@ -196,18 +197,21 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   CREATE_BUFFER_SCOPE(q_rope_buffer_tensors, mla_buffers_.q_rope_buffer);
 
   // kv_a_lora proj MatMul
-  ProfileEvent::PushEvent("attn_kv_a_lora_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(attn_kv_a_lora_proj, "attn_kv_a_lora_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
+  }
 
-  ProfileEvent::PushEvent("kv_a_layernorm", rank);
-  kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
+    kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
+  }
 
   // kv_a_rope_lora proj MatMul
-  ProfileEvent::PushEvent("kv_a_rope_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(kv_a_rope_proj, "kv_a_rope_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
+  }
   Tensor prefill_hidden_buffer_1 = input;
   Tensor decode_hidden_buffer_1 = input;
   Tensor q_b_rope_input = input;
@@ -215,21 +219,24 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   // 降维度，q_lora_rank存在
   if (use_q_lora_) {
     // q_a proj MatMul
-    ProfileEvent::PushEvent("q_a_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
-    ProfileEvent::PopEvent();
-    ProfileEvent::PushEvent("q_a_layernorm", rank);
-    q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(q_a_proj, "q_a_proj", rank);
+      STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
+    }
+    {
+      PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
+      q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+    }
     prefill_hidden_buffer_1 = hidden_buffer_tensors_1[0];
     decode_hidden_buffer_1 = hidden_buffer_tensors_1[0];
     q_b_rope_input = hidden_buffer_tensors_1[0];
   }
 
   // q_b_rope proj MatMul
-  ProfileEvent::PushEvent("q_b_rope_proj_weight", rank);
-  STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj_weight", rank);
+    STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
+  }
 
   const size_t decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
                                forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
@@ -260,33 +267,32 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   // For prefill
   if (context_tokens) {
     // q_b_lora proj MatMul
-    ProfileEvent::PushEvent("context_tokens q_b_nope_proj", rank);
+    PROFILE_EVENT_SCOPE(context_tokens, "context_tokens q_b_nope_proj", rank);
     STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(prefill_hidden_buffer_1, prefill_q_buffer_tensors));
-    ProfileEvent::PopEvent();
   }
 
   // For decode
   if (decode_tokens) {
     if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-      ProfileEvent::PushEvent("decode_tokens q_b_nope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
-
+      {
+        PROFILE_EVENT_SCOPE(q_b_nope_proj, "decode_tokens q_b_nope_proj", rank);
+        STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
+      }
       // transpose and w_uk_t bmm
-      ProfileEvent::PushEvent("decode_tokens attn_w_uk_t_bmm", rank);
-      int decode_tokens_num = decode_q_buffer_tensors_tmp[0].shape[0];
-      decode_q_buffer_tensors_tmp[0].shape = {decode_tokens_num, head_num_per_tp_, qk_nope_head_dim_};
-      STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
-          {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
-          decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
+      {
+        PROFILE_EVENT_SCOPE(attn_w_uk_t_bmm, "decode_tokens attn_w_uk_t_bmm", rank);
+        int decode_tokens_num = decode_q_buffer_tensors_tmp[0].shape[0];
+        decode_q_buffer_tensors_tmp[0].shape = {decode_tokens_num, head_num_per_tp_, qk_nope_head_dim_};
+        STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
+            {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
+            decode_q_buffer_tensors_tmp));
+      }
 
       hidden_buffer_tensors_0[0].shape[0] = seq_len;
       hidden_buffer_tensors_1[0].shape[0] = seq_len;
     } else {
-      ProfileEvent::PushEvent("decode_tokens q_b_nope_proj", rank);
+      PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
       STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
     }
   }
 
@@ -296,27 +302,24 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   }
 
   if (context_tokens) {
-    ProfileEvent::PushEvent("FlashAttentionForward", rank);
     FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
                           hidden_buffer_tensors_0, prefill_q_buffer_tensors[0], q_rope_buffer_tensors[0],
                           kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
-    ProfileEvent::PopEvent();
   }
 
   if (decode_tokens != 0) {
-    ProfileEvent::PushEvent("PagedAttentionForward", rank);
     PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, paged_buffer_tensors,
                           decode_q_buffer_tensors_tmp[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
                           k_rope_buffer_tensors[0], forwarding_context);
-    ProfileEvent::PopEvent();
   }
 
-  ProfileEvent::PushEvent("o_prpj", rank);
-  Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
-                 {context_tokens + decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
-                 hidden_buffer_tensors_0[0].GetPtr<void>());
-  attn_o_proj_->Forward({o_input}, hidden_buffer_tensors_1);
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+    Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
+                   {context_tokens + decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
+                   hidden_buffer_tensors_0[0].GetPtr<void>());
+    attn_o_proj_->Forward({o_input}, hidden_buffer_tensors_1);
+  }
 
   if (forwarding_context.GetModelCommunicator()) {
     std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
@@ -327,7 +330,6 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   set_torch_stream_layers_->Clear();
 #endif
 
-  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -457,45 +459,52 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
   const size_t hidden_units = input.shape[1];
-  ProfileEvent::PushEvent(fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
+  PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
+                      fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
 
   // kv_a_lora proj MatMul
-  ProfileEvent::PushEvent("attn_kv_a_lora_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(attn_kv_a_lora_proj, "attn_kv_a_lora_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
+  }
 
-  ProfileEvent::PushEvent("kv_a_layernorm", rank);
-  kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
+    kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
+  }
 
   // kv_a_rope_lora proj MatMul
-  ProfileEvent::PushEvent("kv_a_rope_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(kv_a_rope_proj, "kv_a_rope_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
+  }
   Tensor prefill_hidden_buffer_1 = input;
   Tensor q_b_rope_input = input;
 
   // 降维度，q_lora_rank存在
   if (use_q_lora_) {
     // q_a proj MatMul
-    ProfileEvent::PushEvent("q_a_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
-    ProfileEvent::PopEvent();
-    ProfileEvent::PushEvent("q_a_layernorm", rank);
-    q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(q_a_proj, "q_a_proj", rank);
+      STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
+    }
+    {
+      PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
+      q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+    }
     prefill_hidden_buffer_1 = hidden_buffer_tensors_1[0];
     q_b_rope_input = hidden_buffer_tensors_1[0];
   }
 
   // q_b_rope proj MatMul
-  ProfileEvent::PushEvent("q_b_rope_proj_weight", rank);
-  STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj_weight", rank);
+    STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
+  }
 
   const size_t context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
   KLLM_LOG_DEBUG << "context token " << context_tokens;
@@ -513,27 +522,28 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
   // For prefill
   if (context_tokens) {
     // q_b_lora proj MatMul
-    ProfileEvent::PushEvent("context_tokens q_b_nope_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(prefill_hidden_buffer_1, prefill_q_buffer_tensors));
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(context_tokens, "context_tokens q_b_nope_proj", rank);
+      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(prefill_hidden_buffer_1, prefill_q_buffer_tensors));
+    }
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
-    ProfileEvent::PushEvent("FlashAttentionForward", rank);
     FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
                           prefill_buffer_tensors, prefill_q_buffer_tensors[0], q_rope_buffer_tensors[0],
                           kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
-    ProfileEvent::PopEvent();
 
-    ProfileEvent::PushEvent("o_prpj", rank);
-    Tensor o_input(prefill_buffer_tensors[0].location, prefill_buffer_tensors[0].dtype, {context_tokens, o_proj_k_dim_},
-                   prefill_buffer_tensors[0].device_id, prefill_buffer_tensors[0].GetPtr<void>());
-    Tensor o_output(hidden_buffer_tensors_1[0].location, hidden_buffer_tensors_1[0].dtype,
-                    {context_tokens, hidden_buffer_tensors_1[0].shape[1]}, hidden_buffer_tensors_1[0].device_id,
-                    hidden_buffer_tensors_1[0].GetPtr<void>());
-    std::vector<Tensor> o_outputs = {o_output};
-    attn_o_proj_->Forward({o_input}, o_outputs);
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+      Tensor o_input(prefill_buffer_tensors[0].location, prefill_buffer_tensors[0].dtype,
+                     {context_tokens, o_proj_k_dim_}, prefill_buffer_tensors[0].device_id,
+                     prefill_buffer_tensors[0].GetPtr<void>());
+      Tensor o_output(hidden_buffer_tensors_1[0].location, hidden_buffer_tensors_1[0].dtype,
+                      {context_tokens, hidden_buffer_tensors_1[0].shape[1]}, hidden_buffer_tensors_1[0].device_id,
+                      hidden_buffer_tensors_1[0].GetPtr<void>());
+      std::vector<Tensor> o_outputs = {o_output};
+      attn_o_proj_->Forward({o_input}, o_outputs);
+    }
 
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
@@ -545,7 +555,6 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
   set_torch_stream_layers_->Clear();
 #endif
 
-  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -559,7 +568,8 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
   const size_t hidden_units = input.shape[1];
-  ProfileEvent::PushEvent(fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
+  PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
+                      fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
@@ -571,18 +581,19 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   CREATE_BUFFER_SCOPE(q_rope_buffer_tensors, mla_buffers_.q_rope_buffer);
 
   // kv_a_lora proj MatMul
-  ProfileEvent::PushEvent("attn_kv_a_lora_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
-  ProfileEvent::PopEvent();
-
-  ProfileEvent::PushEvent("kv_a_layernorm", rank);
-  kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
-  ProfileEvent::PopEvent();
-
+  {
+    PROFILE_EVENT_SCOPE(attn_kv_a_lora_proj, "attn_kv_a_lora_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_lora_projs_->Forward(input, hidden_buffer_tensors_1));
+  }
+  {
+    PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
+    kv_a_layernorms_->Forward(hidden_buffer_tensors_1, kv_buffer_tensors);
+  }
   // kv_a_rope_lora proj MatMul
-  ProfileEvent::PushEvent("kv_a_rope_proj", rank);
-  STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  {
+    PROFILE_EVENT_SCOPE(kv_a_rope_proj, "kv_a_rope_proj", rank);
+    STATUS_CHECK_RETURN(attn_kv_a_ropes_->Forward(input, k_rope_buffer_tensors));
+  }
   Tensor prefill_hidden_buffer_1 = input;
   Tensor decode_hidden_buffer_1 = input;
   Tensor q_b_rope_input = input;
@@ -590,21 +601,24 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   // 降维度，q_lora_rank存在
   if (use_q_lora_) {
     // q_a proj MatMul
-    ProfileEvent::PushEvent("q_a_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
-    ProfileEvent::PopEvent();
-    ProfileEvent::PushEvent("q_a_layernorm", rank);
-    q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(q_a_proj, "q_a_proj", rank);
+      STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(input, q_buffer_tensors));
+    }
+    {
+      PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
+      q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+    }
     prefill_hidden_buffer_1 = hidden_buffer_tensors_1[0];
     decode_hidden_buffer_1 = hidden_buffer_tensors_1[0];
     q_b_rope_input = hidden_buffer_tensors_1[0];
   }
 
-  // q_b_rope proj MatMul
-  ProfileEvent::PushEvent("q_b_rope_proj_weight", rank);
-  STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
-  ProfileEvent::PopEvent();
+  // q_b_rope proj MatMul{}
+  {
+    PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj_weight", rank);
+    STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
+  }
 
   const size_t decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
                                forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
@@ -632,52 +646,50 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   // For decode
   if (decode_tokens) {
     if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-      ProfileEvent::PushEvent("decode_tokens q_b_nope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
+      {
+        PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
+        STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
+      }
 
       // transpose and w_uk_t bmm
-      ProfileEvent::PushEvent("decode_tokens attn_w_uk_t_bmm", rank);
-      int decode_tokens_num = decode_q_buffer_tensors_tmp[0].shape[0];
-      decode_q_buffer_tensors_tmp[0].shape = {decode_tokens_num, head_num_per_tp_, qk_nope_head_dim_};
-      STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
-          {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
-          decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
+      {
+        PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens attn_w_uk_t_bmm", rank);
+        int decode_tokens_num = decode_q_buffer_tensors_tmp[0].shape[0];
+        decode_q_buffer_tensors_tmp[0].shape = {decode_tokens_num, head_num_per_tp_, qk_nope_head_dim_};
+        STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
+            {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
+            decode_q_buffer_tensors_tmp));
+      }
 
       hidden_buffer_tensors_0[0].shape[0] = seq_len;
       hidden_buffer_tensors_1[0].shape[0] = seq_len;
     } else {
-      ProfileEvent::PushEvent("decode_tokens q_b_nope_proj", rank);
+      PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
       STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      ProfileEvent::PopEvent();
     }
   }
 
   if (decode_tokens != 0) {
-    ProfileEvent::PushEvent("PagedAttentionForward", rank);
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
     PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, paged_buffer_tensors,
                           decode_q_buffer_tensors_tmp[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
                           k_rope_buffer_tensors[0], forwarding_context);
-    ProfileEvent::PopEvent();
-
-    ProfileEvent::PushEvent("o_prpj", rank);
-    Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
-                   {decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
-                   hidden_buffer_tensors_0[0].GetPtr<void>() +
-                       context_tokens * o_proj_k_dim_ * hidden_buffer_tensors_0[0].GetDTypeSize());
-    Tensor o_output(
-        hidden_buffer_tensors_1[0].location, hidden_buffer_tensors_1[0].dtype,
-        {decode_tokens, hidden_buffer_tensors_1[0].shape[1]}, hidden_buffer_tensors_1[0].device_id,
-        hidden_buffer_tensors_1[0].GetPtr<void>() +
-            context_tokens * (hidden_buffer_tensors_1[0].GetTotalBytes() / hidden_buffer_tensors_1[0].shape[0]));
-    std::vector<Tensor> o_outputs = {o_output};
-    attn_o_proj_->Forward({o_input}, o_outputs);
-    ProfileEvent::PopEvent();
-
+    {
+      PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+      Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
+                     {decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
+                     hidden_buffer_tensors_0[0].GetPtr<void>() +
+                         context_tokens * o_proj_k_dim_ * hidden_buffer_tensors_0[0].GetDTypeSize());
+      Tensor o_output(
+          hidden_buffer_tensors_1[0].location, hidden_buffer_tensors_1[0].dtype,
+          {decode_tokens, hidden_buffer_tensors_1[0].shape[1]}, hidden_buffer_tensors_1[0].device_id,
+          hidden_buffer_tensors_1[0].GetPtr<void>() +
+              context_tokens * (hidden_buffer_tensors_1[0].GetTotalBytes() / hidden_buffer_tensors_1[0].shape[0]));
+      std::vector<Tensor> o_outputs = {o_output};
+      attn_o_proj_->Forward({o_input}, o_outputs);
+    }
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
@@ -688,7 +700,6 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   set_torch_stream_layers_->Clear();
 #endif
 
-  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -700,6 +711,7 @@ Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& h
                                                           Tensor& prefill_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                                           Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                           ForwardingContext<T>& forwarding_context) {
+  PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(prefix_o_buffer_tensors, mla_buffers_.prefix_o_buffer);
     CREATE_BUFFER_SCOPE(prefix_k_up_buffer_tensors, mla_buffers_.prefix_k_up_buffer);
@@ -731,6 +743,7 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
                                                           Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                                           Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                           ForwardingContext<T>& forwarding_context) {
+  PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
 

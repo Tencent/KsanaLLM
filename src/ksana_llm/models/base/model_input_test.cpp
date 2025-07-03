@@ -25,7 +25,7 @@ class ModelInputTest : public testing::Test {
  protected:
   void SetUp() override {
     int rank = 0;
-    auto context = std::make_shared<Context>(1, 1);
+    auto context = std::make_shared<Context>(1, 1, 1);
 
     // Parse the yaml config file.
     const auto& env = Singleton<Environment>::GetInstance();

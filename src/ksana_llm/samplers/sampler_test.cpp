@@ -22,7 +22,7 @@ class SamplerTest : public testing::Test {
 
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
 
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
@@ -186,7 +186,7 @@ TEST_F(SamplerTest, ArgMaxSamplerTest) {
   SetLogitsBuf(logits_buf_cpu);
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
-  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+  sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
   EXPECT_EQ(6, (*sample_req.sampling_result_tokens).back());
 }
@@ -211,7 +211,7 @@ TEST_F(SamplerTest, ArgMaxEqualSamplerTest) {
   SetLogitsBuf(logits_buf_cpu);
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
-  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+  sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
   EXPECT_EQ(3, (*sample_req.sampling_result_tokens).back());
 }
@@ -265,7 +265,7 @@ TEST_F(SamplerTest, LogitsTargetGatherAllTest) {
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   // 执行 Sampling
-  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+  sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
 
   // 注意：对于 GATHER_ALL 模式，CopyProbsOutputToRequests 方法会跳过将结果复制到 response 中
   // 因此我们不期望在 response 中找到 "logits" 数据
@@ -288,7 +288,7 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
   sampling_config_.logprobs_num = 2;
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
-  sampler_->Sampling(sample_reqs, context_->GetComputeStreams()[device_id_]);
+  sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, logprobs_.size());
 
   // logprobs is not supported in ACL.

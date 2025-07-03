@@ -108,9 +108,8 @@ Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, 
 
   // Mlp all reduce
   if (!enable_full_shared_expert_ || !is_moe_) {
-    ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.GetCurrentRank());
+    PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
     tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
-    ProfileEvent::PopEvent();
   }
 
   size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
@@ -133,13 +132,13 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
   size_t seq_len = hidden_buffer_tensors_0[0].shape[0];
   size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
 
-  ProfileEvent::PushEvent(fmt::format("DS_CommonMlp_seq_len_{}_hidden_units_{}", seq_len, hidden_units),
-                          forwarding_context.GetCurrentRank());
+  PROFILE_EVENT_SCOPE(DS_CommonMlp_seq_len_,
+                      fmt::format("DS_CommonMlp_seq_len_{}_hidden_units_{}", seq_len, hidden_units),
+                      forwarding_context.GetCurrentRank());
 
   if (!is_moe_) {
-    ProfileEvent::PushEvent("CommonMlp", forwarding_context.GetCurrentRank());
+    PROFILE_EVENT_SCOPE(CommonMlp, "CommonMlp", forwarding_context.GetCurrentRank());
     mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
-    ProfileEvent::PopEvent();
   } else {
     // CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
 
@@ -148,13 +147,14 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
     auto& gated_buffer_ = common_mlp_buffer_tensors;
 
     // Expert gating MatMul
-    ProfileEvent::PushEvent("expert_gate", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
-    ProfileEvent::PopEvent();
-
-    ProfileEvent::PushEvent("MOE", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors));
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
+      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
+    }
+    {
+      PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
+      STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors));
+    }
 
     size_t expert_node_rank = forwarding_context.GetContext()->GetExpertParallelExpertNodeRank();
     size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
@@ -202,13 +202,14 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
                        << ", refer_ptr " << remote_mlp_input[0].GetPtr<void>()
                        << ", rank: " << forwarding_context.GetCurrentRank();
         // Expert gating MatMul
-        ProfileEvent::PushEvent("gate", forwarding_context.GetCurrentRank());
-        STATUS_CHECK_RETURN(expert_gate_->Forward(remote_mlp_input, gated_buffer_));
-        ProfileEvent::PopEvent();
-
-        ProfileEvent::PushEvent("MOE", forwarding_context.GetCurrentRank());
-        STATUS_CHECK_RETURN(moe_->Forward(remote_mlp_input[0], gated_buffer_[0], common_mlp_buffer_tensors));
-        ProfileEvent::PopEvent();
+        {
+          PROFILE_EVENT_SCOPE(gate, "gate", forwarding_context.GetCurrentRank());
+          STATUS_CHECK_RETURN(expert_gate_->Forward(remote_mlp_input, gated_buffer_));
+        }
+        {
+          PROFILE_EVENT_SCOPE(MOE, "MOE", forwarding_context.GetCurrentRank());
+          STATUS_CHECK_RETURN(moe_->Forward(remote_mlp_input[0], gated_buffer_[0], common_mlp_buffer_tensors));
+        }
       }
 
       // Clear finished tasks.
@@ -242,15 +243,15 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
           add_->Forward(reduce_buffer_tensors[0], remote_residual_buffer_result[0], reduce_buffer_tensors));
     }
 
-    ProfileEvent::PushEvent("CommonShareMlp", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, common_mlp_buffer_tensors, is_multi_token_forward,
-                                             forwarding_context));
-    ProfileEvent::PopEvent();
+    {
+      PROFILE_EVENT_SCOPE(CommonShareMlp, "CommonShareMlp", forwarding_context.GetCurrentRank());
+      STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, common_mlp_buffer_tensors,
+                                               is_multi_token_forward, forwarding_context));
+    }
 
     if (enable_full_shared_expert_) {
-      ProfileEvent::PushEvent("DS_CommonAllReduce", forwarding_context.GetCurrentRank());
+      PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
       tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
-      ProfileEvent::PopEvent();
     }
 
     /*
@@ -271,8 +272,8 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
      *     SharedExpertOutput saved in common_mlp_buffer_tensors
      *     CommonMlp Output = hidden_buffer_tensors_0 + common_mlp_buffer_tensors
      */
-    ProfileEvent::PushEvent("add_layer", forwarding_context.GetCurrentRank());
     if (forwarding_context.GetModelCommunicator()) {
+      PROFILE_EVENT_SCOPE(add_layer, "add_layer_with_comm", forwarding_context.GetCurrentRank());
       if (enable_full_shared_expert_) {
         STATUS_CHECK_RETURN(
             add_->Forward(hidden_buffer_tensors_0[0], common_mlp_buffer_tensors[0], hidden_buffer_tensors_0));
@@ -281,12 +282,11 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
             add_->Forward(reduce_buffer_tensors[0], common_mlp_buffer_tensors[0], reduce_buffer_tensors));
       }
     } else {
+      PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
       STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0], hidden_buffer_tensors_0));
     }
-    ProfileEvent::PopEvent();
   }
 
-  ProfileEvent::PopEvent();
   return Status();
 }
 
@@ -417,7 +417,8 @@ Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_contex
 
 template <typename T>
 Status DeepSeekV3Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
-  ProfileEvent::PushEvent("DS_LayerForward", forwarding_context.GetCurrentRank());
+  PROFILE_EVENT_SCOPE(DS_LayerForward_, fmt::format("DS_LayerForward_{}", forwarding_context.GetMultiBatchId()),
+                      forwarding_context.GetCurrentRank());
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   const bool need_recv = !forwarding_context.GetContext()->IsChief() && run_mode == RunMode::kMain;
 
@@ -439,8 +440,6 @@ Status DeepSeekV3Model<T>::LayerForward(ForwardingContext<T>& forwarding_context
       STATUS_CHECK_RETURN(nextn_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
     }
   }
-
-  ProfileEvent::PopEvent();
   return Status();
 }
 

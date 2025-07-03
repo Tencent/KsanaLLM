@@ -95,7 +95,7 @@ class MoeMockSafeTensorsLoader : public MockSafeTensorsLoader {
 class CommonMoeWeightTest : public testing::Test {
  protected:
   void SetUp() override {
-    context_ = std::make_shared<Context>(2, 1);
+    context_ = std::make_shared<Context>(2, 1, 1);
 
     // Initialize ModelConfig
     model_config.hidden_units = 5;

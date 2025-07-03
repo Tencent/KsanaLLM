@@ -106,7 +106,8 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
     forwarding_context_->model_input_->ParseFromRequests(forward_reqs);
 
     // Set shape and type of hidden unit.
-    SetHiddenUnitMeta({forwarding_context_->model_input_->input_ids.shape[0], model_config_.hidden_units},
+    SetHiddenUnitMeta(forwarding_context_->multi_batch_id_,
+                      {forwarding_context_->model_input_->input_ids.shape[0], model_config_.hidden_units},
                       model_config_.weight_data_type);
 
     // create forward shape tensor
@@ -214,7 +215,7 @@ class MlaTest : public testing::Test {
   void SetUp() override {
     origin_stderr_verbosity = loguru::g_stderr_verbosity;
     loguru::g_stderr_verbosity = loguru::Verbosity_MAX;
-    context_ = std::make_shared<Context>(1, 1);
+    context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();

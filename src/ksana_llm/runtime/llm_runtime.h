@@ -53,18 +53,18 @@ class LlmRuntime {
 
  private:
   // Execute the forward.
-  Status Forward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
+  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
                  RunMode run_mode = RunMode::kMain);
 
   // Execute the forward, for distributed worker node.
-  Status Forward(size_t schedule_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
+  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
 
   // Execute the sampling.
-  Status Sampling(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs);
+  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs);
 
   // Build forward request, group by model name and stage.
   void BuildForwardRequests(
-      size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+      size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
   // Build forward request, group by model name and stage, for distributed worker node.
@@ -73,7 +73,7 @@ class LlmRuntime {
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs);
 
   // Build sampling request.
-  void BuildSamplingRequest(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+  void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
                             std::vector<SamplingRequest> &sampling_reqs);
 
   // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
@@ -83,19 +83,19 @@ class LlmRuntime {
 
   // Run multi-token and single-token serially in single thread.
   Status RunSerially(
-      size_t schedule_id,
+      size_t multi_batch_id,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs,
       bool epilogue, RunMode run_mode = RunMode::kMain);
 
   // A assisant of forward.
   Status AuxForward(
-      size_t schedule_id,
+      size_t multi_batch_id,
       std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> &grouped_reqs,
       bool epilogue, RunMode run_mode = RunMode::kMain);
 
   void DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>> &reqs);
 
-  Status MTPForward(size_t schedule_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue);
+  Status MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue);
 
   void GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>> &reqs);
 

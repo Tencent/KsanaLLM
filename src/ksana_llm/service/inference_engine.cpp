@@ -43,14 +43,29 @@ Status InferenceEngine::Initialize() {
     return Status(RET_INVALID_ARGUMENT, "The Environment is nullptr.");
   }
 
+  // get batch schedule config;
+  BatchSchedulerConfig batch_scheduler_config;
+  Status status = env->GetBatchSchedulerConfig(batch_scheduler_config);
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
+  }
+  // TODO(TJ): maybe cloud move IsChief and IsStandalone to env.
+  PipelineConfig pipeline_config;
+  Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+  bool is_chief = pipeline_config.world_size == 1 || pipeline_config.node_rank == 0;
+  if (!is_chief) {
+    batch_scheduler_config.max_pp_batch_num = 1;
+  }
   // Environment is must be initialized befroe context.
-  KLLM_LOG_DEBUG << "Get tensor parallel: " << env->GetTensorParallelSize()
-                 << " attention data parallel: " << env->GetAttnDataParallelSize();
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize()));
+  KLLM_LOG_INFO << "Get tensor parallel: " << env->GetTensorParallelSize()
+                 << " attention data parallel: " << env->GetAttnDataParallelSize()
+                 << " max_pp_batch_num: " << batch_scheduler_config.max_pp_batch_num;
+  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(),
+                             batch_scheduler_config.max_pp_batch_num));
 
   // Load model configs.
   std::unordered_map<std::string, ModelConfig> model_configs;
-  Status status = env->GetModelConfigs(model_configs);
+  status = env->GetModelConfigs(model_configs);
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
   }
@@ -75,7 +90,7 @@ Status InferenceEngine::Initialize() {
   if (!context_->IsStandalone() || !context_->IsExpertParallelStandalone()) {
     if (!context_->IsStandalone()) {
       InitializeHiddenUnitBufferPool();  // Does HiddenUnitBufferPool must has one comm type? (No)
-      GetHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
+      GetHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::ALLTOALL);
     }
 
     if (!context_->IsExpertParallelStandalone()) {
@@ -166,20 +181,13 @@ Status InferenceEngine::Initialize() {
   }
 
   // Create batch manager.
-  BatchSchedulerConfig batch_scheduler_config;
-  status = env->GetBatchSchedulerConfig(batch_scheduler_config);
-  if (!status.OK()) {
-    return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
-  }
-
   batch_scheduler_config.max_batch_size = max_batch_size;
   batch_scheduler_config.max_vocab_size = max_vocab_size;
-  if (!context_->IsChief()) {
-    batch_scheduler_config.max_pp_batch_num = 1;
-  }
   KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size= " << max_batch_size
                  << ", Max Vocab Size= " << max_vocab_size
                  << ", max_pp_batch_num=" << batch_scheduler_config.max_pp_batch_num;
+
+  InitHiddenUnitsMetaInfoMap(batch_scheduler_config.max_pp_batch_num);
   batch_manager_ = std::make_unique<BatchManager>(context_, batch_scheduler_config.max_pp_batch_num);
 
   // Register model instance.

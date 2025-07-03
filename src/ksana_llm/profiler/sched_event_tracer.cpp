@@ -64,7 +64,7 @@ void ScheduleEventTracer::ProcessEvents() {
   }
 
   // Write CSV header
-  csv_file << "event_type,node_rank,req_id,time_ns,phase,rank,pp_batch_idx,attn_dp_group_id,"
+  csv_file << "event_type,node_rank,req_id,time_ns,phase,rank,multi_batch_id,attn_dp_group_id,"
            << "forwarding_token_num,seq_len,req_num" << std::endl;
 
   std::queue<RequestSchedEvent> local_queue;
@@ -96,15 +96,15 @@ void ScheduleEventTracer::ProcessEvents() {
         }
         csv_file << event.event_type << "," << node_rank_ << ", -1 ," << event.time_ns << ","
                  << (event.phase == RequestEventPhase::Begin ? "Begin" : "End") << "," << event.rank << ","
-                 << event.batch_info.pp_batch_idx << "," << event.attn_dp_group_id << "," << forwarding_token_num << ","
-                 << seq_len << "," << event.batch_info.req_info_list.size() << std::endl;
+                 << event.batch_info.multi_batch_id << "," << event.attn_dp_group_id << "," << forwarding_token_num
+                 << "," << seq_len << "," << event.batch_info.req_info_list.size() << std::endl;
       }
       if (trace_level_ > 1) {
         for (auto& req_info : event.batch_info.req_info_list) {
           // Convert event to CSV format and write to file
           csv_file << event.event_type << "," << node_rank_ << "," << req_info.req_id << "," << event.time_ns << ","
                    << (event.phase == RequestEventPhase::Begin ? "Begin" : "End") << "," << event.rank << ","
-                   << event.batch_info.pp_batch_idx << "," << event.attn_dp_group_id << ","
+                   << event.batch_info.multi_batch_id << "," << event.attn_dp_group_id << ","
                    << req_info.forwarding_token_num << "," << req_info.seq_len << "," << 1 << std::endl;
         }
       }

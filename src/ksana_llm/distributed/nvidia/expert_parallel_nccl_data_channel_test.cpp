@@ -37,8 +37,8 @@
 
 using namespace ksana_llm;
 
-// TODO(robertyuan): nccl only transmitted tensor, no schedule_id. Use default value.
-#define SCHEDULE_ID DEFAULT_SCHEDULE_ID
+// TODO(robertyuan): nccl only transmitted tensor, no multi_batch_id. Use default value.
+#define TEST_MULTI_BATCH_ID DEFAULT_MULTI_BATCH_ID
 
 class ExpertParallelNcclDataChannelTest : public testing::Test {
  protected:
@@ -120,7 +120,8 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
 
     int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
     uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
-    context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size);
+    size_t multi_batch_num = 1;
+    context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     std::unordered_map<std::string, ModelConfig> model_configs;
     env_->GetModelConfigs(model_configs);
@@ -206,8 +207,8 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
 
     int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
     uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
-
-    context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size);
+    size_t multi_batch_num = 1;
+    context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     std::unordered_map<std::string, ModelConfig> model_configs;
     env_->GetModelConfigs(model_configs);

@@ -25,7 +25,7 @@ class PPMultibatchWorkloadBalancerTest : public testing::Test {
 
 TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   size_t pp_max_batch_num = 2;
-  size_t pp_batch_idx = 1;
+  size_t multi_batch_id = 1;
   BatchSchedulerConfig batch_scheduler_config;
   batch_scheduler_config.max_batch_size = 128;
   batch_scheduler_config.max_waiting_queue_len = 32;
@@ -67,7 +67,7 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   waiting_reqs.push_back(infer_req_list[0]);
 
   PPMultibatchWorkloadBalancer balancer(PPMultibatchWBStrategy::WB_BATCH_REQ);
-  balancer.BalancePPMultiBatchReqs(pp_batch_idx, waiting_reqs, batch_states);
+  balancer.BalancePPMultiBatchReqs(multi_batch_id, waiting_reqs, batch_states);
 
   // batch0 running reqs should not be changed
   EXPECT_EQ(batch_states[0]->schedule_output->running_reqs.size(), 1);

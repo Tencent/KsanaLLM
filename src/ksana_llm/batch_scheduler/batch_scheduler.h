@@ -28,7 +28,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.
-  std::shared_ptr<ScheduleOutputGroup> Schedule(size_t pp_batch_idx) override;
+  std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) override;
 
   // Add infer request to waiting list.
   Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) override;
@@ -39,9 +39,9 @@ class BatchScheduler : public BatchSchedulerInterface {
   std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) override;
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
-  bool IsIdle(size_t pp_batch_idx) override;
+  bool IsIdle(size_t multi_batch_id) override;
 
-  void WaitUntilHaveReqs(size_t pp_batch_idx) override;
+  void WaitUntilHaveReqs(size_t multi_batch_id) override;
 
   void Stop() override;
 
@@ -56,7 +56,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   // the output is dp_waiting_reqs_
   void BalanceWaitingReqs();
 
-  void BalancePPMultiBatchReqs(size_t pp_batch_idx);
+  void BalancePPMultiBatchReqs(size_t multi_batch_id);
 
   void ReportBatchState(std::shared_ptr<BatchState> batch_state);
 
@@ -70,7 +70,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   // The thread pool of batch scheduler.
   std::unique_ptr<ThreadPool> threadpool_ = nullptr;
 
-  // The batch state informations, include some queues and mutexes. [dp_idx, pp_batch_idx]
+  // The batch state informations, include some queues and mutexes. [dp_idx, multi_batch_id]
   std::vector<std::vector<std::shared_ptr<BatchState>>> batch_states_;
 
   // The buffer queue needed be scheduled in strategy.

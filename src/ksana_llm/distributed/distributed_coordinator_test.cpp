@@ -79,8 +79,9 @@ class DistributedCoordinatorTest : public testing::Test {
 
     int master_tp_para = master_env_->GetTensorParallelSize();
     int master_attn_data_parallel_size = master_env_->GetAttnDataParallelSize();
+    int max_multi_batch_num = 1;
     Singleton<Environment>::GetInstance()->SetPipelineConfig(master_pipeline_config);
-    master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size);
+    master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size, max_multi_batch_num);
 
     // Set worker config.
     PipelineConfig worker_pipeline_config;
@@ -94,7 +95,7 @@ class DistributedCoordinatorTest : public testing::Test {
     int worker_tp_para = worker_env_->GetTensorParallelSize();
     uint32_t worker_attn_data_parallel_size = worker_env_->GetAttnDataParallelSize();
     Singleton<Environment>::GetInstance()->SetPipelineConfig(worker_pipeline_config);
-    worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size);
+    worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size, max_multi_batch_num);
 
     // Restore pipeline config.
     Singleton<Environment>::GetInstance()->SetPipelineConfig(default_pipeline_config);
@@ -261,13 +262,14 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
 
   int master_tp_para = master_env_->GetTensorParallelSize();
   int master_attn_data_parallel_size = master_env_->GetAttnDataParallelSize();
+  int max_multi_batch_num = 1;
   Singleton<Environment>::GetInstance()->SetExpertParallelConfig(master_ep_config);
-  master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size);
+  master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size, max_multi_batch_num);
 
   int worker_tp_para = worker_env_->GetTensorParallelSize();
   uint32_t worker_attn_data_parallel_size = worker_env_->GetAttnDataParallelSize();
   Singleton<Environment>::GetInstance()->SetExpertParallelConfig(worker_ep_config);
-  worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size);
+  worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size, max_multi_batch_num);
 
   master_ep_hidden_unit_buffer_pool_ = new ExpertParallelHiddenUnitBufferPool();
   // worker_ep_hidden_unit_buffer_pool_ = new ExpertParallelHiddenUnitBufferPool();
