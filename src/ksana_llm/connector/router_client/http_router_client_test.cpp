@@ -2,15 +2,18 @@
 
 ==============================================================================*/
 #include "ksana_llm/connector/router_client/http_router_client.h"
+#include <curl/curl.h>
 #include <gtest/gtest.h>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
 #include "ksana_llm/connector/node_info.h"
+#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/socket_util.h"
 #include "ksana_llm/utils/status.h"
-#include <nlohmann/json.hpp>
 #include "test.h"
 
 using namespace ksana_llm;
@@ -643,6 +646,66 @@ class RealHTTPRouterClientTest : public HTTPRouterClient {
   using HTTPRouterClient::MakeHttpRequest;
 };
 
+// Fast-timeout version for unreachable host testing
+class FastTimeoutHTTPRouterClientTest : public HTTPRouterClient {
+ public:
+  explicit FastTimeoutHTTPRouterClientTest(const std::string& endpoint) : HTTPRouterClient(endpoint) {}
+
+  // Override MakeHttpRequest with very short timeout for testing
+  std::string MakeHttpRequest(const std::string& path, const std::string& method,
+                              const nlohmann::json& json_data) override {
+    CURL* curl = curl_easy_init();
+    std::string response;
+    if (curl) {
+      std::string url = endpoint_ + path;
+      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+      // Set up headers
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+      // Set very short timeout for fast failure
+      curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);          // 1 second total timeout
+      curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 1L);   // 1 second connect timeout
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);  // Minimum bytes per second
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 1L);   // Abort if too slow for 1 second
+
+      // Set custom request method if not GET
+      if (method != "GET") {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
+        std::string post_data = json_data.dump();
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, post_data.length());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data.c_str());
+      }
+
+      // Perform the request
+      CURLcode res = curl_easy_perform(curl);
+
+      // Clean up
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(curl);
+
+      if (res != CURLE_OK) {
+        KLLM_LOG_WARNING << "HTTP request failed: " << curl_easy_strerror(res);
+        return "{}";  // Return empty JSON on failure
+      }
+    }
+    return response;
+  }
+
+ private:
+  // Use the same WriteCallback as the parent class
+  static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
+    size_t total_size = size * nmemb;
+    userp->append(static_cast<char*>(contents), total_size);
+    return total_size;
+  }
+};
+
 // Test MakeHttpRequest with invalid URL (should handle gracefully)
 TEST_F(RouterClientTest, TestMakeHttpRequestInvalidURL) {
   RealHTTPRouterClientTest client("invalid-url-format");
@@ -657,13 +720,22 @@ TEST_F(RouterClientTest, TestMakeHttpRequestInvalidURL) {
   EXPECT_TRUE(true);  // If we reach here, the method handled the invalid URL gracefully
 }
 
-// Test MakeHttpRequest with unreachable host
+// Test MakeHttpRequest with unreachable host (fast timeout)
 TEST_F(RouterClientTest, TestMakeHttpRequestUnreachableHost) {
-  // Use a non-routable IP address that should fail quickly
-  RealHTTPRouterClientTest client("http://192.0.2.1:8080");  // RFC 5737 test address
+  // Use a non-routable IP address that should fail quickly with short timeout
+  FastTimeoutHTTPRouterClientTest client("http://192.0.2.1:8080");  // RFC 5737 test address
 
   nlohmann::json test_data = {{"test", "data"}};
+
+  // This should fail within 1-2 seconds due to short timeout
+  auto start_time = std::chrono::steady_clock::now();
   std::string response = client.MakeHttpRequest("/api/test", "POST", test_data);
+  auto end_time = std::chrono::steady_clock::now();
+
+  // Verify it failed quickly (within 3 seconds to be safe)
+  auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+  EXPECT_LE(duration.count(), 3) << "Request should fail quickly, took " << duration.count() << " seconds";
+
   // This should handle the connection failure gracefully
   // The response should be empty, "{}", or not contain "Success"
   bool is_empty_or_invalid = response.empty() || response == "{}" || response.find("Success") == std::string::npos;
@@ -682,30 +754,52 @@ TEST_F(RouterClientTest, TestMakeHttpRequestUnreachableHost) {
 
 // Test MakeHttpRequest with different HTTP methods
 TEST_F(RouterClientTest, TestMakeHttpRequestDifferentMethods) {
-  RealHTTPRouterClientTest client("http://httpbin.org");  // Use httpbin.org for testing if available
+  // Use MockRouterClient for predictable, fast responses instead of relying on external service
+  MockRouterClient client("http://httpbin.org");
 
   nlohmann::json test_data = {{"method_test", "value"}};
 
-  // Test GET request (this will likely fail due to network, but tests the code path)
+  // Test GET request (mock will return predictable response)
   std::string get_response = client.MakeHttpRequest("/get", "GET", test_data);
-  EXPECT_TRUE(true);  // Verify it doesn't crash
+  EXPECT_TRUE(true);                         // Verify it doesn't crash
+  EXPECT_EQ(client.GetLastMethod(), "GET");  // Verify method was captured
+  EXPECT_EQ(client.GetLastPath(), "/get");   // Verify path was captured
 
   // Test POST request
   std::string post_response = client.MakeHttpRequest("/post", "POST", test_data);
   EXPECT_TRUE(true);  // Verify it doesn't crash
+  EXPECT_EQ(client.GetLastMethod(), "POST");
 
   // Test PUT request
   std::string put_response = client.MakeHttpRequest("/put", "PUT", test_data);
   EXPECT_TRUE(true);  // Verify it doesn't crash
+  EXPECT_EQ(client.GetLastMethod(), "PUT");
 
   // Test custom method
   std::string custom_response = client.MakeHttpRequest("/patch", "PATCH", test_data);
   EXPECT_TRUE(true);  // Verify it doesn't crash
+  EXPECT_EQ(client.GetLastMethod(), "PATCH");
+}
+
+// Optional test with real network (only if environment variable is set)
+TEST_F(RouterClientTest, TestMakeHttpRequestRealNetworkOptional) {
+  // Only run this test if explicitly requested via environment variable
+  if (!ShouldUseRealServer()) {
+    GTEST_SKIP() << "Skipping real network test. Set KSANA_TEST_WITH_SERVER=1 to enable.";
+  }
+
+  // Use fast timeout for real network test to avoid long waits
+  FastTimeoutHTTPRouterClientTest client("http://httpbin.org");
+  nlohmann::json test_data = {{"network_test", "value"}};
+
+  // Test one method with real network (with fast timeout)
+  std::string response = client.MakeHttpRequest("/get", "GET", test_data);
+  EXPECT_TRUE(true);  // Should handle network response or timeout gracefully
 }
 
 // Test MakeHttpRequest with empty JSON data
 TEST_F(RouterClientTest, TestMakeHttpRequestEmptyData) {
-  RealHTTPRouterClientTest client("http://192.0.2.1:8080");  // Non-routable address
+  FastTimeoutHTTPRouterClientTest client("http://192.0.2.1:8080");  // Use fast timeout for unreachable address
 
   nlohmann::json empty_data;
 
@@ -720,7 +814,7 @@ TEST_F(RouterClientTest, TestMakeHttpRequestEmptyData) {
 
 // Test MakeHttpRequest with complex JSON data
 TEST_F(RouterClientTest, TestMakeHttpRequestComplexData) {
-  RealHTTPRouterClientTest client("http://192.0.2.1:8080");  // Non-routable address
+  FastTimeoutHTTPRouterClientTest client("http://192.0.2.1:8080");  // Use fast timeout for unreachable address
 
   nlohmann::json complex_data = {{"string_field", "test_value"},
                                  {"number_field", 42},
@@ -735,22 +829,29 @@ TEST_F(RouterClientTest, TestMakeHttpRequestComplexData) {
 
 // Test error scenarios in MakeHttpRequest
 TEST_F(RouterClientTest, TestMakeHttpRequestErrorScenarios) {
-  RealHTTPRouterClientTest client("http://httpbin.org");
-
   nlohmann::json test_data = {{"error_test", "data"}};
 
-  // Test endpoint that should return 404 (if httpbin.org is available)
-  std::string not_found_response = client.MakeHttpRequest("/status/404", "GET", test_data);
-  EXPECT_TRUE(true);  // Should handle 404 gracefully
+  // Test 1: Mock different error scenarios without network dependency
+  MockRouterClient mock_client("http://test.example.com");
 
-  // Test endpoint that should return 500 (if httpbin.org is available)
-  std::string server_error_response = client.MakeHttpRequest("/status/500", "GET", test_data);
-  EXPECT_TRUE(true);  // Should handle 500 gracefully
+  // Test mock error handling (instant, no network)
+  std::string mock_404 = mock_client.MakeHttpRequest("/status/404", "GET", test_data);
+  EXPECT_TRUE(true);  // Should handle mock requests gracefully
+  EXPECT_EQ(mock_client.GetLastPath(), "/status/404");
 
-  // Test with very long timeout scenario (using invalid host to trigger timeout)
-  RealHTTPRouterClientTest timeout_client("http://192.0.2.1:8080");
+  std::string mock_500 = mock_client.MakeHttpRequest("/status/500", "POST", test_data);
+  EXPECT_TRUE(true);  // Should handle mock requests gracefully
+  EXPECT_EQ(mock_client.GetLastMethod(), "POST");
+
+  // Test 2: Network timeout scenario (fast failure)
+  FastTimeoutHTTPRouterClientTest timeout_client("http://192.0.2.1:8080");
   std::string timeout_response = timeout_client.MakeHttpRequest("/test", "GET", test_data);
-  EXPECT_TRUE(true);  // Should handle timeout gracefully
+  EXPECT_TRUE(true);  // Should handle timeout gracefully (fails in ~1 second)
+
+  // Test 3: Invalid URL format (instant failure)
+  RealHTTPRouterClientTest invalid_client("invalid-url-format");
+  std::string invalid_response = invalid_client.MakeHttpRequest("/test", "GET", test_data);
+  EXPECT_TRUE(true);  // Should handle invalid URL gracefully
 }
 
 // Test GenerateTaskID method
@@ -779,7 +880,8 @@ TEST_F(RouterClientTest, TestGenerateTaskID) {
 
 // Test edge cases and boundary conditions
 TEST_F(RouterClientTest, TestMakeHttpRequestEdgeCases) {
-  RealHTTPRouterClientTest client("http://192.0.2.1:8080");
+  // Use fast timeout client to avoid long waits on unreachable host
+  FastTimeoutHTTPRouterClientTest client("http://192.0.2.1:8080");
 
   // Test with very large JSON data
   nlohmann::json large_data;
@@ -803,4 +905,24 @@ TEST_F(RouterClientTest, TestMakeHttpRequestEdgeCases) {
   // Test with path starting without /
   response = client.MakeHttpRequest("test", "GET", nlohmann::json{});
   EXPECT_TRUE(true);  // Should handle path without leading slash
+}
+
+// Optional test with real network error scenarios (only if environment variable is set)
+TEST_F(RouterClientTest, TestMakeHttpRequestRealNetworkErrors) {
+  // Only run this test if explicitly requested via environment variable
+  if (!ShouldUseRealServer()) {
+    GTEST_SKIP() << "Skipping real network error test. Set KSANA_TEST_WITH_SERVER=1 to enable.";
+  }
+
+  // Use fast timeout for real network error testing
+  FastTimeoutHTTPRouterClientTest client("http://httpbin.org");
+  nlohmann::json test_data = {{"error_test", "data"}};
+
+  // Test real 404 error (with fast timeout)
+  std::string not_found_response = client.MakeHttpRequest("/status/404", "GET", test_data);
+  EXPECT_TRUE(true);  // Should handle 404 gracefully or timeout quickly
+
+  // Test real 500 error (with fast timeout)
+  std::string server_error_response = client.MakeHttpRequest("/status/500", "GET", test_data);
+  EXPECT_TRUE(true);  // Should handle 500 gracefully or timeout quickly
 }
