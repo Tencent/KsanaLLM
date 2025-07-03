@@ -123,6 +123,8 @@ class DirectCacheManager : public CacheManagerInterface,
   Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids);
   Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids);
 
+  bool IsPrefixCachingEnabled();
+
  private:
   // Create a new cached block.
   DirectCachedBlock* CreateCachedBlock(size_t block_id);

@@ -11,6 +11,8 @@
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/memory_allocator.h"
+#include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 
 #include "test.h"
 
@@ -74,9 +76,12 @@ class ContinuousBatchingTest : public testing::Test {
 
     CacheManagerConfig cache_manager_config;
     cache_manager_config.tensor_para_size = kTpNum;
+    cache_manager_config.enable_prefix_caching = false;
     auto cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
     continuous_batching_strategy_->SetCacheManager(cache_manager);
+
+    pybind11::initialize_interpreter();
   }
 
   ~ContinuousBatchingTest() {
@@ -93,6 +98,7 @@ class ContinuousBatchingTest : public testing::Test {
       BlockManagerConfig block_manager_config;
       env->SetBlockManagerConfig(block_manager_config);
     }
+    pybind11::finalize_interpreter();
   }
 
   void SetUp() {}
@@ -407,4 +413,53 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
+}
+
+// 测试结构化输出
+TEST_F(ContinuousBatchingTest, ProcessStructuredOutputTest) {
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->kv_comm_request_id = 123;
+
+  // 构建状态机
+  Singleton<Tokenizer>::GetInstance()->InitTokenizer("/model/llama-hf/7B/");
+  std::shared_ptr<FiniteStateMachineController> fsm_controller = Singleton<FiniteStateMachineController>::GetInstance();
+  std::string fsm_regex = "Hello [*], my name is [*]";
+  req->req_fsm = fsm_controller->CreateOrGetFSM(fsm_regex);
+  req->fsm_state_id = 0;
+  req->input_tokens = {1};
+  req->output_tokens = {};
+  req->forwarding_tokens = req->input_tokens;
+  // 首轮请求, 测试 JumpForward 扩展请求
+  continuous_batching_strategy_->JumpForwardRequest(req);
+  ASSERT_EQ(req->fsm_state_id, 1);
+  std::vector<int> target_output_tokens = {1, 15043, 29871};
+  ASSERT_EQ(req->output_tokens.size(), target_output_tokens.size());
+  for (int i = 0; i < req->output_tokens.size(); ++i) {
+    ASSERT_EQ(req->output_tokens[i], target_output_tokens[i]);
+  }
+  // 第二轮请求, 测试生成逻辑(未生成跳转词)
+  req->output_tokens.push_back(21599);
+  continuous_batching_strategy_->ProcessStructuredOutput(req);
+  ASSERT_EQ(req->fsm_state_id, 1);
+  ASSERT_EQ(req->output_tokens.size(), target_output_tokens.size() + 1);
+  // 第三轮请求, 测试生成逻辑(生成跳转词)
+  // 同时模拟实际推理的 prefix_cache_len 和 kv_cached_token_num 变动
+  req->output_tokens.push_back(1919);
+  req->kv_cached_token_num = req->forwarding_tokens.size();
+  req->prefix_cache_len = req->forwarding_tokens.size();
+  continuous_batching_strategy_->ProcessStructuredOutput(req);
+  target_output_tokens = {1, 15043, 4335, 29892, 590, 1024, 338, 29871};
+  ASSERT_EQ(req->fsm_state_id, 3);
+  ASSERT_EQ(req->output_tokens.size(), target_output_tokens.size());
+  for (int i = 0; i < req->output_tokens.size(); ++i) {
+    ASSERT_EQ(req->output_tokens[i], target_output_tokens[i]);
+  }
+  // 由于配置了 prefix_cache = False, 则理应清空这两个值
+  ASSERT_EQ(req->kv_cached_token_num, 0);
+  ASSERT_EQ(req->prefix_cache_len, 0);
+  Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
 }

@@ -168,6 +168,8 @@ class PrefixCacheManager : public CacheManagerInterface,
   Status WaitSwapoutRequestMemoryBlock(const std::vector<int64_t>& req_ids);
   Status WaitSwapinRequestMemoryBlock(const std::vector<int64_t>& req_ids);
 
+  bool IsPrefixCachingEnabled();
+
  private:
   // Whether the block token is equal to specific ones.
   bool CheckSameTokens(const PrefixCachedBlock* block, const int* start, size_t len);

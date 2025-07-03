@@ -96,6 +96,8 @@ class CacheManagerInterface {
 
   // Update internal state after request finished.
   virtual void DestroyFinishedRequest(int64_t req_id) = 0;
+
+  virtual bool IsPrefixCachingEnabled() = 0;
 };
 
 }  // namespace ksana_llm

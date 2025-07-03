@@ -1120,4 +1120,8 @@ Status PrefixCacheManager::WaitSwapinRequestMemoryBlock(const std::vector<int64_
   return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::WaitSwapinRequestMemoryBlock(req_ids);
 }
 
+bool PrefixCacheManager::IsPrefixCachingEnabled() {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::IsPrefixCachingEnabled();
+}
+
 }  // namespace ksana_llm

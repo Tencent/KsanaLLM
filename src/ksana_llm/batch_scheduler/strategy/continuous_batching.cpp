@@ -111,6 +111,11 @@ void ContinuousBatchingStrategy::ExtendTokensWithRetokenization(std::shared_ptr<
   // add new tokens to forwarding_tokens, their kv-cache will be generated.
   req->forwarding_tokens = req->output_tokens;
 
+  if (!cache_manager_->IsPrefixCachingEnabled()) {
+    req->kv_cached_token_num = 0;
+    req->prefix_cache_len = 0;
+  }
+
   req->NotifyStep();
 
   // State transition.
@@ -159,7 +164,7 @@ void ContinuousBatchingStrategy::ProcessStructuredOutput(std::shared_ptr<InferRe
     size_t next_state_id = state->GetNextStateId(req->output_tokens.back());
     if (next_state_id != req->fsm_state_id) {
       // The requested end token satisfies the jump condition, and the request will transition to the next state.
-      if (Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled()) {
+      if (cache_manager_->IsPrefixCachingEnabled()) {
         req->prefix_cache_len = req->output_tokens.size() - 1;
       }
       req->req_fsm->CheckFSMPopToken(req->fsm_state_id, req->output_tokens);

@@ -397,4 +397,8 @@ Status DirectCacheManager::WaitSwapinRequestMemoryBlock(const std::vector<int64_
   return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::WaitSwapinRequestMemoryBlock(req_ids);
 }
 
+bool DirectCacheManager::IsPrefixCachingEnabled() {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::IsPrefixCachingEnabled();
+}
+
 }  // namespace ksana_llm
