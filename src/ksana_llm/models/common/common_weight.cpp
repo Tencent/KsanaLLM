@@ -917,6 +917,7 @@ void CommonWeight<T>::ProcessWeights() {
     }
   } else {  // roll back to common weight slover
     ConvertCommonTensor(hidden_units, inter_size, vocab_size);
+    ConvertNextnProjTensor();
   }
 
   // We use vocab_size to determine whether it is the Baichuan2 model.

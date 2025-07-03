@@ -882,7 +882,7 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
             output_token_num = len(tokenizer.encode(output_text))
     elif args.backend == "vllm":
         prompt_len = len(prompt)
-        output_text = output["text"][0].strip()
+        output_text = output["text"][0][prompt_len:].strip()
         if tokenizer is None:
             input_token_num = 0
             output_token_num = 0

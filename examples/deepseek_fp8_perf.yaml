@@ -28,11 +28,11 @@ setting:
     # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
     max_waiting_queue_len: 1200
     # 一个调度step处理的最大token个数，一次context decode视为多个token。
-    max_step_tokens: 16384
+    max_step_tokens: 10240
     # 每一步推理时的最大batch_size
     max_batch_size: 256
     # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
-    max_token_len: 16384
+    max_token_len: 10240
     # 单个请求可用blck小于该值触发换出
     swapout_block_threshold: 1.0
     # 单个请求可用block大于该值触发换入
