@@ -283,7 +283,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareInputRefit(forward_reqs);
 
   PrepareVLRequest(forward_reqs);
-  PrepareNetxnGatherIdx(forward_reqs, run_mode);
+  PrepareNextNGatherIdx(forward_reqs, run_mode);
 
   PreparePrefill();
   PrepareDualDecode();
@@ -346,8 +346,8 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
   ProfileEvent::PopEvent();
 }
 
-void ModelInput::PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
-  ProfileEvent::PushEvent("PrepareNetxnGatherIdx", rank_);
+void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+  ProfileEvent::PushEvent("PrepareNextNGatherIdx", rank_);
   if (run_mode == RunMode::kMain) {
     mtp_req_id_to_pos_.clear();
   }

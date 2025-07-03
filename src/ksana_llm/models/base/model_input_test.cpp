@@ -286,7 +286,7 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
 #endif
 
 #ifdef ENABLE_CUDA
-TEST_F(ModelInputTest, PrepareNetxnGatherIdxTest) {
+TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   auto RandomNum = [](const size_t min, const size_t max) {
     static std::default_random_engine random_engine;
     return std::uniform_int_distribution<size_t>(min, max)(random_engine);
@@ -305,7 +305,7 @@ TEST_F(ModelInputTest, PrepareNetxnGatherIdxTest) {
   }
 
   model_input->mtp_req_id_to_pos_.clear();
-  model_input->PrepareNetxnGatherIdx(forward_reqs, RunMode::kMain);
+  model_input->PrepareNextNGatherIdx(forward_reqs, RunMode::kMain);
 
   EXPECT_EQ(model_input->mtp_req_id_to_pos_.size(), forward_reqs.size());
   size_t total_len = 0;
@@ -314,7 +314,7 @@ TEST_F(ModelInputTest, PrepareNetxnGatherIdxTest) {
     total_len += forward_reqs[i].forwarding_tokens->size() - forward_reqs[i].kv_cached_token_num;
   }
 
-  model_input->PrepareNetxnGatherIdx(forward_reqs, RunMode::kNextN);
+  model_input->PrepareNextNGatherIdx(forward_reqs, RunMode::kNextN);
   EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape.size(), 1);
   EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape[0], total_len);
 

@@ -32,7 +32,7 @@ class ModelInput {
   void CreateVLTensors();
   void DestroyVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareNetxnGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
+  void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
 
   void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
 

@@ -148,7 +148,7 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
     auto& gated_buffer_ = common_mlp_buffer_tensors;
 
     // Expert gating MatMul
-    ProfileEvent::PushEvent("gate", forwarding_context.GetCurrentRank());
+    ProfileEvent::PushEvent("expert_gate", forwarding_context.GetCurrentRank());
     STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
     ProfileEvent::PopEvent();
 
