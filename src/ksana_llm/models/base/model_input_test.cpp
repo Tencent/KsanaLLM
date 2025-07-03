@@ -222,13 +222,13 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
   // 测试用例1: 当model_config_.mla_config.kv_lora_rank为0时，PrepareFlashMla应该直接返回
   model_input->model_config_.mla_config.kv_lora_rank = 0;
   model_input->single_token_request_num = 5;
-  model_input->PrepareFlashMla(model_input->flash_input);
+  model_input->PrepareFlashMla(model_input->page_single_input);
   // 由于方法直接返回，没有明确的状态变化可以验证，这里我们只是确保方法不会崩溃
 
   // 测试用例2: 当single_token_request_num为0时，PrepareFlashMla应该直接返回
   model_input->model_config_.mla_config.kv_lora_rank = 10;
   model_input->single_token_request_num = 0;
-  model_input->PrepareFlashMla(model_input->flash_input);
+  model_input->PrepareFlashMla(model_input->page_single_input);
   // 同样，这里我们只是确保方法不会崩溃
 
   // 测试用例3: 当环境变量ENABLE_FLASH_MLA不是"1"时，PrepareFlashMla不应执行任何操作
@@ -238,10 +238,10 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
   // 设置环境变量为"0"
   setenv("ENABLE_FLASH_MLA", "0", 1);
 
-  MemsetAsync(model_input->flash_input.num_splits.GetPtr<void>(), sizeof(int), 0,
+  MemsetAsync(model_input->page_single_input.num_splits.GetPtr<void>(), sizeof(int), 0,
               model_input->context_->GetH2DStreams()[model_input->rank_]);
 
-  model_input->PrepareFlashMla(model_input->flash_input);
+  model_input->PrepareFlashMla(model_input->page_single_input);
   // 这里我们只是确保方法不会崩溃
 
   // 测试用例4: 当环境变量ENABLE_FLASH_MLA是"1"且满足其他条件时，PrepareFlashMla应该执行相应操作
@@ -256,12 +256,12 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
 
   // 创建输入长度张量
   std::vector<int> input_lengths = {0, 20, 30, 40, 50};
-  MemcpyAsync(model_input->flash_input.input_length.GetPtr<void>(), input_lengths.data(),
+  MemcpyAsync(model_input->page_single_input.input_length.GetPtr<void>(), input_lengths.data(),
               input_lengths.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
               model_input->context_->GetH2DStreams()[model_input->rank_]);
 
   // 执行PrepareFlashMla
-  model_input->PrepareFlashMla(model_input->flash_input);
+  model_input->PrepareFlashMla(model_input->page_single_input);
 
   // 从GPU复制数据回CPU并打印
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
@@ -269,8 +269,8 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
   if (flash_mla_workspace_map.num_sm_parts > 1) {
     int num_splits_cpu;
 
-    MemcpyAsync(&num_splits_cpu, model_input->flash_input.num_splits.GetPtr<void>(), sizeof(int), MEMCPY_DEVICE_TO_HOST,
-                model_input->context_->GetH2DStreams()[model_input->rank_]);
+    MemcpyAsync(&num_splits_cpu, model_input->page_single_input.num_splits.GetPtr<void>(), sizeof(int),
+                MEMCPY_DEVICE_TO_HOST, model_input->context_->GetH2DStreams()[model_input->rank_]);
 
     // 同步流以确保复制完成
     StreamSynchronize(model_input->context_->GetH2DStreams()[model_input->rank_]);

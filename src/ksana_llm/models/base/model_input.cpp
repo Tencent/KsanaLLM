@@ -83,7 +83,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num}, rank_);
 
-  auto allocate_input_info = [&](input_info& info) {
+  auto allocate_input_info = [&](input_info& info, const size_t q_len) {
     const size_t head_num_per_tp = model_config.head_num / env->GetAttentionTensorParallel();
 
     info.input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
@@ -101,9 +101,9 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
     info.block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num * 2}, rank);
 
 #ifdef ENABLE_CUDA
-    if (model_config_.mla_config.kv_lora_rank > 0) {
+    if (model_config_.mla_config.kv_lora_rank > 0 && q_len > 0) {
       llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-      GetNumSmParts(flash_mla_workspace_map, head_num_per_tp, 1, rank_, 0);
+      GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, 1, rank_, 0);
       const size_t tile_scheduler_metadata_tensor_num =
           flash_mla_workspace_map.num_sm_parts * llm_kernels::nvidia::TileSchedulerMetaDataSize;
       info.tile_scheduler_metadata =
@@ -113,9 +113,9 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
 #endif
   };
 
-  allocate_input_info(flash_input);
-  allocate_input_info(page_dual_input);
-  allocate_input_info(page_single_input);
+  allocate_input_info(flash_input, 0);
+  allocate_input_info(page_dual_input, 2);
+  allocate_input_info(page_single_input, 1);
 
   cpu_input_refit_tensor.pos_pair_tensor =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {input_ids.shape[0], 2}, rank_);
@@ -986,8 +986,9 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   Stream stream = context_->GetH2DStreams()[rank_];
   static const int head_num_per_tp =
       model_config_.head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+  const int q_len = input.total_dp_input_ids_len / input.dp_reqs.size();
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-  GetNumSmParts(flash_mla_workspace_map, head_num_per_tp, 1, rank_, stream.Get());
+  GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, 1, rank_, stream.Get());
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
   flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
   InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, input.dp_reqs.size(), stream.Get());
