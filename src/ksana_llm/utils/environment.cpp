@@ -721,13 +721,13 @@ void Environment::InitConnectorConfig(
       connector_config_.coordinator_port =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.coordinator_port", 1357);
       connector_config_.transfer_batch =
-          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_batch", 1);
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_batch", 1048576);
       connector_config_.connector_waiting_sec =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.connector_waiting_sec", 1800);
       connector_config_.circular_bucket_size =
-          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_bucket_size", 16384);
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_bucket_size", 8192);
       connector_config_.circular_bucket_num =
-          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_bucket_num", 16);
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_bucket_num", 4);
       connector_config_.circular_thread_num =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_thread_num", 4);
       connector_config_.send_thread_num =
