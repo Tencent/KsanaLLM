@@ -34,9 +34,6 @@ class PagedMlaAttention {
 
   Tensor attn_w_uv_weight_;
 
-  Tensor attn_w_q_uk_weight_;
-  Tensor attn_w_uv_o_weight_;
-
   // NOTE(karlluo): for example: machine has 4 GPUs, Attention Data Parallelism is 2, Tensor Parallelism is 2.
   // |----Attn DP Group id 0----|----Attn DP Group id 1----|
   // |     TP 0   |     TP1     |     TP0    |     TP1     |

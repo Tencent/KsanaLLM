@@ -63,11 +63,10 @@ extern bool kContextDecodeUseFP8Cache;
 // [DeepSeek-V3 Project] https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py#L393
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,
-                    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* o_proj_weight,
-                    void* kv_b_nope_weight_scale, void* v_head_weight_scale, void* o_weight_scale, size_t o_proj_dim,
-                    void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
-                    void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlen,
-                    float attn_scale,
+                    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
+                    void* v_head_weight_scale, size_t o_proj_dim, void* gemm_workspace, cublasHandle_t& cublas_handles,
+                    cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos, void* rotary_embedding_mask,
+                    void* mla_workspace, void* seqlen, float attn_scale,
                     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
                     int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim,
                     int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, int head_size,
@@ -480,8 +479,8 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
 #define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                             \
   template void MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                      \
       void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,             \
-      void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* o_proj_weight, void* kv_b_nope_weight_scale,   \
-      void* v_head_weight_scale, void* o_weight_scale, size_t o_proj_dim, void* gemm_workspace,                   \
+      void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,   \
+      void* v_head_weight_scale, size_t o_proj_dim, void* gemm_workspace,                   \
       cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos,             \
       void* rotary_embedding_mask, void* mla_workspace, void* seqlen, float attn_scale,                           \
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens, \
@@ -513,8 +512,8 @@ MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokeMlaPagedAttention(
     void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr, void* k_pe_ptr,
-    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* o_proj_weight, void* kv_b_nope_weight_scale,
-    void* v_head_weight_scale, void* o_weight_scale, size_t o_proj_dim, void* workspace, cublasHandle_t& cublas_handles,
+    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
+    void* v_head_weight_scale, size_t o_proj_dim, void* workspace, cublasHandle_t& cublas_handles,
     cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,
     int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads,
     int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads,
@@ -732,14 +731,13 @@ void InvokeMlaPagedAttention(
 #define RUN_MLA_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                                         \
   template void InvokeMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                                \
       void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr,            \
-      void* k_pe_ptr, void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* o_proj_weight,                    \
-      void* kv_b_nope_weight_scale, void* v_head_weight_scale, void* o_weight_scale, size_t o_proj_dim,              \
-      void* workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs,    \
-      void** value_cache_ptrs, void* context_lens_ptr, int max_context_len, cudaStream_t stream,                     \
-      void* cache_offsets_ptr, int seqs_num, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,              \
-      int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads, int stride_size, int block_size,            \
-      float k_scale, float v_scale, int batch, void* rotary_embedding_pos, void* rotary_embedding_mask,              \
-      int total_tokens, float attn_scale,                                                                            \
+      void* k_pe_ptr, void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,           \
+      void* v_head_weight_scale, size_t o_proj_dim, void* workspace, cublasHandle_t& cublas_handles,                 \
+      cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,    \
+      int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads,                \
+      int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads, \
+      int stride_size, int block_size, float k_scale, float v_scale, int batch, void* rotary_embedding_pos,          \
+      void* rotary_embedding_mask, int total_tokens, float attn_scale,                                               \
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr, \
       float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,   \
       const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,           \
@@ -764,21 +762,18 @@ RUN_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType:
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokeAbsorbMlaPagedAttention(
     void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr, void* k_pe_ptr,
-    void* w_q_uk_weight, void* w_q_r_weight, void* w_uv_weight, void* w_o_weight, void* o_weight_scale,
-    void* w_uv_o_weight, void* w_q_uk_weight_scale, void* w_q_r_weight_scale, void* w_uv_o_weight_scale,
-    size_t w_uv_o_dim, void* workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
-    void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr, cudaStream_t stream,
-    void* cache_offsets_ptr, int seqs_num, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
-    int v_head_dim, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale,
-    int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
+    void* w_uv_weight, size_t w_uv_o_dim, void* workspace, cublasHandle_t& cublas_handles,
+    cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void* context_lens_ptr, cudaStream_t stream,
+    void* cache_offsets_ptr, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
+    int v_head_dim, int num_kv_heads, int block_size, float k_scale, float v_scale, int batch,
+    void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
-    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace_ptr, float layernorm_eps, bool use_qk_norm,
-    void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
-    void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,
-    int max_blocks_per_seq, int q_seq_len, int skiped_decode_q_token, int tail_offset_token, QuantMode mm_quant_mode) {
+    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,
+    void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len,
+    int tail_offset_token) {
   // 修改stride_size 和 head_size
-  stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
-  head_size = qk_nope_head_dim + qk_rope_head_dim;
+  const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
+  const int head_size = qk_nope_head_dim + qk_rope_head_dim;
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
 
   if (rotary_embedding_cuda.has_value()) {
@@ -890,23 +885,18 @@ void InvokeAbsorbMlaPagedAttention(
   }
 }
 
-#define RUN_ABSORB_MLA_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                               \
-  template void InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                       \
-      void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr,         \
-      void* k_pe_ptr, void* w_q_uk_weight, void* w_q_r_weight, void* w_uv_weight, void* w_o_weight,               \
-      void* o_weight_scale, void* w_uv_o_weight, void* w_q_uk_weight_scale, void* w_q_r_weight_scale,             \
-      void* w_uv_o_weight_scale, size_t w_uv_o_dim, void* workspace, cublasHandle_t& cublas_handles,              \
-      cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr, \
-      cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads, int qk_rope_head_dim,            \
-      int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads, int stride_size,   \
-      int block_size, float k_scale, float v_scale, int batch, void* rotary_embedding_pos,                        \
-      void* rotary_embedding_mask, int total_tokens, float attn_scale,                                            \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,                   \
-      void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace_ptr, float layernorm_eps,          \
-      bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,                     \
-      const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,        \
-      int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len,                \
-      int skiped_decode_q_token, int total_q_len, QuantMode mm_quant_mode)
+#define RUN_ABSORB_MLA_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                                   \
+  template void InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                           \
+      void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr,             \
+      void* k_pe_ptr, void* w_uv_weight, size_t w_uv_o_dim, void* workspace, cublasHandle_t& cublas_handles,          \
+      cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void* context_lens_ptr, cudaStream_t stream,         \
+      void* cache_offsets_ptr, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,           \
+      int v_head_dim, int num_kv_heads, int block_size, float k_scale, float v_scale, int batch,                      \
+      void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,                    \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,                       \
+      void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,      \
+      void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, \
+      int tail_offset_token)
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -919,64 +909,6 @@ RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCac
 RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif
 #undef RUN_ABSORB_MLA_PAGED_ATTENTION
-
-// Adapted from
-// [DeepSeek-V3 Project]
-// https://github.com/vllm-project/vllm/blob/ed6e9075d31e32c8548b480a47d1ffb77da1f54c/vllm/attention/backends/mla/utils.py#L345
-template <typename T>
-void MlaAbsorbWeight(void* w_q, void* w_uk, void* w_uv, void* w_o, void* w_q_uk, void* w_uv_o, size_t q, size_t n,
-                     size_t d, size_t l, size_t h, bool transpose_matrix, int rank, cudaStream_t& stream) {
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
-  cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
-#endif
-  auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
-
-  if (transpose_matrix) {
-    // For transposed matrices
-    torch::Tensor w_q_tensor =
-        torch::from_blob(w_q, {static_cast<int64_t>(n), static_cast<int64_t>(d), static_cast<int64_t>(q)}, options);
-    torch::Tensor w_uk_tensor =
-        torch::from_blob(w_uk, {static_cast<int64_t>(n), static_cast<int64_t>(d), static_cast<int64_t>(l)}, options);
-    torch::Tensor w_uv_tensor =
-        torch::from_blob(w_uv, {static_cast<int64_t>(n), static_cast<int64_t>(d), static_cast<int64_t>(l)}, options);
-    torch::Tensor w_o_tensor =
-        torch::from_blob(w_o, {static_cast<int64_t>(h), static_cast<int64_t>(n), static_cast<int64_t>(d)}, options);
-
-    // Perform einsum with reshaped tensors
-    auto w_q_uk_tmp = torch::einsum("ndq,ndl -> nlq", {w_q_tensor, w_uk_tensor}).contiguous();
-    auto w_uv_o_tmp = torch::einsum("ndl,hnd -> hnl", {w_uv_tensor, w_o_tensor}).contiguous();
-    CUDA_CHECK(cudaMemcpyAsync(w_q_uk, w_q_uk_tmp.data_ptr(), q * n * l * sizeof(T), cudaMemcpyDeviceToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(w_uv_o, w_uv_o_tmp.data_ptr(), n * l * h * sizeof(T), cudaMemcpyDeviceToDevice, stream));
-  } else {
-    // Original logic for non-transposed matrices
-    torch::Tensor w_q_tensor =
-        torch::from_blob(w_q, {static_cast<int64_t>(q), static_cast<int64_t>(n), static_cast<int64_t>(d)}, options);
-    torch::Tensor w_uk_tensor =
-        torch::from_blob(w_uk, {static_cast<int64_t>(l), static_cast<int64_t>(n), static_cast<int64_t>(d)}, options);
-    torch::Tensor w_uv_tensor =
-        torch::from_blob(w_uv, {static_cast<int64_t>(l), static_cast<int64_t>(n), static_cast<int64_t>(d)}, options);
-    torch::Tensor w_o_tensor =
-        torch::from_blob(w_o, {static_cast<int64_t>(n), static_cast<int64_t>(d), static_cast<int64_t>(h)}, options);
-    auto w_q_uk_tmp = torch::einsum("qnd,lnd -> qnl", {w_q_tensor, w_uk_tensor}).contiguous();
-    CUDA_CHECK(cudaMemcpyAsync(w_q_uk, w_q_uk_tmp.data_ptr(), q * n * l * sizeof(T), cudaMemcpyDeviceToDevice, stream));
-    auto w_uv_o_tmp = torch::einsum("lnd,ndh -> nlh", {w_uv_tensor, w_o_tensor}).contiguous();
-    CUDA_CHECK(cudaMemcpyAsync(w_uv_o, w_uv_o_tmp.data_ptr(), n * l * h * sizeof(T), cudaMemcpyDeviceToDevice, stream));
-  }
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
-  InvokeSetTorchStream(torch_stream, rank);
-#endif
-}
-
-#define MLA_ABSORB_WEIGHT(T)                                                                                           \
-  template void MlaAbsorbWeight<T>(void* w_q, void* w_uk, void* w_uv, void* w_o, void* w_q_uk, void* w_uv_o, size_t q, \
-                                   size_t n, size_t d, size_t l, size_t h, bool transpose_matrix, int rank,            \
-                                   cudaStream_t& stream);
-MLA_ABSORB_WEIGHT(float);
-MLA_ABSORB_WEIGHT(half);
-#ifdef ENABLE_BFLOAT16
-MLA_ABSORB_WEIGHT(__nv_bfloat16);
-#endif
-#undef MLA_ABSORB_WEIGHT
 
 void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {
   llm_kernels::nvidia::SetFlashMlaAttribute(max_batch_size, stream);

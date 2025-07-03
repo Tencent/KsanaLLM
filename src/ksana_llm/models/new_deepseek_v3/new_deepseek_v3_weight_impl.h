@@ -51,12 +51,6 @@ class NewDeepSeekV3WeightImplBase {
                                  std::unordered_map<std::string, Tensor>& device_model_weights,
                                  int dev_rank,
                                  bool is_quant_weight) = 0;
-#ifdef ENABLE_CUDA
-  virtual Status ProcessAbsorbWeightsTypeUKV(std::unordered_map<std::string, Tensor>& dev_weights_map_,
-                                             int dev_rank,
-                                             const std::shared_ptr<NewDeepSeekV3Config> &
-                                                 new_deepseek_v3_config) = 0;
-#endif
 #ifdef ENABLE_FP8
   virtual bool LoadMoeFp8E4m3BlockWiseScale(const std::string & host_weight_name,
                                     const Tensor & host_weight_tensor,
@@ -122,12 +116,6 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
                                  std::unordered_map<std::string, Tensor>& device_model_weights,
                                  int dev_rank,
                                  bool is_quant_weight = false) override;
-#ifdef ENABLE_CUDA
-  Status ProcessAbsorbWeightsTypeUKV(std::unordered_map<std::string, Tensor>& dev_weights_map_,
-                                     int dev_rank,
-                                     const std::shared_ptr<NewDeepSeekV3Config> &
-                                         new_deepseek_v3_config) override;
-#endif
 
 #ifdef ENABLE_FP8
   Tensor DequantFp8E4m3BlockWiseTensor(const Tensor & weight_tensor,

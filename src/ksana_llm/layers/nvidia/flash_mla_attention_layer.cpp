@@ -60,19 +60,15 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   void* k_pe_ptr = input_tensors[25].GetPtr<void>();
   void* kv_b_nope_proj_weight = input_tensors[26].GetPtr<void>();
   void* v_head_proj_weight = input_tensors[27].GetPtr<void>();
-  void* o_proj_weight = input_tensors[28].GetPtr<void>();
 
   void* kv_b_nope_weight_scale = nullptr;
   void* v_head_weight_scale = nullptr;
-  void* o_weight_scale = nullptr;
   if (this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3) {
     kv_b_nope_weight_scale = input_tensors[26].weight_scales->GetPtr<void>();
     v_head_weight_scale = input_tensors[27].weight_scales->GetPtr<void>();
-    o_weight_scale = input_tensors[28].weight_scales->GetPtr<void>();
   } else if (this->mm_quant_mode_ == QUANT_GPTQ) {
     kv_b_nope_weight_scale = input_tensors[26].scales->GetPtr<void>();
     v_head_weight_scale = input_tensors[27].scales->GetPtr<void>();
-    o_weight_scale = input_tensors[28].scales->GetPtr<void>();
   }
 
   size_t o_proj_dim = input_tensors[28].shape[1];
@@ -106,7 +102,7 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
 
   MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
       output_tensors[0].GetPtr<void>(), q_nope_ptr, q_pe_ptr, k_pe_ptr, compressed_kv_ptr, kv_b_nope_proj_weight,
-      v_head_proj_weight, o_proj_weight, kv_b_nope_weight_scale, v_head_weight_scale, o_weight_scale, o_proj_dim,
+      v_head_proj_weight, kv_b_nope_weight_scale, v_head_weight_scale, o_proj_dim,
       fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
       this->context_->ext->GetCublasLtHandles()[this->rank_], input_tensors[6].GetPtr<void>(),
       input_tensors[7].GetPtr<void>(), workspace_buffer, input_tensors[1].GetPtr<void>(),

@@ -9,7 +9,7 @@ namespace ksana_llm {
 
 enum AbsorbWeightsType {
   kAbsorbDisabled = 0,
-  kAbsorbTypeUKV = 1,
+  kAbsorbTypeUKV = 1,  // deprecated, use kAbsorbTypeBMM instead
   kAbsorbTypeBMM = 2,
 };
 

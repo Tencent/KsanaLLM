@@ -852,7 +852,7 @@ TEST_F(EnvironmentTest, InitExpertParaConfig) {
 // 测试Environment的GetCacheBlockSize方法
 TEST_F(EnvironmentTest, GetCacheBlockSize) {
   auto absorb_type = GetAbsorbWeightsType();
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeUKV);
+  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // 创建测试用的ModelConfig
   ModelConfig model_config;
   model_config.type = "deepseek_v3";

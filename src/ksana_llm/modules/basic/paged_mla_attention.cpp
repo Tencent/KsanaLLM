@@ -73,12 +73,7 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
       fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
   attn_o_proj_weight_ =
       creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
-  if (absorb_type == AbsorbWeightsType::kAbsorbTypeUKV) {
-    attn_w_q_uk_weight_ = creation_context.base_weight->GetModelWeights(
-        fmt::format("model.layers.{}.self_attn.w_q_uk.weight", layer_idx));
-    attn_w_uv_o_weight_ = creation_context.base_weight->GetModelWeights(
-        fmt::format("model.layers.{}.self_attn.w_uv_o.weight", layer_idx));
-  } else if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
+  if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
     attn_w_uv_weight_ =
         creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.w_uv.weight", layer_idx));
   }
@@ -111,8 +106,6 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            kv_b_nope_proj_weight_,
                                                            v_head_proj_weight_,
                                                            attn_o_proj_weight_,
-                                                           attn_w_q_uk_weight_,
-                                                           attn_w_uv_o_weight_,
                                                            page_input.tile_scheduler_metadata,
                                                            page_input.num_splits,
                                                            page_input.metadata,

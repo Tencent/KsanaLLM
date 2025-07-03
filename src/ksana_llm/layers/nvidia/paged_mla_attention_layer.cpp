@@ -54,8 +54,6 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   const Tensor& kv_b_nope_proj_weight = *input_iter++;
   const Tensor& v_head_proj_weight = *input_iter++;
   const Tensor& o_proj_weight = *input_iter++;
-  const Tensor& w_q_uk_weight = *input_iter++;
-  const Tensor& w_uv_o_weight = *input_iter++;
   const Tensor& tile_scheduler_metadata_tensor = *input_iter++;
   const Tensor& num_splits_tensor = *input_iter++;
   const Tensor& metadata = *input_iter++;
@@ -96,19 +94,15 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
 
   void* const kv_b_nope_proj_weight_ptr = kv_b_nope_proj_weight.GetPtr<void>();
   void* const v_head_proj_weight_ptr = v_head_proj_weight.GetPtr<void>();
-  void* const o_proj_weight_ptr = o_proj_weight.GetPtr<void>();
 
   void* kv_b_nope_weight_scale = nullptr;
   void* v_head_weight_scale = nullptr;
-  void* o_weight_scale = nullptr;
   if (this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3) {
     kv_b_nope_weight_scale = input_tensors[17].weight_scales->GetPtr<void>();
     v_head_weight_scale = input_tensors[18].weight_scales->GetPtr<void>();
-    o_weight_scale = input_tensors[19].weight_scales->GetPtr<void>();
   } else if (this->mm_quant_mode_ == QUANT_GPTQ) {
     kv_b_nope_weight_scale = input_tensors[17].scales->GetPtr<void>();
     v_head_weight_scale = input_tensors[18].scales->GetPtr<void>();
-    o_weight_scale = input_tensors[19].scales->GetPtr<void>();
   }
 
   const size_t o_proj_dim =
@@ -122,16 +116,9 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   std::shared_ptr<Tensor>& work_buffer = this->workspace_buffer_;
   void* fp8_work_buffer = work_buffer == nullptr ? nullptr : work_buffer->GetPtr<void>();
 
-  void* const w_q_uk_weight_ptr = w_q_uk_weight.GetPtr<void>();
   void* const w_uv_weight_ptr = w_uv_weight.GetPtr<void>();
 
-  // Absorb
-  if (w_q_uk_weight_ptr || w_uv_weight_ptr) {
-    void* w_q_uk_weight_scale =
-        w_q_uk_weight.weight_scales == nullptr ? nullptr : w_q_uk_weight.weight_scales->GetPtr<void>();
-    void* w_uv_o_weight_ptr = w_uv_o_weight.GetPtr<void>();
-    void* w_uv_o_weight_scale =
-        w_uv_o_weight.weight_scales == nullptr ? nullptr : w_uv_o_weight.weight_scales->GetPtr<void>();
+  if (w_uv_weight_ptr) {  // Absorb
     if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kAuto) {
       // 量化时存储convert table的起始位置
       v_cache_ptr = layer_kv_cache_ptr[0] +
@@ -143,37 +130,32 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
       KLLM_LOG_DEBUG << "kv_cache_block_num " << kv_cache_block_num;
     }
     InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-        skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
-        skipped_compressed_kv_ptr, skipped_k_pe_ptr, w_q_uk_weight_ptr, nullptr, w_uv_weight_ptr,
-        o_proj_weight_ptr, o_weight_scale, w_uv_o_weight_ptr, w_q_uk_weight_scale, nullptr, w_uv_o_weight_scale,
-        o_proj_dim, fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
-        this->context_->ext->GetCublasLtHandles()[this->rank_], k_list, v_list, kv_seq_len.GetPtr<void>(),
-        this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size,
-        this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_,
-        this->head_size_, this->num_kv_heads_, this->stride_size_, this->block_token_num_, this->k_scale_,
+        skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr, skipped_compressed_kv_ptr,
+        skipped_k_pe_ptr, w_uv_weight_ptr, o_proj_dim, fp8_work_buffer,
+        this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
+        k_list, kv_seq_len.GetPtr<void>(), this->context_->GetComputeStreams()[this->rank_].Get(),
+        cache_offset.GetPtr<void>(), this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_,
+        this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->block_token_num_, this->k_scale_,
         this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
         total_tokens, this->attn_scale_, this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(),
-        num_splits_tensor.GetPtr<void>(), workspace.GetPtr<void>(), this->layernorm_eps_, this->use_qk_norm_,
-        query_norm_weight.GetPtr<void>(), key_norm_weight.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
-        this->alibi_slopes_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr,
-        kv_cache_block_num, max_blocks_per_seq, q_seq_len, skiped_decode_q_token,
-        out.shape[0] - skip_tokens_num - total_tokens, this->mm_quant_mode_);
+        num_splits_tensor.GetPtr<void>(), this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr,
+        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len,
+        out.shape[0] - skip_tokens_num - total_tokens);
     return Status();
   }
   InvokeMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-      skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr,
-      skipped_compressed_kv_ptr, skipped_k_pe_ptr, kv_b_nope_proj_weight_ptr, v_head_proj_weight_ptr, o_proj_weight_ptr,
-      kv_b_nope_weight_scale, v_head_weight_scale, o_weight_scale, o_proj_dim, fp8_work_buffer,
-      this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
-      k_list, v_list, kv_seq_len.GetPtr<void>(), max_tokens, this->context_->GetComputeStreams()[this->rank_].Get(),
-      cache_offset.GetPtr<void>(), batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_,
-      this->kv_lora_rank_, this->v_head_dim_, this->head_size_, this->num_kv_heads_, this->stride_size_,
-      this->block_token_num_, this->k_scale_, this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(),
-      rotary_embedding_mask.GetPtr<void>(), total_tokens, this->attn_scale_, this->rotary_embedding_cuda_,
-      workspace.GetPtr<void>(), this->layernorm_eps_, this->use_qk_norm_, query_norm_weight.GetPtr<void>(),
-      key_norm_weight.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_,
-      qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
-      this->mm_quant_mode_, q_seq_len);
+      skipped_hidden_buffer1_ptr, skipped_output_ptr, skipped_q_nope_ptr, skipped_q_pe_ptr, skipped_compressed_kv_ptr,
+      skipped_k_pe_ptr, kv_b_nope_proj_weight_ptr, v_head_proj_weight_ptr, kv_b_nope_weight_scale, v_head_weight_scale,
+      o_proj_dim, fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
+      this->context_->ext->GetCublasLtHandles()[this->rank_], k_list, v_list, kv_seq_len.GetPtr<void>(), max_tokens,
+      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size, this->num_heads_,
+      this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->head_size_,
+      this->num_kv_heads_, this->stride_size_, this->block_token_num_, this->k_scale_, this->v_scale_, batch_size,
+      rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens, this->attn_scale_,
+      this->rotary_embedding_cuda_, workspace.GetPtr<void>(), this->layernorm_eps_, this->use_qk_norm_,
+      query_norm_weight.GetPtr<void>(), key_norm_weight.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
+      this->alibi_slopes_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num,
+      max_blocks_per_seq, this->mm_quant_mode_, q_seq_len);
 
   return Status();
 }

@@ -98,12 +98,6 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(
                                         int dev_rank) {
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config> (model_config_);
-  if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeUKV) {
-#ifdef ENABLE_CUDA
-    weight_impl_->ProcessAbsorbWeightsTypeUKV(dev_weights_map, dev_rank,
-              new_deepseek_v3_config);
-#endif
-  }
   std::unordered_set<std::string> post_processed_weights;
   if (new_deepseek_v3_config->quant_config.is_fp8_blockwise) {
     for (auto & [weight_name, weight_tensor] : dev_weights_map) {
