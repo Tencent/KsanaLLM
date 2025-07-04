@@ -308,7 +308,7 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   }
 
   if (decode_tokens != 0) {
-    PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, paged_buffer_tensors,
+    PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, paged_buffer_tensors,
                           decode_q_buffer_tensors_tmp[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
                           k_rope_buffer_tensors[0], forwarding_context);
   }
@@ -667,13 +667,12 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
       PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
       STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
     }
-  }
 
-  if (decode_tokens != 0) {
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
-    PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, paged_buffer_tensors,
+
+    PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, paged_buffer_tensors,
                           decode_q_buffer_tensors_tmp[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
                           k_rope_buffer_tensors[0], forwarding_context);
     {
@@ -736,10 +735,9 @@ Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& h
 }
 
 template <typename T>
-Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& output_tensor,
                                                           std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                          std::vector<Tensor>& reduce_buffer_tensors,
-                                                          std::vector<Tensor>& paged_buffer_tensors,
+                                                          std::vector<Tensor>& workspace_buffer,
                                                           Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                                           Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                           ForwardingContext<T>& forwarding_context) {
@@ -753,20 +751,18 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& h
                             std::vector<size_t>(decode_q_buffer_tensor.shape), decode_q_buffer_tensor.device_id,
                             decode_q_buffer_tensor.GetPtr<void>() +
                                 decode_q_buffer_tensor.GetTotalBytes() / decode_q_buffer_tensor.shape[0] *
-                                    forwarding_context.GetModelInput()->page_dual_input.dp_reqs.size() * 2);
+                                    forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len);
 
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
-          hidden_buffer_tensors_0, forwarding_context.GetModelInput()->page_single_input, hidden_buffer_tensors_1,
-          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(),
-          paged_buffer_tensors[0], /* workspace */
+          output_tensor, forwarding_context.GetModelInput()->page_single_input, hidden_buffer_tensors_1,
+          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0],
           decode_one_seq, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
     }
 
     if (!forwarding_context.GetModelInput()->page_dual_input.dp_reqs.empty()) {
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
-          hidden_buffer_tensors_0, forwarding_context.GetModelInput()->page_dual_input, hidden_buffer_tensors_1,
-          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(),
-          paged_buffer_tensors[0], /* workspace */
+          output_tensor, forwarding_context.GetModelInput()->page_dual_input, hidden_buffer_tensors_1,
+          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0],
           decode_q_buffer_tensor, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
     }
   }

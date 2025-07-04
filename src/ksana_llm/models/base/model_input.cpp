@@ -277,7 +277,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareFlexibleCache(flash_input);
   CheckUseCache(forward_reqs);
 
-  PrepareInputIds({&flash_input}, {&page_dual_input, &page_single_input});
+  PrepareInputIds(forward_reqs);
 
   PrepareVLInputRefit(forward_reqs);
   PrepareInputRefit(forward_reqs);
@@ -312,11 +312,6 @@ void ModelInput::PrepareMetadata() {
   ++meta_offset;
   page_single_input.metadata.GetPtr<size_t>()[meta_offset] = 1;
   page_dual_input.metadata.GetPtr<size_t>()[meta_offset] = 2;
-
-  // index 2: 前面已有的qlen，用于mla里计算query offset muliti - 2 - 1 input_ids_cpu todo
-  ++meta_offset;
-  page_single_input.metadata.GetPtr<size_t>()[meta_offset] = page_dual_input.total_dp_input_ids_len;
-  page_dual_input.metadata.GetPtr<size_t>()[meta_offset] = 0;
 }
 
 // TODO(ttsybyweng): VL_Model :Prepare moved into each Model Class
@@ -1090,8 +1085,7 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 }
 
-void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash_inputs,
-                                 const std::initializer_list<input_info*>& page_inputs) {
+void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs) {
   PROFILE_EVENT_SCOPE(PrepareInputIds, "PrepareInputIds", rank_);
   input_ids_cpu.clear();
   input_offset_list_uint64.assign(1, 0);
@@ -1164,18 +1158,8 @@ void ModelInput::PrepareInputIds(const std::initializer_list<input_info*>& flash
     }
   };
 
-  // process flash attention input
-  for (const auto& flash_input : flash_inputs) {
-    for (const auto& req : flash_input->reqs) {
-      process_func(*req, false);
-    }
-  }
-
-  // process page attention input
-  for (const auto& page_input : page_inputs) {
-    for (const auto& req : page_input->reqs) {
-      process_func(*req, true);
-    }
+  for (size_t i = 0; i < forward_reqs.size(); ++i) {
+    process_func(forward_reqs[i], i >= multi_token_request_num);
   }
 
   KLLM_LOG_DEBUG << "input_ids_cpu " << input_ids_cpu;

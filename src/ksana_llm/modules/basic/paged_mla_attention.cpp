@@ -80,9 +80,9 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
 }
 
 template <typename T>
-Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, ModelInput::input_info& page_input,
+Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& output_tensor, ModelInput::input_info& page_input,
                                      std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
-                                     const AttentionForwardContext& attn_ctx, Tensor& paged_buffer_tensors,
+                                     const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer,
                                      Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
                                      Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor) {
   Tensor query_layernorm_weight, key_layernorm_weight;  // qk_norm not supported, use dummy tensor
@@ -94,7 +94,7 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            page_input.rotary_embedding_mask,
                                                            kv_cache_buffer_tensor,
                                                            attn_ctx.forward_shape,
-                                                           paged_buffer_tensors,   /* workspace */
+                                                           workspace_buffer,       /* workspace */
                                                            query_layernorm_weight, /* for use_qk_norm */
                                                            key_layernorm_weight,   /* for use_qk_norm */
                                                            page_input.layer_kv_cache_ptr,
@@ -110,7 +110,7 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            page_input.num_splits,
                                                            page_input.metadata,
                                                            attn_w_uv_weight_},
-                                                          hidden_buffer_tensors_0));
+                                                          output_tensor));
 
   return Status();
 }

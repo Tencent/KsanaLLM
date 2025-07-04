@@ -249,8 +249,7 @@ class ModelInput {
   void PrepareSingleDecode();
   void PrepareMetadata();
 
-  void PrepareInputIds(const std::initializer_list<input_info*>& flash_inputs,
-                       const std::initializer_list<input_info*>& page_inputs);
+  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
 
   void PreparePageInput(input_info& input);
   void PrepareKVCacheBlocks(input_info& info);

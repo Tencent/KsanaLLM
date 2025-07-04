@@ -40,7 +40,6 @@ struct ForwardingBuffers {
   TensorBuffer* shared_buffer;
   TensorBuffer* kv_cache_buffer;
 
-  // Use for dp only.
   TensorBuffer* dp_input_buffer;
 
   // This buffer is used among multiple forward calls

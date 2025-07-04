@@ -70,8 +70,7 @@ class MultiHeadLatentAttention {
                                Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext<T>& forwarding_context);
 
-  Status PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                               std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
+  Status PagedAttentionForward(std::vector<Tensor>& output_tensor, std::vector<Tensor>& hidden_buffer_tensors_1,
                                std::vector<Tensor>& paged_buffer_tensors, Tensor& prefill_q_buffer_tensor,
                                Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext<T>& forwarding_context);
