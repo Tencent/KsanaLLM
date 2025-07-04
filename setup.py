@@ -169,14 +169,14 @@ class BuildExt(build_ext_orig):
                 target_libs.append(f"lib{endpoint}_endpoint.so")
 
         # Also copy tbb dynamic library if it exists
-        tbb_so = cwd / "build" / "tbb_install" / "lib64" / "libtbb.so.12"
+        tbb_so = build_temp / "tbb_install" / "lib64" / "libtbb.so.12"
         if tbb_so.exists():
             target_libs.append("libtbb.so.12")
 
         # Copy libraries to both the local development directory and the package directory
         for target_lib in target_libs:
             if target_lib == "libtbb.so.12":
-                src_lib = cwd / "build" / "tbb_install" / "lib64" / target_lib
+                src_lib = tbb_so
             else:
                 src_lib = build_temp_lib / target_lib
             dst_lib_deps = deps_lib / target_lib
