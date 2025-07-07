@@ -107,6 +107,12 @@ template <>
 void FreeHostT<DEVICE_TYPE_ZIXIAO>(void* host_ptr);
 
 template <>
+void HostAllocMappedT<DEVICE_TYPE_ZIXIAO>(void** host_ptr, void** device_ptr, size_t size);
+
+template <>
+void FreeHostMappedT<DEVICE_TYPE_ZIXIAO>(void* host_ptr, void* device_ptr);
+
+template <>
 void MallocAsyncT<DEVICE_TYPE_ZIXIAO>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_ZIXIAO> stream);
 
 template <>

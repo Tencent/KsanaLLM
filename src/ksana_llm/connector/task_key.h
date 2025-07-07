@@ -109,43 +109,31 @@ struct TaskKey {
     return key;
   }
 
-  // Batch serialization/deserialization methods
-  static std::vector<TaskKey> DeserializeBatch(const std::vector<uint8_t>& data) {
-    std::vector<TaskKey> result;
-    size_t count = data.size() / sizeof(TaskKey);
-    if (count == 0 || data.size() % sizeof(TaskKey) != 0) {
-      return result;
+  // High-performance batch serialization: directly from pointer and count
+  static std::vector<uint8_t> BatchSerialize(const TaskKey* keys, size_t count) {
+    if (!keys || count == 0) {
+      return std::vector<uint8_t>();
     }
-
-    // Direct cast approach - more efficient, avoiding memcpy
-    const TaskKey* keys_ptr = reinterpret_cast<const TaskKey*>(data.data());
-    result.assign(keys_ptr, keys_ptr + count);
-
-    return result;
-  }
-
-  static std::vector<TaskKey> DeserializeBatch(const char* data, size_t size) {
-    std::vector<TaskKey> result;
-    if (!data || size == 0) {
-      return result;
-    }
-
-    size_t count = size / sizeof(TaskKey);
-    if (count == 0 || size % sizeof(TaskKey) != 0) {
-      return result;
-    }
-
-    // Direct cast approach - more efficient, avoiding memcpy
-    const TaskKey* keys_ptr = reinterpret_cast<const TaskKey*>(data);
-    result.assign(keys_ptr, keys_ptr + count);
-
-    return result;
-  }
-
-  static std::vector<uint8_t> BatchSerialize(const std::vector<TaskKey>& keys) {
-    std::vector<uint8_t> buffer(keys.size() * sizeof(TaskKey));
-    std::memcpy(buffer.data(), keys.data(), buffer.size());
+    std::vector<uint8_t> buffer(count * sizeof(TaskKey));
+    std::memcpy(buffer.data(), keys, buffer.size());
     return buffer;
+  }
+
+  // Zero-copy serialization: direct access to raw bytes (use with caution)
+  // This provides direct access to the underlying bytes without copying
+  // Only safe when data lifetime is guaranteed and platforms are compatible
+  static const uint8_t* BatchSerializePtr(const TaskKey* keys, size_t count, size_t& out_size) {
+    if (!keys || count == 0) {
+      out_size = 0;
+      return nullptr;
+    }
+    out_size = count * sizeof(TaskKey);
+    return reinterpret_cast<const uint8_t*>(keys);
+  }
+
+  // Convenience wrapper for vector serialization
+  static std::vector<uint8_t> BatchSerialize(const std::vector<TaskKey>& keys) {
+    return BatchSerialize(keys.data(), keys.size());
   }
 
   /**
@@ -167,6 +155,49 @@ struct TaskKey {
     return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.device_idx, tensor_size,
                    task->token, ProfileTimer::GetCurrentTimeInUs());
   }
+
+  static const TaskKey* DeserializeBatchPtr(const uint8_t* data, size_t size, size_t& out_count) {
+    if (!data || size == 0 || size % sizeof(TaskKey) != 0) {
+      out_count = 0;
+      return nullptr;
+    }
+    out_count = size / sizeof(TaskKey);
+    return reinterpret_cast<const TaskKey*>(data);
+  }
+
+  // High-performance batch deserialization: char* version
+  static const TaskKey* DeserializeBatchPtr(const char* data, size_t size, size_t& out_count) {
+    return DeserializeBatchPtr(reinterpret_cast<const uint8_t*>(data), size, out_count);
+  }
+
+  // High-performance batch deserialization: vector<uint8_t> version
+  static const TaskKey* DeserializeBatchPtr(const std::vector<uint8_t>& data, size_t& out_count) {
+    return DeserializeBatchPtr(data.data(), data.size(), out_count);
+  }
+
+  // Convenience wrapper for backward compatibility
+  static std::vector<TaskKey> DeserializeBatch(const std::vector<uint8_t>& data) {
+    size_t count;
+    const TaskKey* keys = DeserializeBatchPtr(data, count);
+    if (!keys || count == 0) {
+      return std::vector<TaskKey>();
+    }
+    return std::vector<TaskKey>(keys, keys + count);
+  }
+
+  // Convenience wrapper: char* version for backward compatibility
+  static std::vector<TaskKey> DeserializeBatch(const char* data, size_t size) {
+    size_t count;
+    const TaskKey* keys = DeserializeBatchPtr(data, size, count);
+    if (!keys || count == 0) {
+      return std::vector<TaskKey>();
+    }
+    return std::vector<TaskKey>(keys, keys + count);
+  }
 };
+
+// Static assertions to ensure safe serialization (placed after complete type definition)
+static_assert(std::is_trivially_copyable_v<TaskKey>, "TaskKey must be trivially copyable for safe serialization");
+static_assert(std::is_standard_layout_v<TaskKey>, "TaskKey must have standard layout for safe serialization");
 
 }  // namespace ksana_llm

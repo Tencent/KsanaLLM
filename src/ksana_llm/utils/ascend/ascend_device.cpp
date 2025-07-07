@@ -150,6 +150,16 @@ void FreeHostT<DEVICE_TYPE_ASCEND>(void* host_ptr) {
 }
 
 template <>
+void HostAllocMappedT<DEVICE_TYPE_ASCEND>(void** host_ptr, void** device_ptr, size_t size) {
+  throw std::runtime_error("Ascend does not support mapped host memory allocation.");
+}
+
+template <>
+void FreeHostMappedT<DEVICE_TYPE_ASCEND>(void* host_ptr, void* device_ptr) {
+  throw std::runtime_error("Ascend does not support mapped host memory allocation.");
+}
+
+template <>
 void MallocAsyncT<DEVICE_TYPE_ASCEND>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_ASCEND> stream) {
   ACL_CHECK(aclrtMalloc(dev_ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
 }

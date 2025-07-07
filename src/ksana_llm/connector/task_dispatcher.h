@@ -18,9 +18,9 @@
 #include "ksana_llm/connector/task_key.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/transfer/transfer_types.h"
+#include "ksana_llm/utils/pinned_mem_buffer_pool.h"
 
 #ifdef ENABLE_CUDA
-#  include "ksana_llm/connector/cuda_buffer_pool.h"
 #  include "ksana_llm/utils/nvidia/cuda_utils.h"
 #  include "ksana_llm/utils/nvidia/nccl_utils.h"
 #endif
@@ -149,10 +149,7 @@ class TaskDispatcher {
    */
   void SendDataToDecodeWithNccl(const std::string& group_key, int device_idx, const std::vector<TaskKey>& group_vec);
 
-  BufferBlock* CopyTaskKeysToDevice(BufferPool* buffer_pool, const std::vector<TaskKey>& task_keys,
-                                    size_t task_keys_bytes, int device_idx, cudaEvent_t copy_done);
-  void RecvTaskDataWithNccl(const std::string& group_key, int device_idx, const std::vector<TaskKey>& task_keys);
-  void RecvTaskKeysWithNccl(const std::string& group_key, int device_idx, TaskKey* host_ptr, size_t bytes);
+  void RecvTaskDataWithNccl(const std::string& group_key, int device_idx, size_t count);
 #endif
 
  private:  // Changed from private to protected to allow test access
@@ -189,9 +186,8 @@ class TaskDispatcher {
 
   /** @brief Communicator manager（所有权转移） */
   std::shared_ptr<CommunicatorManager> comm_manager_;
-
+  std::unique_ptr<PinnedMemoryBufferPool> buffer_pool_;
 #ifdef ENABLE_CUDA
-  std::map<int, std::unique_ptr<BufferPool>> device_pools_;
   // cudaStream_t copy_stream = nullptr;
   std::map<int, cudaStream_t> device_streams_;
 #endif

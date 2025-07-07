@@ -118,6 +118,16 @@ void FreeHostT<DEVICE_TYPE_ZIXIAO>(void* host_ptr) {
 }
 
 template <>
+void HostAllocMappedT<DEVICE_TYPE_ZIXIAO>(void** host_ptr, void** device_ptr, size_t size) {
+  throw std::runtime_error("HostAllocMappedT is not supported in Zixiao device.");
+}
+
+template <>
+void FreeHostMappedT<DEVICE_TYPE_ZIXIAO>(void* host_ptr, void* device_ptr) {
+  throw std::runtime_error("FreeHostMappedT is not supported in Zixiao device.");
+}
+
+template <>
 void MallocAsyncT<DEVICE_TYPE_ZIXIAO>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_ZIXIAO> stream) {
   TOPS_CHECK(topsMallocAsync(dev_ptr, size, stream.Get(), ZIXIAO_MEMCPY_FLAG));
 }

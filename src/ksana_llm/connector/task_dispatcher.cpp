@@ -52,14 +52,6 @@ void TaskDispatcher::Shutdown() {
 
   // 关闭通信管理器
   if (comm_manager_) comm_manager_->Shutdown();
-
-#ifdef ENABLE_CUDA
-  // Clean up device buffer pools
-  if (!device_pools_.empty()) {
-    device_pools_.clear();  // smart pointers will automatically handle cleanup
-  }
-
-#endif
 }
 
 Status TaskDispatcher::Initialize() {
@@ -95,6 +87,9 @@ Status TaskDispatcher::Initialize() {
     return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Failed to get ZMQ communicator");
   }
 
+  buffer_pool_ = std::make_unique<PinnedMemoryBufferPool>(config_.device_count, config_.send_thread_num * 2,
+                                                          config_.transfer_batch * sizeof(TaskKey));
+
   // 只在NCCL模式下才初始化NCCL
 #ifdef ENABLE_CUDA
   if (config_.communication_type == CommunicationType::NCCL) {
@@ -103,15 +98,6 @@ Status TaskDispatcher::Initialize() {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "NCCL communicator is not initialized");
     }
     nccl_communicator_ = comm_manager_->GetNcclCommunicator();
-  }
-  // CUDA is available, initialize buffer pools and streams for each device
-  for (int dev = 0; dev < config_.device_count; ++dev) {
-    device_pools_[dev] =
-        std::make_unique<BufferPool>(dev, config_.send_thread_num * 2, config_.transfer_batch * sizeof(TaskKey));
-    cudaSetDevice(dev);
-    cudaStream_t stream;
-    CUDA_CHECK(cudaStreamCreate(&stream));
-    device_streams_[dev] = stream;
   }
 #endif
 
@@ -303,16 +289,12 @@ void TaskDispatcher::RegisterDecodeRecv() {
     std::string connection_id = signal.substr(0, sep);
     size_t count = std::stoul(signal.substr(sep + 1));
     auto [group_key, device_idx] = TaskDispatcher::ParseConnectionId(connection_id);
-    std::vector<TaskKey> task_keys(count);
     KLLM_LOG_DEBUG << "Step_4: Decode signal recved from Prefill for group_key=" << group_key
                    << ", device_idx=" << device_idx << ", count=" << count;
     switch (config_.communication_type) {
       case CommunicationType::NCCL:
 #ifdef ENABLE_CUDA
-        RecvTaskKeysWithNccl(group_key, device_idx, task_keys.data(), count * sizeof(TaskKey));
-        KLLM_LOG_DEBUG << "Step_7: Decode received task_keys from Prefill for group_key: " << group_key
-                       << ", first task_key is: " << task_keys[0].ToString();
-        RecvTaskDataWithNccl(group_key, device_idx, task_keys);
+        RecvTaskDataWithNccl(group_key, device_idx, count);
 #endif
         break;
       case CommunicationType::ZMQ:
@@ -579,18 +561,14 @@ void TaskDispatcher::PrefillProcessGroupBatches(const std::vector<TaskKey>& batc
 void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int device_idx,
                                               const std::vector<TaskKey>& group_vec) {
   CUDA_CHECK(cudaSetDevice(device_idx));
-  BufferPool* buffer_pool = device_pools_[device_idx].get();
   size_t task_keys_bytes = group_vec.size() * sizeof(TaskKey);
-  cudaEvent_t copy_done;
-  cudaEventCreate(&copy_done);
-  auto task_keys_gpu = CopyTaskKeysToDevice(buffer_pool, group_vec, task_keys_bytes, device_idx, copy_done);
-
-  // Check if CopyTaskKeysToDevice failed
-  if (task_keys_gpu == nullptr) {
-    KLLM_LOG_ERROR << "Failed to copy task keys to device for group_key=" << group_key;
-    CUDA_CHECK(cudaEventDestroy(copy_done));
+  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(device_idx);
+  if (!block) {
+    KLLM_LOG_ERROR << "Failed to get buffer block for device_idx: " << device_idx;
     return;
   }
+
+  std::memcpy(block->host_ptr, group_vec.data(), task_keys_bytes);
 
   // 收集和准备张量数据
   std::vector<void*> tensors;
@@ -612,12 +590,7 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
     }
   }
 
-  cudaEventSynchronize(copy_done);
-  nccl_communicator_->Send(group_key, device_idx, 0, task_keys_gpu->device_ptr, task_keys_bytes, DataType::TYPE_BYTES);
-  CUDA_CHECK(cudaEventDestroy(copy_done));
-  buffer_pool->put_block(task_keys_gpu);
-  KLLM_LOG_DEBUG << "Step_6: Prefill task_keys sent to Decode for group_key=" << group_key
-                 << ", and first task_key is:=" << group_vec[0].ToString();
+  nccl_communicator_->Send(group_key, device_idx, 0, block->device_ptr, task_keys_bytes, DataType::TYPE_BYTES);
 
   if (tensors.empty() || tensor_sizes.empty() || data_types.empty()) {
     return;
@@ -627,71 +600,37 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
   for (auto ptr : tensors) const_tensors.push_back(ptr);
   nccl_communicator_->SendGroup(group_key, device_idx, 0, const_tensors, tensor_sizes, data_types[0]);
 
+  buffer_pool_->put_block(block);
   KLLM_LOG_DEBUG << "Step_8: Prefill task data sent to Decode and task_key[0]= "
                  << (group_vec.empty() ? "" : group_vec[0].ToString()) << " batch size: " << group_vec.size();
   return;
 }
 
-BufferBlock* TaskDispatcher::CopyTaskKeysToDevice(BufferPool* buffer_pool, const std::vector<TaskKey>& task_keys,
-                                                  size_t task_keys_bytes, int device_idx, cudaEvent_t copy_done) {
-  // Check for null buffer_pool
-  if (buffer_pool == nullptr) {
-    KLLM_LOG_ERROR << "BufferPool is null in CopyTaskKeysToDevice";
-    return nullptr;
+void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int device_idx, size_t count) {
+  CUDA_CHECK(cudaSetDevice(device_idx));
+  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(device_idx);
+  if (!block) {
+    KLLM_LOG_WARNING << "Failed to get buffer block for device_idx: " << device_idx;
+    return;
   }
 
-  // Check for empty task_keys
-  if (task_keys.empty()) {
-    KLLM_LOG_DEBUG << "Empty task_keys in CopyTaskKeysToDevice";
-    return nullptr;
-  }
-
-  KLLM_LOG_DEBUG << "copy task_keys to device first task_key: " << task_keys[0].ToString()
-                 << ", task_keys size: " << task_keys.size();
-  BufferBlock* blk = buffer_pool->get_block();
-  cudaStream_t cur_stream = device_streams_[device_idx];
-  CUDA_CHECK(cudaEventRecord(copy_done, cur_stream));
-  CUDA_CHECK(cudaMemcpyAsync(blk->device_ptr, task_keys.data(), task_keys_bytes, cudaMemcpyHostToDevice, cur_stream));
-  return blk;
-}
-
-void TaskDispatcher::RecvTaskKeysWithNccl(const std::string& group_key, int device_idx, TaskKey* host_ptr,
-                                          size_t bytes) {
-  cudaSetDevice(device_idx);
-  // Check if device_pools_ is properly initialized for this device
-  auto it = device_pools_.find(device_idx);
-  if (it == device_pools_.end() || !it->second) {
-    throw std::runtime_error("BufferPool not initialized for device " + std::to_string(device_idx));
-  }
-
-  auto buffer_pool = it->second.get();
-  BufferBlock* blk = buffer_pool->get_block();
-
-  if (blk->capacity < bytes) throw std::runtime_error("Buffer too small");
-
-  Status recv_status = nccl_communicator_->Recv(group_key, device_idx, 0, blk->device_ptr, bytes, DataType::TYPE_BYTES);
+  Status recv_status = nccl_communicator_->Recv(group_key, device_idx, 0, block->device_ptr, count * sizeof(TaskKey),
+                                                DataType::TYPE_BYTES);
   if (!recv_status.OK()) {
-    buffer_pool->put_block(blk);
-    throw std::runtime_error("NCCL Recv failed");
+    buffer_pool_->put_block(block);
+    KLLM_LOG_ERROR << "Failed to receive task_keys with NCCL for group_key: " << group_key
+                   << ", device_idx: " << device_idx << ", error: " << recv_status.GetMessage();
+    return;
   }
 
-  // 2. 从 device buffer 拷贝回 host
-  cudaEvent_t copy_done;
-  cudaStream_t cur_stream = device_streams_[device_idx];
-  CUDA_CHECK(cudaEventCreate(&copy_done));
-  CUDA_CHECK(cudaMemcpyAsync(host_ptr, blk->device_ptr, bytes, cudaMemcpyDeviceToHost, cur_stream));
-  CUDA_CHECK(cudaEventRecord(copy_done, cur_stream));
-  CUDA_CHECK(cudaEventSynchronize(copy_done));
-  CUDA_CHECK(cudaEventDestroy(copy_done));
-  buffer_pool->put_block(blk);
-}
-
-void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int device_idx,
-                                          const std::vector<TaskKey>& task_keys) {
   std::vector<void*> recv_ptrs;
   std::vector<size_t> recv_sizes;
   std::vector<DataType> data_types;
-  for (const auto& tk : task_keys) {
+
+  TaskKey* task_keys = static_cast<TaskKey*>(block->host_ptr);
+
+  for (size_t i = 0; i < count; ++i) {
+    const TaskKey& tk = task_keys[i];
     KLLM_LOG_DEBUG << "Step_9: Decode preparing to receive tensor for task_key: " << tk.ToString()
                    << ", nccl send task_keys cost: " << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
     auto task = task_manager_->GetTask(tk);
@@ -705,15 +644,19 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int devi
       std::memcpy(task->dst_ptr, &tk.token, sizeof(int32_t));
     }
   }
+
   if (!recv_ptrs.empty()) {
     nccl_communicator_->RecvGroup(group_key, device_idx, 0, recv_ptrs, recv_sizes, data_types[0]);
   }
-  for (const auto& tk : task_keys) {
+
+  for (size_t i = 0; i < count; ++i) {
+    const TaskKey& tk = task_keys[i];
     task_manager_->CompleteTask(tk);
     KLLM_LOG_DEBUG << "Step_10: Decode completed task_key: " << tk.ToString()
                    << " nccl send task_keys and tensors cost: "
                    << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
   }
+  buffer_pool_->put_block(block);
 }
 #endif
 }  // namespace ksana_llm

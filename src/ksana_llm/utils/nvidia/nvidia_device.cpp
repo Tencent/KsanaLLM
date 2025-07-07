@@ -131,6 +131,21 @@ void FreeHostT<DEVICE_TYPE_NVIDIA>(void* host_ptr) {
 }
 
 template <>
+void HostAllocMappedT<DEVICE_TYPE_NVIDIA>(void** host_ptr, void** device_ptr, size_t size) {
+  CUDA_CHECK(cudaHostAlloc(host_ptr, size, cudaHostAllocMapped));
+  CUDA_CHECK(cudaHostGetDevicePointer(device_ptr, *host_ptr, 0));
+}
+
+template <>
+void FreeHostMappedT<DEVICE_TYPE_NVIDIA>(void* host_ptr, void* device_ptr) {
+  if (host_ptr) {
+    CUDA_CHECK(cudaFreeHost(host_ptr));
+    host_ptr = nullptr;    // Set to nullptr to avoid dangling pointer
+    device_ptr = nullptr;  // Set to nullptr to avoid dangling pointer
+  }
+}
+
+template <>
 void MallocAsyncT<DEVICE_TYPE_NVIDIA>(void** dev_ptr, size_t size, StreamT<DEVICE_TYPE_NVIDIA> stream) {
   CUDA_CHECK(cudaMallocAsync(dev_ptr, size, stream.Get()));
 }

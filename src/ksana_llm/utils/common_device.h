@@ -102,6 +102,13 @@ void HostAllocT(void** host_ptr, size_t size);
 template <int T>
 void FreeHostT(void* host_ptr);
 
+// alloc mapped memory on host.
+template <int T>
+void HostAllocMappedT(void** host_ptr, void** device_ptr, size_t size);
+
+template <int T>
+void FreeHostMappedT(void* host_ptr, void* device_ptr);
+
 // malloc memory on device
 template <int T>
 void MallocAsyncT(void** dev_ptr, size_t size, StreamT<T> stream);

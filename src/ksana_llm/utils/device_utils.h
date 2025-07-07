@@ -60,6 +60,10 @@ constexpr auto Free = FreeT<ACTIVE_DEVICE_TYPE>;
 constexpr auto HostAlloc = HostAllocT<ACTIVE_DEVICE_TYPE>;
 constexpr auto HostFree = FreeHostT<ACTIVE_DEVICE_TYPE>;
 
+// The alloc/free host memory with mapped device pointer.
+constexpr auto HostAllocMapped = HostAllocMappedT<ACTIVE_DEVICE_TYPE>;
+constexpr auto FreeHostMapped = FreeHostMappedT<ACTIVE_DEVICE_TYPE>;
+
 // The malloc/free device memory.
 constexpr auto MallocAsync = MallocAsyncT<ACTIVE_DEVICE_TYPE>;
 constexpr auto FreeAsync = FreeAsyncT<ACTIVE_DEVICE_TYPE>;
