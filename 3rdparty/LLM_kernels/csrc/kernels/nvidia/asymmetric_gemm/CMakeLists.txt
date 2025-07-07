@@ -71,10 +71,10 @@ endif()
 if(NEED_REGENERATE)
   message(STATUS "Regenerating CUTLASS kernels...")
   
-  # 设置CUTLASS库
+  # NOTE(karlluo): setup cutlass python environment refer to: https://github.com/NVIDIA/cutlass/tree/main/python#installation
   execute_process(
-    WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass/python/
-    COMMAND ${Python3_EXECUTABLE} setup_library.py develop --user
+    WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass
+    COMMAND ${Python3_EXECUTABLE} -m pip install -e .
     RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
 
   if(NOT _CUTLASS_LIBRARY_SUCCESS MATCHES 0)
