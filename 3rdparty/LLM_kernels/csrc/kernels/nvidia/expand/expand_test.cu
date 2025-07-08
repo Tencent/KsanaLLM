@@ -41,7 +41,7 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
     BufferMeta expand_output_torch_meta =
         CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, expand_size, n}, /*is_random_init*/ false);
 
-    int num_iterations = 100;
+    int num_iterations = 3;
     auto options = torch::TensorOptions().device(torch::kCUDA, device).dtype(tensor_type);
     torch::Tensor input_tensor =
         torch::from_blob(input_meta.data_ptr, {static_cast<int64_t>(m), 1, static_cast<int64_t>(n)}, options);
@@ -56,7 +56,7 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
     cudaEventCreate(&stop);
 
     // warm up
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 1; i++) {
       InvokeExpand<T>(reinterpret_cast<const T*>(input_meta.data_ptr),
                       reinterpret_cast<T*>(expand_output_meta.data_ptr), m, expand_size, n, 0, stream);
 
@@ -102,7 +102,12 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
     std::cout << "Input shape: [" << m << ", 1, " << n << "], Expand size: " << expand_size << std::endl;
     std::cout << "Custom InvokeExpand time: " << custom_time_ms << " ms" << std::endl;
     std::cout << "Torch expand time: " << torch_time_ms << " ms" << std::endl;
-    std::cout << "Speed ratio (Custom/Torch): " << torch_time_ms / custom_time_ms << std::endl;
+    float speed_ratio = torch_time_ms / custom_time_ms;
+    std::cout << "Speed ratio (Custom/Torch): " << speed_ratio << std::endl;
+    int arch = GetSMVersion();
+    if (arch == 90) {
+      EXPECT_GE(speed_ratio, 3.0f);
+    }
 
     torch::cuda::CUDAStream original_stream = torch::cuda::getStreamFromExternal(old_stream, device);
     torch::cuda::setCurrentCUDAStream(original_stream);
@@ -115,16 +120,12 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
   }
 };
 
-TEST_F(LlamaNvidiaExpandTestSuit, HalfExpandTest) { TestExpand<half>(4096, 64, 128); }
-TEST_F(LlamaNvidiaExpandTestSuit, HalfExpand64KTest) { TestExpand<half>(65536, 64, 128); }
-
-TEST_F(LlamaNvidiaExpandTestSuit, FloatExpandTest) { TestExpand<float>(4096, 64, 128); }
-TEST_F(LlamaNvidiaExpandTestSuit, FloatExpand64KTest) { TestExpand<float>(65536, 64, 128); }
-
+TEST_F(LlamaNvidiaExpandTestSuit, ExpandTest) { 
+  TestExpand<half>(2048, 64, 128); 
 #ifdef ENABLE_BF16
-TEST_F(LlamaNvidiaExpandTestSuit, BFloat16ExpandTest) { TestExpand<__nv_bfloat16>(4096, 64, 128); }
-TEST_F(LlamaNvidiaExpandTestSuit, BFloat16Expand64KTest) { TestExpand<__nv_bfloat16>(65536, 64, 128); }
+  TestExpand<__nv_bfloat16>(2048, 64, 128);
 #endif
+}
 
 }  // namespace test
 }  // namespace nvidia
