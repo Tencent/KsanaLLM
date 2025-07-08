@@ -12,6 +12,7 @@
 #include "ksana_llm/layers/fp8_moe_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
 #include "ksana_llm/layers/marlin_matmul_layer.h"
+#include "ksana_llm/layers/marlin_moe_layer.h"
 #include "ksana_llm/layers/matmul_layer.h"
 #include "ksana_llm/layers/moe_layer.h"
 #include "ksana_llm/models/base/base_weight.h"
@@ -75,10 +76,14 @@ class MatMulLayerFactory {
       builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, MOE_QUANT_NONE, NONE_QUANT}] =
           &MatMulLayerFactory<T>::BuildLayer<MoeLayer<T>>;
       // for fused_moe_gtpq_triton
-      builder_map_[{TYPE_UINT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GTPQ, NONE_QUANT}] =
+      builder_map_[{TYPE_UINT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, NONE_QUANT}] =
           &MatMulLayerFactory<T>::BuildLayer<MoeLayer<T>>;
-      builder_map_[{TYPE_UINT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GTPQ, NONE_QUANT}] =
+      builder_map_[{TYPE_UINT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, NONE_QUANT}] =
           &MatMulLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+
+      // for marlin gptq moe
+      builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_BACKEND}] =
+          &MatMulLayerFactory<T>::BuildLayer<MarlinMoeLayer<T>>;
 
 #  ifdef ENABLE_FP8
       builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, MOE_QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
@@ -157,6 +162,7 @@ class MatMulLayerFactory {
       kn_pairs["mlp.shared_expert.up_proj"] = kn_pairs["mlp.shared_expert.gate_proj"];
       kn_pairs["mlp.shared_expert.down_proj"] = std::make_tuple(shared_expert_inter_size_per_rank, hidden_size, false);
       kn_pairs["query_key_value"] = std::make_tuple(hidden_size, qkv_size / attn_tp, true);
+      kn_pairs["q_proj"] = std::make_tuple(hidden_size, hidden_size / attn_tp, true);
 
       // attn
       kn_pairs["q_a_proj"] = std::make_tuple(hidden_size, q_lora_rank, false);
@@ -224,6 +230,7 @@ class MatMulLayerFactory {
                                                 DataType input_type, DataType output_type,
                                                 const std::vector<std::any>& init_params) {
     // moe layer   (weight_names[0]: up_gate_experts, weight_names[1]: down_experts)
+    bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
     std::vector<std::any> moe_matmul_param = init_params;
     moe_matmul_param.push_back(model_config_.max_step_token_num);
     size_t up_gate_experts_num = base_weight->GetModelWeights(weight_names[0]).shape[0];
@@ -237,7 +244,13 @@ class MatMulLayerFactory {
     size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
     size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
     if (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4) {
-      up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
+      if (use_vllm_moe) {
+        up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
+      } else {  // marlin gptq
+        up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[1] /
+                              (sizeof(int) / model_config_.quant_config.bits) * 16;
+        down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[2] / model_config_.quant_config.bits * 2;
+      }
     }
     if (up_gate_hidden_size != down_hidden_size) {
       KLLM_THROW(
@@ -253,7 +266,7 @@ class MatMulLayerFactory {
     moe_matmul_param.push_back(moe_inter_size_per_rank);                               // Inter_size
     moe_matmul_param.push_back(model_config_.moe_config.experts_topk);                 // experts topk
     moe_matmul_param.push_back(model_config_.tensor_para_size);                        // TP_size
-    moe_matmul_param.push_back(model_config_.moe_config.use_vllm_moe);                 // use_vllm_moe
+    moe_matmul_param.push_back(use_vllm_moe);                                          // use_vllm_moe
     moe_matmul_param.push_back(model_config_.moe_config.num_expert_group);             // num_expert_group
     moe_matmul_param.push_back(model_config_.moe_config.expert_groups_topk);           // expert_groups_topk
     moe_matmul_param.push_back(model_config_.moe_config.scoring_func);                 // scoring_func
@@ -270,8 +283,12 @@ class MatMulLayerFactory {
     if ((model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) ||
         model_config_.quant_config.enable_moe_int4) {
       moe_matmul_param.push_back(DataType::TYPE_I4_GROUP);
+      // group_size
+      moe_matmul_param.push_back(static_cast<int>(model_config_.quant_config.group_size));
     } else {
       moe_matmul_param.push_back(DataType::TYPE_INVALID);
+      // group_size
+      moe_matmul_param.push_back(0);
     }
     moe_matmul_param.push_back(model_config_.moe_config.apply_weight);
 
@@ -292,7 +309,12 @@ class MatMulLayerFactory {
     }
     if (weight_type == TYPE_UINT8 &&
         (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4)) {
-      return CreateLayer(TYPE_UINT8, input_type, output_type, moe_matmul_param, MOE_QUANT_GTPQ, NONE_QUANT);
+      return CreateLayer(TYPE_UINT8, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, NONE_QUANT);
+    }
+
+    if (!use_vllm_moe && (model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) ||
+        model_config_.quant_config.enable_moe_int4) {
+      return CreateLayer(TYPE_I4_GROUP, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_BACKEND);
     }
     return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_NONE, NONE_QUANT);
   }

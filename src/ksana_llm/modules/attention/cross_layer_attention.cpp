@@ -14,12 +14,12 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   // Attention related blocks
-  if (cla_share_factor_ != 0 && (layer_idx % cla_share_factor_ == 0)) {
-    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
+  if (cla_share_factor_ != 0 && (layer_idx % cla_share_factor_ != 0)) {
+    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_proj.weight", creation_context,
                                                   model_creation_config.attn_config.model_config.quant_config.backend);
   } else {
     // Cla only do q_proj for odd layers when cla_share_factor=2
-    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_proj.weight", creation_context,
+    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
                                                   model_creation_config.attn_config.model_config.quant_config.backend);
   }
 

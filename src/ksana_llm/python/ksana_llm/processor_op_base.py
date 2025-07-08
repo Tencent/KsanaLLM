@@ -44,11 +44,13 @@ PROMPT_AFFIX_DICT = {
     " Respond using markdown.\n<|user|>\n%s\n<|assistant|>\n",
     "empty":
     "%s",
+    "hunyuan_large":
+    "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>"
 }
 
 SUPPORTED_MODEL_TYPE = [
     'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm',
-    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1'
+    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1', 'hunyuan_large'
 ]
 
 USER = "user"

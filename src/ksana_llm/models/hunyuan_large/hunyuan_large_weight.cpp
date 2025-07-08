@@ -21,9 +21,11 @@ Status HunyuanLargeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFile
 
 template <typename T>
 Status HunyuanLargeWeight<T>::PermuteQueryWeight(Tensor& last_q_proj_tensor, const int num_layer) {
+  if (model_config_.cla_share_factor == 0)
+    return Status();
   SetDevice(rank_);
   for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
-    if (model_config_.cla_share_factor != 0 && (layer_idx % model_config_.cla_share_factor == 0)) continue;
+    if (layer_idx % model_config_.cla_share_factor == 0) continue;
     std::string gating_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.q_proj.weight";
     CommonWeight<T>::CommonPermuteWeight(gating_name, last_q_proj_tensor);
   }
@@ -36,10 +38,11 @@ void HunyuanLargeWeight<T>::ProcessWeights() {
   int num_layers = model_config_.num_layer;
 
   // Permute q_proj Weight
-  if (num_layers > 1) {
-    DataType dt = weights_map_["model.layers.1.self_attn.q_proj.weight"].dtype;
+  std::string q_proj_name = "model.layers.1.self_attn.q_proj.weight";
+  if (num_layers > 1 && weights_map_.find(q_proj_name) != weights_map_.end()) {
+    DataType dt = weights_map_[q_proj_name].dtype;
     if (dt == TYPE_FP16 || dt == TYPE_BF16) {
-      tensor_manager_->CreateTensorWithSameShape("model.layers.1.self_attn.q_proj.weight", "empty_q_proj_tensor");
+      tensor_manager_->CreateTensorWithSameShape(q_proj_name, "empty_q_proj_tensor");
       Tensor& last_q_proj_tensor = weights_map_["empty_q_proj_tensor"];
       PermuteQueryWeight(last_q_proj_tensor, num_layers);
       weights_map_.erase("empty_q_proj_tensor");

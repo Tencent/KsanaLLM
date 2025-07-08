@@ -177,6 +177,15 @@ void Environment::ParseModelQuantConfig(const nlohmann::json &config_json, Model
   } else {
     KLLM_LOG_INFO << "Not using any Quant Backend";
   }
+
+  if (model_config.type == "hunyuan" && config_json.contains("use_mixed_mlp_moe") && config_json["use_mixed_mlp_moe"]) {
+    if (model_config.quant_config.method == QUANT_GPTQ && model_config.weight_data_type != TYPE_FP16) {
+      KLLM_THROW("Only support QUANT_GPTQ with data_type fp16 for HunyuanLarge.");
+    }
+    if (model_config.quant_config.method == QUANT_AWQ) {
+      KLLM_THROW("Not support QUANT_AWQ for HunyuanLarge.");
+    }
+  }
 }
 
 void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_config) {

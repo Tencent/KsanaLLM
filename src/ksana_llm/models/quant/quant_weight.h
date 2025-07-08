@@ -99,6 +99,8 @@ class QuantWeight {
   // Check if the model is a quantized model
   bool CheckQuantModel();
 
+  bool IsClaLayer(const int layer_idx);
+
   void GetExpertsScaleIdx(const std::string& expert_scale_name, int& layer_idx, int& expert_idx);
 
   std::shared_ptr<CutlassUtils> cutlass_helper_{nullptr};

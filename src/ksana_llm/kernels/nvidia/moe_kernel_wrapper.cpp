@@ -653,4 +653,21 @@ FUSEDMOE(__nv_bfloat16);
 #endif
 #undef FUSEDMOE
 
+void FusedMarlinMoe(half* output, const half* input, const float* gating_output, const void* w1, const void* w2,
+                    const void* w1_scale, const void* w2_scale, void* workspace, size_t workspace_size, int num_tokens,
+                    int inter_size, int hidden_size, int num_experts, int topk, cudaStream_t& stream,
+                    llm_kernels::nvidia::MOEExpertScaleNormalizationMode norm_mode, const int* g_idx1,
+                    const int* g_idx2, const void* sort_indices1, const void* sort_indices2, const void* w1_zeros,
+                    const void* w2_zeros, int num_bits, int group_size) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::marlin_moe::fused_marlin_moe(
+      output, input, gating_output, w1, w2, w1_scale, w2_scale, workspace, workspace_size, num_tokens, inter_size,
+      hidden_size, num_experts, topk, stream, norm_mode, g_idx1, g_idx2, sort_indices1, sort_indices2, w1_zeros,
+      w2_zeros, num_bits, group_size));
+}
+
+size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int hidden_size, int num_experts, int topk,
+                                            size_t data_type_size) {
+  return llm_kernels::nvidia::marlin_moe::get_fused_marlin_moe_workspace_size(num_tokens, inter_size, hidden_size,
+                                                                              num_experts, topk, data_type_size);
+}
 }  // namespace ksana_llm

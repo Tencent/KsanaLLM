@@ -36,6 +36,7 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
   use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
   DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
+  int group_size = std::any_cast<int>(parameters[parameter_index++]);
 
   // 权重&计算类型处理
   weight_dtype_ = GetDataType<T>();
@@ -52,7 +53,7 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
   if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
     block_shape_ = {128, 128};
   } else if (weight_dtype_ == DataType::TYPE_I4_GROUP) {
-    block_shape_ = {0, 128};  // TODO(jinxcwu) 当前只支持groupsize=128
+    block_shape_ = {0, group_size};
   }
 
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);

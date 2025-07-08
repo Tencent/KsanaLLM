@@ -56,6 +56,8 @@ PROMPT_AFFIX_DICT = {
     "chatglm":
     "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully."
     " Respond using markdown.\n<|user|>\n%s\n<|assistant|>\n",
+    "hunyuan_large":
+    "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>",
     "empty":
     "%s",
 }
@@ -282,7 +284,8 @@ def args_config():
                         default="llama",
                         choices=[
                             'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi',
-                            'chatglm', 'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1'
+                            'chatglm', 'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1',
+                            'hunyuan_large'
                         ],
                         help="serving model type, used to add prefixes and suffixes"
                              " to the prompt.")

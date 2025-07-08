@@ -12,6 +12,7 @@
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
 #include "csrc/kernels/nvidia/machete/machete_wrapper.h"
+#include "csrc/kernels/nvidia/marlin_moe/fused_marlin_moe.h"
 #include "csrc/kernels/nvidia/mixture_of_experts/moe_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
@@ -73,5 +74,15 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
                     void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
                     int num_experts, int hidden_size, int inter_size, void* dequant_workspace, int rank,
                     cudaStream_t stream);
+
+size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int hidden_size, int num_experts, int topk,
+                                            size_t data_type_size);
+
+void FusedMarlinMoe(half* output, const half* input, const float* gating_output, const void* w1, const void* w2,
+                    const void* w1_scale, const void* w2_scale, void* workspace, size_t workspace_size, int num_tokens,
+                    int inter_size, int hidden_size, int num_experts, int topk, cudaStream_t& stream,
+                    llm_kernels::nvidia::MOEExpertScaleNormalizationMode norm_mode, const int* g_idx1,
+                    const int* g_idx2, const void* sort_indices1, const void* sort_indices2, const void* w1_zeros,
+                    const void* w2_zeros, int num_bits, int group_size);
 
 }  // namespace ksana_llm

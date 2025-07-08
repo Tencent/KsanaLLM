@@ -24,8 +24,9 @@ void awq_marlin_repack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, int64_
 
 std::vector<int64_t> awq_marlin_repack_meta(int64_t size_k, int64_t size_n, int64_t num_bits);
 
-void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr, int64_t size_k,
-                        int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream);
+void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr,
+                        int64_t num_experts, int64_t size_k, int64_t size_n, int64_t num_bits, bool has_perm, int rank,
+                        cudaStream_t stream);
 
 std::vector<int64_t> gptq_marlin_repack_meta(int64_t size_k, int64_t size_n, int64_t num_bits);
 

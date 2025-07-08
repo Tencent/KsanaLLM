@@ -103,7 +103,7 @@ Status HunyuanDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_ten
 template <typename T>
 HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const int rank,
                                         std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context), cla_share_factor_(model_config.cla_share_factor) {
+    : CommonModel<T>(model_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);
@@ -112,16 +112,44 @@ HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const i
 template <typename T>
 Status HunyuanLargeModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
                                           ModelCreationConfig& model_creation_config) {
+  return hunyuan_large_.CreateLayers(creation_context, model_creation_config);
+}
+
+template <typename T>
+Status HunyuanLargeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+  std::vector<Tensor>& residual_buffer =
+      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
+  STATUS_CHECK_RETURN(hunyuan_large_.Forward(residual_buffer, forwarding_context));
+  SetHiddenUnitBuffer(residual_buffer, forwarding_context);
+  return Status();
+}
+
+template class HunyuanLargeModel<float>;
+template class HunyuanLargeModel<float16>;
+#ifdef ENABLE_BFLOAT16
+template class HunyuanLargeModel<bfloat16>;
+#endif
+
+template <typename T>
+Status HunyuanLarge<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
+  model_run_config.position_encoding = PositionEncoding::ROPE;
+  model_run_config.layernorm_position = LayerNormPosition::PRE_NORM;
+  return Status();
+}
+
+template <typename T>
+Status HunyuanLarge<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+                                     ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
+  cla_share_factor_ = model_config.cla_share_factor;
   DataType weight_type = model_config.weight_data_type;
 
-  CrossLayerAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
-                                        cla_buffers_);
+  CrossLayerAttention<T>::CreateBuffers(creation_context.buffer_mgr_, model_creation_config.attn_config, cla_buffers_);
 
   size_t max_token_num = model_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_config.hidden_units;
 
-  moe_buffer_ = CommonModel<T>::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
+  moe_buffer_ = creation_context.buffer_mgr_->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
 
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
@@ -132,24 +160,20 @@ Status HunyuanLargeModel<T>::CreateLayers(LayerCreationContext<T>& creation_cont
 }
 
 template <typename T>
-Status HunyuanLargeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status HunyuanLarge<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
-
-  std::vector<Tensor>& residual_buffer =
-      GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
     STATUS_CHECK_RETURN(
         decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
   }
-  SetHiddenUnitBuffer(residual_buffer, forwarding_context);
-
   return Status();
 }
 
-template class HunyuanLargeModel<float>;
-template class HunyuanLargeModel<float16>;
+template class HunyuanLarge<float>;
+template class HunyuanLarge<float16>;
 #ifdef ENABLE_BFLOAT16
-template class HunyuanLargeModel<bfloat16>;
+template class HunyuanLarge<bfloat16>;
 #endif
+
 }  // namespace ksana_llm

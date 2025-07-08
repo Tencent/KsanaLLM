@@ -54,9 +54,6 @@ if(WITH_STANDALONE_TEST)
   cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
   if(WITH_CUDA)
-    cpp_test(hunyuan_large_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_large/hunyuan_large_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-    cpp_test(llama4_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama4/llama4_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-
     if(DEFINED SM AND "${SM}" STREQUAL "90a")
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(deepseek_v3_dp_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_dp_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

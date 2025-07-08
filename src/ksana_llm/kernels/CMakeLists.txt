@@ -28,6 +28,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_flash_mla llm_kernels_nvidia_kernel_expand
     llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_machete
     llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant
+    llm_kernels_nvidia_kernel_marlin_moe
     llm_kernels_nvidia_kernel_per_token_group_quant llm_kernels_nvidia_kernel_fused_add_norm
     llm_kernels_nvidia_kernel_deepgemm_aot_wrapper)
 endif()

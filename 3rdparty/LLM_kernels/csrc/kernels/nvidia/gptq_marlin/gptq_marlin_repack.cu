@@ -32,7 +32,7 @@ namespace marlin {
 template <int const num_threads, int const num_bits, bool const has_perm>
 __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weight_ptr,
                                           uint32_t const* __restrict__ perm_ptr, uint32_t* __restrict__ out_ptr,
-                                          int size_k, int size_n) {
+                                          int num_experts, int size_k, int size_n) {
   constexpr int pack_factor = 32 / num_bits;
 
   int k_tiles = size_k / tile_k_size;
@@ -44,6 +44,14 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
     return;
   }
 
+  int expert_idx = blockIdx.y;
+  size_t offset = expert_idx * size_k * size_n / pack_factor;
+  uint32_t const* expert_b_q_weight_ptr = b_q_weight_ptr + offset;
+  uint32_t* expert_out_ptr = out_ptr + offset;
+  uint32_t const* expert_perm_ptr = nullptr;
+  if constexpr (has_perm) {
+    expert_perm_ptr = perm_ptr + expert_idx * size_k;
+  }
   int finish_k_tile = min(start_k_tile + block_k_tiles, k_tiles);
 
   // Wait until the next thread tile has been loaded to shared memory.
@@ -75,7 +83,7 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
   auto load_perm_to_shared = [&](int k_tile_id) {
     int first_k_int4 = (k_tile_id * tile_k_size) / 4;
 
-    int4 const* perm_int4_ptr = reinterpret_cast<int4 const*>(perm_ptr);
+    int4 const* perm_int4_ptr = reinterpret_cast<int4 const*>(expert_perm_ptr);
 
     if (threadIdx.x < perm_size) {
       sh_perm_ptr[threadIdx.x] = perm_int4_ptr[first_k_int4 + threadIdx.x];
@@ -103,8 +111,9 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
         int src_k = sh_perm_int_ptr[k_id];
         int src_k_packed = src_k / pack_factor;
 
-        cp_async4(&sh_ptr[k_id * stage_n_threads + n_id],
-                  reinterpret_cast<int4 const*>(&(b_q_weight_ptr[src_k_packed * size_n + first_n + (n_id * 4)])));
+        cp_async4(
+            &sh_ptr[k_id * stage_n_threads + n_id],
+            reinterpret_cast<int4 const*>(&(expert_b_q_weight_ptr[src_k_packed * size_n + first_n + (n_id * 4)])));
       }
 
     } else {
@@ -115,9 +124,9 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
         int first_k = k_tile_id * tile_k_size;
         int first_k_packed = first_k / pack_factor;
 
-        cp_async4(
-            &sh_ptr[k_id * stage_n_threads + n_id],
-            reinterpret_cast<int4 const*>(&(b_q_weight_ptr[(first_k_packed + k_id) * size_n + first_n + (n_id * 4)])));
+        cp_async4(&sh_ptr[k_id * stage_n_threads + n_id],
+                  reinterpret_cast<int4 const*>(
+                      &(expert_b_q_weight_ptr[(first_k_packed + k_id) * size_n + first_n + (n_id * 4)])));
       }
     }
 
@@ -205,7 +214,7 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
         res |= vals[pack_idx[i]] << (i * 4);
       }
 
-      out_ptr[out_offset + th_id * 4 + warp_id] = res;
+      expert_out_ptr[out_offset + th_id * 4 + warp_id] = res;
 
     } else {
       constexpr int pack_idx[4] = {0, 2, 1, 3};
@@ -218,8 +227,8 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
         res2 |= vals[4 + pack_idx[i]] << (i * 8);
       }
 
-      out_ptr[out_offset + th_id * 8 + (warp_id * 2) + 0] = res1;
-      out_ptr[out_offset + th_id * 8 + (warp_id * 2) + 1] = res2;
+      expert_out_ptr[out_offset + th_id * 8 + (warp_id * 2) + 0] = res1;
+      expert_out_ptr[out_offset + th_id * 8 + (warp_id * 2) + 1] = res2;
     }
   };
 
@@ -253,21 +262,23 @@ __global__ void gptq_marlin_repack_kernel(uint32_t const* __restrict__ b_q_weigh
   }
 }
 
-#define CALL_IF(NUM_BITS, HAS_PERM)                                                                             \
-  else if (num_bits == NUM_BITS && has_perm == HAS_PERM) {                                                      \
-    cudaFuncSetAttribute(marlin::gptq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS, HAS_PERM>,         \
-                         cudaFuncAttributeMaxDynamicSharedMemorySize, max_shared_mem);                          \
-    marlin::gptq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS, HAS_PERM>                               \
-        <<<blocks, marlin::repack_threads, max_shared_mem, stream>>>(b_q_weight_ptr, perm_ptr, out_ptr, size_k, \
-                                                                     size_n);                                   \
+#define CALL_IF(NUM_BITS, HAS_PERM)                                                                                  \
+  else if (num_bits == NUM_BITS && has_perm == HAS_PERM) {                                                           \
+    cudaFuncSetAttribute(marlin::gptq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS, HAS_PERM>,              \
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, max_shared_mem);                               \
+    marlin::gptq_marlin_repack_kernel<marlin::repack_threads, NUM_BITS, HAS_PERM>                                    \
+        <<<blocks, marlin::repack_threads, max_shared_mem, stream>>>(b_q_weight_ptr, perm_ptr, out_ptr, num_experts, \
+                                                                     size_k, size_n);                                \
   }
 
-void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr, int64_t size_k,
-                        int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream) {
-  int blocks = 0, max_shared_mem = 0;
-  cudaDeviceGetAttribute(&blocks, cudaDevAttrMultiProcessorCount, rank);
+void gptq_marlin_repack(const uint32_t* b_q_weight_ptr, const uint32_t* perm_ptr, uint32_t* out_ptr,
+                        int64_t num_experts, int64_t size_k, int64_t size_n, int64_t num_bits, bool has_perm, int rank,
+                        cudaStream_t stream) {
+  int processors = 0, max_shared_mem = 0;
+  cudaDeviceGetAttribute(&processors, cudaDevAttrMultiProcessorCount, rank);
   cudaDeviceGetAttribute(&max_shared_mem, cudaDevAttrMaxSharedMemoryPerBlockOptin, rank);
   KLLM_KERNEL_CHECK(max_shared_mem > 0);
+  dim3 blocks(processors, num_experts, 1);
 
   if (false) {
   }

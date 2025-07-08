@@ -30,6 +30,7 @@ TEST_F(MarlinUtilsTest, TestMarlinPrepack) {
 #ifdef ENABLE_CUDA
   size_t num_rows = 1024, num_cols = 1024;
 
+  // tensor is 2D
   torch::Tensor tensor =
       torch::arange(static_cast<int64_t>(num_rows * num_cols), torch::kInt32).to(torch::Device(torch::kCUDA, rank_));
   tensor = tensor.view({static_cast<int64_t>(num_rows), static_cast<int64_t>(num_cols)});
@@ -61,6 +62,32 @@ TEST_F(MarlinUtilsTest, TestMarlinPrepack) {
     EXPECT_TRUE(gptq[num_rows * num_cols - 10 + i].item<int32_t>() == gptq_ref_1[i]);
     EXPECT_TRUE(awq[num_rows * num_cols - 10 + i].item<int32_t>() == awq_ref_1[i]);
   }
+
+  // tensor is 3D
+  size_t num_experts = 4;
+  tensor = tensor.repeat({static_cast<int64_t>(num_experts), 1, 1}).contiguous();
+
+  gptq = marlin_helper_->PackGptqWeight(tensor, std::nullopt);
+
+  // shape检查
+  EXPECT_TRUE(gptq.size(0) == 4);
+  EXPECT_TRUE(gptq.size(1) == 512);
+  EXPECT_TRUE(gptq.size(2) == 2048);
+
+  // 数据检查
+  gptq = gptq.view({gptq.size(0), gptq.size(1) * gptq.size(2)});
+
+  for (size_t e = 0; e < num_experts; e++) {
+    for (size_t i = 0; i < 10; i++) {
+      EXPECT_TRUE(gptq[e][i].item<int32_t>() == gptq_ref_0[i]);
+    }
+  }
+
+  for (size_t e = 0; e < num_experts; e++) {
+    for (size_t i = 0; i < 10; i++) {
+      EXPECT_TRUE(gptq[e][num_rows * num_cols - 10 + i].item<int32_t>() == gptq_ref_1[i]);
+    }
+  }
 #endif
 }
 
@@ -69,11 +96,13 @@ TEST_F(MarlinUtilsTest, TestMarlinSortGIdx) {
   size_t gidx_len = 512;
 
   torch::manual_seed(42);
+  // tensor is 1D
   int32_t int32_min = std::numeric_limits<int32_t>::min();
   int32_t int32_max = std::numeric_limits<int32_t>::max();
   auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::Device(torch::kCUDA, rank_));
   torch::Tensor gidx = torch::randint(int32_min, int32_max, {static_cast<int64_t>(gidx_len)}, options);
 
+  // Note: gidx is modified
   torch::Tensor perm = marlin_helper_->MarlinSortGIdx(gidx);
 
   // 数据检查
@@ -92,6 +121,30 @@ TEST_F(MarlinUtilsTest, TestMarlinSortGIdx) {
     EXPECT_TRUE(gidx[gidx_len - 10 + i].item<int32_t>() == gidx_ref_1[i]);
     EXPECT_TRUE(perm[gidx_len - 10 + i].item<int32_t>() == perm_ref_1[i]);
   }
+
+  // tensor is 2D
+  size_t num_experts = 4;
+  torch::manual_seed(42);
+  gidx = torch::randint(int32_min, int32_max, {static_cast<int64_t>(gidx_len)}, options);
+  gidx = gidx.repeat({static_cast<int64_t>(num_experts), 1}).contiguous();
+
+  perm = marlin_helper_->MarlinSortGIdx(gidx);
+
+  // 数据检查
+  for (size_t e = 0; e < num_experts; e++) {
+    for (size_t i = 0; i < 10; i++) {
+      EXPECT_TRUE(gidx[e][i].item<int32_t>() == gidx_ref_0[i]);
+      EXPECT_TRUE(perm[e][i].item<int32_t>() == perm_ref_0[i]);
+    }
+  }
+
+  for (size_t e = 0; e < num_experts; e++) {
+    for (size_t i = 0; i < 10; i++) {
+      EXPECT_TRUE(gidx[e][gidx_len - 10 + i].item<int32_t>() == gidx_ref_1[i]);
+      EXPECT_TRUE(perm[e][gidx_len - 10 + i].item<int32_t>() == perm_ref_1[i]);
+    }
+  }
+
 #endif
 }
 

@@ -67,8 +67,9 @@ void InvokeMarlinAwqRepack(const void* b_q_weight_ptr, void* out_ptr, int64_t si
 
 std::vector<int64_t> GetMarlinAwqRepackMeta(int64_t size_k, int64_t size_n, int64_t num_bits);
 
-void InvokeMarlinGptqRepack(const void* b_q_weight_ptr, const void* perm_ptr, void* out_ptr, int64_t size_k,
-                            int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream);
+void InvokeMarlinGptqRepack(const void* b_q_weight_ptr, const void* perm_ptr, void* out_ptr, int64_t num_experts,
+                            int64_t size_k, int64_t size_n, int64_t num_bits, bool has_perm, int rank,
+                            cudaStream_t stream);
 
 std::vector<int64_t> GetMarlinGptqRepackMeta(int64_t size_k, int64_t size_n, int64_t num_bits);
 

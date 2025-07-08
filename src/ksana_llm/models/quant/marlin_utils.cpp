@@ -20,8 +20,15 @@ MarlinUtils::MarlinUtils(std::shared_ptr<Context> context, int rank, int bits, i
 template <typename T>
 torch::Tensor MarlinUtils::MarlinPermuteScales(torch::Tensor s, int k, int n) {
   torch::Tensor permute_s = torch::empty_like(s);
-  InvokeMarlinPermuteScales<T>(context_->GetMemoryManageStreams()[rank_].Get(), s.data_ptr(), permute_s.data_ptr(), k,
-                               n, groupsize_);
+  if (s.dim() == 2) {
+    InvokeMarlinPermuteScales<T>(context_->GetMemoryManageStreams()[rank_].Get(), s.data_ptr(), permute_s.data_ptr(), k,
+                                 n, groupsize_);
+  } else if (s.dim() == 3) {  // first dim is num_experts
+    for (int e = 0; e < s.size(0); ++e) {
+      InvokeMarlinPermuteScales<T>(context_->GetMemoryManageStreams()[rank_].Get(), s[e].data_ptr(),
+                                   permute_s[e].data_ptr(), k, n, groupsize_);
+    }
+  }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return permute_s;
 }
@@ -97,18 +104,45 @@ torch::Tensor MarlinUtils::MarlinAwqToMarlinZeroPoints(const torch::Tensor& q_zp
 }
 
 torch::Tensor MarlinUtils::MarlinSortGIdx(torch::Tensor& g_idx) {
-  torch::Tensor g_idx_sort_indices = torch::argsort(g_idx, true, 0, false);
-  g_idx = g_idx.index_select(0, g_idx_sort_indices).contiguous();
-  return g_idx_sort_indices.to(torch::kInt32);
+  torch::Tensor output;
+  if (g_idx.dim() == 1) {
+    torch::Tensor g_idx_sort_indices = torch::argsort(g_idx, true, 0, false);
+    g_idx = g_idx.index_select(0, g_idx_sort_indices).contiguous();
+    output = g_idx_sort_indices.to(torch::kInt32);
+  } else if (g_idx.dim() == 2) {  // first dim is num_experts
+    output = torch::zeros_like(g_idx);
+    for (int e = 0; e < g_idx.size(0); ++e) {
+      torch::Tensor g_idx_sort_indices = torch::argsort(g_idx[e], true, 0, false);
+      g_idx[e].copy_(g_idx[e].index_select(0, g_idx_sort_indices).contiguous());
+      output[e].copy_(g_idx_sort_indices.to(torch::kInt32).contiguous());
+    }
+  }
+  return output;
 }
 
+// https://github.com/vllm-project/vllm/blob/v0.6.4.post1/vllm/_custom_ops.py#L562
 torch::Tensor MarlinUtils::PackGptqWeight(torch::Tensor& qweight, std::optional<torch::Tensor> perm) {
-  int k = qweight.size(0) * pack_factor_;
-  int n = qweight.size(1);
   auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank_);
-  torch::Tensor processed_tensor = torch::empty(GetMarlinGptqRepackMeta(k, n, bits_), options);
-  InvokeMarlinGptqRepack(qweight.data_ptr(), perm.has_value() ? perm->data_ptr() : nullptr, processed_tensor.data_ptr(),
-                         k, n, bits_, perm.has_value(), rank_, context_->GetMemoryManageStreams()[rank_].Get());
+  torch::Tensor processed_tensor;
+  if (qweight.dim() == 2) {
+    int num_experts = 1;
+    int k = qweight.size(0) * pack_factor_;
+    int n = qweight.size(1);
+    processed_tensor = torch::empty(GetMarlinGptqRepackMeta(k, n, bits_), options);
+    InvokeMarlinGptqRepack(qweight.data_ptr(), perm.has_value() ? perm->data_ptr() : nullptr,
+                           processed_tensor.data_ptr(), num_experts, k, n, bits_, perm.has_value(), rank_,
+                           context_->GetMemoryManageStreams()[rank_].Get());
+  } else if (qweight.dim() == 3) {  // first dim is num_experts
+    int num_experts = qweight.size(0);
+    int k = qweight.size(1) * pack_factor_;
+    int n = qweight.size(2);
+    std::vector<int64_t> dim = GetMarlinGptqRepackMeta(k, n, bits_);
+    dim.insert(dim.begin(), num_experts);
+    processed_tensor = torch::empty(dim, options);
+    InvokeMarlinGptqRepack(qweight.data_ptr(), perm.has_value() ? perm.value().data_ptr() : nullptr,
+                           processed_tensor.data_ptr(), num_experts, k, n, bits_, perm.has_value(), rank_,
+                           context_->GetMemoryManageStreams()[rank_].Get());
+  }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   return processed_tensor;
 }

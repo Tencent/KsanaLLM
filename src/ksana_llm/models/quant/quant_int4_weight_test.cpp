@@ -53,6 +53,9 @@ class QuantWeightLoadTest : public testing::Test {
   std::vector<ArrayInfo> up_qweight_arrays_;
   std::vector<ArrayInfo> down_qweight_arrays_;
   std::vector<ArrayInfo> mla_weight_arrays_;
+  std::vector<ArrayInfo> gate_g_idx_arrays_;
+  std::vector<ArrayInfo> up_g_idx_arrays_;
+  std::vector<ArrayInfo> down_g_idx_arrays_;
   ModelConfig model_config_;
   std::shared_ptr<Context> context_{nullptr};
   std::unordered_map<std::string, Tensor> weights_map_;
@@ -92,6 +95,38 @@ class QuantWeightLoadTest : public testing::Test {
                                               model_config_.hidden_units};
       down_qweight_arrays_[i].weight_data_type = TYPE_INT32;
       down_qweight_arrays_[i].tensor_name = "model.layers.0.mlp.experts." + std::to_string(i) + ".down_proj.qweight";
+    }
+
+    gate_g_idx_arrays_.resize(model_config_.moe_config.num_experts);
+    up_g_idx_arrays_.resize(model_config_.moe_config.num_experts);
+    down_g_idx_arrays_.resize(model_config_.moe_config.num_experts);
+    const size_t gate_up_g_idx_array_size = model_config_.hidden_units;
+    const size_t down_g_idx_array_size = model_config_.moe_config.moe_inter_size;
+    for (size_t i = 0; i < model_config_.moe_config.num_experts; i++) {
+      int32_t* gate_g_idx_array = new int32_t[gate_up_g_idx_array_size];
+      int32_t* up_g_idx_array = new int32_t[gate_up_g_idx_array_size];
+      int32_t* down_g_idx_array = new int32_t[down_g_idx_array_size];
+      for (size_t j = 0; j < gate_up_g_idx_array_size; ++j) {
+        gate_g_idx_array[j] = i + 1;
+        up_g_idx_array[j] = i + 1;
+      }
+      for (size_t j = 0; j < down_g_idx_array_size; ++j) {
+        down_g_idx_array[j] = i + 1;
+      }
+      gate_g_idx_arrays_[i].weight_ptr = reinterpret_cast<void*>(gate_g_idx_array);
+      gate_g_idx_arrays_[i].weight_shape = {gate_up_g_idx_array_size};
+      gate_g_idx_arrays_[i].weight_data_type = TYPE_INT32;
+      gate_g_idx_arrays_[i].tensor_name = "model.layers.0.mlp.experts." + std::to_string(i) + ".gate_proj.g_idx";
+
+      up_g_idx_arrays_[i].weight_ptr = reinterpret_cast<void*>(up_g_idx_array);
+      up_g_idx_arrays_[i].weight_shape = {gate_up_g_idx_array_size};
+      up_g_idx_arrays_[i].weight_data_type = TYPE_INT32;
+      up_g_idx_arrays_[i].tensor_name = "model.layers.0.mlp.experts." + std::to_string(i) + ".up_proj.g_idx";
+
+      down_g_idx_arrays_[i].weight_ptr = reinterpret_cast<void*>(down_g_idx_array);
+      down_g_idx_arrays_[i].weight_shape = {down_g_idx_array_size};
+      down_g_idx_arrays_[i].weight_data_type = TYPE_INT32;
+      down_g_idx_arrays_[i].tensor_name = "model.layers.0.mlp.experts." + std::to_string(i) + ".down_proj.g_idx";
     }
   }
 
@@ -192,6 +227,15 @@ class QuantWeightLoadTest : public testing::Test {
       quant_weight_solver->LoadMoeIntQuantWeight(
           down_qweight_arrays_[i].tensor_name, down_qweight_arrays_[i].weight_shape,
           down_qweight_arrays_[i].weight_data_type, down_qweight_arrays_[i].weight_ptr);
+
+      quant_weight_solver->LoadMoeIntQuantWeight(gate_g_idx_arrays_[i].tensor_name, gate_g_idx_arrays_[i].weight_shape,
+                                                 gate_g_idx_arrays_[i].weight_data_type,
+                                                 gate_g_idx_arrays_[i].weight_ptr);
+      quant_weight_solver->LoadMoeIntQuantWeight(up_g_idx_arrays_[i].tensor_name, up_g_idx_arrays_[i].weight_shape,
+                                                 up_g_idx_arrays_[i].weight_data_type, up_g_idx_arrays_[i].weight_ptr);
+      quant_weight_solver->LoadMoeIntQuantWeight(down_g_idx_arrays_[i].tensor_name, down_g_idx_arrays_[i].weight_shape,
+                                                 down_g_idx_arrays_[i].weight_data_type,
+                                                 down_g_idx_arrays_[i].weight_ptr);
     }
   }
 };
@@ -251,6 +295,41 @@ TEST_F(QuantWeightLoadTest, GPTQMoeQuantWeightloadTest) {
         }
         EXPECT_EQ(down_cpu_tensor[i][j][k].item<uint8_t>(), static_cast<uint8_t>(0));
       }
+    }
+  }
+
+  std::string gate_up_g_idx_name = "model.layers.0.mlp.experts.up_gate_proj.g_idx";
+  EXPECT_TRUE(weights_map_.find(gate_up_g_idx_name) != weights_map_.end());
+  std::vector<size_t> gate_up_g_idx_shape = {num_experts, hidden_units};
+  EXPECT_EQ(static_cast<std::vector<size_t>>(weights_map_[gate_up_g_idx_name].shape), gate_up_g_idx_shape);
+  EXPECT_EQ(weights_map_[gate_up_g_idx_name].dtype, TYPE_INT32);
+
+  auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchTypeFromDataType(TYPE_INT32));
+  torch::Tensor gate_up_g_idx_tensor =
+      torch::from_blob(weights_map_[gate_up_g_idx_name].GetPtr<void>(),
+                       std::vector<int64_t>(gate_up_g_idx_shape.begin(), gate_up_g_idx_shape.end()), int32_options);
+  torch::Tensor gate_up_g_idx_cpu_tensor = gate_up_g_idx_tensor.to(torch::kCPU);
+  // compare value
+  for (size_t i = 0; i < gate_up_g_idx_shape[0]; i++) {
+    for (size_t j = 0; j < gate_up_g_idx_shape[1]; j++) {
+      EXPECT_EQ(gate_up_g_idx_cpu_tensor[i][j].item<int32_t>(), static_cast<int32_t>(i + 1));
+    }
+  }
+
+  std::string down_g_idx_name = "model.layers.0.mlp.experts.down_proj.g_idx";
+  EXPECT_TRUE(weights_map_.find(down_g_idx_name) != weights_map_.end());
+  std::vector<size_t> down_g_idx_shape = {num_experts, moe_inter_size / tp};
+  EXPECT_EQ(static_cast<std::vector<size_t>>(weights_map_[down_g_idx_name].shape), down_g_idx_shape);
+  EXPECT_EQ(weights_map_[down_g_idx_name].dtype, TYPE_INT32);
+
+  torch::Tensor down_g_idx_tensor =
+      torch::from_blob(weights_map_[down_g_idx_name].GetPtr<void>(),
+                       std::vector<int64_t>(down_g_idx_shape.begin(), down_g_idx_shape.end()), int32_options);
+  torch::Tensor down_g_idx_cpu_tensor = down_g_idx_tensor.to(torch::kCPU);
+  // compare value
+  for (size_t i = 0; i < down_g_idx_shape[0]; i++) {
+    for (size_t j = 0; j < down_g_idx_shape[1]; j++) {
+      EXPECT_EQ(down_g_idx_cpu_tensor[i][j].item<int32_t>(), static_cast<int32_t>(i + 1));
     }
   }
 }

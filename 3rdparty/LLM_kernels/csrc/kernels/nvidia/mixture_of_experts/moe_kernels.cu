@@ -971,9 +971,13 @@ void finalizeMoeRoutingKernelLauncher(GemmOutputType const* expanded_permuted_ro
 // ============================== Gated Activation =================================
 constexpr static int ACTIVATION_THREADS_PER_BLOCK = 256;
 
+// fused_marlin_moe和mixture_of_experts中weight的up和gate存储顺序相反
+// 为了marlin_moe能复用doGatedActivationKernel增加了参数is_up_first
+// fused_marlin_moe中is_up_first为false, 表示gate在前
+// mixture_of_experts中is_up_first为true，表示up在前
 template <class T, class OutputType, template <class> class ActFn>
 __global__ void doGatedActivationKernel(T* output, OutputType const* gemm_result, int64_t const* num_valid_tokens_ptr,
-                                        int64_t inter_size) {
+                                        int64_t inter_size, bool is_up_first) {
   int64_t const tid = threadIdx.x;
   int64_t const token = blockIdx.x;
   if (num_valid_tokens_ptr && token >= *num_valid_tokens_ptr) {
@@ -995,11 +999,19 @@ __global__ void doGatedActivationKernel(T* output, OutputType const* gemm_result
   int64_t const num_elems_in_col = inter_size / ACTIVATION_ELEM_PER_THREAD;
   int64_t const inter_size_vec = inter_size / ACTIVATION_ELEM_PER_THREAD;
 
+  int64_t gate_value_offset = 0;
+  int64_t fc1_value_offset = 0;
+  if (is_up_first) {
+    gate_value_offset = inter_size_vec;
+  } else {
+    fc1_value_offset = inter_size_vec;
+  }
+
   ActFn<ComputeElem> fn{};
   for (int64_t elem_index = start_offset; elem_index < num_elems_in_col; elem_index += stride) {
-    auto fc1_value = arrayConvert<DataElem, ComputeElem>(gemm_result_vec[elem_index]);
+    auto fc1_value = arrayConvert<DataElem, ComputeElem>(gemm_result_vec[elem_index + fc1_value_offset]);
     // BF16 isn't supported, use FP32 for activation function
-    auto gate_value = arrayConvert<DataElem, ComputeElem>(gemm_result_vec[elem_index + inter_size_vec]);
+    auto gate_value = arrayConvert<DataElem, ComputeElem>(gemm_result_vec[elem_index + gate_value_offset]);
     auto gate_act = fn(gate_value);
     output_vec[elem_index] = arrayConvert<ComputeElem, DataElem>(fc1_value * gate_act);
   }
@@ -1007,7 +1019,8 @@ __global__ void doGatedActivationKernel(T* output, OutputType const* gemm_result
 
 template <typename T, typename OutputType>
 void doGatedActivation(T* output, OutputType const* gemm_result, int64_t const* num_valid_tokens_ptr,
-                       int64_t inter_size, int64_t num_tokens, ActivationType activation_type, cudaStream_t stream) {
+                       int64_t inter_size, int64_t num_tokens, ActivationType activation_type, cudaStream_t stream,
+                       bool is_up_first) {
   int64_t const blocks = num_tokens;
   int64_t const threads = ACTIVATION_THREADS_PER_BLOCK;
 
@@ -1016,8 +1029,12 @@ void doGatedActivation(T* output, OutputType const* gemm_result, int64_t const* 
   auto* fn = activation_type == ActivationType::Swiglu
                  ? &doGatedActivationKernel<T, OutputType, cutlass::epilogue::thread::SiLu>
                  : &doGatedActivationKernel<T, OutputType, cutlass::epilogue::thread::GELU>;
-  fn<<<blocks, threads, 0, stream>>>(output, gemm_result, num_valid_tokens_ptr, inter_size);
+  fn<<<blocks, threads, 0, stream>>>(output, gemm_result, num_valid_tokens_ptr, inter_size, is_up_first);
 }
+
+template void doGatedActivation(half* output, half const* gemm_result, int64_t const* num_valid_tokens_ptr,
+                                int64_t inter_size, int64_t num_tokens, ActivationType activation_type,
+                                cudaStream_t stream, bool is_up_first);
 
 // ============================== Activation =================================
 

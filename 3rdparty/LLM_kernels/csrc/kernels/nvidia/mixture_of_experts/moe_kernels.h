@@ -408,5 +408,15 @@ class CutlassMoeFCRunner : public CutlassMoeFCRunnerInterface {
   RoutingFunctionType custom_routing_function_;
 };
 
+void topkGatingSoftmaxKernelLauncher(float const* input, bool const* finished, float* output,
+                                     float* softmax_temp_output, int* indices, int* source_row, int64_t const num_rows,
+                                     int const num_experts, int const k, int const start_expert, int const end_expert,
+                                     MOEExpertScaleNormalizationMode renorm_mode, cudaStream_t stream);
+
+template <typename T, typename OutputType>
+void doGatedActivation(T* output, OutputType const* gemm_result, int64_t const* num_valid_tokens_ptr,
+                       int64_t inter_size, int64_t num_tokens, ActivationType activation_type, cudaStream_t stream,
+                       bool is_up_first = true);
+
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -2,8 +2,8 @@
 
 ==============================================================================*/
 #pragma once
-
 #include "ksana_llm/models/common/common_model.h"
+#include "ksana_llm/models/common/model_interface.h"
 
 #include "ksana_llm/models/communicator/tp_communicator.h"
 #include "ksana_llm/modules/attention/cross_layer_attention.h"
@@ -44,6 +44,25 @@ class HunyuanDecoderLayer {
 };
 
 template <typename T>
+class HunyuanLarge : public ModelInterface<T> {
+ public:
+  HunyuanLarge() {}
+  ~HunyuanLarge() = default;
+
+  Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
+  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+
+ private:
+  // for cla (if the model not use cross of attention, default nullptr)
+  int cla_share_factor_;
+  ClaBuffers cla_buffers_;
+  TensorBuffer* moe_buffer_;
+
+  std::map<int, std::shared_ptr<HunyuanDecoderLayer<T>>> decoder_layers_;
+};
+
+template <typename T>
 class HunyuanLargeModel : public CommonModel<T> {
  public:
   HunyuanLargeModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
@@ -60,12 +79,7 @@ class HunyuanLargeModel : public CommonModel<T> {
   using CommonModel<T>::SetHiddenUnitBuffer;
 
  private:
-  // for cla (if the model not use cross of attention, default nullptr)
-  int cla_share_factor_;
-  ClaBuffers cla_buffers_;
-  TensorBuffer* moe_buffer_;
-
-  std::map<int, std::shared_ptr<HunyuanDecoderLayer<T>>> decoder_layers_;
+  HunyuanLarge<T> hunyuan_large_;
 };
 
 }  // namespace ksana_llm

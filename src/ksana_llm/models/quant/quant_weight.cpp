@@ -168,20 +168,70 @@ bool QuantWeight<T>::CheckQuantModel() {
   return false;
 }
 
-// Only for fuse_moe_gptq_awq triton op
+template <typename T>
+bool QuantWeight<T>::IsClaLayer(const int layer_idx) {
+  if (model_config_.use_cla && model_config_.cla_share_factor != 0 &&
+      (layer_idx % model_config_.cla_share_factor != 0)) {
+    return true;
+  }
+  return false;
+}
+
+// Only for fuse_moe_gptq_awq triton op and marlin_moe op
 template <typename T>
 void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::vector<size_t>& weight_shape,
                                            DataType& weight_data_type, void* weight_ptr) {
   SetDevice(rank_);
+  size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
+  size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
+  size_t hidden_units = model_config_.hidden_units;
+  size_t pack_factor = 32 / model_config_.quant_config.bits;
+  size_t group_size = model_config_.quant_config.group_size;
+  int layer_idx = -1, expert_idx = -1;
+  GetExpertsScaleIdx(tensor_name, layer_idx, expert_idx);
+  if (expert_map_[expert_idx] >= num_experts_per_rank_) {
+    // Skip load weight when the expert_id will be not used in current rank.
+    return;
+  }
+  expert_idx = expert_map_[expert_idx];
+  int tp_rank = (model_config_.moe_tensor_para_size > 1 ? rank_ / expert_para_size_ : 0);
+  if (!model_config_.use_mla && !model_config_.moe_config.use_vllm_moe &&
+      tensor_name.find(".g_idx") != std::string::npos) {
+    if (tensor_name.find("up_proj") != std::string::npos || tensor_name.find("gate_proj") != std::string::npos) {
+      // model.layers.layer_idx.mlp.experts.expert_idx.up/gate_proj.g_idx shape is {hidden_units}
+      // model.layers.mlp.experts.up_gate_proj.g_idx shape is {num_experts_per_rank_, hidden_units}
+      std::string name = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.up_gate_proj.g_idx";
+      std::vector<size_t> shape = {static_cast<size_t>(num_experts_per_rank_), weight_shape[0]};
+      KLLM_LOG_DEBUG << "copying weight to:" << name;
+      if (weights_map_.find(name) == weights_map_.end()) {
+        tensor_manager_->AddWeightTensor(name, shape, weight_data_type);
+      }
+      size_t size = shape[1] * GetTypeSize(weight_data_type);
+      void* dst_ptr = weights_map_[name].GetPtr<void>() + expert_idx * size;
+      // up and gate use the same g_idx for all ranks
+      MemcpyAsync(dst_ptr, weight_ptr, size, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find("down_proj") != std::string::npos) {
+      // model.layers.layer_idx.mlp.experts.expert_idx.down_proj.g_idx shape is {moe_inter_size}
+      // model.layers.mlp.experts.down_proj.g_idx shape is {num_experts_per_rank_, moe_inter_size_per_rank}
+      std::string name = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.down_proj.g_idx";
+      std::vector<size_t> shape = {static_cast<size_t>(num_experts_per_rank_), moe_inter_size_per_rank};
+      if (weights_map_.find(name) == weights_map_.end()) {
+        tensor_manager_->AddWeightTensor(name, shape, weight_data_type);
+      }
+      size_t size = shape[1] * GetTypeSize(weight_data_type);
+      void* src_ptr = weight_ptr + tp_rank * size;
+      void* dst_ptr = weights_map_[name].GetPtr<void>() + expert_idx * size;
+      MemcpyAsync(dst_ptr, src_ptr, size, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    } else {
+      KLLM_THROW(fmt::format("Not support weight : {}", tensor_name));
+    }
+    StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
+    return;
+  }
+
   // TODO(winminkong): support awq moe
   if (tensor_name.find(".qweight") != std::string::npos || tensor_name.find(".scales") != std::string::npos) {
     bool is_qweight = false;
-    size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
-    size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
-    size_t hidden_units = model_config_.hidden_units;
-    size_t pack_factor = 32 / model_config_.quant_config.bits;
-    size_t group_size = model_config_.quant_config.group_size;
-
 #ifdef ENABLE_CUDA
     if (weight_ptr == nullptr) {
       KLLM_LOG_ERROR << fmt::format("The {}'s weight_ptr is null", tensor_name);
@@ -196,13 +246,6 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
     }
 
     DataType processed_tensor_type = GetDataTypeFromTorchType(tensor.scalar_type());
-    int layer_idx = -1, expert_idx = -1;
-    GetExpertsScaleIdx(tensor_name, layer_idx, expert_idx);
-    if (expert_map_[expert_idx] >= num_experts_per_rank_) {
-      // Skip load weight when the expert_id will be not used in current rank.
-      return;
-    }
-    expert_idx = expert_map_[expert_idx];
     // Postprocess, split tensor for TP and copy to cuda device
     if (tensor_name.find(".gate_proj.") != std::string::npos || tensor_name.find(".up_proj.") != std::string::npos) {
       if (tensor.sizes()[0] != moe_inter_size || tensor.strides()[1] != 1) {
@@ -293,7 +336,10 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
     AddWeightFromTorchTensor(tensor_name, tensor);
   } else if (tensor_name.find(".g_idx") != std::string::npos) {
     torch::Tensor tensor = GetTorchTensorFromWeightPtr(weight_shape, weight_data_type, weight_ptr, true);
-    if (tensor_name.find("W_pack") != std::string::npos) {
+    if (tensor_name.find(".experts.") != std::string::npos && !model_config_.use_mla &&
+        !model_config_.moe_config.use_vllm_moe) {
+      LoadMoeIntQuantWeight(tensor_name, weight_shape, weight_data_type, weight_ptr);
+    } else if (tensor_name.find("W_pack") != std::string::npos) {
       AddWeightFromTorchTensor(NameReplace(tensor_name, "W_pack", "q_proj"), tensor);
       AddWeightFromTorchTensor(NameReplace(tensor_name, "W_pack", "k_proj"), tensor);
       AddWeightFromTorchTensor(NameReplace(tensor_name, "W_pack", "v_proj"), tensor);
@@ -582,21 +628,22 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
 #ifdef ENABLE_CUDA
   SetDevice(rank_);
   KLLM_LOG_DEBUG << fmt::format("Starting bind quant weight {} on rank: {}", qweight_name, rank_);
-  if (needed_slove_weight_name.find("mlp.experts") == std::string::npos) {
+  bool is_experts = (needed_slove_weight_name.find("mlp.experts") != std::string::npos);
+  if (!model_config_.use_mla && !model_config_.moe_config.use_vllm_moe || !is_experts) {
     if (model_config_.quant_config.desc_act == true) {
-      torch::Tensor gidx_gpu = GetTorchTensorFromWeight(gidx_name);
+      torch::Tensor gidx_gpu = GetTorchTensorFromWeight(gidx_name).clone();
       torch::Tensor perm_gpu = marlin_helper_->MarlinSortGIdx(gidx_gpu);
       weights_map_.erase(gidx_name);
       AddWeightFromTorchTensor(gidx_name, gidx_gpu);
       AddWeightFromTorchTensor(perm_name, perm_gpu);
     }
     torch::Tensor qweight_gpu = GetTorchTensorFromWeight(qweight_name);
-    if (model_config_.quant_config.backend == CUTLASS_BACKEND) {
+    if (model_config_.quant_config.backend == CUTLASS_BACKEND && !is_experts) {
       torch::Tensor processed_tensor_gpu = cutlass_helper_->CutlassPreprocessWeightsForMixedGemmWarpper(
           qweight_gpu, llm_kernels::nvidia::QuantType::W4_A16);
       AddWeightFromTorchTensor(weight_name, processed_tensor_gpu);
     } else if (model_config_.quant_config.backend == MARLIN_BACKEND ||
-               needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos) {
+               needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos || is_experts) {
       if (model_config_.quant_config.method == QUANT_GPTQ) {
         std::optional<torch::Tensor> perm_gpu = std::nullopt;
         if (model_config_.quant_config.desc_act == true) {
@@ -622,10 +669,10 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
 
     // In Marlin, GPTQ and AWQ share the same scale layout
     if (model_config_.quant_config.backend == MARLIN_BACKEND ||
-        needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos) {
+        needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos || is_experts) {
       torch::Tensor scales_gpu = GetTorchTensorFromWeight(scales_name);
       scales_gpu = marlin_helper_->MarlinPermuteScales<T>(
-          scales_gpu, model_config_.quant_config.group_size * scales_gpu.size(0), scales_gpu.size(1));
+          scales_gpu, model_config_.quant_config.group_size * scales_gpu.size(-2), scales_gpu.size(-1));
       weights_map_.erase(scales_name);
       AddWeightFromTorchTensor(scales_name, scales_gpu);
     }
@@ -675,7 +722,11 @@ Status QuantWeight<T>::AutoPackAndBindGroupTensor(std::vector<std::string> neede
     }
     // TODO(winminkong) : 后期改为required_layer_idx_并解耦三个int4后端以及mla和moe权重的处理
     for (int layer_idx = min_layer_idx; layer_idx <= max_layer_idx; ++layer_idx) {
-      PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
+      std::string name = needed_slove_weight_name;
+      if (name == "self_attn.query_key_value" && IsClaLayer(layer_idx)) {
+        name = "self_attn.q_proj";
+      }
+      PackAndBindGroupTensor(layer_idx, name);
     }
     if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
       if (needed_slove_weight_name.find("mlp.") != std::string::npos &&
@@ -685,7 +736,11 @@ Status QuantWeight<T>::AutoPackAndBindGroupTensor(std::vector<std::string> neede
       }
       for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
            ++layer_idx) {
-        PackAndBindGroupTensor(layer_idx, needed_slove_weight_name);
+        std::string name = needed_slove_weight_name;
+        if (name == "self_attn.query_key_value" && IsClaLayer(layer_idx)) {
+          name = "self_attn.q_proj";
+        }
+        PackAndBindGroupTensor(layer_idx, name);
       }
     }
   }
@@ -713,6 +768,7 @@ Status QuantWeight<T>::ConvertGroupTensor() {
   if (!use_mla) {
     for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
       for (const auto layer_idx : required_layer_idx_.all) {
+        if (IsClaLayer(layer_idx)) continue;
         std::string q_name = fmt::format("model.layers.{}.self_attn.q_proj.{}", layer_idx, needed_slove_weight_name);
         std::string k_name = fmt::format("model.layers.{}.self_attn.k_proj.{}", layer_idx, needed_slove_weight_name);
         std::string v_name = fmt::format("model.layers.{}.self_attn.v_proj.{}", layer_idx, needed_slove_weight_name);
@@ -735,13 +791,40 @@ Status QuantWeight<T>::ConvertGroupTensor() {
     }
   }
 
+  if (model_config_.is_moe && !model_config_.use_mla && !model_config_.moe_config.use_vllm_moe) {
+    std::vector<std::string> needed_slove_weights_name = {"up_gate_proj.weight", "up_gate_proj.scales",
+                                                          "down_proj.weight", "down_proj.scales"};
+    for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
+      for (const auto layer_idx : required_layer_idx_.all) {
+        std::string tensor_name = fmt::format("model.layers.{}.mlp.experts.{}", layer_idx, needed_slove_weight_name);
+        KLLM_LOG_DEBUG << "transpose(1,2) of " << tensor_name;
+        std::string new_name = tensor_name;
+        torch::Tensor torch_tensor_gpu = GetTorchTensorFromWeight(tensor_name);
+        if (tensor_name.find(".weight") != std::string::npos) {
+          torch_tensor_gpu = torch_tensor_gpu.view(torch::kInt32);
+          new_name.replace(tensor_name.length() - 6, 6, "qweight");
+        }
+        torch_tensor_gpu = torch_tensor_gpu.transpose(1, 2).contiguous();
+        std::string trans_name = new_name + ".trans";
+        AddWeightFromTorchTensor(trans_name, torch_tensor_gpu);
+        weights_map_.erase(tensor_name);
+        weights_map_[new_name] = weights_map_[trans_name];
+        weights_map_.erase(trans_name);
+      }
+    }
+  }
+
   // convert qzeros
   if (model_config_.quant_config.method == QUANT_AWQ) {
     // TODO(winminkong) : MLA does not currently support AWQ, will be added.
     needed_slove_weights_name = {"self_attn.query_key_value", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj",
                                  "mlp.down_proj"};
-    for (std::string& needed_slove_weight_name : needed_slove_weights_name) {
+    for (int name_idx = 0; name_idx < needed_slove_weights_name.size(); ++name_idx) {
       for (const auto layer_idx : required_layer_idx_.all) {
+        std::string needed_slove_weight_name = needed_slove_weights_name[name_idx];
+        if (needed_slove_weight_name == "self_attn.query_key_value" && IsClaLayer(layer_idx)) {
+          needed_slove_weight_name = "self_attn.q_proj";
+        }
         std::string scales_name = fmt::format("model.layers.{}.{}.scales", layer_idx, needed_slove_weight_name);
         std::string qzeros_name = fmt::format("model.layers.{}.{}.qzeros", layer_idx, needed_slove_weight_name);
         std::string zeros_name = fmt::format("model.layers.{}.{}.zeros", layer_idx, needed_slove_weight_name);
@@ -1317,7 +1400,7 @@ Status QuantWeight<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight() {
                             size_t(weights_map_[dequant_vhead_weight_name].shape[1]), rank_);
       weights_map_.erase(dequant_vhead_weight_name);
     }  // end if
-  }    // end for loop
+  }  // end for loop
   return Status();
 }
 #  endif
@@ -1800,10 +1883,10 @@ Status QuantWeight<T>::AddWeightFromTorchTensor(const std::string& name, torch::
   tensor_manager_->AddWeightTensor(name, std::vector<size_t>(tensor.sizes().begin(), tensor.sizes().end()),
                                    GetDataTypeFromTorchType(tensor.scalar_type()));
   if (tensor.device().type() == torch::kCPU) {
-    MemcpyAsync(weights_map_[name].GetPtr<void>(), tensor.data_ptr(), weights_map_[name].GetTotalBytes(),
+    MemcpyAsync(weights_map_[name].GetPtr<void>(), tensor.contiguous().data_ptr(), weights_map_[name].GetTotalBytes(),
                 MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
   } else {
-    MemcpyAsync(weights_map_[name].GetPtr<void>(), tensor.data_ptr(), weights_map_[name].GetTotalBytes(),
+    MemcpyAsync(weights_map_[name].GetPtr<void>(), tensor.contiguous().data_ptr(), weights_map_[name].GetTotalBytes(),
                 MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
   }
   StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);

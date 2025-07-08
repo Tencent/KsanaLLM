@@ -16,11 +16,13 @@
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
 #include "ksana_llm/layers/marlin_matmul_layer.h"
+#include "ksana_llm/layers/marlin_moe_layer.h"
 #include "ksana_llm/layers/matmul_layer.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
+#include "ksana_llm/models/common_moe/moe_config.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/search_status.h"
@@ -788,7 +790,7 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   std::vector<int64_t> repack_shape = GetMarlinGptqRepackMeta(max_k, max_n, bits);
   Tensor weightPrePack =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {repack_shape[0], repack_shape[1]}, kDeviceRank);
-  InvokeMarlinGptqRepack(weight.GetPtr<void>(), nullptr, weightPrePack.GetPtr<void>(), max_k, max_n, bits, false,
+  InvokeMarlinGptqRepack(weight.GetPtr<void>(), nullptr, weightPrePack.GetPtr<void>(), 1, max_k, max_n, bits, false,
                          kDeviceRank, context_->GetComputeStreams()[kDeviceRank].Get());
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
 
@@ -1085,7 +1087,6 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   size_t expert_inter_size = 2688;
   size_t expert_topk = 1;
   size_t tp_size = 1;
-  int pack_factor = 32;
   bool use_vllm_moe = false;
   uint32_t num_expert_group = 1;
   uint32_t expert_groups_topk = 1;
@@ -1096,6 +1097,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   bool use_e_score_correction_bias = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
   DataType int_weight_dtype = DataType::TYPE_INVALID;
+  int group_size = 0;
   bool apply_weight = false;
 
   std::vector<std::any> params;
@@ -1116,55 +1118,59 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   params.push_back(use_e_score_correction_bias);
   params.push_back(fp8_weight_dtype);
   params.push_back(int_weight_dtype);
+  params.push_back(group_size);
   params.push_back(apply_weight);
 
-  // 初始化tensor
-  // input_tensors[0]:9:1024
-  // input_tensors[1]:4:4
-  // input_tensors[2]:4:5376:1024
-  // input_tensors[3]:4:1024:2688
-  // output_tensors[0]:9:1024
   int num_tokens = 9;
-  std::vector<Tensor> scales(4);
-  std::vector<Tensor> inputs(4);
-  std::vector<Tensor> outputs(1);
+  auto options = torch::TensorOptions().device(torch::kCUDA, kDeviceRank);
 
+  // initialize input and weight tensor
+  std::vector<Tensor> inputs(4);
   inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
   inputs[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {expert_num, expert_num}, kDeviceRank);
   inputs[2] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
                      {expert_num, expert_inter_size * 2, expert_hidden_size}, kDeviceRank);
   inputs[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
                      {expert_num, expert_hidden_size, expert_inter_size}, kDeviceRank);
+  for (int i = 0; i < inputs.size(); ++i) {
+    torch::Tensor tensor = torch::from_blob(inputs[i].GetPtr<void>(),
+                                            {std::vector<int64_t>(inputs[i].shape.begin(), inputs[i].shape.end())},
+                                            options.dtype(GetTorchTypeFromDataType(inputs[i].dtype)));
+    if (i < 2) {
+      tensor.fill_(0.8213);
+    } else {
+      tensor.fill_(89);
+    }
+  }
 
-  MemsetAsync(inputs[0].GetPtr<void>(), 0, inputs[0].GetTotalBytes(), context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemsetAsync(inputs[1].GetPtr<void>(), 0, inputs[1].GetTotalBytes(), context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemsetAsync(inputs[2].GetPtr<void>(), 0, inputs[2].GetTotalBytes(), context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemsetAsync(inputs[3].GetPtr<void>(), 0, inputs[3].GetTotalBytes(), context_->GetMemoryManageStreams()[kDeviceRank]);
-
+  // initialize scales tensor
+  std::vector<Tensor> scales(4);
   scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, kDeviceRank);
   scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, kDeviceRank);
   scales[2] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, kDeviceRank);
   scales[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, kDeviceRank);
+  for (int i = 0; i < scales.size(); ++i) {
+    torch::Tensor tensor = torch::from_blob(scales[i].GetPtr<void>(),
+                                            {std::vector<int64_t>(scales[i].shape.begin(), scales[i].shape.end())},
+                                            options.dtype(GetTorchTypeFromDataType(scales[i].dtype)));
+    if (i < 2) {
+      tensor.fill_(0.01);
+    } else {
+      tensor.fill_(1.8601190e-06);
+    }
+  }
 
-  float host_scale(1.0f);
-  MemcpyAsync(scales[0].GetPtr<void>(), &host_scale, sizeof(float), MEMCPY_HOST_TO_DEVICE,
-              context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemcpyAsync(scales[1].GetPtr<void>(), &host_scale, sizeof(float), MEMCPY_HOST_TO_DEVICE,
-              context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemcpyAsync(scales[2].GetPtr<void>(), &host_scale, sizeof(float), MEMCPY_HOST_TO_DEVICE,
-              context_->GetMemoryManageStreams()[kDeviceRank]);
-  MemcpyAsync(scales[3].GetPtr<void>(), &host_scale, sizeof(float), MEMCPY_HOST_TO_DEVICE,
-              context_->GetMemoryManageStreams()[kDeviceRank]);
-  StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
-
+  // binding scales
   inputs[2].input_scales = &scales[0];
-  inputs[2].weight_scales = &scales[1];
-  inputs[3].input_scales = &scales[2];
+  inputs[3].input_scales = &scales[1];
+  inputs[2].weight_scales = &scales[2];
   inputs[3].weight_scales = &scales[3];
 
+  // initialize output tensor
+  std::vector<Tensor> outputs(1);
   outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
 
-  // 测试Forward
+  // run moe_layer
   Fp8MoeLayer<half, __nv_fp8_e4m3> moe_layer = Fp8MoeLayer<half, __nv_fp8_e4m3>();
   moe_layer.Init(params, context_, kDeviceRank);
   size_t workspace_size = moe_layer.GetWorkSpaceSize();
@@ -1175,7 +1181,131 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
 
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+  // check output
+  // output is a repetition of 0.1768
+  torch::Tensor tensor = torch::from_blob(outputs[0].GetPtr<void>(),
+                                          {std::vector<int64_t>(outputs[0].shape.begin(), outputs[0].shape.end())},
+                                          options.dtype(GetTorchTypeFromDataType(outputs[0].dtype)))
+                             .cpu();
+  EXPECT_TRUE(torch::all(torch::eq(tensor[0], 0.1768)).item<bool>());
+
 #  endif
+#endif
+}
+
+TEST_F(LayerTest, MarlinMoeLayerTest) {
+#ifdef ENABLE_CUDA
+  constexpr int kDeviceRank = 0;
+  int num_bits = 4;
+  // params
+  MoeScaleNormMode moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;
+  size_t max_token_num = 4096;
+  size_t expert_num = 4;
+  size_t expert_hidden_size = 1024;
+  size_t expert_inter_size = 2688;
+  size_t expert_topk = 1;
+  size_t tp_size = 1;
+  bool use_vllm_moe = false;
+  uint32_t num_expert_group = 1;
+  uint32_t expert_groups_topk = 1;
+  std::string scoring_func = "softmax";
+  std::string topk_method = "greedy";
+  bool norm_topk_prob = false;
+  float routed_scaling_factor = 1.0f;
+  bool use_e_score_correction_bias = false;
+  DataType fp8_weight_dtype = DataType::TYPE_INVALID;
+  DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
+  int group_size = 128;
+  bool apply_weight = false;
+
+  std::vector<std::any> params;
+  params.push_back(moe_scale_norm_mode);
+  params.push_back(max_token_num);
+  params.push_back(expert_num);
+  params.push_back(expert_hidden_size);
+  params.push_back(expert_inter_size);
+  params.push_back(expert_topk);
+  params.push_back(tp_size);
+  params.push_back(use_vllm_moe);
+  params.push_back(num_expert_group);
+  params.push_back(expert_groups_topk);
+  params.push_back(scoring_func);
+  params.push_back(topk_method);
+  params.push_back(norm_topk_prob);
+  params.push_back(routed_scaling_factor);
+  params.push_back(use_e_score_correction_bias);
+  params.push_back(fp8_weight_dtype);
+  params.push_back(int_weight_dtype);
+  params.push_back(group_size);
+  params.push_back(apply_weight);
+
+  int num_tokens = 9;
+  auto options = torch::TensorOptions().device(torch::kCUDA, kDeviceRank);
+
+  // initialize input and weight tensor
+  std::vector<Tensor> inputs(4);
+  inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
+  inputs[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_num}, kDeviceRank);
+  inputs[2] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                     {expert_num, expert_hidden_size / 16, 2 * expert_inter_size * (num_bits / 2)}, kDeviceRank);
+  inputs[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                     {expert_num, expert_inter_size / 16, expert_hidden_size * (num_bits / 2)}, kDeviceRank);
+  for (int i = 0; i < inputs.size(); ++i) {
+    torch::Tensor tensor = torch::from_blob(inputs[i].GetPtr<void>(),
+                                            {std::vector<int64_t>(inputs[i].shape.begin(), inputs[i].shape.end())},
+                                            options.dtype(GetTorchTypeFromDataType(inputs[i].dtype)));
+    if (i < 2) {
+      tensor.fill_(0.8213);
+    } else {
+      tensor.fill_(1754889370);
+    }
+  }
+
+  // initialize scales tensor
+  std::vector<Tensor> scales(2);
+  scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+                     {expert_num, expert_hidden_size / group_size, expert_inter_size * 2}, kDeviceRank);
+  scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+                     {expert_num, expert_inter_size / group_size, expert_hidden_size}, kDeviceRank);
+  for (int i = 0; i < scales.size(); ++i) {
+    torch::Tensor tensor = torch::from_blob(scales[i].GetPtr<void>(),
+                                            {std::vector<int64_t>(scales[i].shape.begin(), scales[i].shape.end())},
+                                            options.dtype(GetTorchTypeFromDataType(scales[i].dtype)));
+    tensor.fill_(0.002735);
+  }
+
+  // binding scales
+  inputs[2].scales = &scales[0];
+  inputs[3].scales = &scales[1];
+
+  // initialize output tensor
+  std::vector<Tensor> outputs(1);
+  outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
+
+  // run moe_layer
+  MarlinMoeLayer<half> moe_layer = MarlinMoeLayer<half>();
+  moe_layer.Init(params, context_, kDeviceRank);
+  size_t workspace_size = moe_layer.GetWorkSpaceSize();
+  Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
+  std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
+  moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+  moe_layer.Preprocess(model_config);
+  EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
+
+  StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+  // check output
+  // output is a repetition of: [10.984, 10.984, 10.984, 10.984, 10.984, 10.984, 10.984, 10.984,
+  // 14.1, 14.1, 14.1, 14.1, 14.1, 14.1, 14.1, 14.1]
+  torch::Tensor tensor = torch::from_blob(outputs[0].GetPtr<void>(),
+                                          {std::vector<int64_t>(outputs[0].shape.begin(), outputs[0].shape.end())},
+                                          options.dtype(GetTorchTypeFromDataType(outputs[0].dtype)))
+                             .cpu()
+                             .view({outputs[0].shape[0] * outputs[0].shape[1] / 16, 2, 8})
+                             .permute({1, 0, 2});
+  EXPECT_TRUE(torch::all(torch::eq(tensor[0], 10.984)).item<bool>());
+  EXPECT_TRUE(torch::all(torch::eq(tensor[1], 14.1)).item<bool>());
 #endif
 }
 

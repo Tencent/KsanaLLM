@@ -233,6 +233,9 @@ class FakeMultiHeadAttentionWeight : public FakeWeight {
                                FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer), add_qkv_bias_(add_qkv_bias), use_qk_norm_(use_qk_norm) {
     DataType dtype = model_config.weight_data_type;
+
+    use_cla_ = model_config.use_cla;
+    cla_share_factor_ = model_config.cla_share_factor;
     for (uint32_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
       InitOneLayer(layer_idx, dtype, (size_t)model_config.hidden_units, (size_t)model_config.head_num);
     }
@@ -245,10 +248,14 @@ class FakeMultiHeadAttentionWeight : public FakeWeight {
     std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
     MemoryLocation location = MemoryLocation::LOCATION_DEVICE;
     // attn_qkv_proj_
-    CreateWeight(layer_prefix + ".self_attn.query_key_value.weight", {hidden_size, head_dim * total_head_num}, dtype,
-                 location);
-    if (add_qkv_bias_) {
-      CreateWeight(layer_prefix + ".self_attn.query_key_value.bias", {1, head_dim * total_head_num}, dtype, location);
+    if (use_cla_ && (layer_idx % cla_share_factor_ != 0)) {
+      CreateWeight(layer_prefix + ".self_attn.q_proj.weight", {hidden_size, hidden_size}, dtype, location);
+    } else {
+      CreateWeight(layer_prefix + ".self_attn.query_key_value.weight", {hidden_size, head_dim * total_head_num}, dtype,
+                   location);
+      if (add_qkv_bias_) {
+        CreateWeight(layer_prefix + ".self_attn.query_key_value.bias", {1, head_dim * total_head_num}, dtype, location);
+      }
     }
 
     if (use_qk_norm_) {
@@ -263,6 +270,8 @@ class FakeMultiHeadAttentionWeight : public FakeWeight {
  private:
   bool add_qkv_bias_;
   bool use_qk_norm_;
+  bool use_cla_;
+  int cla_share_factor_;
 };
 
 class FakeTwoLayeredFFNWeight : public FakeWeight {

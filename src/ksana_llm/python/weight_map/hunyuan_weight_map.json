@@ -13,5 +13,29 @@
     "model.layers.(\\d+).mlp.shared_mlp.up_proj.weight_scale": "model.layers.$1.mlp.shared_expert.up_proj.weight_scale",
     "model.layers.(\\d+).mlp.shared_mlp.gate_proj.weight_scale": "model.layers.$1.mlp.shared_expert.gate_proj.weight_scale",
     "model.layers.(\\d+).self_attn.qkv_proj.weight":"model.layers.$1.self_attn.W_pack.weight",
-    "model.layers.(\\d+).mlp.gate_and_up_proj.weight":"model.layers.$1.mlp.gate_up_proj.weight"
+    "model.layers.(\\d+).mlp.gate_and_up_proj.weight":"model.layers.$1.mlp.gate_up_proj.weight",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.weight_scale": "model.layers.$1.mlp.shared_expert.gate_proj.weight_scale",
+
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.qweight": "model.layers.$1.mlp.shared_expert.down_proj.qweight",
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.g_idx": "model.layers.$1.mlp.shared_expert.down_proj.g_idx",
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.scales": "model.layers.$1.mlp.shared_expert.down_proj.scales",
+    "model.layers.(\\d+).mlp.shared_mlp.down_proj.qzeros": "model.layers.$1.mlp.shared_expert.down_proj.qzeros",
+
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.qweight": "model.layers.$1.mlp.shared_expert.up_proj.qweight",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.g_idx": "model.layers.$1.mlp.shared_expert.up_proj.g_idx",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.scales": "model.layers.$1.mlp.shared_expert.up_proj.scales",
+    "model.layers.(\\d+).mlp.shared_mlp.up_proj.qzeros": "model.layers.$1.mlp.shared_expert.up_proj.qzeros",
+
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.qweight": "model.layers.$1.mlp.shared_expert.gate_proj.qweight",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.g_idx": "model.layers.$1.mlp.shared_expert.gate_proj.g_idx",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.scales": "model.layers.$1.mlp.shared_expert.gate_proj.scales",
+    "model.layers.(\\d+).mlp.shared_mlp.gate_proj.qzeros": "model.layers.$1.mlp.shared_expert.gate_proj.qzeros",
+    "model.layers.(\\d+).self_attn.qkv_proj.qweight":"model.layers.$1.self_attn.W_pack.qweight",
+    "model.layers.(\\d+).self_attn.qkv_proj.g_idx":"model.layers.$1.self_attn.W_pack.g_idx",
+    "model.layers.(\\d+).self_attn.qkv_proj.scales":"model.layers.$1.self_attn.W_pack.scales",
+    "model.layers.(\\d+).self_attn.qkv_proj.qzeros":"model.layers.$1.self_attn.W_pack.qzeros",
+    "model.layers.(\\d+).mlp.gate_and_up_proj.qweight":"model.layers.$1.mlp.gate_up_proj.qweight",
+    "model.layers.(\\d+).mlp.gate_and_up_proj.g_idx":"model.layers.$1.mlp.gate_up_proj.g_idx",
+    "model.layers.(\\d+).mlp.gate_and_up_proj.scales":"model.layers.$1.mlp.gate_up_proj.scales",
+    "model.layers.(\\d+).mlp.gate_and_up_proj.qzeros":"model.layers.$1.mlp.gate_up_proj.qzeros"
 }

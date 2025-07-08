@@ -134,11 +134,12 @@ std::vector<int64_t> GetMarlinAwqRepackMeta(int64_t size_k, int64_t size_n, int6
   return llm_kernels::nvidia::marlin::awq_marlin_repack_meta(size_k, size_n, num_bits);
 }
 
-void InvokeMarlinGptqRepack(const void* b_q_weight_ptr, const void* perm_ptr, void* out_ptr, int64_t size_k,
-                            int64_t size_n, int64_t num_bits, bool has_perm, int rank, cudaStream_t stream) {
+void InvokeMarlinGptqRepack(const void* b_q_weight_ptr, const void* perm_ptr, void* out_ptr, int64_t num_experts,
+                            int64_t size_k, int64_t size_n, int64_t num_bits, bool has_perm, int rank,
+                            cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::marlin::gptq_marlin_repack(
       reinterpret_cast<const uint32_t*>(b_q_weight_ptr), reinterpret_cast<const uint32_t*>(perm_ptr),
-      reinterpret_cast<uint32_t*>(out_ptr), size_k, size_n, num_bits, has_perm, rank, stream));
+      reinterpret_cast<uint32_t*>(out_ptr), num_experts, size_k, size_n, num_bits, has_perm, rank, stream));
 }
 
 std::vector<int64_t> GetMarlinGptqRepackMeta(int64_t size_k, int64_t size_n, int64_t num_bits) {
@@ -246,7 +247,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
