@@ -592,6 +592,8 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
 
   nccl_communicator_->Send(group_key, device_idx, 0, block->device_ptr, task_keys_bytes, DataType::TYPE_BYTES);
 
+  buffer_pool_->put_block(block);
+
   if (tensors.empty() || tensor_sizes.empty() || data_types.empty()) {
     return;
   }
@@ -600,7 +602,6 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
   for (auto ptr : tensors) const_tensors.push_back(ptr);
   nccl_communicator_->SendGroup(group_key, device_idx, 0, const_tensors, tensor_sizes, data_types[0]);
 
-  buffer_pool_->put_block(block);
   KLLM_LOG_DEBUG << "Step_8: Prefill task data sent to Decode and task_key[0]= "
                  << (group_vec.empty() ? "" : group_vec[0].ToString()) << " batch size: " << group_vec.size();
   return;
