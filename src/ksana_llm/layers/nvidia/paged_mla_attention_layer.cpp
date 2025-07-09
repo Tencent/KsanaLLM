@@ -88,6 +88,9 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   auto skipped_k_pe_ptr =
       k_pe_tensor.GetPtr<void>() + skip_tokens_num * (k_pe_tensor.GetTotalBytes() / k_pe_tensor.shape[0]);
 
+  const size_t batch_input_ids_len = q_pe_tensor.shape[0];
+  const size_t batch_tail_tokens = batch_input_ids_len - skip_tokens_num - total_tokens;
+
   void* const kv_b_nope_proj_weight_ptr = kv_b_nope_proj_weight.GetPtr<void>();
   void* const v_head_proj_weight_ptr = v_head_proj_weight.GetPtr<void>();
 
@@ -135,8 +138,7 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
         this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
         total_tokens, this->attn_scale_, this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(),
         num_splits_tensor.GetPtr<void>(), this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr,
-        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len,
-        out.shape[0] - skip_tokens_num - total_tokens);
+        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len, batch_tail_tokens);
     return Status();
   }
 
