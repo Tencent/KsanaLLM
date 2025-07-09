@@ -25,10 +25,8 @@ class QuantWeightTest : public testing::Test {
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     const auto& env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path);
-    env->batch_scheduler_config_.max_token_len = 256;
-    env->ParseModelConfig("/model/hunyuan_large", "/model/hunyuan_large");
-    env->GetModelConfig("", model_config);
+    env->ParseConfig(config_path, "/model/hunyuan_large");
+    env->GetModelConfig(model_config);
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);

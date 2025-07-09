@@ -36,13 +36,11 @@ class ExpertParallelHiddenUnitBufferTest : public testing::Test {
   void TearDown() override {}
 
   void InitBufferSize() {
-    std::unordered_map<std::string, ModelConfig> model_configs;
-    Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
-    if (model_configs.empty()) {
+    ModelConfig model_config;
+    Status status = Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+    if (!status.OK()) {
       throw std::runtime_error("No model_config provided.");
     }
-
-    ModelConfig model_config = model_configs.begin()->second;
 
     weight_type_ = model_config.weight_data_type;
     tensor_para_size_ = model_config.tensor_para_size;

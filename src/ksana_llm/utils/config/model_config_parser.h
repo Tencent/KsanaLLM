@@ -1,0 +1,280 @@
+/* Copyright 2024 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#pragma once
+#ifdef ENABLE_CUDA
+#  include <nccl.h>
+#endif
+#include <unistd.h>
+
+#include <any>
+#include <array>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "nlohmann/json.hpp"
+
+#include "ksana_llm/connector/config.h"
+#include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/search_path.h"
+#include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/yaml_reader.h"
+
+namespace ksana_llm {
+
+struct RoPEScalingFactor {
+  std::string type{"default"};
+  float factor{1.0f};
+  float low_freq_factor{1.0f};
+  float high_freq_factor{4.0f};
+  int original_max_position_embeddings{8192};
+  bool has_alpha{false};
+  float scaling_alpha{1.0f};         // for dynamic alpha rope
+  std::vector<int> mrope_section{};  // for multimodal rope
+
+  // deepseek-yarn config params
+  bool use_deepseek_yarn{false};
+  float beta_fast{32.0f};
+  float beta_slow{1.0f};
+  float mscale{1.0f};
+  float mscale_all_dim{1.0f};
+};
+
+enum QuantMode {
+  QUANT_NONE,
+  QUANT_GPTQ,
+  QUANT_AWQ,
+  QUANT_FP8_E4M3,
+  QUANT_BLOCK_FP8_E4M3,
+  MOE_QUANT_NONE,
+  MOE_QUANT_BLOCK_FP8_E4M3,
+  MOE_QUANT_FP8_E4M3,
+  MOE_QUANT_GPTQ
+};
+
+enum GroupQuantBackend { NONE_QUANT, CUTLASS_BACKEND, MARLIN_BACKEND, MACHETE_BACKEND };
+
+enum class DistributedCommunicationType {
+  DEFAULT = 0,   // send and recevie
+  SCATTER = 1,   // scatter
+  ALLTOALL = 2,  // all to all
+};
+
+// The Quant informations.
+struct QuantConfig {
+  // The quant method
+  QuantMode method = QUANT_NONE;
+
+  // (gptq/awq) The quant bits
+  size_t bits = 4;
+
+  // (gptq/awq) The quant group size
+  size_t group_size = 128;
+
+  // (fp8-blockwise) The quant block size
+  std::vector<size_t> weight_block_size;
+
+  // (gptq) The desc act mode
+  bool desc_act = false;
+
+  GroupQuantBackend backend = NONE_QUANT;
+
+  // (fp8) Whether weight_scale shape is empty.
+  bool is_fp8_blockwise = false;
+
+  // (fp8) Whether weight is quantized in checkpoint.
+  bool is_checkpoint_fp8_serialized = false;
+
+  // (fp8) Whether input_scale is in checkpoint.
+  bool is_activation_scheme_static = false;
+
+  // (fp8) Whether enable int4 moe in fp8 model.
+  bool enable_moe_int4 = false;
+
+  // Adaptation layers
+  std::vector<std::string> pattern_layers;
+
+  // Ignored layers
+  std::vector<std::string> ignored_layers;
+};
+
+// The Moe informations.
+struct MoeConfig {
+  size_t num_experts{1};
+  size_t num_shared_experts{0};
+
+  size_t experts_topk;
+
+  size_t moe_inter_size;
+  size_t first_k_dense_replace = 0;
+  size_t shared_expert_inter_size = 0;
+
+  // For group topk
+  uint32_t num_expert_group = 1;
+  uint32_t expert_groups_topk = 1;
+  std::string scoring_func = "softmax";
+  std::string topk_method = "greedy";
+  bool norm_topk_prob = false;
+  bool use_e_score_correction_bias = false;
+  float routed_scaling_factor = 1.0f;
+
+  // TODO(winminkong): 增加临时算子选择项，后期改为配置项
+  bool use_vllm_moe = false;
+
+  // for llama4
+  size_t interleave_moe_layer_step = 1;
+  // when is_moe == true,
+  // if moe_layers.empty() means all layers' mlp use moe,
+  // else only layer_idx in moe_layers use moe.
+  std::vector<size_t> moe_layers;
+  bool output_router_logits = true;
+  float router_aux_loss_coef = 0;
+  float router_jitter_noise = 0;
+  bool apply_weight = false;
+};
+
+// The MLA informations.
+struct MlaConfig {
+  uint32_t q_lora_rank = 0;
+  uint32_t kv_lora_rank = 0;
+
+  uint32_t qk_nope_head_dim = 0;
+  uint32_t qk_rope_head_dim = 0;
+  uint32_t v_head_dim = 0;
+};
+
+// The model informations.
+struct ModelConfig {
+  // The model name.
+  std::string name = "";
+
+  // The model type, such as llama.
+  std::string type;
+
+  // The dir path.
+  std::string path;
+
+  std::string tokenizer_path;
+
+  // Type of weight
+  DataType weight_data_type;
+
+  // The max input token number of request(input)
+  size_t max_token_num;
+
+  // The max token number of step
+  size_t max_step_token_num;
+
+  size_t tensor_para_size;
+  size_t attn_data_para_size;
+  size_t max_pp_batch_num = 1;  // max number of batchs in pipeline parallel.
+
+  // The expert parallel size
+  size_t expert_world_size;
+  size_t expert_para_size;
+  size_t moe_tensor_para_size;
+
+  size_t head_num;
+  uint32_t size_per_head;
+  uint32_t inter_size;
+  uint32_t hidden_units;
+  uint32_t num_layer;
+  uint32_t num_nextn_predict_layers = 0;
+  uint32_t rotary_embedding;
+  float rope_theta;
+  float layernorm_eps;
+  uint32_t vocab_size;
+  uint32_t start_id;
+  std::vector<uint32_t> end_ids;
+  uint32_t pad_id;
+  size_t num_key_value_heads;
+  int max_batch_size;
+  int max_position_embeddings;
+  size_t block_token_num;
+  std::vector<float> k_scales;
+  std::vector<float> v_scales;
+
+  RoPEScalingFactor rope_scaling_factor_config;
+
+  bool tie_word_embeddings;
+  bool exist_tie_embeddings_param = true;
+
+  // The activation function used.
+  std::string activation_function{"swiglu"};
+
+  // Determines if the model is a visual llm model.
+  bool is_visual = false;
+
+  // Determines if the model is a quant model.
+  bool is_quant;
+  QuantConfig quant_config;
+  std::vector<QuantConfig> sub_quant_configs;
+
+  // Determines if the model is a moe model.
+  bool is_moe = false;
+  bool has_shared_experts = false;
+  bool enable_full_shared_expert = false;
+  MoeConfig moe_config;
+
+  // others attributes
+  std::unordered_map<std::string, std::string> model_attributes;
+
+  ModelFileFormat model_file_format;
+
+  bool load_bias = true;     // Check if load all weights bias.
+  int cla_share_factor = 0;  // Determines the number of layers that share k and v.
+  bool use_cla = false;
+  bool use_qk_norm = false;  // Check if normlize the attention out q and k.
+  bool mlp_bias = false;     // Check if use bias in mlp layer.
+  // For mla model
+  bool use_mla = false;
+  MlaConfig mla_config;
+
+  // Whether enable prefix caching.
+  bool enable_prefix_caching = false;
+
+  // Whether to normalize q and k before rotary position embedding in attention.
+  bool enable_qk_pre_norm_before_rotary_pos = false;
+
+  bool enable_add_qkv_bias = false;
+
+  // for llama4
+  std::vector<size_t> no_rope_layers;
+  size_t attn_temperature_tuning = 0;
+  float attn_scale = 0;
+  size_t floor_scale = 0;
+  size_t attention_chunk_size = 0;
+};
+class EnvModelConfigParser {
+ public:
+  EnvModelConfigParser(const std::string &weight_quant_method, const std::string &gptq_backend)
+      : weight_quant_method_(weight_quant_method), gptq_backend_(gptq_backend) {}
+
+  // Parse model config from model dir.
+  Status ParseModelConfig(const std::string &model_dir, const std::string &tokenizer_dir,
+                          const std::string &model_config_filename, ModelConfig &model_config);
+
+  // Parse Model Quant Config
+  void ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
+                             std::string &yaml_weight_quant_method, std::string &yaml_gptq_backend);
+
+ private:
+  // Parse model config from GGUF file.
+  Status ParseModelConfigFromGGUF(const std::string &meta_file_path, ModelConfig &model_config);
+
+ private:
+  // The config of quantization.
+  std::string weight_quant_method_;
+
+  // The backend of gptq/awq quantization.
+  std::string gptq_backend_;
+};
+
+}  // namespace ksana_llm

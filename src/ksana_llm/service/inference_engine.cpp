@@ -64,15 +64,11 @@ Status InferenceEngine::Initialize() {
                              batch_scheduler_config.max_pp_batch_num));
 
   // Load model configs.
-  std::unordered_map<std::string, ModelConfig> model_configs;
-  status = env->GetModelConfigs(model_configs);
+  ModelConfig model_config;
+  status = env->GetModelConfig(model_config);
   if (!status.OK()) {
-    return Status(RET_INVALID_ARGUMENT, "Get model configs error:" + status.ToString());
+    return Status(RET_INVALID_ARGUMENT, "Get model config error:" + status.ToString());
   }
-  if (model_configs.empty()) {
-    return Status(RET_INVALID_ARGUMENT, "No model config found.");
-  }
-  KLLM_LOG_DEBUG << "Get model instance size: " << model_configs.size();
 
   // Initialize schedule output and hidden unit buffer pool.
   // Must be called after block manager is set.
@@ -80,8 +76,7 @@ Status InferenceEngine::Initialize() {
 
   // 初始化 LayerProgressTracker，为每个设备的每一层创建 CUDA event
   Singleton<LayerProgressTracker>::GetInstance()->Initialize(
-      env->GetTensorParallelSize(),
-      model_configs.begin()->second.num_layer + model_configs.begin()->second.num_nextn_predict_layers);
+      env->GetTensorParallelSize(), model_config.num_layer + model_config.num_nextn_predict_layers);
 
   Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback(
       [&](int device_id, int layer_index) { TransferEngine::GetInstance()->Send(device_id, layer_index); });
@@ -109,8 +104,6 @@ Status InferenceEngine::Initialize() {
   // Set model layers for standalone mode, assume only one model now.
   KLLM_LOG_INFO << "InferenceEngine PiplineParallel IsStandalone:" << context_->IsStandalone();
   if (context_->IsStandalone()) {
-    ModelConfig model_config = model_configs.begin()->second;
-
     PipelineConfig pipeline_config;
     Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
     pipeline_config.lower_layer_idx = 0;
@@ -168,14 +161,10 @@ Status InferenceEngine::Initialize() {
   status = env->GetProfilerConfig(profiler_config);
   Singleton<Profiler>::GetInstance()->Init(profiler_config);
 
-  size_t max_batch_size = 0;
-  size_t max_vocab_size = 0;
-  for (auto &[model_name, model_config] : model_configs) {
-    max_batch_size = std::max(max_batch_size, (size_t)model_config.max_batch_size);
-    max_vocab_size = std::max(max_vocab_size, (size_t)model_config.vocab_size);
-  }
+  size_t max_batch_size = (size_t)model_config.max_batch_size;
+  size_t max_vocab_size = (size_t)model_config.vocab_size;
 
-  status = LoadOperatorOptimization(model_configs);
+  status = LoadOperatorOptimization(model_config);
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Load optimization config error:" + status.ToString());
   }
@@ -191,7 +180,7 @@ Status InferenceEngine::Initialize() {
   batch_manager_ = std::make_unique<BatchManager>(context_, batch_scheduler_config.max_pp_batch_num);
 
   // Register model instance.
-  for (auto &[model_name, model_config] : model_configs) {
+  {
     // Update pipeline_config first, and then load model.
     model_config.max_pp_batch_num = batch_scheduler_config.max_pp_batch_num;
     std::shared_ptr<WeightInstanceInterface> weight_instance = std::make_shared<WeightInstance>(model_config, context_);
@@ -206,7 +195,7 @@ Status InferenceEngine::Initialize() {
     batch_manager_->RegisterModelInstance(model_instance);
 
     // Register to data hub.
-    SetModelInstance(model_name, model_instance);
+    SetModelInstance(model_config.name, model_instance);
   }
 
   // Calc block number after model loaded.
@@ -272,7 +261,7 @@ Status InferenceEngine::Initialize() {
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
-  llm_runtime_->SetMtpForward(env->IsMTPEnabled() && model_configs.begin()->second.num_nextn_predict_layers > 0);
+  llm_runtime_->SetMtpForward(env->IsMTPEnabled() && model_config.num_nextn_predict_layers > 0);
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
   if (batch_scheduler_config.enable_speculative_decoding) {
@@ -340,12 +329,12 @@ Status InferenceEngine::DoWarmupRun() {
     KLLM_LOG_DEBUG << "warmup is disabled";
     return Status();
   }
-  std::unordered_map<std::string, ModelConfig> model_configs;
-  Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
-  if (model_configs.empty()) {
-    return Status(RET_INVALID_ARGUMENT, "No model config found for warmup run.");
+  ModelConfig model_config;
+  Status status = Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+  if (!status.OK()) {
+    return Status(RET_INVALID_ARGUMENT, "No model config found for warmup run. " + status.ToString());
   }
-  size_t max_warmup_input_length = std::min(model_configs.begin()->second.max_token_num, (size_t)2048);
+  size_t max_warmup_input_length = std::min(model_config.max_token_num, (size_t)2048);
   if (std::getenv("MAX_WARMUP_INPUT_LENGTH") != nullptr) {
     max_warmup_input_length = std::stoi(std::getenv("MAX_WARMUP_INPUT_LENGTH"));
   }
@@ -432,7 +421,7 @@ Status InferenceEngine::CudaGraphCapture() {
 }
 #endif
 
-Status InferenceEngine::LoadOperatorOptimization(const std::unordered_map<std::string, ModelConfig> &model_configs) {
+Status InferenceEngine::LoadOperatorOptimization(ModelConfig &model_config) {
 #ifdef ENABLE_CUDA
   if (std::getenv("KSANA_GEMM_ALGO_MAP_DIR") != nullptr) {
     std::string gemm_algo_map_path =
@@ -444,11 +433,8 @@ Status InferenceEngine::LoadOperatorOptimization(const std::unordered_map<std::s
     }
   }
   // NOTE(karlluo): GEMM algo file is in model dir, so we have to load gemm best algo here
-  for (const auto &model_configs_it : model_configs) {
-    if (context_->ext->GetGPUGemmAlgoHelper().LoadFromYaml(
-            fmt::format("{}/gemm_algo_map.yaml", model_configs_it.second.path))) {
-      KLLM_LOG_INFO << fmt::format("Load gemm algo from {}/gemm_algo_map.yaml success.", model_configs_it.second.path);
-    }
+  if (context_->ext->GetGPUGemmAlgoHelper().LoadFromYaml(fmt::format("{}/gemm_algo_map.yaml", model_config.path))) {
+    KLLM_LOG_INFO << fmt::format("Load gemm algo from {}/gemm_algo_map.yaml success.", model_config.path);
   }
 #endif
   return Status();

@@ -23,10 +23,8 @@ class WeightInstanceTest : public ::testing::Test {
     setenv("MODEL_CACHE_PATH", tmp_cache_model_path_.c_str(), 1);
 
     const auto &env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path);
-    env->batch_scheduler_config_.max_token_len = 256;
-    env->ParseModelConfig("/model/deepseek_v3", "/model/deepseek_v3");
-    env->GetModelConfig("", model_config_);
+    env->ParseConfig(config_path, "/model/deepseek_v3");
+    env->GetModelConfig(model_config_);
 
     AttnBackendConfig attn_backend_config;
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;

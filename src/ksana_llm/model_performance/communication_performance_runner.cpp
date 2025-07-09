@@ -46,7 +46,10 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
   KLLM_CHECK_WITH_INFO(!context_->IsStandalone(), "Failed to get batch scheduler config error");
 
   // init model_config
-  env->GetModelConfig("", model_config_);
+  Status status = env->GetModelConfig(model_config_);
+  if (!status.OK()) {
+    KLLM_THROW("GetModelConfig failed. status: " + status.ToString());
+  }
 
   InitializeScheduleOutputPool();
   InitializeHiddenUnitBufferPool();

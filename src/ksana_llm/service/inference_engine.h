@@ -47,7 +47,7 @@ class InferenceEngine {
   Status CudaGraphCapture();
 
   // Load operator optimization
-  Status LoadOperatorOptimization(const std::unordered_map<std::string, ModelConfig> &model_configs);
+  Status LoadOperatorOptimization(ModelConfig &model_config);
 
  private:
   // The channel used to pass request from endpoint.

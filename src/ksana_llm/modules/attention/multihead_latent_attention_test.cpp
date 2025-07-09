@@ -233,7 +233,7 @@ class MlaTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, std::filesystem::absolute(parent_path / "../../../../examples/deepseekv2/").string());
 
-    env->GetModelConfig("", model_config);
+    env->GetModelConfig(model_config);
     model_config.max_batch_size = 5;
     model_config.max_token_num = 20;
     model_config.max_step_token_num = 40;

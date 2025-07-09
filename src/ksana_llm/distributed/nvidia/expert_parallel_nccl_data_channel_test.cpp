@@ -123,12 +123,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     size_t multi_batch_num = 1;
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
-    std::unordered_map<std::string, ModelConfig> model_configs;
-    env_->GetModelConfigs(model_configs);
-    if (model_configs.size() >= 1)
-      model_config_ = model_configs.begin()->second;
-    else
-      std::cout << "GetModelConfig errors \n";
+    env_->GetModelConfig(model_config_);
 
     // model_config, rank, context.
     model_input_ = std::make_shared<ModelInput>(model_config_, 0, context_);
@@ -210,12 +205,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     size_t multi_batch_num = 1;
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
-    std::unordered_map<std::string, ModelConfig> model_configs;
-    env_->GetModelConfigs(model_configs);
-    if (model_configs.size() >= 1)
-      model_config_ = model_configs.begin()->second;
-    else
-      std::cout << "GetModelConfig errors \n";
+    env_->GetModelConfig(model_config_);
 
     // model_config, rank, context.
     model_input_ = std::make_shared<ModelInput>(model_config_, 0, context_);

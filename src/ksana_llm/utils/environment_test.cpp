@@ -84,7 +84,7 @@ TEST_F(EnvironmentTest, GetModelConfig) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig config;
-  auto status = env_.GetModelConfig("", config);
+  auto status = env_.GetModelConfig(config);
   EXPECT_TRUE(status.OK());
 
   // 验证模型配置
@@ -94,37 +94,6 @@ TEST_F(EnvironmentTest, GetModelConfig) {
   EXPECT_GT(config.num_layer, 0);
   EXPECT_GT(config.head_num, 0);
   EXPECT_GT(config.size_per_head, 0);
-}
-
-// 测试获取不存在的模型配置
-TEST_F(EnvironmentTest, GetNonExistModelConfig) {
-  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
-
-  ksana_llm::ModelConfig config;
-  auto status = env_.GetModelConfig("non_exist_model", config);
-  EXPECT_FALSE(status.OK());
-  EXPECT_EQ(status.GetCode(), ksana_llm::RET_MODEL_NOT_FOUND);
-}
-
-// 测试获取所有模型配置
-TEST_F(EnvironmentTest, GetModelConfigs) {
-  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
-
-  std::unordered_map<std::string, ksana_llm::ModelConfig> configs;
-  auto status = env_.GetModelConfigs(configs);
-  EXPECT_TRUE(status.OK());
-  EXPECT_FALSE(configs.empty());
-}
-
-// 测试获取EndpointConfig
-TEST_F(EnvironmentTest, GetEndpointConfig) {
-  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
-
-  ksana_llm::EndpointConfig config;
-  auto status = env_.GetEndpointConfig(config);
-  EXPECT_TRUE(status.OK());
-  EXPECT_FALSE(config.host.empty());
-  EXPECT_GT(config.port, 0);
 }
 
 // 测试获取ProfilerConfig
@@ -144,15 +113,6 @@ TEST_F(EnvironmentTest, ParseConfigError) {
   EXPECT_FALSE(status.OK());
 }
 
-// 测试环境检查
-TEST_F(EnvironmentTest, CheckEnvironment) {
-  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
-  ASSERT_TRUE(env_.InitializeBlockManagerConfig().OK());
-
-  auto status = env_.CheckEnvironment();
-  EXPECT_TRUE(status.OK());
-}
-
 // 测试前缀缓存功能状态
 TEST_F(EnvironmentTest, PrefixCachingStatus) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
@@ -167,7 +127,7 @@ TEST_F(EnvironmentTest, DeviceCompatibilityCheck) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig config;
-  auto status = env_.GetModelConfig("", config);
+  auto status = env_.GetModelConfig(config);
   EXPECT_TRUE(status.OK());
 
   // 验证设备相关配置
@@ -197,7 +157,7 @@ TEST_F(EnvironmentTest, ConfigDependencies) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig model_config;
-  auto status = env_.GetModelConfig("", model_config);
+  auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
 
   // 验证量化配置依赖
@@ -218,9 +178,6 @@ TEST_F(EnvironmentTest, ConfigFileIntegrity) {
   ksana_llm::BlockManagerConfig block_config;
   EXPECT_TRUE(env_.GetBlockManagerConfig(block_config).OK());
 
-  ksana_llm::EndpointConfig endpoint_config;
-  EXPECT_TRUE(env_.GetEndpointConfig(endpoint_config).OK());
-
   ksana_llm::ProfilerConfig profiler_config;
   EXPECT_TRUE(env_.GetProfilerConfig(profiler_config).OK());
 }
@@ -230,7 +187,7 @@ TEST_F(EnvironmentTest, RequiredParametersValidation) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig model_config;
-  auto status = env_.GetModelConfig("", model_config);
+  auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
 
   // 验证必需的模型参数
@@ -761,7 +718,7 @@ TEST_F(EnvironmentTest, ParameterBoundaries) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig model_config;
-  auto status = env_.GetModelConfig("", model_config);
+  auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
 
   // 验证参数范围
@@ -780,7 +737,7 @@ TEST_F(EnvironmentTest, InvalidConfigCombinations) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig model_config;
-  auto status = env_.GetModelConfig("", model_config);
+  auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
 
   // 验证量化配置组合
@@ -795,7 +752,7 @@ TEST_F(EnvironmentTest, SpecialCharacterHandling) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
   ksana_llm::ModelConfig model_config;
-  auto status = env_.GetModelConfig("", model_config);
+  auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
 }
 
@@ -805,15 +762,6 @@ TEST_F(EnvironmentTest, RuntimeConfig) {
 
   ksana_llm::BatchSchedulerConfig batch_config;
   auto status = env_.GetBatchSchedulerConfig(batch_config);
-  EXPECT_TRUE(status.OK());
-}
-
-// 测试负载均衡配置
-TEST_F(EnvironmentTest, LoadBalancingConfig) {
-  ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
-
-  ksana_llm::EndpointConfig endpoint_config;
-  auto status = env_.GetEndpointConfig(endpoint_config);
   EXPECT_TRUE(status.OK());
 }
 
@@ -827,8 +775,8 @@ TEST_F(EnvironmentTest, InitExpertParaConfig) {
   expert_parallel_config.expert_world_size = 8;
   env_.SetExpertParallelConfig(expert_parallel_config);
 
-  env_.tensor_parallel_size_ = 12;
-  env_.expert_parallel_size_ = 6;
+  env_.SetTensorParallelSize(12);
+  env_.SetExpertParallelSize(6);
   env_.InitializeExpertParallelConfig();
   env_.GetExpertParallelConfig(expert_parallel_config);
 
@@ -872,8 +820,10 @@ TEST_F(EnvironmentTest, GetCacheBlockSize) {
   block_manager_config.device_allocator_config.block_token_num = 16;
   block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
   block_manager_config.host_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
-  env_.block_manager_config_ = block_manager_config;
-  env_.model_configs_[""].weight_data_type = DataType::TYPE_FP16;
+  env_.SetBlockManagerConfig(block_manager_config);
+
+  model_config.weight_data_type = DataType::TYPE_FP16;
+  env_.SetModelConfig(model_config);
 
   // 设置环境变量
   setenv("ENABLE_COMPRESSED_KV", "1", 1);
@@ -885,12 +835,17 @@ TEST_F(EnvironmentTest, GetCacheBlockSize) {
   // 验证block_size和convert_size是否大于0
   EXPECT_EQ(block_size, 155136);
   EXPECT_EQ(convert_size, 3072);
-  env_.block_manager_config_.device_allocator_config.block_size = block_size;
-  env_.block_manager_config_.device_allocator_config.convert_size = convert_size;
-  env_.block_manager_config_.host_allocator_config.block_size = block_size;
-  env_.block_manager_config_.host_allocator_config.convert_size = convert_size;
+
+  env_.GetBlockManagerConfig(block_manager_config);
+  block_manager_config.device_allocator_config.block_size = block_size;
+  block_manager_config.device_allocator_config.convert_size = convert_size;
+  block_manager_config.host_allocator_config.block_size = block_size;
+  block_manager_config.host_allocator_config.convert_size = convert_size;
+  env_.SetBlockManagerConfig(block_manager_config);
   env_.CalculateBlockNumber();
-  EXPECT_GT(env_.block_manager_config_.device_allocator_config.blocks_num, 0);
+  env_.GetBlockManagerConfig(block_manager_config);
+  EXPECT_GT(block_manager_config.device_allocator_config.blocks_num, 0);
+
   // 清理环境变量
   unsetenv("ENABLE_COMPRESSED_KV");
   unsetenv("ENABLE_FLASH_MLA");
@@ -926,7 +881,8 @@ TEST_F(EnvironmentTest, ParseModelQuantConfig) {
     ModelConfig model_config;
     std::string yaml_weight_quant_method = "auto";
     std::string yaml_gptq_backend = "cutlass";
-    env_.ParseModelQuantConfig(mixed_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EnvModelConfigParser model_config_parser("", "");
+    model_config_parser.ParseModelQuantConfig(mixed_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
     EXPECT_TRUE(model_config.is_quant);
     EXPECT_TRUE(model_config.quant_config.is_checkpoint_fp8_serialized);
     EXPECT_TRUE(!model_config.quant_config.is_activation_scheme_static);
@@ -954,7 +910,8 @@ TEST_F(EnvironmentTest, ParseModelQuantConfig) {
     ModelConfig model_config;
     std::string yaml_weight_quant_method = "auto";
     std::string yaml_gptq_backend = "cutlass";
-    env_.ParseModelQuantConfig(gptq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EnvModelConfigParser model_config_parser("", "");
+    model_config_parser.ParseModelQuantConfig(gptq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
     EXPECT_TRUE(model_config.is_quant);
     EXPECT_EQ(model_config.quant_config.method, QUANT_GPTQ);
     EXPECT_EQ(model_config.quant_config.bits, 4);
@@ -968,7 +925,8 @@ TEST_F(EnvironmentTest, ParseModelQuantConfig) {
     ModelConfig model_config;
     std::string yaml_weight_quant_method = "auto";
     std::string yaml_gptq_backend = "cutlass";
-    env_.ParseModelQuantConfig(awq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
+    EnvModelConfigParser model_config_parser("", "");
+    model_config_parser.ParseModelQuantConfig(awq_config, model_config, yaml_weight_quant_method, yaml_gptq_backend);
     EXPECT_TRUE(model_config.is_quant);
     EXPECT_EQ(model_config.quant_config.method, QUANT_AWQ);
     EXPECT_EQ(model_config.quant_config.bits, 4);

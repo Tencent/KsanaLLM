@@ -583,7 +583,11 @@ Status ControlChannel::SynchronizeNodeLayers(size_t master_offload_layer_num) {
 
   // For master node.
   ModelConfig model_config;
-  env_->GetModelConfig("", model_config);
+  Status status = env_->GetModelConfig(model_config);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "SynchronizeNodeLayers failed. status: " << status.ToString();
+    return status;
+  }
 
   // Generate layer distribution for all nodes
   auto layer_distribution = GenerateLayerDistribution(model_config.num_layer, master_offload_layer_num);

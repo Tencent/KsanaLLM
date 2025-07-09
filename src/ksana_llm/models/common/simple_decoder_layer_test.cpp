@@ -95,10 +95,10 @@ struct ModelTestConfig {
 void InitModelOutputBaseline();
 class FakeTinyWeightTest : public testing::Test {
  protected:
-  explicit FakeTinyWeightTest(const std::string &model_config_dir = "tiny_model_configs")
-      : model_config_dir_name_(model_config_dir) {}
+  explicit FakeTinyWeightTest(const std::string &model_config_filename = "config.json")
+      : model_config_filename_(model_config_filename) {}
 
-  std::string model_config_dir_name_;
+  std::string model_config_filename_;
 
   void SetUp() override {
     context_ = std::make_shared<Context>(1, 1, 1);
@@ -112,9 +112,8 @@ class FakeTinyWeightTest : public testing::Test {
     std::string model_config_path = std::filesystem::absolute(model_config_path_relate).string();
 
     const auto &env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path);
-    env->ParseModelConfig(model_config_path_relate, model_config_path_relate, model_config_dir_name_);
-    STATUS_CHECK_FAILURE(env->GetModelConfig("", model_config));
+    env->ParseConfig(config_path, model_config_path_relate, model_config_filename_);
+    STATUS_CHECK_FAILURE(env->GetModelConfig(model_config));
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();

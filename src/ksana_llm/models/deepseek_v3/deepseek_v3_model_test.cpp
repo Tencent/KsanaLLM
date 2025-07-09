@@ -46,12 +46,15 @@ class DeepSeekV3Test : public testing::Test {
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     const auto &env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path);
-    env->batch_scheduler_config_.max_token_len = 256;
-    env->batch_scheduler_config_.enable_mtp_module = true;
+    env->ParseConfig(config_path, model_path);
+    // TODO(robertyuan): bad style, remove later
+    BatchSchedulerConfig batch_scheduler_config;
+    env->GetBatchSchedulerConfig(batch_scheduler_config);
+    batch_scheduler_config.enable_mtp_module = true;
+    env->SetBatchSchedulerConfig(batch_scheduler_config);
+    env->UpdateModelConfig();
+    env->GetModelConfig(model_config);
 
-    env->ParseModelConfig(model_path, model_path);
-    env->GetModelConfig("", model_config);
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;

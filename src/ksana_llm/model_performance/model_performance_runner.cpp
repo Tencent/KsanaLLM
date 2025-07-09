@@ -47,7 +47,11 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(), max_multi_batch_num));
 
   // init model_config
-  env->GetModelConfig("", model_config_);
+  Status status = env->GetModelConfig(model_config_);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "GetModelConfig failed. status: " << status.ToString();
+    return;
+  }
 
 #ifdef ENABLE_CUDA
   // load gemm_algo_map

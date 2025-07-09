@@ -54,7 +54,7 @@ class ForwardTest : public testing::Test {
 
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
-    env->GetModelConfig("", model_config);
+    env->GetModelConfig(model_config);
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();

@@ -141,20 +141,15 @@ size_t ExpertParallelHiddenUnitBufferPool::GetHostPacketSize(Packet* packet) {
 }
 
 void ExpertParallelHiddenUnitBufferPool::InitializeBufferSize() {
-  std::unordered_map<std::string, ModelConfig> model_configs;
-  Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
+  ModelConfig model_config;
+  Status status = Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+  if (!status.OK()) {
+    KLLM_THROW("InitializeBufferSize failed. status:" + status.ToString());
+  }
   ExpertParallelConfig expert_parallel_config;
   Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config);
   DistributedCommunicationType comm_type = expert_parallel_config.expert_para_comm_type;
   SetCommType(comm_type);
-
-  // Skip if no model config.
-  if (model_configs.empty()) {
-    KLLM_LOG_ERROR << "No model_config provided.";
-    return;
-  }
-
-  ModelConfig model_config = model_configs.begin()->second;
 
   weight_type_ = model_config.weight_data_type;
   tensor_para_size_ = model_config.tensor_para_size;

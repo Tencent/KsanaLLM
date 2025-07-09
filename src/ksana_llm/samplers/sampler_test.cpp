@@ -32,7 +32,7 @@ class SamplerTest : public testing::Test {
 
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
-    env->GetModelConfig("", model_config_);
+    env->GetModelConfig(model_config_);
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);

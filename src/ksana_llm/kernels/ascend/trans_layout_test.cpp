@@ -23,7 +23,7 @@ class TransLayoutTest : public testing::Test {
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     Singleton<Environment>::GetInstance()->ParseConfig(config_path);
-    Singleton<Environment>::GetInstance()->GetModelConfig("", model_config);
+    Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
 
     BlockManagerConfig block_manager_config;
     Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();

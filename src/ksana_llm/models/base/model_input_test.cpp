@@ -37,17 +37,19 @@ class ModelInputTest : public testing::Test {
 
     // Initialize the model config
     ModelConfig model_config;
-    env->GetModelConfig("", model_config);
+    env->GetModelConfig(model_config);
 
     // 修改kv_lora_rank为512
     model_config.mla_config.kv_lora_rank = 512;
 
     // Initialize the block manager.
     env->InitializeBlockManagerConfig();
-    BlockManagerConfig& block_manager_config = env->block_manager_config_;
+    BlockManagerConfig block_manager_config;
+    env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.block_host_memory_factor = 0.0;
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+    env->SetBlockManagerConfig(block_manager_config);
 
     // Initialize the model input object.
     model_input = std::make_unique<ModelInput>(model_config, rank, context);
@@ -181,7 +183,8 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
   std::vector<ForwardRequest> forward_reqs = {forward_req1, forward_req2};
 
   const auto& env = Singleton<Environment>::GetInstance();
-  CacheManagerConfig& cache_manager_config = env->cache_manager_config_;
+  CacheManagerConfig cache_manager_config;
+  env->GetCacheManagerConfig(cache_manager_config);
 
   // Test case 1: All the caching is disabled and all the requests only require the next token.
   EXPECT_FALSE(env->IsPrefixCachingEnabled());
@@ -197,6 +200,7 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
 
   // Test case 3: Prefix caching is enabled.
   cache_manager_config.enable_prefix_caching = true;
+  env->SetCacheManagerConfig(cache_manager_config);
   EXPECT_TRUE(env->IsPrefixCachingEnabled());
   EXPECT_FALSE(env->IsFlexibleCachingEnabled());
   model_input->multi_token_request_num = 1;
@@ -206,6 +210,7 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
   // Test case 4: Flexible caching is enabled.
   cache_manager_config.enable_prefix_caching = false;
   cache_manager_config.min_flexible_cache_num = 256;
+  env->SetCacheManagerConfig(cache_manager_config);
   EXPECT_FALSE(env->IsPrefixCachingEnabled());
   EXPECT_TRUE(env->IsFlexibleCachingEnabled());
   model_input->multi_token_request_num = 1;

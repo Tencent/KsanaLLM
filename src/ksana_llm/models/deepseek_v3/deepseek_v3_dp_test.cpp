@@ -40,12 +40,13 @@ class DeepSeekV3DPTest : public testing::Test {
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     const auto &env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path);
-    env->batch_scheduler_config_.max_token_len = 256;
-    env->batch_scheduler_config_.enable_mtp_module = true;
-
-    env->ParseModelConfig(model_path, model_path);
-    env->GetModelConfig("", model_config);
+    env->ParseConfig(config_path, model_path);
+    BatchSchedulerConfig batch_scheduler_config;
+    env->GetBatchSchedulerConfig(batch_scheduler_config);
+    batch_scheduler_config.enable_mtp_module = true;
+    env->SetBatchSchedulerConfig(batch_scheduler_config);
+    env->UpdateModelConfig();
+    env->GetModelConfig(model_config);
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
@@ -100,38 +101,37 @@ class DeepSeekV3DPTest : public testing::Test {
 
   void LoadModel(std::filesystem::path &model_path) {
     for (int device_id : {0, 1}) {
-        SetDevice(device_id);
+      SetDevice(device_id);
 
-        std::shared_ptr<BaseWeight> deepseek_v3_weight =
-            std::make_shared<DeepSeekV3Weight<bfloat16>>(model_config, device_id, context);
+      std::shared_ptr<BaseWeight> deepseek_v3_weight =
+          std::make_shared<DeepSeekV3Weight<bfloat16>>(model_config, device_id, context);
 
-        // Start Loader Weight
-        ModelFileFormat model_file_format;
-        std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
-        for (std::string &file_name : weights_file_list) {
-          std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-          if (model_file_format == SAFETENSORS) {
-            weights_loader = std::make_shared<SafeTensorsLoader>(file_name, model_config.load_bias);
-          } else if (model_file_format == GGUF) {
-            weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name, model_config.load_bias);
-          } else {
-            weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name, model_config.load_bias);
-          }
-          std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
-          std::vector<std::string> custom_name_list;
-
-          GetCustomNameList(model_config.path, model_config.type, weight_name_list, custom_name_list,
-                            model_file_format);
-          deepseek_v3_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
-          StreamSynchronize(context->GetMemoryManageStreams()[device_id]);
+      // Start Loader Weight
+      ModelFileFormat model_file_format;
+      std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
+      for (std::string &file_name : weights_file_list) {
+        std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
+        if (model_file_format == SAFETENSORS) {
+          weights_loader = std::make_shared<SafeTensorsLoader>(file_name, model_config.load_bias);
+        } else if (model_file_format == GGUF) {
+          weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name, model_config.load_bias);
+        } else {
+          weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name, model_config.load_bias);
         }
-        deepseek_v3_weight->ProcessWeights();
-        std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 =
-            std::make_shared<DeepSeekV3Model<bfloat16>>(model_config, device_id, context, deepseek_v3_weight);
-        deepseek_v3->AllocResources(multi_batch_id);
+        std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
+        std::vector<std::string> custom_name_list;
 
-        deepseek_v3_dps.push_back(deepseek_v3);
-        deepseek_v3_weight_dps.push_back(deepseek_v3_weight);
+        GetCustomNameList(model_config.path, model_config.type, weight_name_list, custom_name_list, model_file_format);
+        deepseek_v3_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
+        StreamSynchronize(context->GetMemoryManageStreams()[device_id]);
+      }
+      deepseek_v3_weight->ProcessWeights();
+      std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 =
+          std::make_shared<DeepSeekV3Model<bfloat16>>(model_config, device_id, context, deepseek_v3_weight);
+      deepseek_v3->AllocResources(multi_batch_id);
+
+      deepseek_v3_dps.push_back(deepseek_v3);
+      deepseek_v3_weight_dps.push_back(deepseek_v3_weight);
     }
   }
 

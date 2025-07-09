@@ -570,7 +570,11 @@ Status ExpertParallelControlChannel::DeserializeAllocateExpertRequest(AllocateEx
 
 Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
   ModelConfig model_config;
-  env_->GetModelConfig("", model_config);
+  Status status = env_->GetModelConfig(model_config);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "SynchronizeExpertParallelExperts failed. status: " << status.ToString();
+    return status;
+  }
   const size_t num_experts = model_config.moe_config.num_experts;
 
   if (node_rank_ == 0) {

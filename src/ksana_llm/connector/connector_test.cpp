@@ -13,8 +13,11 @@ class MockEnvironment : public Environment {
  public:
   MockEnvironment() {
     // 设置默认配置
-    pipeline_config_.world_size = 1;
-    pipeline_config_.node_rank = 0;
+    PipelineConfig pipeline_config;
+    GetPipelineConfig(pipeline_config);
+    pipeline_config.world_size = 1;
+    pipeline_config.node_rank = 0;
+    SetPipelineConfig(pipeline_config);
   }
 };
 

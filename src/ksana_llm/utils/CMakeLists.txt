@@ -47,6 +47,8 @@ if(WITH_STANDALONE_TEST)
   file(GLOB_RECURSE utils_test_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/*test.cpp
     ${PROJECT_SOURCE_DIR}/tests/test.cpp)
+  list(FILTER utils_test_SRCS EXCLUDE REGEX ".*environment_test.cpp")
   message(STATUS "utils_test_SRCS: ${utils_test_SRCS}")
   cpp_test(utils_test SRCS ${utils_test_SRCS} DEPS runtime utils)
+  cpp_test(environment_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/environment_test.cpp DEPS runtime utils)
 endif()

@@ -127,19 +127,15 @@ size_t HiddenUnitBufferPool::GetHostPacketSize(Packet* packet) {
 }
 
 void HiddenUnitBufferPool::InitializeBufferSize() {
-  std::unordered_map<std::string, ModelConfig> model_configs;
-  Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
+  ModelConfig model_config;
+  Status status = Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "GetModelConfig failed. status: " << status.ToString();
+    return;
+  }
   PipelineConfig pipeline_config;
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
   comm_type_ = pipeline_config.pipeline_para_comm_type;
-
-  // Skip if no model config.
-  if (model_configs.empty()) {
-    KLLM_LOG_ERROR << "No model_config provided.";
-    return;
-  }
-
-  ModelConfig model_config = model_configs.begin()->second;
 
   weight_type_ = model_config.weight_data_type;
   tensor_para_size_ = model_config.tensor_para_size;

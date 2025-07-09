@@ -35,13 +35,11 @@ class HiddenUnitBufferTest : public testing::Test {
   void TearDown() override {}
 
   void InitBufferSize() {
-    std::unordered_map<std::string, ModelConfig> model_configs;
-    Singleton<Environment>::GetInstance()->GetModelConfigs(model_configs);
-    if (model_configs.empty()) {
+    ModelConfig model_config;
+    Status status = Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+    if (!status.OK()) {
       throw std::runtime_error("No model_config provided.");
     }
-
-    ModelConfig model_config = model_configs.begin()->second;
 
     weight_type_ = model_config.weight_data_type;
     tensor_para_size_ = model_config.tensor_para_size;
@@ -247,7 +245,7 @@ TEST_F(HiddenUnitBufferTest, TestMultiThreadRecvWait) {
   // Test with one sender and multiple receivers with different timing
   {
     std::vector<int> num_iterations = {5, 4, 8, 6};  // Number of buffers for every receiver
-    const int num_receivers = 4;                  // Number of receiver threads
+    const int num_receivers = 4;                     // Number of receiver threads
 
     std::atomic<int> sender_iteration(0);
     std::vector<std::atomic<int>> receiver_counts(num_receivers);
