@@ -65,6 +65,9 @@ class InferRequest {
 
   size_t sampling_token_num = kStepGenerateTokenNum;
 
+  // Record the number of tokens sampled in the previous step.
+  size_t last_step_token_num = sampling_token_num;
+
   // The input tokens.
   std::vector<int> &input_tokens;
 

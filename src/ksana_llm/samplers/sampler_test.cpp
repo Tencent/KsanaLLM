@@ -18,6 +18,7 @@ class SamplerTest : public testing::Test {
 
     std::vector<float> GetHostTemperatures() const { return host_temperatures_; }
     std::vector<float> GetNorepeatNgrams() const { return norepeat_ngrams_; }
+    std::vector<float> GetInvRepeatPenalty() const { return inv_repetition_penalties_; }
   };
 
  protected:
@@ -67,9 +68,10 @@ class SamplerTest : public testing::Test {
   SamplingRequest GetSamlingRequest() {
     SamplingRequest sample_req;
     sample_req.input_tokens = &token_ids_;
-    sample_req.sampling_token_num = 1;
+    sample_req.sampling_token_num = sampling_token_num_;
     sample_req.sampling_result_tokens = &sampling_result_tokens_;
-    sample_req.forwarding_tokens = &token_ids_;
+    std::vector<int> forwarding_tokens = token_ids_;
+    sample_req.forwarding_tokens = &forward_token_ids_;
     sampling_result_tokens_.clear();
     sample_req.logits_offset = 0;
     sample_req.logprobs = &logprobs_;
@@ -77,6 +79,7 @@ class SamplerTest : public testing::Test {
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
     sample_req.model_config = &model_config_;
     sample_req.sampling_config = &sampling_config_;
+    sample_req.last_step_token_num = last_step_token_num_;
     return sample_req;
   }
 
@@ -110,11 +113,14 @@ class SamplerTest : public testing::Test {
   std::shared_ptr<Context> context_{nullptr};
   std::shared_ptr<DerivedSampler> sampler_{nullptr};
   int vocab_size_;
+  size_t last_step_token_num_ = 1;
+  size_t sampling_token_num_ = 1;
   int max_batch_size_ = 4;
 
   // Parameters used for default initialization of sample_req.
   void *logits_buf_ = nullptr;
   std::vector<int> token_ids_ = {1, 2, 3, 4, 5};
+  std::vector<int> forward_token_ids_ = {1, 2, 3, 4, 5};
   std::vector<int> sampling_result_tokens_ = {};
   std::vector<int> draft_tokens_;
   NgramDict ngram_dict_;
@@ -137,13 +143,13 @@ TEST_F(SamplerTest, DecoderNoRepeatNgramProcessorTest) {
 
   // Test decoder_no_repeat_ngram_size = 1
   sampler_->DecoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
-                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          &output_tokens_, &ngram_dict_, vocab_size_, last_step_token_num_,
                                           context_->GetComputeStreams()[device_id_]);
   VerifyNoRepeatNgrams({0, 0});
 
   output_tokens_.push_back(6);
   sampler_->DecoderNoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
-                                          &output_tokens_, &ngram_dict_, vocab_size_,
+                                          &output_tokens_, &ngram_dict_, vocab_size_, last_step_token_num_,
                                           context_->GetComputeStreams()[device_id_]);
   VerifyNoRepeatNgrams({0, -std::numeric_limits<float>::infinity()});
 }
@@ -169,7 +175,7 @@ TEST_F(SamplerTest, NoRepeatNgramProcessorTest) {
 
   // Test no_repeat_ngram_size = 1
   sampler_->NoRepeatNgramProcessor(reinterpret_cast<float *>(logits_buf_), ngram_size_, input_token_size,
-                                   &output_tokens_, &ngram_dict_, vocab_size_,
+                                   &output_tokens_, &ngram_dict_, vocab_size_, last_step_token_num_,
                                    context_->GetComputeStreams()[device_id_]);
   VerifyNoRepeatNgrams({-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()});
 }
@@ -301,4 +307,38 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
 #endif
 
   sampling_config_.logprobs_num = 0;
+}
+
+TEST_F(SamplerTest, MTPSampleTest) {
+  // Test NoRepeatNgram in PrepareDeviceLogitsAndParameter
+  sampling_config_.no_repeat_ngram_size = 1;
+  sampling_config_.repetition_penalty = 0.5f;
+  // For MTP
+  sampling_token_num_ = 2;
+  std::vector<float> logits_buf_cpu(vocab_size_ * max_batch_size_, 1.0f);
+  KLLM_LOG_INFO << "vocab_size_ = " << vocab_size_;
+  SetLogitsBuf(logits_buf_cpu);
+  SamplingRequest sample_req = GetSamlingRequest();
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  float *device_logits = nullptr;
+  SamplingDeviceParameter sampling_device_parameter;
+
+  // For Repetition Penalty
+  sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
+                                            context_->GetComputeStreams()[device_id_]);
+  std::vector<float> inv_repetition_penalties = sampler_->GetInvRepeatPenalty();
+  for (int token_id : token_ids_) {
+    EXPECT_NEAR(2.0f, inv_repetition_penalties[token_id], 1e-6);
+  }
+
+  // For NoRepeatNgram
+  sample_reqs[0].last_step_token_num = 2;
+  sample_reqs[0].forwarding_tokens->push_back(6);
+  sample_reqs[0].forwarding_tokens->push_back(7);
+  sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
+                                            context_->GetComputeStreams()[device_id_]);
+  std::vector<float> norepeat_ngrams = sampler_->GetNorepeatNgrams();
+  for (int token_id : forward_token_ids_) {
+    EXPECT_EQ(-std::numeric_limits<float>::infinity(), norepeat_ngrams[token_id]);
+  }
 }

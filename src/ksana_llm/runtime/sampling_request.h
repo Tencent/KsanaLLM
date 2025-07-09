@@ -35,6 +35,8 @@ struct SamplingRequest {
 
   size_t sampling_token_num = 1;
 
+  size_t last_step_token_num = 1;
+
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
   const std::map<std::string, TargetDescribe>* request_target = nullptr;

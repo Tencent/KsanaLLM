@@ -142,7 +142,7 @@ void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int cur
 
 void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                                      const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                                     Stream& stream) {
+                                     size_t last_step_token_num, Stream& stream) {
   int cur_output_size = output_tokens->size();
   if (ngram_size > cur_output_size) {
     KLLM_LOG_WARNING << fmt::format(
@@ -155,10 +155,12 @@ void Sampler::NoRepeatNgramProcessor(float* logits, const int ngram_size, const 
     // TODO(winminkong): consider the computational approach for ngrams with re-computation.
     GetNgrams(ngram_size, cur_output_size, output_tokens, ngram_dict);
   } else if (input_tokens_size < cur_output_size) {
-    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
-    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
-    int last_elem = sub_ngram.back();
-    (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+    for (size_t i = 0; i < last_step_token_num; ++i) {  // For MTP
+      std::vector<int> sub_ngram(output_tokens->end() - ngram_size - i, output_tokens->end() - i);
+      std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
+      int last_elem = sub_ngram.back();
+      (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+    }
   }
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
@@ -182,7 +184,7 @@ void Sampler::EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
 
 void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                                             const std::vector<int>* output_tokens, NgramDict* ngram_dict,
-                                            const int vocab_size, Stream& stream) {
+                                            const int vocab_size, size_t last_step_token_num, Stream& stream) {
   int cur_output_size = output_tokens->size();
   if (ngram_size > cur_output_size - input_tokens_size) {
     KLLM_LOG_WARNING << fmt::format(
@@ -190,10 +192,12 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
         ngram_size, cur_output_size - input_tokens_size);
     return;
   } else {
-    std::vector<int> sub_ngram(output_tokens->end() - ngram_size, output_tokens->end());
-    std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
-    int last_elem = sub_ngram.back();
-    (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+    for (size_t i = 0; i < last_step_token_num; ++i) {  // For MTP
+      std::vector<int> sub_ngram(output_tokens->end() - ngram_size - i, output_tokens->end() - i);
+      std::vector<int> ngram_excluding_last(sub_ngram.begin(), sub_ngram.end() - 1);
+      int last_elem = sub_ngram.back();
+      (*ngram_dict)[ngram_excluding_last].push_back(last_elem);
+    }
   }
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
@@ -371,23 +375,27 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
 
     const int vocab_size = batch_schedule_config_.max_vocab_size;
     if (sampling_config->repetition_penalty != 1.0f) {
-      ApplyRepetitionPenalty(logits + req_index * vocab_size, sampling_req.input_tokens,
-                             sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
-                             stream);
+      for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
+        ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens,
+                               sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
+                               stream);
+      }
     }
 
     const int input_tokens_size = sampling_req.input_tokens->size();
+    // NOTE(winminkong): When MTP is enabled, the NoRepeatNgram sampling is applied only to the first token generated.
     if (sampling_config->no_repeat_ngram_size > 0) {
-      NoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
-                             sampling_req.forwarding_tokens, sampling_req.ngram_dict, vocab_size, stream);
+      NoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
+                             sampling_req.forwarding_tokens, sampling_req.ngram_dict, vocab_size,
+                             sampling_req.last_step_token_num, stream);
     } else if (sampling_config->encoder_no_repeat_ngram_size > 0) {
-      EncoderNoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
+      EncoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
                                     input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
                                     vocab_size, stream);
     } else if (sampling_config->decoder_no_repeat_ngram_size > 0) {
-      DecoderNoRepeatNgramProcessor(logits + req_index * vocab_size, sampling_config->decoder_no_repeat_ngram_size,
+      DecoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->decoder_no_repeat_ngram_size,
                                     input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
-                                    vocab_size, stream);
+                                    vocab_size, sampling_req.last_step_token_num, stream);
     }
   }
 

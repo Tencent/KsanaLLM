@@ -46,7 +46,7 @@ class Sampler {
 
   void NoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                               const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                              Stream& stream);
+                              size_t last_step_token_num, Stream& stream);
 
   void EncoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                                      const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
@@ -54,7 +54,7 @@ class Sampler {
 
   void DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size, const int input_tokens_size,
                                      const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
-                                     Stream& stream);
+                                     size_t last_step_token_num, Stream& stream);
 
  private:
   const BatchSchedulerConfig batch_schedule_config_;

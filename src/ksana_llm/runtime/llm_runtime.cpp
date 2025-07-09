@@ -95,6 +95,7 @@ void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req
   forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
   forward_req.logits_custom_length = req_ptr->logits_custom_length;
   forward_req.sampling_token_num = req_ptr->sampling_token_num;
+  forward_req.last_step_token_num = req_ptr->last_step_token_num;
   forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
   forward_req.logits_buf = logits_buf;
   forward_req.logits_offset = req_ptr->logits_offset;
@@ -339,6 +340,7 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     sampling_req.input_tokens = &(req_ptr->input_tokens);
     sampling_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
     sampling_req.sampling_token_num = req_ptr->sampling_token_num;
+    sampling_req.last_step_token_num = req_ptr->last_step_token_num;
     sampling_req.sampling_result_tokens = &(req_ptr->sampling_result_tokens);
     sampling_req.sampling_result_tokens->clear();
     sampling_req.response = &(req_ptr->response);
@@ -463,6 +465,7 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
     req->forwarding_tokens = std::move(mtp_forward_token);
     req->forwarding_tokens_draft_num = req->accepted_tokens.size();  // already removed wrong token
     req->sampling_token_num = kStepGenerateTokenNum;
+    req->last_step_token_num = kStepGenerateTokenNum;
     req->kv_cached_token_num = req->mtp_kv_cached_token_num;
     req->prefix_cache_len = req->kv_cached_token_num;
   }

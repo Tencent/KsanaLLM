@@ -32,6 +32,8 @@ struct ForwardRequest {
 
   size_t sampling_token_num = 1;
 
+  size_t last_step_token_num = 1;
+
   // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
   int64_t* mrotary_embedding_pos_offset = nullptr;
 

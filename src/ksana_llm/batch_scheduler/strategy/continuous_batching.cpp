@@ -285,6 +285,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       req->draft_tokens.clear();
       req->forwarding_tokens_draft_num = req->draft_tokens.size();
       req->sampling_token_num = kStepGenerateTokenNum;
+      req->last_step_token_num = kStepGenerateTokenNum;
       batch_state_->waiting_queue.emplace_front(req);
       it = batch_state_->schedule_output->running_reqs.erase(it);
       KLLM_LOG_DEBUG << "splitfuse cal multi-token" << req;
@@ -301,6 +302,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
                               req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
                               req->forwarding_tokens.end());
     req->output_mutex.unlock();
+    req->last_step_token_num = req->accepted_tokens.size() + kStepGenerateTokenNum;
 
     req->req_ctx->emplace("status_code", std::to_string(static_cast<int>(req->finish_status.GetCode())));
     std::unordered_map<std::string, std::string> filtered_ctx = *req->req_ctx;
