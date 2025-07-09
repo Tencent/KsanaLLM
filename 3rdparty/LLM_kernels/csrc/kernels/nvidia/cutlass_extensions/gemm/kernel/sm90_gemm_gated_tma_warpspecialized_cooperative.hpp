@@ -45,6 +45,8 @@
 #include "cutlass/trace.h"
 #include "cutlass/workspace.h"
 
+#include "cuda_hint.cuh"
+
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::gemm::kernel {

@@ -48,6 +48,8 @@
 
 #include "cute/util/debug.hpp"
 
+#include "cuda_hint.cuh"
+
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::gemm::kernel {
