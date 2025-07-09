@@ -16,6 +16,8 @@ constexpr int CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION = 120103;
 
 template <int T>
 void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
+  // TODO(karlluo): to optimize memory with multiple memory pool description
+  constexpr size_t kMemDescCount = 1;
   int device_supports_memory_pools = 0;
   CUDA_CHECK(cudaDeviceGetAttribute(&device_supports_memory_pools, cudaDevAttrMemoryPoolsSupported, worker_id));
   // NOTE(karlluo): 1 if the device supports using the cudaMallocAsync and cudaMemPool family of APIs, and 0 otherwise
@@ -26,6 +28,7 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
 
   KLLM_LOG_DEBUG << "Init nvidia memroy pool on GPU " << worker_id;
   CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_version_));
+  bool is_cuda_p2p_access_enable = true;
   if (cuda_driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
     int pool_supported_handle_types = 0;
     cudaMemPool_t mempool;
@@ -46,13 +49,12 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
         desc.location.type = cudaMemLocationTypeDevice;
         desc.location.id = access_id;
         desc.flags = cudaMemAccessFlagsProtReadWrite;
-        int can_access = 0;
-        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, access_id, worker_id));
-        if (can_access == 0) {
-          KLLM_THROW(
-              fmt::format("GPU {} is not capable of directly accessing memory of peer GPU {}.", access_id, worker_id));
+        if (is_p2p_enable_) {
+          CUDA_CHECK(cudaMemPoolSetAccess(mempool, &desc, kMemDescCount));
+        } else {
+          KLLM_LOG_WARNING << fmt::format("GPU {} is not capable of directly accessing memory of peer GPU {}.",
+                                          access_id, worker_id);
         }
-        CUDA_CHECK(cudaMemPoolSetAccess(mempool, &desc, 1));
       }
     }
   }
@@ -65,7 +67,7 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
   CUDA_CHECK(cublasLtCreate(&cublaslt_handles_[worker_id]));
 
   cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, worker_id);
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, worker_id));
   // FP8 GEMM is supported when arch >= 89 and cublaslt >= 12.1.3.
   base_ptr_->is_gemm_fp8_supported_ = (((prop.major >= 8 && prop.minor >= 9) || prop.major >= 9) &&
                                        (cublasLtGetVersion() >= CUDA_GEMM_SUPPORT_FP8_MIN_CUBLASLT_VERSION));
@@ -79,21 +81,7 @@ void NvidiaContextExtension<T>::InitNcclParam() {
   KLLM_LOG_DEBUG << "Init nvidia nccl param.";
   reduce_signals_.resize(max_reduce_inputs_num_);
   reduce_inputs_.resize(max_reduce_inputs_num_);
-
   const size_t world_size = base_ptr_->tensor_parallel_size_;
-
-  for (int worker_id = 0; worker_id < world_size; ++worker_id) {
-    CUDA_CHECK(cudaSetDevice(worker_id));
-    for (int i = 0; i < world_size; i++) {
-      if (i != worker_id) {
-        auto err = cudaDeviceEnablePeerAccess(i, 0);
-        if (err != cudaErrorPeerAccessAlreadyEnabled) {
-          CUDA_CHECK(err);
-        }
-      }
-    }
-  }
-
   nccl_params_.resize(world_size);
   if (world_size > 1) {
     nccl_uid_ = GenerateNCCLUniqueID();
@@ -111,25 +99,57 @@ void NvidiaContextExtension<T>::InitNcclParam() {
 }
 
 template <int T>
+bool NvidiaContextExtension<T>::EnableGpuP2PAccess() {
+  // NOTE(karlluo): Reserved for future use and must be set to 0
+  constexpr uint32_t kReserveP2PFlag = 0;
+  for (size_t src_id = 0; src_id < base_ptr_->tensor_parallel_size_; ++src_id) {
+    CUDA_CHECK(cudaSetDevice(src_id));
+    for (size_t dst_id = 0; dst_id < base_ptr_->tensor_parallel_size_; ++dst_id) {
+      if (src_id == dst_id) {
+        continue;
+      }
+      // NOTE(karlluo): returns in *canAccessPeer a value of 1 if device device is capable of directly accessing memory
+      // from peerDevice and 0 otherwise. If direct access of peerDevice from device is possible, then access may be
+      // enabled by calling cudaDeviceEnablePeerAccess().
+      int can_cuda_enable_p2p = 0;
+      // Refer https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__PEER.html canAccessPeer Returned
+      // access capability.
+      CUDA_CHECK(cudaDeviceCanAccessPeer(&can_cuda_enable_p2p, static_cast<int>(src_id), static_cast<int>(dst_id)));
+      if (can_cuda_enable_p2p == 0) {
+        return false;
+      }
+      cudaError_t err = cudaDeviceEnablePeerAccess(dst_id, kReserveP2PFlag);
+      if (err != cudaErrorPeerAccessAlreadyEnabled) {
+        CUDA_CHECK(err);
+      }
+    }
+  }
+  return true;
+}
+
+template <int T>
 void NvidiaContextExtension<T>::Initialize() {
-  CUDA_CHECK(cudaDriverGetVersion(&base_ptr_->driver_version_));
   int device_count;
   CUDA_CHECK(cudaGetDeviceCount(&device_count));
   if (device_count <= 0) {
-    KLLM_THROW("There is not GPU on you machine.");
+    KLLM_THROW("There is not GPUs detected on you machine.");
   }
+  CUDA_CHECK(cudaDriverGetVersion(&base_ptr_->driver_version_));
   cudaDeviceProp prop;
   CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
   sm_ = prop.major * 10 + prop.minor;
   int cuda_ver_tmp;
   CUDA_CHECK(cudaRuntimeGetVersion(&cuda_ver_tmp));
   cuda_ver_ = static_cast<uint32_t>(cuda_ver_tmp);
-  KLLM_LOG_INFO << fmt::format("Get sm: {}, cuda version: {}", sm_, cuda_ver_);
+  KLLM_LOG_INFO << fmt::format("Get SM: {}, cuda version: {}", sm_, cuda_ver_);
 
   memory_pool_.resize(base_ptr_->tensor_parallel_size_);
   cublas_handles_.resize(base_ptr_->tensor_parallel_size_);
   cublaslt_handles_.resize(base_ptr_->tensor_parallel_size_);
   std::vector<std::thread> init_threads;
+
+  is_p2p_enable_ = EnableGpuP2PAccess();
+
   for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
     init_threads.emplace_back([worker_id, this]() {
       KLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;

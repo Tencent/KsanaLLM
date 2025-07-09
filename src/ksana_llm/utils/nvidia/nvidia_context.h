@@ -41,6 +41,8 @@ class NvidiaContextExtension {
 
   bool IsFullNvLink() { return is_full_nvlink_; }
 
+  const bool IsSupportedP2PAccess() { return is_p2p_enable_; }
+
   uint32_t GetComputeCapacity() { return sm_; }
   uint32_t GetCudaVersion() { return cuda_ver_; }
 
@@ -59,6 +61,9 @@ class NvidiaContextExtension {
 
   // init nccl handle
   void InitNcclParam();
+
+  // try to enable p2p access, if enable success, return true, if Gpus not support P2P access, return false
+  bool EnableGpuP2PAccess();
 
  private:
   ContextT<T>* base_ptr_ = nullptr;
@@ -96,6 +101,8 @@ class NvidiaContextExtension {
   llm_kernels::nvidia::GPUGemmAlgoHelper gpu_gemm_algo_helper_;
 
   std::atomic_bool init_done_{false};
+
+  bool is_p2p_enable_{false};
 };
 
 template <>

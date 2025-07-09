@@ -51,6 +51,9 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
 #ifdef ENABLE_CUDA
 template <typename T>
 void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input) {
+  if (!context_->ext->IsSupportedP2PAccess()) {
+    return;
+  }
   size_t max_size = input->GetTotalBytes();
   size_t largest_part = max_size / tp_size_ + max_size % tp_size_;
   size_t signal_sz = sizeof(llm_kernels::nvidia::Signal) + largest_part;
@@ -143,6 +146,11 @@ bool ModelCommunicator<T>::CheckIfUseCustomReduceSum(const std::vector<Tensor>& 
   if (select_all_reduce_by_size_ && input_tensors[0].GetTotalBytes() > kAllReduceThreshold) {
     return false;
   }
+#ifdef ENABLE_CUDA
+  if (!context_->ext->IsSupportedP2PAccess()) {
+    return false;
+  }
+#endif
   int batch_size = input_tensors[0].shape[0];
   return use_custom && (tp_size_ == 2 || is_full_nvlink_) &&
          (!use_cuda_graph_ || (use_cuda_graph_ && context_->GetSupportedCudaGraphCaptureSizes().find(batch_size) ==
