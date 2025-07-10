@@ -39,7 +39,7 @@ struct FlashMlaWorkspaceMap {
   float *softmax_lse_ptr;
   float *softmax_lse_accum_ptr;
   float *out_accum_ptr;
-  int num_sm_parts;
+  int num_sm_parts = 1;  // Set a default value to avoid invalid values in certain scenarios whild disable flash mla
 };
 
 void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream);
