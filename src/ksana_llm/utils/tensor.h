@@ -137,11 +137,13 @@ class Tensor {
   Tensor(const Tensor& other) { AssignMembers(other); }
 
   Tensor& operator=(const Tensor& other) {
-    // Free underlying memory until no more tensor instances referenced.
-    if (reference_.use_count() == 1) {
-      FreeMemory();
+    if (this != &other) {
+      // Free underlying memory until no more tensor instances referenced.
+      if (reference_.use_count() == 1) {
+        FreeMemory();
+      }
+      AssignMembers(other);
     }
-    AssignMembers(other);
     return *this;
   }
 

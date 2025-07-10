@@ -309,6 +309,7 @@ void Tensor::AssignMembers(const Tensor& other) {
   location.Set(other.location.Get());
   device_id.Set(other.device_id.Get());
   data_ptr.Set(other.data_ptr.Get());
+  stream_ = other.stream_;
 
   dtype = other.dtype;
   shape = other.shape;

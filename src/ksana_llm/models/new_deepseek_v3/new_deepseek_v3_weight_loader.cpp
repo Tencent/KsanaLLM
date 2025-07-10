@@ -32,10 +32,14 @@ namespace ksana_llm {
 NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelConfig> model_config,
                                                      std::shared_ptr<Environment> env,
                                                      std::shared_ptr<Context> context) :
-                                                     BaseModelWeightLoader(model_config, env, context),
-                                                     weight_impl_(nullptr) {
+                                                     BaseModelWeightLoader(model_config, env, context) {
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
+
+  std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
+      std::dynamic_pointer_cast<NewDeepSeekV3Config> (model_config_);
+
+  InitWeightLoaderImpl(new_deepseek_v3_config);
 }
 
 NewDeepSeekV3WeightLoader::~NewDeepSeekV3WeightLoader() {}
@@ -108,7 +112,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(
         auto scale_iter = dev_weights_map.find(weight_scale_name);
         if (scale_iter != dev_weights_map.end()) {
           weight_tensor.weight_scales = &(scale_iter->second);
-          KLLM_LOG_INFO << fmt::format("bind {}, shape: {} to {}, shape: {}\n",
+          KLLM_LOG_DEBUG << fmt::format("bind {}, shape: {} to {}, shape: {}\n",
                                         weight_scale_name,
                                         Vector2Str(std::vector<size_t>(weight_tensor.weight_scales->shape)),
                                         weight_name,
@@ -116,7 +120,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(
           post_processed_weights.insert(weight_scale_name);
           post_processed_weights.insert(weight_name);
         } else {
-          KLLM_LOG_INFO << fmt::format("weight scale not found: {}", weight_scale_name);
+          KLLM_LOG_DEBUG << fmt::format("weight scale not found: {}", weight_scale_name);
         }
       }
     }
@@ -149,10 +153,6 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
                                        std::unordered_map<std::string, Tensor>& left_host_weights) {
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config> (model_config_);
-
-  if (weight_impl_ == nullptr) {
-    STATUS_CHECK_RETURN(InitWeightLoaderImpl(new_deepseek_v3_config));
-  }
 
   int32_t layer_idx = -1, expert_idx = -1;
   size_t num_experts = new_deepseek_v3_config->moe_config.num_experts;
