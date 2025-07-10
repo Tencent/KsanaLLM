@@ -172,7 +172,6 @@ class DeepGEMMAOTWrapperTestSuit : public NvidiaTestSuitBase {
     std::vector<uint32_t> compute_ms({4, 8, 12, 16});
     for (auto compute_m : compute_ms) {
       // Construct test data including inputs and reference output
-      // uint32_t compute_m = 7;
       auto result = construct(compute_m, k, n);
 
       // Extract elements from the nested tuple

@@ -2,7 +2,6 @@
 
 ==============================================================================*/
 
-#include <regex>
 #include <string>
 #include <fstream>
 #include <filesystem>
@@ -35,6 +34,7 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
                                                      BaseModelWeightLoader(model_config, env, context) {
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
+  to_be_permuted_weights_.resize(env->GetTensorParallelSize());
 
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config> (model_config_);
@@ -44,14 +44,6 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
 
 NewDeepSeekV3WeightLoader::~NewDeepSeekV3WeightLoader() {}
 
-// local helper function
-std::string replace_first(std::string str, const std::string& key, const std::string& replacement) {
-  size_t pos = str.find(key);
-  if (pos != std::string::npos) {
-      str.replace(pos, key.length(), replacement);
-  }
-  return str;
-}
 
 Status NewDeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& weight_names) {
   std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq"};
@@ -125,7 +117,12 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(
       }
     }
   }
-  for (auto &[weight_name, weight_tensor] : dev_weights_map) {
+  for (auto& [weight_name, weight_tensor] : dev_weights_map) {
+    if (to_be_permuted_weights_[dev_rank].find(weight_name) != to_be_permuted_weights_[dev_rank].end()) {
+      // permute weight tensor
+      weight_impl_->PermuteWeight(weight_tensor, {1, 0}, dev_rank);
+    }
+
     if (post_processed_weights.find(weight_name) != post_processed_weights.end() ||
         weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
       continue;
@@ -196,6 +193,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
   size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
   size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
+  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
   size_t head_num = new_deepseek_v3_config->head_num;
   size_t head_num_tp = static_cast<size_t>(DivRoundUp(new_deepseek_v3_config->head_num,
       attn_tp_size));
@@ -251,7 +249,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
         new_deepseek_v3_config->is_quant);
       std::string file_weight_name_replace;
       if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = replace_first(file_weight_name, "shared_experts", "shared_expert");
+        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
       } else {
         file_weight_name_replace = file_weight_name;
       }
@@ -278,7 +276,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 
       std::string file_weight_name_replace;
       if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = replace_first(file_weight_name, "shared_experts", "shared_expert");
+        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
       } else {
         file_weight_name_replace = file_weight_name;
       }
@@ -372,6 +370,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
     }
 
     // 4. MLA layer
+    const std::string fused_lora_a_weight_name = ".fused_lora_a_proj.weight";
     if (file_weight_name.find("self_attn") != std::string::npos &&
         file_weight_name.find("norm.") == std::string::npos) {
 #ifdef ENABLE_FP8
@@ -473,64 +472,52 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       if (file_weight_name.find(".q_a_proj.weight") != std::string::npos) {
         // Weights are not split and are copied to each GPU.
         // fp16/bf16: weights needs to transpose
-        Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-          host_weight_tensor.dtype, host_weight_tensor.shape, dev_rank,
-          nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-
-        MemcpyAsync(dev_tensor.GetPtr<void>(),
-          host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[dev_rank]);
-
-        if (host_weight_tensor.dtype == DataType::TYPE_FP16 ||
-            host_weight_tensor.dtype == DataType::TYPE_BF16) {
-          weight_impl_->PermuteWeight(dev_tensor, {1, 0}, dev_rank);
+        std::string fused_tensor_name = GetReplacedName(file_weight_name, ".q_a_proj.weight", fused_lora_a_weight_name);
+        Tensor fused_tensor;
+        if (device_model_weights.find(fused_tensor_name) != device_model_weights.end()) {
+          fused_tensor = device_model_weights.at(fused_tensor_name);
+        } else {
+          fused_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
+                                {q_lora_rank + kv_lora_rank + qk_rope_head_dim, host_weight_tensor.shape[1]}, dev_rank,
+                                nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
         }
-        device_model_weights[file_weight_name] = dev_tensor;
+        MemcpyAsync(fused_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
+                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+        if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
+          device_model_weights[fused_tensor_name] = fused_tensor;
+        }
+        if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
+          to_be_permuted_weights_[dev_rank].insert(fused_tensor_name);
+        }
         continue;
       }
       if (file_weight_name.find(".kv_a_proj_with_mqa.weight") != std::string::npos) {
         if ((kv_lora_rank + qk_rope_head_dim) != host_weight_tensor.shape[0]) {
-          KLLM_THROW(
-            fmt::format("The shape of the 0th dim of the weight named `{}` is not equal to the sum of kv_lora_rank {} "
-            "and qk_rope_head_dim {}.",
-            file_weight_name, kv_lora_rank, qk_rope_head_dim));
+          KLLM_THROW(fmt::format(
+              "The shape of the 0th dim of the weight named `{}` is not equal to the sum of kv_lora_rank {} "
+              "and qk_rope_head_dim {}.",
+              file_weight_name, kv_lora_rank, qk_rope_head_dim));
         }
-
-        // For kv_a_lora_proj weight load
-        std::string kv_a_lora_name =
-          file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.kv_a_lora_proj.weight";
-        std::vector<size_t> kv_a_lora_shape = {kv_lora_rank, host_weight_tensor.shape[1]};
-        Tensor kv_a_lora_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-          host_weight_tensor.dtype, kv_a_lora_shape, dev_rank,
-          nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-        size_t kv_a_lora_size = kv_lora_rank *
-          host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-        MemcpyAsync(kv_a_lora_tensor.GetPtr<void>(),
-          host_weight_tensor.GetPtr<void>(), kv_a_lora_size, MEMCPY_HOST_TO_DEVICE,
+        std::string fused_tensor_name =
+            GetReplacedName(file_weight_name, ".kv_a_proj_with_mqa.weight", fused_lora_a_weight_name);
+        Tensor fused_tensor;
+        if (device_model_weights.find(fused_tensor_name) != device_model_weights.end()) {
+          fused_tensor = device_model_weights.at(fused_tensor_name);
+        } else {
+          fused_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
+                                {q_lora_rank + kv_lora_rank + qk_rope_head_dim, host_weight_tensor.shape[1]}, dev_rank,
+                                nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+        }
+        const int offset = q_lora_rank * host_weight_tensor.shape[1] * host_weight_tensor.GetDTypeSize();
+        MemcpyAsync(fused_tensor.GetPtr<void>() + offset, host_weight_tensor.GetPtr<void>(),
+                    host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
                     context_->GetMemoryManageStreams()[dev_rank]);
-
-        if (!new_deepseek_v3_config->is_quant) {
-          weight_impl_->PermuteWeight(kv_a_lora_tensor, {1, 0}, dev_rank);
+        if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
+          device_model_weights[fused_tensor_name] = fused_tensor;
         }
-        device_model_weights[kv_a_lora_name] = kv_a_lora_tensor;
-
-        // For kv_a_rope_proj weight load
-        std::string kv_a_rope_name =
-          file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.kv_a_rope_proj.weight";
-        std::vector<size_t> kv_a_rope_shape = {qk_rope_head_dim, host_weight_tensor.shape[1]};
-        size_t kv_a_rope_size = qk_rope_head_dim * host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-        Tensor kv_a_rope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-          host_weight_tensor.dtype, kv_a_rope_shape, dev_rank,
-          nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-        MemcpyAsync(kv_a_rope_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>() + kv_a_lora_size,
-                    kv_a_rope_size, MEMCPY_HOST_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[dev_rank]);
-
-        // do not permute for fp8 weights
-        if (!new_deepseek_v3_config->is_quant) {
-          weight_impl_->PermuteWeight(kv_a_rope_tensor, {1, 0}, dev_rank);
+        if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
+          to_be_permuted_weights_[dev_rank].insert(fused_tensor_name);
         }
-        device_model_weights[kv_a_rope_name] = kv_a_rope_tensor;
         continue;
       }
       if (file_weight_name.find(".kv_b_proj.weight") != std::string::npos) {

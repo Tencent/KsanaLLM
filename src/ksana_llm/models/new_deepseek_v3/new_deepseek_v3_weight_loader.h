@@ -24,19 +24,20 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
 
   // Process weights, such as rename, split, merge, type convert, quantization, etc.
   virtual Status ProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights, int dev_rank,
-                                      std::unordered_map<std::string, Tensor>& device_model_weights,
-                                      std::unordered_map<std::string, Tensor>& left_host_weights) override;
+                                     std::unordered_map<std::string, Tensor>& device_model_weights,
+                                     std::unordered_map<std::string, Tensor>& left_host_weights) override;
 
   // Invoked only once after ProcessModelWeights.
-  virtual Status PostProcessModelWeights(
-                  std::unordered_map<std::string, Tensor>& dev_weights_map,
-                  int dev_rank) override;
+  virtual Status PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map,
+                                         int dev_rank) override;
 
  private:
-  Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config> & new_deepseek_v3_config);
+  Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config);
 
  private:
   PipelineConfig pipeline_config_;
   std::unique_ptr<NewDeepSeekV3WeightImplBase> weight_impl_;
+  // rank -> weight_name
+  std::vector<std::unordered_set<std::string>> to_be_permuted_weights_;
 };
 }  // namespace ksana_llm

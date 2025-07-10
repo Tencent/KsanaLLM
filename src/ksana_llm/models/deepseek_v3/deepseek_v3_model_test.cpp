@@ -10,6 +10,7 @@
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_weight.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
@@ -119,29 +120,9 @@ class DeepSeekV3Test : public testing::Test {
     constexpr int rounds = 10;
     EventCreate(&start);
     EventCreate(&stop);
-
-    std::shared_ptr<BaseWeight> deepseek_v3_weight =
-        std::make_shared<DeepSeekV3Weight<weight_data_type>>(model_config, device_id, context);
-    // Start Loader Weight
-    ModelFileFormat model_file_format;
-    std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
-    for (std::string &file_name : weights_file_list) {
-      std::shared_ptr<BaseFileTensorLoader> weights_loader = nullptr;
-      if (model_file_format == SAFETENSORS) {
-        weights_loader = std::make_shared<SafeTensorsLoader>(file_name, model_config.load_bias);
-      } else if (model_file_format == GGUF) {
-        weights_loader = std::make_shared<GGUFFileTensorLoader>(file_name, model_config.load_bias);
-      } else {
-        weights_loader = std::make_shared<PytorchFileTensorLoader>(file_name, model_config.load_bias);
-      }
-      std::vector<std::string> weight_name_list = weights_loader->GetTensorNameList();
-      std::vector<std::string> custom_name_list;
-
-      GetCustomNameList(model_config.path, model_config.type, weight_name_list, custom_name_list, model_file_format);
-      deepseek_v3_weight->LoadWeightsFromFile(weights_loader, weight_name_list, custom_name_list);
-      StreamSynchronize(context->GetMemoryManageStreams()[device_id]);
-    }
-    deepseek_v3_weight->ProcessWeights();  // End Loader Weight
+    std::unique_ptr<WeightInstance> weight_instance = std::make_unique<WeightInstance>(model_config, context);
+    weight_instance->Load();
+    std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(/*rank*/ 0);
     std::shared_ptr<DeepSeekV3Model<weight_data_type>> deepseek_v3 =
         std::make_shared<DeepSeekV3Model<weight_data_type>>(model_config, device_id, context, deepseek_v3_weight);
     deepseek_v3->AllocResources(multi_batch_id);

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -34,6 +35,11 @@ inline std::string FormatStr(const std::string& format, Args... args) {
 #  pragma GCC diagnostic pop
 #endif
   return std::string(buf.get(), buf.get() + size - 1);  // We don't want the '\0' inside
+}
+
+inline std::string GetReplacedName(const std::string& tensor_name, const std::string& pattern,
+                                   const std::string& replacement) {
+  return std::regex_replace(tensor_name, std::regex(pattern), replacement);
 }
 
 // Split string to a vector.

@@ -14,6 +14,7 @@
 #include "csrc/kernels/nvidia/machete/machete_wrapper.h"
 #include "csrc/kernels/nvidia/mixture_of_experts/moe_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
+#include "csrc/kernels/nvidia/split/split.h"
 #include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
 #include "csrc/utils/nvidia/scalar_type.hpp"
 #include "csrc/utils/quant_type.h"
@@ -235,5 +236,9 @@ void InvokePerTokenGroupQuantFp8E4m3(void* input, void* output_q, void* output_s
 
 template <typename T>
 void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, cudaStream_t stream);
+
+template <typename T>
+void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs, std::vector<int>& col_offsets,
+                 int rows, int cols, int num_outputs, cudaStream_t& stream);
 
 }  // namespace ksana_llm

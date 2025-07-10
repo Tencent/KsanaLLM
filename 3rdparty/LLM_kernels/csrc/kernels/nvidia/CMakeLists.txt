@@ -29,6 +29,8 @@ add_subdirectory(moe_wna16)
 add_subdirectory(fused_moe_gptq_int4_fp8_kernel)
 add_subdirectory(fused_add_norm)
 add_subdirectory(per_token_group_quant)
+add_subdirectory(split)
+
 if(SM VERSION_GREATER_EQUAL "90")
   add_subdirectory(decode_grouped_att_m_fwd)
   add_subdirectory(fused_moe)

@@ -16,6 +16,7 @@
 #include "ksana_llm/modules/basic/flash_mla_attention.h"
 #include "ksana_llm/modules/basic/linear.h"
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
+#include "ksana_llm/modules/basic/split.h"
 
 namespace ksana_llm {
 
@@ -23,7 +24,7 @@ namespace ksana_llm {
 // TODO(robertyuan): Some maybe reused with other modules
 struct MlaBuffers {
   TensorBuffer* q_buffer;
-  TensorBuffer* q_rope_buffer;
+  TensorBuffer* kv_lora_or_q_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
 
@@ -86,7 +87,10 @@ class MultiHeadLatentAttention {
 #endif
 
   bool use_q_lora_ = false;
+  // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
+  bool use_fused_lora_a_ = false;
 
+  std::shared_ptr<Linear<T>> attn_fused_lora_a_projs_;
   std::shared_ptr<Linear<T>> attn_q_a_projs_;
   std::shared_ptr<Linear<T>> attn_kv_a_lora_projs_;
   std::shared_ptr<Linear<T>> attn_kv_a_ropes_;
@@ -96,11 +100,14 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Linear<T>> attn_v_head_projs_;
   std::shared_ptr<Linear<T>> attn_w_q_uks_;
   std::shared_ptr<Linear<T>> attn_o_proj_;
+  std::shared_ptr<Split<T>> split_;
   std::shared_ptr<Bmm<T>> attn_w_uk_t_bmm_;
   std::shared_ptr<FlashMlaAttention<T>> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention<T>> paged_mla_attention_layers_;
   inline static uint32_t qk_nope_head_dim_ = 0;
+  inline static uint32_t qk_rope_head_dim_ = 0;
   inline static uint32_t kv_lora_rank_ = 0;
+  inline static uint32_t q_lora_rank_ = 0;
   inline static int head_num_per_tp_ = 0;
   size_t o_proj_k_dim_ = 0;
 

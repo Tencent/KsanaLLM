@@ -1040,4 +1040,24 @@ INVOKE_FUSED_ADD_RMS_NORM(__nv_bfloat16);
 #endif
 #undef INVOKE_FUSED_ADD_RMS_NORM
 
+template <typename T>
+void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs,
+                 std::vector<int>& col_offsets,  // [0, col1, col1+col2, ...]
+                 int rows, int cols, int num_outputs, cudaStream_t& stream) {
+  if (output_ptrs.size() != num_outputs || col_offsets.size() != num_outputs + 1) {
+    KLLM_THROW("Invalid input for InvokeSplit");
+  }
+  llm_kernels::nvidia::InvokeSplit<T>(input, output_ptrs, col_offsets, rows, cols, num_outputs, stream);
+}
+#define INVOKE_SPLIT(T)                                                                            \
+  template void InvokeSplit<T>(const T* __restrict__ input, const std::vector<T*>& output_ptrs,    \
+                               std::vector<int>& col_offsets, int rows, int cols, int num_outputs, \
+                               cudaStream_t& stream);
+INVOKE_SPLIT(float);
+INVOKE_SPLIT(half);
+#ifdef ENABLE_BFLOAT16
+INVOKE_SPLIT(__nv_bfloat16);
+#endif
+#undef INVOKE_SPLIT
+
 }  // namespace ksana_llm

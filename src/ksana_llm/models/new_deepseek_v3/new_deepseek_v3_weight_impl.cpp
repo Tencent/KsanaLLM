@@ -563,11 +563,10 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string 
 }
 
 template <typename T>
-bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string & host_weight_name,
-                                    const Tensor & host_weight_tensor,
-                                    int dev_rank,
-                                    std::shared_ptr<NewDeepSeekV3Config> & new_deepseek_v3_config,
-                                    std::unordered_map<std::string, Tensor> & device_model_weights) {
+bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
+    const std::string& host_weight_name, const Tensor& host_weight_tensor, int dev_rank,
+    std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
+    std::unordered_map<std::string, Tensor>& device_model_weights) {
   // q_a_proj: Weights are not split and copied to each GPU
   // q_b_proj: Weights are split, requiring dequantization, splitting, requantization, and distribution to each GPU
   // kv_a_proj: Copied to each GPU, split directly on each GPU without dequantization
@@ -587,17 +586,29 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string 
   if (host_weight_tensor.dtype != TYPE_FP32) {
     KLLM_THROW("Not support data type of scale:" + host_weight_name);
   }
-
+  const std::string fused_name = ".fused_lora_a_proj.weight_scale_inv";
+  size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
+  size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
+  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
+  const size_t weight_block_size = new_deepseek_v3_config->quant_config.weight_block_size[0];
   if (host_weight_name.find(".q_a_proj.weight_scale_inv") != std::string::npos) {
-    // Weights are not split and are copied to each GPU.
-    Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-      host_weight_tensor.dtype, host_weight_tensor.shape, dev_rank,
-      nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+    std::vector<size_t> fused_q_a_proj_scale_shape = {
+        DivRoundUp(q_lora_rank + kv_lora_rank + qk_rope_head_dim, weight_block_size), host_weight_tensor.shape[1]};
+    std::string fused_tensor_name = GetReplacedName(host_weight_name, ".q_a_proj.weight_scale_inv", fused_name);
+    Tensor fused_tensor;
+    if (device_model_weights.find(fused_tensor_name) != device_model_weights.end()) {
+      fused_tensor = device_model_weights.at(fused_tensor_name);
+    } else {
+      fused_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, fused_q_a_proj_scale_shape,
+                            dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      fused_tensor.Fill(0);
+    }
+    MemcpyAsync(fused_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
+                MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
-    MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(),
-                host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                context_->GetMemoryManageStreams()[dev_rank]);
-    device_model_weights[host_weight_name] = dev_tensor;
+    if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
+      device_model_weights[fused_tensor_name] = fused_tensor;
+    }
   }
   // For q_b_proj scale
   if (host_weight_name.find(".q_b_proj.weight_scale_inv") != std::string::npos) {
@@ -623,48 +634,27 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string 
 
   // For kv_a_proj scale
   if (host_weight_name.find(".kv_a_proj_with_mqa.weight_scale_inv") != std::string::npos) {
-    // For kv_a_lora_proj scale
-    size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
-    if (kv_lora_rank % new_deepseek_v3_config->quant_config.weight_block_size[0] != 0) {
-      KLLM_THROW("Not support shape of scale:" + host_weight_name);
+    std::vector<size_t> fused_q_a_proj_scale_shape = {
+        DivRoundUp(q_lora_rank + kv_lora_rank + qk_rope_head_dim, weight_block_size), host_weight_tensor.shape[1]};
+    std::string fused_tensor_name =
+        GetReplacedName(host_weight_name, ".kv_a_proj_with_mqa.weight_scale_inv", fused_name);
+    Tensor fused_tensor;
+    if (device_model_weights.find(fused_tensor_name) != device_model_weights.end()) {
+      fused_tensor = device_model_weights.at(fused_tensor_name);
+    } else {
+      fused_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, fused_q_a_proj_scale_shape,
+                            dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      fused_tensor.Fill(0);
     }
-    std::string kv_a_lora_scale_name =
-        host_weight_name.substr(0, host_weight_name.find_first_of('_')) + "_attn.kv_a_lora_proj.weight_scale_inv";
-    size_t kv_a_lora_scale_shape_0 = kv_lora_rank / new_deepseek_v3_config->quant_config.weight_block_size[0];
-    std::vector<size_t> kv_a_lora_scale_shape = { kv_a_lora_scale_shape_0, host_weight_tensor.shape[1]};
-    Tensor kv_a_lora_scale_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-      DataType::TYPE_FP32, kv_a_lora_scale_shape, dev_rank,
-      nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-    MemcpyAsync(kv_a_lora_scale_tensor.GetPtr<void>(),
-                host_weight_tensor.GetPtr<void>(),
-                kv_a_lora_scale_tensor.GetTotalBytes(),
-                MEMCPY_HOST_TO_DEVICE,
+    const size_t offset =
+        (q_lora_rank / weight_block_size) * host_weight_tensor.shape[1] * host_weight_tensor.GetDTypeSize();
+    MemcpyAsync(fused_tensor.GetPtr<void>() + offset, host_weight_tensor.GetPtr<void>(),
+                host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
                 context_->GetMemoryManageStreams()[dev_rank]);
-    device_model_weights[kv_a_lora_scale_name] = kv_a_lora_scale_tensor;
 
-    // For kv_a_rope_proj scale
-    std::string kv_a_rope_scale_name =
-        host_weight_name.substr(0, host_weight_name.find_first_of('_')) + "_attn.kv_a_rope_proj.weight_scale_inv";
-    size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
-    size_t kv_a_rope_scale_shape_0 = DivRoundUp(qk_rope_head_dim,
-      new_deepseek_v3_config->quant_config.weight_block_size[0]);
-    if (kv_a_rope_scale_shape_0 + kv_a_lora_scale_shape_0 != host_weight_tensor.shape[0]) {
-      KLLM_THROW("Not support shape of scale:" + host_weight_name);
+    if (device_model_weights.find(fused_tensor_name) == device_model_weights.end()) {
+      device_model_weights[fused_tensor_name] = fused_tensor;
     }
-    std::vector<size_t> kv_a_rope_scale_shape = {kv_a_rope_scale_shape_0, host_weight_tensor.shape[1]};
-    size_t kv_a_rope_allocate_size = std::max(static_cast<size_t>(256),
-        kv_a_rope_scale_shape_0 * host_weight_tensor.shape[1]);
-    Tensor kv_a_rope_scale_tensor = Tensor(MemoryLocation::LOCATION_DEVICE,
-      DataType::TYPE_FP32, {kv_a_rope_allocate_size}, dev_rank,
-      nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-    kv_a_rope_scale_tensor.Fill(0);
-    kv_a_rope_scale_tensor.shape = kv_a_rope_scale_shape;
-    MemcpyAsync(kv_a_rope_scale_tensor.GetPtr<void>(),
-                host_weight_tensor.GetPtr<void>() + kv_a_lora_scale_tensor.GetTotalBytes(),
-                kv_a_rope_scale_tensor.GetTotalBytes(),
-                MEMCPY_HOST_TO_DEVICE,
-                context_->GetMemoryManageStreams()[dev_rank]);
-    device_model_weights[kv_a_rope_scale_name] = kv_a_rope_scale_tensor;
   }
 
   // for kv_b_proj_scale
