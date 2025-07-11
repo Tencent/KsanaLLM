@@ -39,20 +39,20 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
                                                    /*is_random_init*/ false);
     // Set input data to device
     std::vector<float> h_data_float(m * n);
-    for (int i = 0; i < m * n; ++i) {
+    for (size_t i = 0; i < m * n; ++i) {
       h_data_float[i] = i / 100.0f;
     }
     if (std::is_same<T, float>::value) {
       CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(input_meta.data_ptr, h_data_float.data(), data_size, cudaMemcpyHostToDevice));
     } else if (std::is_same<T, half>::value) {
       std::vector<half> h_data_half(m * n);
-      for (int i = 0; i < m * n; ++i) {
+      for (size_t i = 0; i < m * n; ++i) {
         h_data_half[i] = __float2half(h_data_float[i]);
       }
       CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(input_meta.data_ptr, h_data_half.data(), data_size, cudaMemcpyHostToDevice));
     } else if (std::is_same<T, __nv_bfloat16>::value) {
       std::vector<__nv_bfloat16> h_data_bf16(m * n);
-      for (int i = 0; i < m * n; ++i) {
+      for (size_t i = 0; i < m * n; ++i) {
         h_data_bf16[i] = __float2bfloat16(h_data_float[i]);
       }
       CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(input_meta.data_ptr, h_data_bf16.data(), data_size, cudaMemcpyHostToDevice));
@@ -88,10 +88,10 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
         125, 125, 125, 125, 125, 126, 126, 126, 126, 126, 126, 126, 126, 126};
 
     // Check the results
-    for (int i = 0; i < (m * n) / 128; ++i) {
+    for (size_t i = 0; i < (m * n) / 128; ++i) {
       EXPECT_NEAR(h_s[i], target_scales[i], 1e-3);
     }
-    for (int i = 0; i < m * n; ++i) {
+    for (size_t i = 0; i < m * n; ++i) {
       EXPECT_NEAR(static_cast<int>(h_q[i]), target_q[i], 1);
     }
 

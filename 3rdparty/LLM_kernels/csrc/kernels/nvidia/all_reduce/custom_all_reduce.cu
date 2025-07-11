@@ -272,7 +272,7 @@ void CustomAllreduce::CheckRankDataCapacity(size_t num) {
 void CustomAllreduce::RegisterBuffer(void** ptrs, cudaStream_t& stream) {
   CheckRankDataCapacity();
   RankData data;
-  for (int i = root_rank_; i < (root_rank_ + world_size_); ++i) {
+  for (uint32_t i = root_rank_; i < (root_rank_ + world_size_); ++i) {
     data.ptrs[i] = ptrs[i];
   }
   auto d_data = d_rank_data_base_++;

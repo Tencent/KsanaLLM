@@ -251,7 +251,6 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPrecisionTest) {
   const int k = 256;
   const int n = 64;
 
-  const int block_size_m = 1;
   const int block_size_n = 128;
   const int block_size_k = 128;
 
@@ -348,7 +347,6 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
     int k = std::get<1>(size);
     int n = std::get<2>(size);
 
-    const int block_size_m = 1;
     const int block_size_n = 128;
     const int block_size_k = 128;
 

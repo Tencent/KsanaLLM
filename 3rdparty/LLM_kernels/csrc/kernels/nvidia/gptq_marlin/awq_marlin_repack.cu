@@ -18,6 +18,8 @@
  * https://github.com/vllm-project/vllm/tree/65334ef3b9e4fd32ebc5c4e512debc25d5025488/csrc/quantization/gptq_marlin
  */
 
+#include <fmt/format.h>
+
 #include "csrc/kernels/nvidia/gptq_marlin/marlin.cuh"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
@@ -215,7 +217,7 @@ void awq_marlin_repack(const uint32_t* b_q_weight_ptr, uint32_t* out_ptr, int64_
   CALL_IF(4)
   CALL_IF(8)
   else {
-    KLLM_KERNEL_CHECK_WITH_INFO(false, fmtstr("Unsupported repack config: num_bits = {}", num_bits));
+    KLLM_KERNEL_CHECK_WITH_INFO(false, fmt::format("Unsupported repack config: num_bits = {}", num_bits));
   }
 }
 

@@ -34,6 +34,12 @@ namespace marlin {
   static_assert(std::is_same<scalar_t, half>::value || std::is_same<scalar_t, nv_bfloat16>::value, \
                 "only float16 and bfloat16 is supported");
 
+#define MARLIN_KERNEL_PARAMS                                                                                         \
+  const int4 *__restrict__ A, const int4 *__restrict__ B, int4 *__restrict__ C, int4 *__restrict__ C_tmp,            \
+      const int4 *__restrict__ scales_ptr, const uint16_t *__restrict__ scale2_ptr, const int4 *__restrict__ zp_ptr, \
+      const int *__restrict__ g_idx, int num_groups, int prob_m, int prob_n, int prob_k, int lda, int *locks,        \
+      bool use_atomic_add, bool use_fp32_reduce, int max_shared_mem
+
 // m16n8k16 tensor core mma instruction with fp16 inputs and fp32
 // output/accumulation.
 template <typename scalar_t>
@@ -1439,8 +1445,7 @@ __global__ void Marlin(const int4* __restrict__ A,               // fp16 input m
         }
         int last_group_id = g_idx[last_g_idx];
         if (last_group_id >= sh_first_group_id + sh_num_groups) {
-          fetch_act_order_scales_to_shared(false, first_group_id,
-                                           last_group_id);
+          fetch_act_order_scales_to_shared(false, first_group_id, last_group_id);
           __syncthreads();
         }
       }

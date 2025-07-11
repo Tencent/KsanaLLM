@@ -19,7 +19,9 @@
  * Adapted from https://github.com/IST-DASLab/marlin
  */
 
-#include "csrc/kernels/nvidia/gptq_marlin/kernel.h"
+#include <fmt/format.h>
+
+#include "csrc/kernels/nvidia/gptq_marlin/marlin_template.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "csrc/utils/nvidia/string_utils.h"
@@ -405,25 +407,26 @@ void marlin_mm(const void* A, const void* B, void* C, void* C_tmp, void* s, void
   if (has_zp) {
     KLLM_KERNEL_CHECK_WITH_INFO(
         q_type == llm_kernels::nvidia::vllm_dtype::kU4 || q_type == llm_kernels::nvidia::vllm_dtype::kU8,
-        fmtstr("q_type must be u4 or u8 when has_zp = True. Got = {}", q_type.str()));
+        fmt::format("q_type must be u4 or u8 when has_zp = True. Got = {}", q_type.str()));
   } else {
     KLLM_KERNEL_CHECK_WITH_INFO(
         q_type == llm_kernels::nvidia::vllm_dtype::kU4B8 || q_type == llm_kernels::nvidia::vllm_dtype::kU8B128 ||
             q_type == llm_kernels::nvidia::vllm_dtype::kFE4M3fn || q_type == llm_kernels::nvidia::vllm_dtype::kFE2M1f,
-        fmtstr("q_type must be uint4b8, uint8b128, float8_e4m3fn or float4_e2m1f when has_zp = False. Got = {}",
-               q_type.str()));
+        fmt::format("q_type must be uint4b8, uint8b128, float8_e4m3fn or float4_e2m1f when has_zp = False. Got = {}",
+                    q_type.str()));
   }
 
   KLLM_KERNEL_CHECK_WITH_INFO(prob_m > 0 && prob_n > 0 && prob_k > 0,
-                              fmtstr("Invalid MNK = [{}, {}, {}]", prob_m, prob_n, prob_k));
+                              fmt::format("Invalid MNK = [{}, {}, {}]", prob_m, prob_n, prob_k));
 
   int group_blocks = 0;
   if (has_act_order) {
     if (is_k_full) {
       KLLM_KERNEL_CHECK(group_size != -1);
       group_blocks = group_size / 16;
-      KLLM_KERNEL_CHECK_WITH_INFO(prob_k % group_blocks == 0,
-                                  fmtstr("prob_k = {} is not divisible by group_blocks = {}", prob_k, group_blocks));
+      KLLM_KERNEL_CHECK_WITH_INFO(
+          prob_k % group_blocks == 0,
+          fmt::format("prob_k = {} is not divisible by group_blocks = {}", prob_k, group_blocks));
     } else {
       KLLM_KERNEL_CHECK(group_size == 0);
       group_blocks = 0;
@@ -433,8 +436,9 @@ void marlin_mm(const void* A, const void* B, void* C, void* C_tmp, void* s, void
       group_blocks = -1;
     } else {
       group_blocks = group_size / 16;
-      KLLM_KERNEL_CHECK_WITH_INFO(prob_k % group_blocks == 0,
-                                  fmtstr("prob_k = {} is not divisible by group_blocks = {}", prob_k, group_blocks));
+      KLLM_KERNEL_CHECK_WITH_INFO(
+          prob_k % group_blocks == 0,
+          fmt::format("prob_k = {} is not divisible by group_blocks = {}", prob_k, group_blocks));
     }
   }
 
@@ -496,9 +500,9 @@ void marlin_mm(const void* A, const void* B, void* C, void* C_tmp, void* s, void
       thread_tfg = thread_config_t{thread_k, thread_n, default_threads};
       exec_cfg = exec_config_t{1, thread_tfg};
       KLLM_KERNEL_CHECK_WITH_INFO(prob_n % thread_n == 0,
-                                  fmtstr("prob_n = {} is not divisible by thread_n = {}", prob_n, thread_n));
+                                  fmt::format("prob_n = {} is not divisible by thread_n = {}", prob_n, thread_n));
       KLLM_KERNEL_CHECK_WITH_INFO(prob_k % thread_k == 0,
-                                  fmtstr("prob_k = {} is not divisible by thread_k = {}", prob_k, thread_k));
+                                  fmt::format("prob_k = {} is not divisible by thread_k = {}", prob_k, thread_k));
     } else {
       // Auto config
       exec_cfg = determine_exec_config<scalar_t>(q_type, prob_m_split, prob_n, prob_k, thread_m_blocks, m_block_size_8,
@@ -523,23 +527,23 @@ void marlin_mm(const void* A, const void* B, void* C, void* C_tmp, void* s, void
     KLLM_KERNEL_CHECK_WITH_INFO(
         is_valid_config(thread_tfg, thread_m_blocks, prob_m_split, prob_n, prob_k, num_bits, group_size, has_act_order,
                         is_k_full, has_zp, is_zp_float, max_shared_mem_new),
-        fmtstr("Invalid thread config: thread_m_blocks = {}, thread_k = {}, thread_n = {}, num_threads = {} for MKN = "
-               "[{}, {}, {}] and num_bits = {}, prob_m_split = {}, group_size = {}, has_act_order = {}, is_k_full = "
-               "{}, has_zp = {}, is_zp_float = {}, max_shared_mem_new = {}",
-               thread_m_blocks, thread_tfg.thread_k, thread_tfg.thread_n, thread_tfg.num_threads, prob_m, prob_k,
-               prob_n, num_bits, prob_m_split, group_size, has_act_order, is_k_full, has_zp, is_zp_float,
-               max_shared_mem_new));
+        fmt::format(
+            "Invalid thread config: thread_m_blocks = {}, thread_k = {}, thread_n = {}, num_threads = {} for MKN = "
+            "[{}, {}, {}] and num_bits = {}, prob_m_split = {}, group_size = {}, has_act_order = {}, is_k_full = "
+            "{}, has_zp = {}, is_zp_float = {}, max_shared_mem_new = {}",
+            thread_m_blocks, thread_tfg.thread_k, thread_tfg.thread_n, thread_tfg.num_threads, prob_m, prob_k, prob_n,
+            num_bits, prob_m_split, group_size, has_act_order, is_k_full, has_zp, is_zp_float, max_shared_mem_new));
 
     auto kernel = get_marlin_kernel<scalar_t>(q_type, thread_m_blocks, thread_n_blocks, thread_k_blocks, m_block_size_8,
                                               has_act_order, has_zp, group_blocks, num_threads, is_zp_float);
 
     if (kernel == MarlinDefault) {
       KLLM_KERNEL_CHECK_WITH_INFO(
-          false, fmtstr("Unsupported shapes: MNK = [{}, {}, {}], has_act_order = {}, num_groups = "
-                        "{}, group_size = {}, prob_m_split = {}, thread_m_blocks = {}, "
-                        "thread_n_blocks = {}, thread_k_blocks = {}, num_threads = {}, num_bits = {}",
-                        prob_m, prob_n, prob_k, has_act_order, num_groups, group_size, prob_m_split, thread_m_blocks,
-                        thread_n_blocks, thread_k_blocks, num_threads, num_bits));
+          false, fmt::format("Unsupported shapes: MNK = [{}, {}, {}], has_act_order = {}, num_groups = "
+                             "{}, group_size = {}, prob_m_split = {}, thread_m_blocks = {}, "
+                             "thread_n_blocks = {}, thread_k_blocks = {}, num_threads = {}, num_bits = {}",
+                             prob_m, prob_n, prob_k, has_act_order, num_groups, group_size, prob_m_split,
+                             thread_m_blocks, thread_n_blocks, thread_k_blocks, num_threads, num_bits));
     }
 
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, max_shared_mem_new);
@@ -663,7 +667,7 @@ template <typename T>
 void permute_scales(cudaStream_t stream, const T* input, T* output, const size_t k, const size_t n,
                     const int64_t groupsize) {
   size_t scale_perm_size;
-  if (groupsize < k && groupsize != -1) {
+  if (groupsize < static_cast<int64_t>(k) && groupsize != -1) {
     scale_perm_size = 64;
   } else {
     scale_perm_size = 32;

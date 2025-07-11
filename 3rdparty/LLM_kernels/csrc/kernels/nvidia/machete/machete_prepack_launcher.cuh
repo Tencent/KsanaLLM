@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include "csrc/kernels/nvidia/machete/cutlass_extensions/torch_utils.hpp"
 #include "csrc/kernels/nvidia/machete/machete_prepack_kernel.cuh"
 #include "csrc/utils/nvidia/scalar_type.hpp"
@@ -59,9 +61,9 @@ void prepack_impl(const void* inB, const std::vector<size_t> inB_shape, void* ou
 
   KLLM_KERNEL_CHECK_WITH_INFO(
       (inB_shape[0] * eles_per_storage) % size<1>(PPBlockShape_NK{}) == 0,
-      fmtstr("B.shape[0] (in terms of unpacked elements) must be a multiple of {}", size<1>(PPBlockShape_NK{})));
+      fmt::format("B.shape[0] (in terms of unpacked elements) must be a multiple of {}", size<1>(PPBlockShape_NK{})));
   KLLM_KERNEL_CHECK_WITH_INFO(inB_shape[1] % size<0>(PPBlockShape_NK{}) == 0,
-                              fmtstr("B.shape[1] must be a multiple of {}", size<0>(PPBlockShape_NK{})));
+                              fmt::format("B.shape[1] must be a multiple of {}", size<0>(PPBlockShape_NK{})));
 
   using StrideB = cutlass::detail::TagToStrideB_t<cutlass::layout::ColumnMajor>;
   // auto const l_inBt_packed = make_cute_layout<StrideB>(inBt_packed, "B");

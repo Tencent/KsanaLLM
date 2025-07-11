@@ -19,10 +19,12 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include "cute/layout.hpp"
-#include "cutlass/layout/matrix.h"
 #include "cutlass/bfloat16.h"
 #include "cutlass/half.h"
+#include "cutlass/layout/matrix.h"
 
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "csrc/utils/nvidia/string_utils.h"
@@ -37,10 +39,8 @@ namespace cute {
 namespace detail {
 
 template <class T, class F, class G, int... I>
-CUTE_HOST_DEVICE constexpr auto tapply_with_idx(T&& t, F&& f, G&& g,
-                                                seq<I...>) {
+CUTE_HOST_DEVICE constexpr auto tapply_with_idx(T&& t, F&& f, G&& g, seq<I...>) {
   return g(f(cute::get<I>(static_cast<T&&>(t)), I)...);
-  
 }
 
 template <class F, int... I>
@@ -54,8 +54,7 @@ template <class T, class F>
 CUTE_HOST_DEVICE constexpr auto transform_with_idx(T const& t, F&& f) {
   if constexpr (cute::is_tuple<T>::value) {
     return detail::tapply_with_idx(
-        t, f, [](auto const&... a) { return cute::make_tuple(a...); },
-        tuple_seq<T>{});
+        t, f, [](auto const&... a) { return cute::make_tuple(a...); }, tuple_seq<T>{});
   } else {
     return f(t);
   }
@@ -79,7 +78,7 @@ CUTE_HOST_DEVICE constexpr auto make_shape_from_idx(F&& f) {
 // strides are set to be 0 or 1.
 template <typename Stride>
 static inline auto make_cute_layout_from_shape(const std::vector<size_t>& tensor_shape,
-                                    std::string_view name = "tensor") {
+                                               std::string_view name = "tensor") {
   int tensor_dim = tensor_shape.size();
   KLLM_KERNEL_CHECK(tensor_dim <= rank(Stride{}));
 
@@ -91,29 +90,28 @@ static inline auto make_cute_layout_from_shape(const std::vector<size_t>& tensor
     current_stride *= tensor_shape[i];
   }
 
-  auto stride = cute::transform_with_idx(
-      Stride{}, [&](auto const& stride_ele, auto const& idx) {
-        using StrideEle = std::decay_t<decltype(stride_ele)>;
+  auto stride = cute::transform_with_idx(Stride{}, [&](auto const& stride_ele, auto const& idx) {
+    using StrideEle = std::decay_t<decltype(stride_ele)>;
 
-        if (idx < tensor_dim) {
-          if constexpr (cute::is_static_v<StrideEle>) {
-            KLLM_KERNEL_CHECK_WITH_INFO(StrideEle::value == tensor_stride[idx], fmtstr("Expected {}.stride({}) to be {}",
-                        name, idx, StrideEle::value));
-            return StrideEle{};
-          } else {
-            if (tensor_shape[idx] == 1) {
-              return StrideEle{0};
-            } else {
-              return StrideEle{static_cast<long>(tensor_stride[idx])};
-            }
-          }
+    if (idx < tensor_dim) {
+      if constexpr (cute::is_static_v<StrideEle>) {
+        KLLM_KERNEL_CHECK_WITH_INFO(StrideEle::value == tensor_stride[idx],
+                                    fmt::format("Expected {}.stride({}) to be {}", name, idx, StrideEle::value));
+        return StrideEle{};
+      } else {
+        if (tensor_shape[idx] == 1) {
+          return StrideEle{0};
         } else {
-          if constexpr (cute::is_static_v<StrideEle>) {
-            static_assert(StrideEle::value == 0 || StrideEle::value == 1);
-          }
-          return StrideEle{};
+          return StrideEle{static_cast<long>(tensor_stride[idx])};
         }
-      });
+      }
+    } else {
+      if constexpr (cute::is_static_v<StrideEle>) {
+        static_assert(StrideEle::value == 0 || StrideEle::value == 1);
+      }
+      return StrideEle{};
+    }
+  });
 
   auto shape = cute::make_shape_from_idx<rank(Stride{})>([&](auto const& idx) {
     if (idx < tensor_dim)
@@ -126,9 +124,8 @@ static inline auto make_cute_layout_from_shape(const std::vector<size_t>& tensor
 }
 
 template <typename Stride>
-static inline auto maybe_make_cute_layout_from_shape(
-    std::optional<std::vector<size_t>> const& tensor_shape,
-    std::string_view name = "tensor") {
+static inline auto maybe_make_cute_layout_from_shape(std::optional<std::vector<size_t>> const& tensor_shape,
+                                                     std::string_view name = "tensor") {
   using Layout = decltype(make_cute_layout_from_shape<Stride>(*tensor_shape));
 
   if (tensor_shape) {

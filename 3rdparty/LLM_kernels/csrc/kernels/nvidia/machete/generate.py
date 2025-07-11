@@ -133,6 +133,8 @@ DISPATCH_TEMPLATE = """
 
 #include "csrc/kernels/nvidia/machete/machete_mm_launcher.cuh"
 
+#include <fmt/format.h>
+
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "csrc/utils/nvidia/string_utils.h"
 
@@ -167,8 +169,8 @@ void mm_dispatch_{{type_sig}}(MMArgs args) {
   if (*args.maybe_schedule == "{{ gen_sch_sig(s) }}")
     return impl_{{type_sig}}_sch_{{ gen_sch_sig(s) }}(args);
   {%- endfor %}
-  KLLM_KERNEL_CHECK_WITH_INFO(false, fmtstr("machete_gemm(..) is not implemented for "
-                                     "schedule = {}", *args.maybe_schedule));
+  KLLM_KERNEL_CHECK_WITH_INFO(false, fmt::format("machete_gemm(..) is not implemented for "
+                                     "schedule = {}", args.maybe_schedule ? *args.maybe_schedule : "None"    ));
 }
 {%- endfor %}
 
@@ -214,7 +216,7 @@ void mm_dispatch(MMArgs args) {
   {%- endfor %}
   
   KLLM_KERNEL_CHECK_WITH_INFO(
-    false, fmtstr("machete_mm(..) is not implemented for a_type={}, b_type={}, out_type={}, with_group_scale_type={}, with_group_zeropoint_type={}, with_channel_scale_type={}, with_token_scale_type={}", args.a_type.str(), args.b_type.str(), out_type, maybe_g_scales_type ? (*maybe_g_scales_type).str() : "None", maybe_g_zeros_type ? (*maybe_g_zeros_type).str() : "None", maybe_ch_scales_type ? (*maybe_ch_scales_type).str() : "None", maybe_tok_scales_type ? (*maybe_tok_scales_type).str() : "None"));
+    false, fmt::format("machete_mm(..) is not implemented for a_type={}, b_type={}, out_type={}, with_group_scale_type={}, with_group_zeropoint_type={}, with_channel_scale_type={}, with_token_scale_type={}", args.a_type.str(), args.b_type.str(), out_type.str(), maybe_g_scales_type ? (*maybe_g_scales_type).str() : "None", maybe_g_zeros_type ? (*maybe_g_zeros_type).str() : "None", maybe_ch_scales_type ? (*maybe_ch_scales_type).str() : "None", maybe_tok_scales_type ? (*maybe_tok_scales_type).str() : "None"));
 }
 
 std::vector<std::string> supported_schedules_dispatch(
@@ -351,6 +353,8 @@ PREPACK_TEMPLATE = """
 
 #include "csrc/kernels/nvidia/machete/machete_prepack_launcher.cuh"
 
+#include <fmt/format.h>
+
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "csrc/utils/nvidia/string_utils.h"
 
@@ -381,7 +385,7 @@ void prepack_B_dispatch(PrepackBArgs args, void* out_ptr, cudaStream_t stream) {
   }
   {%- endfor %}
   
-  KLLM_KERNEL_CHECK_WITH_INFO(false, fmtstr(
+  KLLM_KERNEL_CHECK_WITH_INFO(false, fmt::format(
     "prepack_B_dispatch(..) is not implemented for atype = {}, b_type = {}, with_group_scales_type= {}",
         args.a_type.str(), args.b_type.str(), args.maybe_group_scales_type ? (*args.maybe_group_scales_type).str() : "None"));
 }

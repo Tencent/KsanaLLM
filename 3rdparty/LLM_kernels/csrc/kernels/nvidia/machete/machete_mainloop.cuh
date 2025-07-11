@@ -532,7 +532,7 @@ struct MacheteCollectiveMma {
     typename Params::TMA_A tma_load_a;
     typename Params::TMA_B tma_load_b;
     typename Params::TMA_Scale tma_load_scale;
-    typename Params::TMA_Zero tma_load_zero;
+    typename Params::TMA_Zero tma_load_zero{};
 
     auto layout = GmemLayoutA::TVbNbKL_to_offset_copy(make_shape(M, K, L));
     tma_load_a = make_tma_copy_A(make_logical_tensor(ptr_A, shape(layout), stride(layout)));

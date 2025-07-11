@@ -114,8 +114,8 @@ class NvidiaMarlinTestSuit : public NvidiaTestSuitBase {
         MemoryType::MEMORY_GPU, {static_cast<size_t>(new_qweight_shape[0]), static_cast<size_t>(new_qweight_shape[1])},
         false);
     llm_kernels::nvidia::marlin::gptq_marlin_repack(reinterpret_cast<const uint32_t*>(w_q.data_ptr), nullptr,
-                                                    reinterpret_cast<uint32_t*>(w_q_repack.data_ptr), 1, k, n, bits, false,
-                                                    0, stream);
+                                                    reinterpret_cast<uint32_t*>(w_q_repack.data_ptr), 1, k, n, bits,
+                                                    false, 0, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // scale预处理

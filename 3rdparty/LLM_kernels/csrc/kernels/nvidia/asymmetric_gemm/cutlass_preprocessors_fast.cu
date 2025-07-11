@@ -69,7 +69,7 @@ void fast_permute_B_rows_for_mixed_gemm(int8_t* permuted_quantized_tensor, const
       fmtstr("Invalid shape for quantized tensor. On turing/Ampere, the number of cols must be a multiple of %d.",
              MMA_SHAPE_N));
 
-  KLLM_KERNEL_CHECK_WITH_INFO(size_t(B_ROWS_PER_MMA) == row_permutation_size, "Unexpected number of LDSM rows permuted.");
+  KLLM_KERNEL_CHECK_WITH_INFO(B_ROWS_PER_MMA == row_permutation_size, "Unexpected number of LDSM rows permuted.");
 
   constexpr int THREADS = 64;
   dim3 gridSize(num_experts, num_rows / B_ROWS_PER_MMA);
@@ -205,7 +205,6 @@ void fast_subbyte_transpose_impl(int8_t* transposed_quantized_tensor, int8_t con
              VECTOR_WIDTH, col_bytes_trans, col_bytes));
 
   int const num_m_tiles = (num_rows + M_TILE_L1 - 1) / M_TILE_L1;
-  int const num_n_tiles = (col_bytes + N_TILE_L1 - 1) / N_TILE_L1;
 
   constexpr int THREADS = 64;
   dim3 gridSize(num_experts, num_m_tiles);

@@ -244,7 +244,7 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     std::vector<void *> input_handles(8);
 
     bool is_full_nvlink = true;
-    for (size_t i = 0; i < device_count; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(device_count); ++i) {
       if (GetNvLinkVersion(0, i) == 0) {
         is_full_nvlink = false;
         break;
@@ -301,7 +301,6 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     input_handles_cpu_ptrs[cur_rank] = self_data_meta_cpu.data_ptr;
 
     BufferMeta refer_result_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {static_cast<size_t>(data_size)}, false);
-    T *refer_result = static_cast<T *>(refer_result_meta.data_ptr);
     BufferMeta refer_result_meta_cpu = CopyToHost<T>(refer_result_meta);
 
     // sync all threads
@@ -327,7 +326,6 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     cudaEvent_t start, stop;
     CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
     CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-    constexpr int warmup_iters = 10;
     constexpr int num_iters = 25;
     dummy_kernel<<<1, 1, 0, stream>>>();
     float duration_ms = 0;

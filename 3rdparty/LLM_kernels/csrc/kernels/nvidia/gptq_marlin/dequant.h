@@ -86,6 +86,7 @@ where `scale_factor * multiplier` can be computed at weight loading.
 #pragma once
 
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_dtypes.cuh"
+#include "csrc/utils/nvidia/scalar_type.hpp"
 
 namespace llm_kernels {
 namespace nvidia {

@@ -206,8 +206,8 @@ class ScalarType {
     // shift the mantissa into the position for a double and
     // the exponent
     uint64_t double_raw = (max_mantissa << (52 - mantissa)) | (max_exponent_double << 52);
-
-    return *reinterpret_cast<double*>(&double_raw);
+    uint64_t* double_raw_ptr = &double_raw;
+    return *reinterpret_cast<double*>(double_raw_ptr);
   }
 
   constexpr std::variant<int64_t, double> _raw_max() const {
@@ -226,9 +226,11 @@ class ScalarType {
       constexpr uint64_t sign_bit_double = (uint64_t(1) << 63);
 
       double max = _floating_point_max();
-      uint64_t max_raw = *reinterpret_cast<uint64_t*>(&max);
+      double* max_ptr = &max;
+      uint64_t max_raw = *reinterpret_cast<uint64_t*>(max_ptr);
       uint64_t min_raw = max_raw | sign_bit_double;
-      return {*reinterpret_cast<double*>(&min_raw)};
+      uint64_t* min_raw_ptr = &min_raw;
+      return {*reinterpret_cast<double*>(min_raw_ptr)};
     } else {
       KLLM_KERNEL_CHECK_WITH_INFO(!is_signed() || size_bits() <= 64, "Cannot represent min as a int64_t");
       if (is_signed()) {

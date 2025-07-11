@@ -20,7 +20,7 @@ void InvokeLayerNormWithBeta(T* out, const T* input, const T* gamma, const T* be
                              const int32_t m, const int32_t n, float* scale, const int32_t int8_mode,
                              cudaStream_t stream, int32_t opt_version = 2) {
   InvokeLayerNormWithBeta(out, input, gamma, beta, layernorm_eps, m, n, scale, (float*)nullptr, int8_mode, stream,
-                          opt_version = 2);
+                          opt_version);
 }
 
 template <typename T>

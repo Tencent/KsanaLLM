@@ -18,7 +18,6 @@
  * https://github.com/vllm-project/vllm/tree/65334ef3b9e4fd32ebc5c4e512debc25d5025488/csrc/quantization/gptq_marlin
  */
 
-#include "csrc/kernels/nvidia/gptq_marlin/kernel.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_template.h"
 
 namespace llm_kernels {
