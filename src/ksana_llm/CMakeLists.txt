@@ -19,6 +19,7 @@ add_subdirectory(modules)
 add_subdirectory(model_loader)
 add_subdirectory(models)
 add_subdirectory(models/base)
+add_subdirectory(multi_batch_controller)
 add_subdirectory(plugins)
 add_subdirectory(data_hub)
 add_subdirectory(runtime)
@@ -45,6 +46,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   connector
   data_hub
   batch_manager
+  multi_batch_controller
   batch_scheduler
   cache_manager
   distributed

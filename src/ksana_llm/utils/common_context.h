@@ -45,8 +45,7 @@ class ContextT {
 
   std::vector<Stream>& GetCommStreams() { return comm_streams_; }
 
-  std::vector<Stream>& GetCommSendStreams() { return comm_send_streams_; }
-  std::vector<Stream>& GetCommRecvStreams() { return comm_recv_streams_; }
+  std::vector<Stream>& GetCommNodesStreams() { return comm_nodes_streams_; }
 
   const std::set<int>& GetSupportedCudaGraphCaptureSizes() { return cudagraph_captured_batchsizes; }
 
@@ -90,9 +89,8 @@ class ContextT {
   std::vector<Stream> compute_streams_;
   // these comm_streams seems not in use
   std::vector<Stream> comm_streams_;
-
-  std::vector<Stream> comm_send_streams_;
-  std::vector<Stream> comm_recv_streams_;
+  // btw nodes comm streams
+  std::vector<Stream> comm_nodes_streams_;
 
   std::vector<Stream> h2d_streams_;
   std::vector<Stream> d2h_streams_;

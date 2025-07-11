@@ -35,6 +35,7 @@ TEST(CommunicationPerformanceRunnerTest, TestCommunication) {
     setenv("WORLD_SIZE", world_size.c_str(), 1);
     setenv("NODE_RANK", "0", 1);
     setenv("CUDA_VISIBLE_DEVICES", "0", 1);
+    setenv("USE_TCP_DATA_CHANNEL", "1", 1);
 
     try {
       CommunicationPerformanceRunner runner(config_path);
@@ -60,6 +61,7 @@ TEST(CommunicationPerformanceRunnerTest, TestCommunication) {
     setenv("WORLD_SIZE", world_size.c_str(), 1);
     setenv("NODE_RANK", "1", 1);
     setenv("CUDA_VISIBLE_DEVICES", "1", 1);
+    setenv("USE_TCP_DATA_CHANNEL", "1", 1);
 
     try {
       CommunicationPerformanceRunner runner(config_path);

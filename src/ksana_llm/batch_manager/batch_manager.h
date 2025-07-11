@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "ksana_llm/batch_scheduler/batch_scheduler.h"
+#include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/samplers/sampler.h"
@@ -32,6 +33,9 @@ class BatchManager {
 
   // Set the runtime instance to batch manager.
   void SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime);
+
+  // Set the multi_batch contorller instance to batch manager.
+  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller);
 
   // Enqueue a request to waiting queue.
   Status Enqueue(std::shared_ptr<Request> &request);
@@ -66,6 +70,9 @@ class BatchManager {
 
   // The batch scheduler.
   std::shared_ptr<BatchSchedulerInterface> batch_scheduler_ = nullptr;
+
+  // The multi batch controllor.
+  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
 
   // Maximum number of pipeline parallel batch threads
   size_t max_pp_batch_num_;

@@ -22,14 +22,15 @@ NcclDataChannel::NcclDataChannel(HiddenUnitBufferPool* hidden_unit_buffer_pool, 
 
   hidden_unit_buffer_pool_ = hidden_unit_buffer_pool ? hidden_unit_buffer_pool : GetHiddenUnitBufferPool();
 
-  // TODO(TJ): optmize to use event
-  recved_events_.resize(context_->GetMaxMultiBatchSize());
-  for (size_t batch_id = 0; batch_id < recved_events_.size(); ++batch_id) {
-    recved_events_[batch_id].resize(context_->GetTensorParallelSize());
-    for (int dev_id = 0; dev_id < recved_events_[batch_id].size(); ++dev_id) {
-      EventCreateWithFlags(&(recved_events_[batch_id][dev_id]), EVENT_DISABLE_TIMING);
-    }
+  // keep send and recv in order to have better performance.
+  if (context_->IsChief()) {
+    KLLM_LOG_INFO << "init for master";
+    last_recv_done_waiter_ = std::unique_ptr<Waiter>(new Waiter(0));
+  } else {
+    KLLM_LOG_INFO << "init for worker";
+    last_recv_done_waiter_ = std::unique_ptr<Waiter>(new Waiter(1));
   }
+
   recv_thread_ = std::unique_ptr<std::thread>(new std::thread(&NcclDataChannel::ProcessRecvLoop, this));
   send_thread_ = std::unique_ptr<std::thread>(new std::thread(&NcclDataChannel::ProcessSendLoop, this));
   KLLM_LOG_DEBUG << "NcclDataChannel() succeed \n";
@@ -38,6 +39,7 @@ NcclDataChannel::NcclDataChannel(HiddenUnitBufferPool* hidden_unit_buffer_pool, 
 NcclDataChannel::~NcclDataChannel() {
   terminated_ = true;
   hidden_unit_buffer_pool_->Stop();
+  last_recv_done_waiter_->Stop();
   Close();
   for (auto& multi_events : recved_events_) {
     for (auto& event : multi_events) {
@@ -131,9 +133,14 @@ Status NcclDataChannel::Disconnect() {
   return Status();
 }
 
-void NcclDataChannel::NotifySendFinished(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
+void NcclDataChannel::NotifySendCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
 
-void NcclDataChannel::NotifyRecvFinished(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
+void NcclDataChannel::NotifyRecvCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
+
+void NcclDataChannel::WaitLastRecvDone() {
+  last_recv_done_waiter_->Wait();
+  last_recv_done_waiter_->Reset(1);
+}
 
 Status NcclDataChannel::ProcessSendLoop() {
   while (!terminated_) {
@@ -147,9 +154,9 @@ Status NcclDataChannel::ProcessSendLoop() {
     if (!status.OK()) {
       KLLM_LOG_ERROR << "ProcessSendLoop send data failed, info:" << status.GetMessage();
     }
-
-    NotifySendFinished(hidden_unit);
-    KLLM_LOG_DEBUG << "notitfy async send done, multi_batch_id:" << hidden_unit->multi_batch_id << ", " << hidden_unit;
+    NotifySendCommandLaunched(hidden_unit);
+    KLLM_LOG_DEBUG << "notitfy send commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
+                   << hidden_unit;
   }
 
   return Status();
@@ -157,13 +164,13 @@ Status NcclDataChannel::ProcessSendLoop() {
 
 void NcclDataChannel::WaitUtilRecvFinished(HiddenUnitDeviceBuffer* hidden_unit) {
   PROFILE_EVENT_SCOPE(WaitUtilRecvFinished, "WaitUtilRecvFinished");
-  // recv need to wait util data recved
   if (!context_->IsChief()) {
     // worker use compute stream donot need wait
     return;
   }
   for (size_t dev_id = 0; dev_id < hidden_unit->tensors.size(); ++dev_id) {
-    StreamSynchronize(context_->GetCommRecvStreams()[dev_id]);
+    // TODO(TJ): cloud use events to get better sync performance
+    StreamSynchronize(context_->GetCommNodesStreams()[dev_id]);
   }
 }
 
@@ -179,17 +186,15 @@ Status NcclDataChannel::ProcessRecvLoop() {
       KLLM_LOG_WARNING << "ProcessRecvLoop empty hidden unit from host send queue, break..";
       break;
     }
-    if (context_->IsChief()) {
-      // Note: nccl conflict with flash mla so sleep, worker do not need sleep
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
     Status status = ProcessDeviceBuffer(hidden_unit, false);
     if (!status.OK()) {
       KLLM_LOG_ERROR << "ProcessRecvLoop send data failed, info:" << status.GetMessage();
     }
-    WaitUtilRecvFinished(hidden_unit);
+    NotifyRecvCommandLaunched(hidden_unit);
+    KLLM_LOG_DEBUG << "notitfy recv commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
+                   << hidden_unit;
 
-    NotifyRecvFinished(hidden_unit);
+    WaitUtilRecvFinished(hidden_unit);
     KLLM_LOG_DEBUG << "notitfy recv done, multi_batch_id:" << hidden_unit->multi_batch_id << ", " << hidden_unit;
     // return the recved buffer to be used
     hidden_unit_buffer_pool_->PutToDeviceRecvedQueue(hidden_unit);
@@ -289,7 +294,8 @@ void NcclDataChannel::SendRecvDeviceData(bool is_send, size_t multi_batch_id, in
 Status NcclDataChannel::ProcessDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit, bool is_send) {
   DataType data_type;
   std::vector<size_t> shape;
-  GetHiddenUnitMeta(hidden_unit->multi_batch_id, shape, data_type);
+  const size_t multi_batch_id = hidden_unit->multi_batch_id;
+  GetHiddenUnitMeta(multi_batch_id, shape, data_type);
 
   ncclDataType_t nccl_dtype;
   GetNcclDataType(data_type, nccl_dtype);
@@ -300,33 +306,34 @@ Status NcclDataChannel::ProcessDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit,
   }
 
   std::string send_or_recv_str = (is_send ? "send" : "recv");
-  KLLM_LOG_DEBUG << "start to " << send_or_recv_str << " multi_batch_id= " << hidden_unit->multi_batch_id
+  KLLM_LOG_DEBUG << "start to " << send_or_recv_str << " multi_batch_id= " << multi_batch_id
                  << ", shape:" << Vector2Str(shape);
-  PROFILE_EVENT_SCOPE(ProcessDeviceBuffer,
-                      fmt::format("nccl_{}_multi_batch_id_{}", send_or_recv_str, hidden_unit->multi_batch_id));
+  PROFILE_EVENT_SCOPE(ProcessDeviceBuffe_,
+                      fmt::format("nccl_{}_multi_batch_id_{}", send_or_recv_str, multi_batch_id));
   int devs_num = static_cast<int>(hidden_unit->tensors.size());
+
+  if (is_send) {
+    WaitLastRecvDone();
+  }
   ncclGroupStart();
   for (int dev_id = 0; dev_id < devs_num; ++dev_id) {
     Tensor& tensor = hidden_unit->tensors[dev_id];
     tensor.shape = shape;
     tensor.dtype = data_type;
     if (context_->IsChief()) {
-      if (is_send) {
-        auto send_streams = context_->GetCommSendStreams();
-        SendRecvDeviceData(is_send, hidden_unit->multi_batch_id, dev_id, hidden_unit->comm_type,
-                           hidden_unit->scatter_sender_rank, send_streams, tensor.GetPtr<void>(), count, nccl_dtype);
-      } else {
-        auto recv_streams = context_->GetCommRecvStreams();
-        SendRecvDeviceData(is_send, hidden_unit->multi_batch_id, dev_id, hidden_unit->comm_type,
-                           hidden_unit->scatter_sender_rank, recv_streams, tensor.GetPtr<void>(), count, nccl_dtype);
-      }
+      auto recv_send_streams = context_->GetCommNodesStreams();
+      SendRecvDeviceData(is_send, multi_batch_id, dev_id, hidden_unit->comm_type, hidden_unit->scatter_sender_rank,
+                         recv_send_streams, tensor.GetPtr<void>(), count, nccl_dtype);
     } else {
       auto recv_send_streams = context_->GetComputeStreams();
-      SendRecvDeviceData(is_send, hidden_unit->multi_batch_id, dev_id, hidden_unit->comm_type,
-                         hidden_unit->scatter_sender_rank, recv_send_streams, tensor.GetPtr<void>(), count, nccl_dtype);
+      SendRecvDeviceData(is_send, multi_batch_id, dev_id, hidden_unit->comm_type, hidden_unit->scatter_sender_rank,
+                         recv_send_streams, tensor.GetPtr<void>(), count, nccl_dtype);
     }
   }
   ncclGroupEnd();
+  if (!is_send) {
+    last_recv_done_waiter_->Notify();
+  }
 
   return Status();
 }

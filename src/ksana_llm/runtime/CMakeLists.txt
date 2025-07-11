@@ -44,10 +44,10 @@ if(WITH_TOPS)
 endif()
 
 add_library(runtime STATIC ${runtime_SRCS})
-add_dependencies(runtime utils fmt gflags layer_progress_tracker)
+add_dependencies(runtime utils fmt gflags layer_progress_tracker multi_batch_controller)
 target_link_libraries(runtime PUBLIC
   -lpthread -ldl gflags ${runtime_nvidia_LIBS} ${runtime_ascend_LIBS}
-  model_loader layer_progress_tracker models utils transfer
+  model_loader layer_progress_tracker models utils transfer multi_batch_controller
 )
 
 # for test

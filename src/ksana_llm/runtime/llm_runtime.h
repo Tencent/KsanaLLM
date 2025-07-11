@@ -8,6 +8,7 @@
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/data_hub/schedule_output.h"
+#include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/draft_generator/draft_generator_interface.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -30,6 +31,9 @@ class LlmRuntime {
 
   // Set cache manager, used to operate the kv cache block.
   void SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers);
+
+  // Set the multi_batch contorller.
+  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller);
 
   // Set draft generator
   void SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator);
@@ -107,6 +111,9 @@ class LlmRuntime {
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;
+
+  // The multi batch controllor.
+  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
 
   // The runtime context.
   std::shared_ptr<Context> context_ = nullptr;

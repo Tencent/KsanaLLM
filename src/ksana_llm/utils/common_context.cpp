@@ -28,8 +28,7 @@ ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_
   max_multi_batch_size_ = max_multi_batch_size;
   KLLM_CHECK_WITH_INFO(max_multi_batch_size > 0, "max_multi_batch_size should be bigger than 0");
 
-  comm_send_streams_.reserve(tensor_parallel_size_);
-  comm_recv_streams_.reserve(tensor_parallel_size_);
+  comm_nodes_streams_.reserve(tensor_parallel_size_);
   compute_streams_.reserve(tensor_parallel_size_);
   h2d_streams_.reserve(tensor_parallel_size_);
   d2h_streams_.reserve(tensor_parallel_size_);
@@ -61,8 +60,7 @@ ContextT<T>::~ContextT() {
   for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     memory_manage_streams_[worker_id].Destroy();
     compute_streams_[worker_id].Destroy();
-    comm_send_streams_[worker_id].Destroy();
-    comm_recv_streams_[worker_id].Destroy();
+    comm_nodes_streams_[worker_id].Destroy();
     h2d_streams_[worker_id].Destroy();
     d2h_streams_[worker_id].Destroy();
     d2d_streams_[worker_id].Destroy();
@@ -75,16 +73,14 @@ ContextT<T>::~ContextT() {
   d2h_streams_.clear();
   d2d_streams_.clear();
   comm_streams_.clear();
-  comm_send_streams_.clear();
-  comm_recv_streams_.clear();
+  comm_nodes_streams_.clear();
 }
 
 template <int T>
 void ContextT<T>::InitStreams(const int worker_id) {
   memory_manage_streams_.emplace_back(worker_id);
   compute_streams_.emplace_back(worker_id);
-  comm_send_streams_.emplace_back(worker_id);
-  comm_recv_streams_.emplace_back(worker_id);
+  comm_nodes_streams_.emplace_back(worker_id);
   h2d_streams_.emplace_back(worker_id);
   d2h_streams_.emplace_back(worker_id);
   d2d_streams_.emplace_back(worker_id);

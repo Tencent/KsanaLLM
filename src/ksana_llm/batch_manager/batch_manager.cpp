@@ -12,7 +12,6 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_request.h"
-#include "ksana_llm/utils/critical_zone.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/string_utils.h"
@@ -44,6 +43,10 @@ void BatchManager::SetBatchScheduler(std::shared_ptr<BatchSchedulerInterface> ba
 }
 
 void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) { llm_runtime_ = llm_runtime; }
+
+void BatchManager::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
+  multi_batch_controller_ = controller;
+}
 
 Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   KLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
@@ -116,6 +119,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(multi_batch_id);
     ScheduleOutput schedule_output = MergeScheduleOutputGroup(schedule_output_group);
     if (schedule_output_group->RunningSize() == 0) {
+      multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);
       if (batch_scheduler_->IsIdle(multi_batch_id) && !terminated_) {
         batch_scheduler_->WaitUntilHaveReqs(multi_batch_id);
       } else {
@@ -124,7 +128,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       }
       continue;
     }
-
+    multi_batch_controller_->MultiBatchThreadIsReady(multi_batch_id);
     RecordRequestSchedEventsWithStartTime(schedule_output.running_reqs, 0, multi_batch_id, 0, "Schedule",
                                           sched_start_time_ns);
     size_t forwarding_token_num = 0, total_seq_len = 0;
@@ -139,10 +143,9 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
-      EnterDeviceComputingCriticalZone();
-      KLLM_LOG_DEBUG
-          << "EnterDeviceComputingCriticalZone success. epilogue=false, Broadcast schedule output multi_batch_id="
-          << schedule_output.multi_batch_id << " to all workers.";
+      multi_batch_controller_->WaitUtilCurrentBatchCanRun(multi_batch_id);
+      KLLM_LOG_DEBUG << "lock and start running multi_batch_id: " << schedule_output.multi_batch_id
+                     << ", epilogue=false";
       BroadcastScheduleOutput(&schedule_output);
       InitHiddenUnits(schedule_output.multi_batch_id);
     }
@@ -159,6 +162,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(SendAndStepOnChief_,
                           fmt::format("SendAndStepOnChief_{}_true", schedule_output.multi_batch_id));
+      multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(schedule_output.multi_batch_id);
       SendHiddenUnits(schedule_output.multi_batch_id);
 
       // lm head & sampling
@@ -193,12 +197,11 @@ Status BatchManager::WorkerProcess() {
   SetDevice(0);
   while (!terminated_) {
     KLLM_LOG_DEBUG << "Wait schedule_output from upstream node.";
-    EnterDeviceComputingCriticalZone();
     ScheduleOutput *schedule_output = GetScheduleOutputPool()->GetFromRecvQueue();
     if (!schedule_output) {
       break;
     }
-    KLLM_LOG_INFO << "WorkerProcess: start process schedule_output multi_batch_id=" << schedule_output->multi_batch_id;
+    KLLM_LOG_DEBUG << "WorkerProcess: start process schedule_output multi_batch_id=" << schedule_output->multi_batch_id;
     InitHiddenUnits(schedule_output->multi_batch_id);
 
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
@@ -210,7 +213,6 @@ Status BatchManager::WorkerProcess() {
     KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
                    << ", runningSize=" << schedule_output->running_reqs.size() << ", step cost "
                    << (end_time_ms - start_time_ms) << "ms";
-    LeaveDeviceComputingCriticalZone();
 
     // Send hidden units to downstream node.
     SendHiddenUnits(schedule_output->multi_batch_id);

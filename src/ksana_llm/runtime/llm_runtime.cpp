@@ -19,7 +19,6 @@
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
-#include "ksana_llm/utils/critical_zone.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
 
@@ -38,6 +37,10 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, std::
 
 void LlmRuntime::SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers) {
   cache_managers_ = cache_managers;
+}
+
+void LlmRuntime::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
+  multi_batch_controller_ = controller;
 }
 
 void LlmRuntime::SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator) {
@@ -521,17 +524,19 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
 
   if (!epilogue) {
     // Alloc resources before forwarding
-    KLLM_LOG_DEBUG << "Start EnterDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
     model_instance->AllocResources(schedule_output->multi_batch_id);
   }
   // Inference forward.
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   if (epilogue && !context_->IsStandalone()) {
-    LeaveDeviceComputingCriticalZone();
-    KLLM_LOG_DEBUG << "LeaveDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
+    multi_batch_controller_->NotifyOtherBatchCanRun();
+    KLLM_LOG_DEBUG << "unlock multi_batch_id=" << schedule_output->multi_batch_id << ", start to recv hiddens";
+    multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id);
     SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
     RecvHiddenUnits(schedule_output->multi_batch_id);
-    EnterDeviceComputingCriticalZone();
+
+    KLLM_LOG_DEBUG << "try to lock again multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=true";
+    multi_batch_controller_->WaitUtilCurrentBatchCanRun(schedule_output->multi_batch_id);
   }
   Forward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
   time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
@@ -548,8 +553,8 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
 
     // Forwarding finished, free resources.
     model_instance->FreeResources(schedule_output->multi_batch_id);
-    LeaveDeviceComputingCriticalZone();
-    KLLM_LOG_DEBUG << "LeaveDeviceComputingCriticalZone. multi_batch_id=" << schedule_output->multi_batch_id;
+    // Note(TJ): donot need NotifyOtherBatchCanRun, because maybe this batch will enter again.
+    KLLM_LOG_DEBUG << "finish multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue;
   }
   KLLM_LOG_DEBUG << "Leave llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;

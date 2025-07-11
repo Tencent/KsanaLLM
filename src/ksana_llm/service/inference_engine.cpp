@@ -175,7 +175,9 @@ Status InferenceEngine::Initialize() {
   KLLM_LOG_DEBUG << "Batch Scheduler Config Max Batch Size= " << max_batch_size
                  << ", Max Vocab Size= " << max_vocab_size
                  << ", max_pp_batch_num=" << batch_scheduler_config.max_pp_batch_num;
-
+  if (context_->IsChief()) {
+    multi_batch_controller_ = std::make_shared<MultiBatchController>(batch_scheduler_config.max_pp_batch_num);
+  }
   InitHiddenUnitsMetaInfoMap(batch_scheduler_config.max_pp_batch_num);
   batch_manager_ = std::make_unique<BatchManager>(context_, batch_scheduler_config.max_pp_batch_num);
 
@@ -261,6 +263,7 @@ Status InferenceEngine::Initialize() {
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
+  llm_runtime_->SetMultiBatchController(multi_batch_controller_);
   llm_runtime_->SetMtpForward(env->IsMTPEnabled() && model_config.num_nextn_predict_layers > 0);
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
@@ -271,6 +274,7 @@ Status InferenceEngine::Initialize() {
 #endif
 
   batch_manager_->SetBatchScheduler(batch_scheduler_);
+  batch_manager_->SetMultiBatchController(multi_batch_controller_);
   batch_manager_->SetLlmRuntime(llm_runtime_);
 
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {

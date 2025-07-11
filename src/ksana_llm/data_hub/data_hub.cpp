@@ -14,7 +14,6 @@
 #include "ksana_llm/distributed/packet_type.h"
 #include "ksana_llm/distributed/raw_packet.h"
 #include "ksana_llm/profiler/profile_event.h"
-#include "ksana_llm/utils/critical_zone.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {

@@ -52,11 +52,16 @@ class NcclDataChannel : public DataChannelInterface {
   virtual Status ProcessRecvLoop();
   virtual Status ProcessSendLoop();
 
-  void NotifyRecvFinished(HiddenUnitDeviceBuffer* hidden_unit);
-  void NotifySendFinished(HiddenUnitDeviceBuffer* hidden_unit);
+  // just mark as called ncclsend / ncclrecv functions.
+  // donot actually send done or really recved the data.
+  void NotifyRecvCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit);
+  void NotifySendCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit);
 
   size_t GetRecordEventsBatchId(size_t multi_batch_id);
   void WaitUtilRecvFinished(HiddenUnitDeviceBuffer* hidden_unit);
+
+  // keep send and recv in order to have better performance.
+  void WaitLastRecvDone();
 
  private:
 #ifdef ENABLE_CUDA
@@ -84,10 +89,13 @@ class NcclDataChannel : public DataChannelInterface {
   HiddenUnitBufferPool* hidden_unit_buffer_pool_ = nullptr;
 
   // Receive data buffer from remote.
-  std::shared_ptr<std::thread> recv_thread_ = nullptr;
+  std::unique_ptr<std::thread> recv_thread_ = nullptr;
 
   // Send data buffers to remote.
-  std::shared_ptr<std::thread> send_thread_ = nullptr;
+  std::unique_ptr<std::thread> send_thread_ = nullptr;
+
+  // keep send recv in order
+  std::unique_ptr<Waiter> last_recv_done_waiter_ = nullptr;
 
   // Whether channel is terminated.
   bool terminated_ = false;

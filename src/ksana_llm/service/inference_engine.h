@@ -7,6 +7,7 @@
 #include "ksana_llm/batch_manager/batch_manager.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/distributed/distributed_coordinator.h"
+#include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance_inferface.h"
 #include "ksana_llm/utils/channel.h"
@@ -67,6 +68,9 @@ class InferenceEngine {
 
   // The runtime instance used for inference engine.
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
+
+  // The multibatch controllor for inference engine.
+  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;

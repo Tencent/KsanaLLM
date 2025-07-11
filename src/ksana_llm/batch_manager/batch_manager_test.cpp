@@ -24,8 +24,12 @@ class BatchManagerTest : public testing::Test {
   void SetUp() override {
     std::string config_file = GetTestConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
-    context_ = std::make_shared<Context>(1, 1, 1);
+    context_ = std::make_shared<Context>(1, 1, PP_BATCH_NUM);
     batch_manager_ = std::make_unique<BatchManager>(context_, PP_BATCH_NUM);
+    if (context_->IsChief()) {
+      multi_batch_controller_ = std::make_shared<MultiBatchController>(PP_BATCH_NUM);
+    }
+    batch_manager_->SetMultiBatchController(multi_batch_controller_);
     memory_allocator_ = std::make_shared<MemoryAllocator>();
   }
 
@@ -38,6 +42,7 @@ class BatchManagerTest : public testing::Test {
   // NOTE(karlluo): model instance need shared_ptr as input parameter
   std::shared_ptr<Context> context_ = nullptr;
   std::unique_ptr<BatchManager> batch_manager_ = nullptr;
+  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
 
@@ -162,6 +167,7 @@ TEST_F(BatchManagerTest, StartAndStop) {
   PrepareTestCaseMeterial(dp_num, tp_num, batch_scheduler, cache_manager);
 
   auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, context_);
+  llm_runtime->SetMultiBatchController(multi_batch_controller_);
 
   batch_manager_->SetBatchScheduler(batch_scheduler);
   batch_manager_->SetLlmRuntime(llm_runtime);
