@@ -10,8 +10,8 @@
 #include "fmt/core.h"
 
 #ifdef ENABLE_CUDA
-#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/cast/cast.h"
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
 #ifdef ENABLE_ACL
@@ -44,8 +44,8 @@ Status BaseModelWeightLoader::PreProcessModelWeights(
   return Status();
 }
 
-Status BaseModelWeightLoader::PostProcessModelWeights(
-    std::unordered_map<std::string, Tensor>& dev_weights_map, int dev_rank) {
+Status BaseModelWeightLoader::PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map,
+                                                      int dev_rank) {
   return Status();
 }
 
@@ -111,40 +111,40 @@ Status BaseModelWeightLoader::CastDeviceTensorType(Tensor& input_tensor, DataTyp
 #ifdef ENABLE_CUDA
   if (input_tensor.dtype == DataType::TYPE_FP32 && new_dtype == DataType::TYPE_FP16) {
     Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank);
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::FloatToHalf(input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(),
-                new_tensor.GetPtr<float16>(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FloatToHalf(
+        input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<float16>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
     input_tensor = new_tensor;
   } else if (input_tensor.dtype == DataType::TYPE_FP32 && new_dtype == DataType::TYPE_BF16) {
     Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank);
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::FloatToBFloat16(input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(),
-                   new_tensor.GetPtr<bfloat16>(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FloatToBFloat16(
+        input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<bfloat16>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
     input_tensor = new_tensor;
   } else if (input_tensor.dtype == DataType::TYPE_FP16 && new_dtype == DataType::TYPE_FP32) {
     Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank);
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::HalfToFloat(input_tensor.GetPtr<float16>(), input_tensor.GetElementNumber(),
-                new_tensor.GetPtr<float>(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToFloat(input_tensor.GetPtr<float16>(),
+                                                           input_tensor.GetElementNumber(), new_tensor.GetPtr<float>(),
+                                                           context_->GetMemoryManageStreams()[dev_rank].Get()));
     input_tensor = new_tensor;
   } else if (input_tensor.dtype == DataType::TYPE_BF16 && new_dtype == DataType::TYPE_FP32) {
     Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank);
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::BFloat16ToFloat(input_tensor.GetPtr<bfloat16>(), input_tensor.GetElementNumber(),
-                   new_tensor.GetPtr<float>(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToFloat(
+        input_tensor.GetPtr<bfloat16>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<float>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
     input_tensor = new_tensor;
   } else if (input_tensor.dtype == DataType::TYPE_BF16 && new_dtype == DataType::TYPE_FP16) {
     input_tensor.dtype = new_dtype;
     // Inplace cast
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::BFloat16ToHalf(input_tensor.GetPtr<void>(),
-                   input_tensor.GetElementNumber(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToHalf(input_tensor.GetPtr<void>(),
+                                                              input_tensor.GetElementNumber(),
+                                                              context_->GetMemoryManageStreams()[dev_rank].Get()));
   } else if (input_tensor.dtype == DataType::TYPE_FP16 && new_dtype == DataType::TYPE_BF16) {
     input_tensor.dtype = new_dtype;
     // Inplace cast
-    CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::HalfToBFloat16(input_tensor.GetPtr<void>(),
-                   input_tensor.GetElementNumber(), context_->GetMemoryManageStreams()[dev_rank].Get()));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToBFloat16(input_tensor.GetPtr<void>(),
+                                                              input_tensor.GetElementNumber(),
+                                                              context_->GetMemoryManageStreams()[dev_rank].Get()));
   } else {
     KLLM_THROW(fmt::format("Unsupported tensor conversion from type {} to {}", input_tensor.dtype, new_dtype));
   }

@@ -203,13 +203,11 @@ TEST_F(LlamaNvidiaAddTestSuit, FloatAddBiasResidualTest) {
   }
 }
 
-#ifdef ENABLE_BFLOAT16
 TEST_F(LlamaNvidiaAddTestSuit, Bf16AddBiasResidualTest) {
   for (const auto& m_n_pair : m_n_pairs) {
     TestAddBiasResidual<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second));
   }
 }
-#endif
 
 }  // namespace test
 }  // namespace nvidia

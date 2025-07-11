@@ -30,8 +30,6 @@ void Qwen3MoeWeight<T>::SetEmbeddingsConfig() {
 
 template class Qwen3MoeWeight<float>;
 template class Qwen3MoeWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Qwen3MoeWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

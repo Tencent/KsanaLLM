@@ -20,9 +20,7 @@
 namespace llm_kernels {
 namespace nvidia {
 
-#ifdef ENABLE_BF16
 template class CutlassFpAIntBGemmRunner<__nv_bfloat16, uint8_t, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>;
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

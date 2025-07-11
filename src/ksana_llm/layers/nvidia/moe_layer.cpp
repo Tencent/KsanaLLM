@@ -302,9 +302,7 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 
 template class MoeLayer<float>;
 template class MoeLayer<half>;
-#  ifdef ENABLE_BFLOAT16
 template class MoeLayer<__nv_bfloat16>;
-#  endif
 
 #endif
 }  // namespace ksana_llm

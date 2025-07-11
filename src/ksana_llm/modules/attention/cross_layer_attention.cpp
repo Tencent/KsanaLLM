@@ -133,7 +133,6 @@ Status CrossLayerAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const At
 
 template class CrossLayerAttention<float>;
 template class CrossLayerAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CrossLayerAttention<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

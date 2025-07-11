@@ -109,9 +109,7 @@ Status MarlinMoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
 template class MarlinMoeLayer<float>;
 template class MarlinMoeLayer<half>;
-#  ifdef ENABLE_BFLOAT16
 template class MarlinMoeLayer<__nv_bfloat16>;
-#  endif
 
 #endif
 }  // namespace ksana_llm

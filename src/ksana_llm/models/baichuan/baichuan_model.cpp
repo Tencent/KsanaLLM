@@ -44,9 +44,7 @@ Status Baichuan<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingCont
 
 template class Baichuan<float>;
 template class Baichuan<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Baichuan<bfloat16>;
-#endif
 
 /* **************************************
  * BaichuanModel
@@ -78,8 +76,6 @@ Status BaichuanModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, 
 
 template class BaichuanModel<float>;
 template class BaichuanModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class BaichuanModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

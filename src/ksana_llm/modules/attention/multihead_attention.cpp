@@ -61,8 +61,6 @@ Status MultiHeadAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors
 
 template class MultiHeadAttention<float>;
 template class MultiHeadAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MultiHeadAttention<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

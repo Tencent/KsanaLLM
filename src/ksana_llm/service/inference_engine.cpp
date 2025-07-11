@@ -58,8 +58,8 @@ Status InferenceEngine::Initialize() {
   }
   // Environment is must be initialized befroe context.
   KLLM_LOG_INFO << "Get tensor parallel: " << env->GetTensorParallelSize()
-                 << " attention data parallel: " << env->GetAttnDataParallelSize()
-                 << " max_pp_batch_num: " << batch_scheduler_config.max_pp_batch_num;
+                << " attention data parallel: " << env->GetAttnDataParallelSize()
+                << " max_pp_batch_num: " << batch_scheduler_config.max_pp_batch_num;
   context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(),
                              batch_scheduler_config.max_pp_batch_num));
 

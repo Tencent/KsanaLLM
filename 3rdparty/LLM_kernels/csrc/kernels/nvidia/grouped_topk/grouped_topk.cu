@@ -11,9 +11,7 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#ifdef ENABLE_BFLOAT16
 #  include <cuda_bf16.h>
-#endif
 #include <cutlass/array.h>
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
@@ -671,10 +669,7 @@ void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed
 
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(float);
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(half);
-
-#ifdef ENABLE_BFLOAT16
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(__nv_bfloat16);
-#endif
 #undef INVOKE_DEEPSEEK_V3_GROUPED_TOPK
 
 }  // namespace nvidia

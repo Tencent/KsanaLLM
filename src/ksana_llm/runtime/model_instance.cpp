@@ -21,6 +21,7 @@
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/models/gpt/gpt_model.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_model.h"
+#include "ksana_llm/models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "ksana_llm/models/internlm2/internlm_model.h"
 #include "ksana_llm/models/internlmxcomposer2/internlmxcomposer2_model.h"
 #include "ksana_llm/models/llama/llama_model.h"
@@ -41,11 +42,9 @@ std::shared_ptr<BaseModel> CreateModel(int rank, std::shared_ptr<BaseWeight> bas
     case DataType::TYPE_FP16:
       model_obj = std::make_shared<ClassT<float16>>(model_config, rank, context, base_weight);
       break;
-#ifdef ENABLE_BFLOAT16
     case DataType::TYPE_BF16:
       model_obj = std::make_shared<ClassT<bfloat16>>(model_config, rank, context, base_weight);
       break;
-#endif
     case DataType::TYPE_FP32:
       model_obj = std::make_shared<ClassT<float>>(model_config, rank, context, base_weight);
       break;

@@ -51,10 +51,8 @@ template class FpAIntBGroupCudaGemmWrapper<float, INT8>;
 template class FpAIntBGroupCudaGemmWrapper<half, INT4>;
 template class FpAIntBGroupCudaGemmWrapper<half, INT8>;
 
-#ifdef ENABLE_BF16
 template class FpAIntBGroupCudaGemmWrapper<__nv_bfloat16, INT4>;
 template class FpAIntBGroupCudaGemmWrapper<__nv_bfloat16, INT8>;
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

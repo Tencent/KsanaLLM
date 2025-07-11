@@ -41,9 +41,7 @@ void InvokeRepetitionPenalty(const T* logits, const T* repetition_penalties, T* 
 
 INSTANTIATE_INVOKE_REPETITION_PENALTY(float);
 INSTANTIATE_INVOKE_REPETITION_PENALTY(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_REPETITION_PENALTY(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_INVOKE_REPETITION_PENALTY
 

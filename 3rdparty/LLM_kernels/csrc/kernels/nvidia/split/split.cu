@@ -136,9 +136,7 @@ void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs
 
 INSTANTIATE_SPLIT(float);
 INSTANTIATE_SPLIT(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_SPLIT(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_SPLIT
 

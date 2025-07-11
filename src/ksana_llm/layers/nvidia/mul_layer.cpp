@@ -32,8 +32,6 @@ Status MulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 }
 template class MulLayer<float>;
 template class MulLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class MulLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -26,9 +26,7 @@ void HiddenUnitDeviceBuffer::NotifyFinished() {
   }
 }
 
-HiddenUnitBufferPool::HiddenUnitBufferPool() {
-  InitializeBufferSize();
-}
+HiddenUnitBufferPool::HiddenUnitBufferPool() { InitializeBufferSize(); }
 
 void HiddenUnitBufferPool::PreAllocateDeviceBuffer() {
   HiddenUnitDeviceBuffer* dev_hidden_unit = new HiddenUnitDeviceBuffer();

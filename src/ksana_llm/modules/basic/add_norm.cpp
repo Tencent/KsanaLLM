@@ -26,8 +26,6 @@ Status AddNorm<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector
 
 template class AddNorm<float>;
 template class AddNorm<float16>;
-#ifdef ENABLE_BFLOAT16
 template class AddNorm<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

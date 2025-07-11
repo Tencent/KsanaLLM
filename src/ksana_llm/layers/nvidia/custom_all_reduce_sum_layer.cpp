@@ -106,8 +106,6 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
 
 template class CustomAllReduceSumLayer<float>;
 template class CustomAllReduceSumLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class CustomAllReduceSumLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

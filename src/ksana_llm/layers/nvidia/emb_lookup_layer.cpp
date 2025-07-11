@@ -48,8 +48,6 @@ Status EmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
 template class EmbLookupLayer<float>;
 template class EmbLookupLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class EmbLookupLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -21,11 +21,10 @@ class Qwen3MoeWeight : public CommonMoeWeight<T> {
 
   void SetEmbeddingsConfig();
 
-
  protected:
+  using BaseWeight::model_config_;
   using BaseWeight::rank_;
   using BaseWeight::weights_map_;
-  using BaseWeight::model_config_;
   using CommonWeight<T>::tensor_manager_;
 };
 

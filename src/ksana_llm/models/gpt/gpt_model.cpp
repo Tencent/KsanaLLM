@@ -193,9 +193,7 @@ Status Gpt<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T
 
 template class Gpt<float>;
 template class Gpt<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Gpt<bfloat16>;
-#endif
 
 /**********************************************************
  * GptModel
@@ -226,8 +224,6 @@ Status GptModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const
 
 template class GptModel<float>;
 template class GptModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class GptModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

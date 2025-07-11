@@ -317,37 +317,29 @@ class DeepSeekV3Test : public testing::Test {
 
 TEST_F(DeepSeekV3Test, ForwardFP8BlockWiseTest) {
 #ifdef ENABLE_CUDA
-#  ifdef ENABLE_BFLOAT16
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   // deepseek only support fp8 block-wise quantization, don't support fp8 per-tensor quantization
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
   std::cout << "Test FP8-BlockWise TYPE_BF16 weight_data_type forward." << std::endl;
   TestDeepSeekV3Forward<bfloat16>();
-#  endif
 #endif
 }
 
 TEST_F(DeepSeekV3Test, ForwardGPTQInt4Test) {
 #ifdef ENABLE_CUDA
-#  ifdef ENABLE_BFLOAT16
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_GPTQ;
   std::cout << "Test GPTQ-Quant TYPE_BF16 weight_data_type forward." << std::endl;
   TestDeepSeekV3Forward<bfloat16>();
-#  endif
 #endif
 }
 
 TEST_F(DeepSeekV3Test, EnableFullShardExpertTest) {
-#ifdef ENABLE_CUDA
-#  ifdef ENABLE_BFLOAT16
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
   model_config.enable_full_shared_expert = true;
   TestDeepSeekV3Forward<bfloat16>();
-#  endif
-#endif
 }

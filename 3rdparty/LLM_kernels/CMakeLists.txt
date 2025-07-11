@@ -2,13 +2,13 @@
 
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 
-# # support NVIDIA GPU
+# support NVIDIA GPU
 option(WITH_CUDA "Enable CUDA" ON)
 
-# # support Huawei NPU
+# support Huawei NPU
 option(WITH_ACL "Enable Ascend" OFF)
 
-# # support Tencent ZiXiao
+# support Tencent ZiXiao
 option(WITH_TOPS "Enable Tops" OFF)
 
 option(WITH_TESTING "Enable testing" OFF)
@@ -16,7 +16,8 @@ option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
 if(WITH_CUDA)
   project(LLMKernels LANGUAGES CXX CUDA)
-  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --threads 16)  # 使用16线程加快CUDA编译
+  # Use 16 threads to accelerate CUDA compilation
+  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --threads 16)
 elseif(WITH_ACL)
   set(ASCEND_PRODUCT_TYPE "ascend910")
   set(ASCEND_CORE_TYPE "AiCore")

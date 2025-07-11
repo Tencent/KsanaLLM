@@ -378,7 +378,6 @@ class FakeTinyWeightTest : public testing::Test {
 #endif
 
 #ifdef ENABLE_CUDA
-#  ifdef ENABLE_BFLOAT16
     if (model_test_config.test_bf16) {
       model_config.is_quant = false;
       model_config.weight_data_type = TYPE_BF16;
@@ -387,7 +386,7 @@ class FakeTinyWeightTest : public testing::Test {
       DoLayerTest<ModelType, bfloat16, WeightType>(model_test_config, prefill_hidden_state_baseline,
                                                    decode_hidden_state_baseline, thresholds);
     }
-#    ifdef ENABLE_FP8
+#  ifdef ENABLE_FP8
     // fp8 forward
     if (model_test_config.test_fp8) {
       model_config.is_quant = true;
@@ -397,7 +396,6 @@ class FakeTinyWeightTest : public testing::Test {
       DoLayerTest<ModelType, bfloat16, WeightType>(model_test_config, prefill_hidden_state_baseline,
                                                    decode_hidden_state_baseline, thresholds);
     }
-#    endif
 #  endif
 #endif
   }

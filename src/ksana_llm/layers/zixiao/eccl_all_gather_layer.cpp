@@ -19,8 +19,6 @@ Status EcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
 
 template class EcclAllGatherLayer<float>;
 template class EcclAllGatherLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class EcclAllGatherLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

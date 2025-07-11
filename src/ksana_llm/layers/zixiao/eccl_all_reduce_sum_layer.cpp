@@ -20,8 +20,6 @@ Status EcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
 
 template class EcclAllReduceSumLayer<float>;
 template class EcclAllReduceSumLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class EcclAllReduceSumLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

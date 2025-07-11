@@ -80,8 +80,6 @@ Status CommonAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 
 template class CommonAttention<float>;
 template class CommonAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CommonAttention<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

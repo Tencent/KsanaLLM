@@ -82,13 +82,10 @@ void genericMoeGemmKernelLauncher(T const* A, WeightType const* B, GemmOutputTyp
                     cutlass::platform::is_same<T, __nv_fp8_e4m3>::value ||
                     cutlass::platform::is_same<T, __nv_fp8_e5m2>::value || cutlass::platform::is_same<T, float>::value,
                 "Specialized for fp8, bfloat16, half, float");
-#elif defined(ENABLE_BF16)
+#else
   static_assert(cutlass::platform::is_same<T, __nv_bfloat16>::value || cutlass::platform::is_same<T, half>::value ||
                     cutlass::platform::is_same<T, float>::value,
                 "Specialized for bfloat16, half, float");
-#else
-  static_assert(cutlass::platform::is_same<T, half>::value || cutlass::platform::is_same<T, float>::value,
-                "Specialized for half, float");
 #endif
 
   static_assert(cutlass::platform::is_same<T, WeightType>::value ||

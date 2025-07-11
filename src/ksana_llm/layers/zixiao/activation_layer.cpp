@@ -14,26 +14,18 @@ Status ActivationLayer<ACTIVATION_TYPE, T>::Forward(const std::vector<Tensor>& i
 
 template class ActivationLayer<ActivationType::Gelu, float>;
 template class ActivationLayer<ActivationType::Gelu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Gelu, bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Relu, float>;
 template class ActivationLayer<ActivationType::Relu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Relu, bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Geglu, float>;
 template class ActivationLayer<ActivationType::Geglu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Geglu, bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Swiglu, float>;
 template class ActivationLayer<ActivationType::Swiglu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Swiglu, bfloat16>;
-#endif
 
 }  // namespace ksana_llm

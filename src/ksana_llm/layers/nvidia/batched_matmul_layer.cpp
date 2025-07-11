@@ -56,8 +56,6 @@ Status BatchedMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
 
 template class BatchedMatMulLayer<float>;
 template class BatchedMatMulLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class BatchedMatMulLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

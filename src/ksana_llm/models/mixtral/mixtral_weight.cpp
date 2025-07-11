@@ -25,8 +25,6 @@ void MixtralWeight<T>::ProcessWeights() {
 
 template class MixtralWeight<float>;
 template class MixtralWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MixtralWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

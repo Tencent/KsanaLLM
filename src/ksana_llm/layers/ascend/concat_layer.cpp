@@ -20,7 +20,5 @@ Status ConcatLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
 }
 template class ConcatLayer<float>;
 template class ConcatLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ConcatLayer<bfloat16>;
-#endif
 }  // namespace ksana_llm

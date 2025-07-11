@@ -6,16 +6,10 @@ endif()
 
 find_package(CUDA 11.2 REQUIRED)
 
-if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
-  # enable BFloat16
-  add_definitions("-DENABLE_BF16")
-  message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
-
-  # enable FP8
-  if(${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8" OR ${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12")
-    add_definitions("-DENABLE_FP8")
-    message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
-  endif()
+# enable FP8
+if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
+  add_definitions("-DENABLE_FP8")
+  message(STATUS "CUDA version: ${CUDA_VERSION} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
 endif()
 
 if(NOT DEFINED SM)
@@ -134,22 +128,13 @@ if(GIT_FOUND)
       message(FATAL_ERROR "git submodule update --init --recursive 3rdparty/DeepGEMM failed with ${GIT_SUBMOD_RESULT}, please checkout DeepGEMM submodule")
     endif()
 
-    execute_process(COMMAND python setup.py develop
+    execute_process(COMMAND python3 -m pip install --upgrade --force-reinstall --ignore-installed -e .
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/DeepGEMM
       RESULT_VARIABLE DEEPGEMM_INSTALL_RESULT)
 
     if(NOT DEEPGEMM_INSTALL_RESULT EQUAL "0")
-      message(FATAL_ERROR "python setup.py develop under DeepGEMM failed with ${DEEPGEMM_INSTALL_RESULT}, please checkout DeepGEMM install problem")
+      message(FATAL_ERROR "python -m pip install --upgrade --force-reinstall --ignore-installed -e . under DeepGEMM failed with ${DEEPGEMM_INSTALL_RESULT}, please checkout DeepGEMM install problem")
     endif()
-
-    execute_process(COMMAND pip install .
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/DeepGEMM
-      RESULT_VARIABLE DEEPGEMM_INSTALL_RESULT)
-
-    if(NOT DEEPGEMM_INSTALL_RESULT EQUAL "0")
-      message(FATAL_ERROR "python setup.py install under DeepGEMM failed with ${DEEPGEMM_INSTALL_RESULT}, please checkout DeepGEMM install problem")
-    endif()
-
     message(STATUS "Prepare DeepGEMM success")
   endif()
 endif()
@@ -164,14 +149,8 @@ set(CUDA_LIB_DIRS
   ${CUDA_PATH}/lib64
 )
 
-if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
-  # enable BFloat16
-  add_definitions("-DENABLE_BFLOAT16")
-  message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
-
-  # enable FP8
-  if(${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8" OR ${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12")
-    add_definitions("-DENABLE_FP8")
-    message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
-  endif()
+# enable FP8
+if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
+  add_definitions("-DENABLE_FP8")
+  message(STATUS "CUDA version: ${CUDA_VERSION} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
 endif()

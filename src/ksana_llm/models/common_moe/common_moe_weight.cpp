@@ -307,8 +307,6 @@ void CommonMoeWeight<T>::ProcessWeights() {
 
 template class CommonMoeWeight<float>;
 template class CommonMoeWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CommonMoeWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

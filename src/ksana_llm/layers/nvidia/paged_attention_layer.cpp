@@ -118,8 +118,8 @@ template class PagedAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
 template class PagedAttentionLayer<half, half, KVCacheType::kAuto>;
 template class PagedAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
 template class PagedAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
-#ifdef ENABLE_BFLOAT16
 template class PagedAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
+#if defined(ENABLE_FP8)
 template class PagedAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
 template class PagedAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
 #endif

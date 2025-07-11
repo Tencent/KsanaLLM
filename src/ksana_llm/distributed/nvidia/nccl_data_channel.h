@@ -68,7 +68,7 @@ class NcclDataChannel : public DataChannelInterface {
   PipelineConfig pipeline_config_;
 
   // [multi_batch_id, device_id]
-  std::vector< std::vector<Event>> recved_events_;
+  std::vector<std::vector<Event>> recved_events_;
 
   // The rank ids of upstream and downstream device.
   std::vector<int> upstream_ranks_;

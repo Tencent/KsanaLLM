@@ -260,8 +260,6 @@ void ForwardingContext<T>::UpdateAfterForward(std::vector<ForwardRequest>& forwa
 
 template class ForwardingContext<float>;
 template class ForwardingContext<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ForwardingContext<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

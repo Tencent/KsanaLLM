@@ -560,17 +560,13 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
 TEST_F(LlamaNvidiaGemmWrapperTestSuit, CublasGemmTest) {
   CublasGemmTest<float, float>();
   CublasGemmTest<half, half>();
-#ifdef ENABLE_BF16
   CublasGemmTest<__nv_bfloat16, __nv_bfloat16>();
-#endif
 }
 
 TEST_F(LlamaNvidiaGemmWrapperTestSuit, CustomGemmTest) {
   CustomGemmTest<float, float>();
   CustomGemmTest<half, half>();
-#ifdef ENABLE_BF16
   CustomGemmTest<__nv_bfloat16, __nv_bfloat16>();
-#endif
 }
 
 }  // namespace test

@@ -130,17 +130,13 @@ TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyCommonTest) {
     return;
   }
   TestGreedyCommon<half>();
-#ifdef ENABLE_BF16
   TestGreedyCommon<__nv_bfloat16>();
-#endif
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyEqualTest) {
   TestGreedyEqual<float>();
   TestGreedyEqual<half>();
-#ifdef ENABLE_BF16
   TestGreedyEqual<__nv_bfloat16>();
-#endif
 }
 
 TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {

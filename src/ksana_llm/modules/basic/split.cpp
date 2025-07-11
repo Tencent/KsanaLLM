@@ -25,8 +25,6 @@ Status Split<T>::Forward(Tensor input, std::vector<Tensor>& output_tensors) {
 
 template class Split<float>;
 template class Split<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Split<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

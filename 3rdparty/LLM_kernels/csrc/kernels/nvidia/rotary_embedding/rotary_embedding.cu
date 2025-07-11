@@ -196,9 +196,7 @@ void LaunchRotaryEmbedding(const RotaryEmbeddingParam<T>& params) {
 
 template void LaunchRotaryEmbedding<float>(const RotaryEmbeddingParam<float>& params);
 template void LaunchRotaryEmbedding<half>(const RotaryEmbeddingParam<half>& params);
-#ifdef ENABLE_BF16
 template void LaunchRotaryEmbedding<__nv_bfloat16>(const RotaryEmbeddingParam<__nv_bfloat16>& params);
-#endif
 
 template <typename T>
 __global__ void InvokeComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_cache, const int rotary_dim,
@@ -344,9 +342,7 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam<T>& params) {
 
 template void ComputeCosSinWithCache<float>(const RotaryEmbeddingParam<float>& params);
 template void ComputeCosSinWithCache<half>(const RotaryEmbeddingParam<half>& params);
-#ifdef ENABLE_BF16
 template void ComputeCosSinWithCache<__nv_bfloat16>(const RotaryEmbeddingParam<__nv_bfloat16>& params);
-#endif
 
 template <typename T>
 void RotaryEmbeddingCuda<T>::SetInput(
@@ -367,11 +363,9 @@ template void RotaryEmbeddingCuda<float>::SetInput(const int64_t* positions, con
                                                    float* key, int num_tokens, cudaStream_t& stream);
 template void RotaryEmbeddingCuda<half>::SetInput(const int64_t* positions, const int64_t* mask, half* query, half* key,
                                                   int num_tokens, cudaStream_t& stream);
-#ifdef ENABLE_BF16
 template void RotaryEmbeddingCuda<__nv_bfloat16>::SetInput(const int64_t* positions, const int64_t* mask,
                                                            __nv_bfloat16* query, __nv_bfloat16* key, int num_tokens,
                                                            cudaStream_t& stream);
-#endif
 
 template <typename T>
 void RotaryEmbeddingCuda<T>::Forward() {
@@ -380,9 +374,7 @@ void RotaryEmbeddingCuda<T>::Forward() {
 
 template void RotaryEmbeddingCuda<float>::Forward();
 template void RotaryEmbeddingCuda<half>::Forward();
-#ifdef ENABLE_BF16
 template void RotaryEmbeddingCuda<__nv_bfloat16>::Forward();
-#endif
 
 template <typename T>
 void RotaryEmbeddingCuda<T>::SetConfig(T* cos_sin_cache, const int rotary_dim, const int max_position_embeddings,
@@ -440,7 +432,6 @@ template void RotaryEmbeddingCuda<half>::SetConfig(
     const float high_freq_factor, const int original_max_position_embeddings, const float scaling_alpha,
     const int* mrope_section, const float beta_fast, const float beta_slow, const float mscale,
     const float mscale_all_dim, const bool use_deepseek_rope);
-#ifdef ENABLE_BF16
 template void RotaryEmbeddingCuda<__nv_bfloat16>::SetConfig(
     __nv_bfloat16* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int head_size, const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
@@ -448,7 +439,6 @@ template void RotaryEmbeddingCuda<__nv_bfloat16>::SetConfig(
     const float low_freq_factor, const float high_freq_factor, const int original_max_position_embeddings,
     const float scaling_alpha, const int* mrope_section, const float beta_fast, const float beta_slow,
     const float mscale, const float mscale_all_dim, const bool use_deepseek_rope);
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -150,9 +150,7 @@ void InvokeMoeWna16Gemm(cudaStream_t stream, void* output, const void* input, co
       int num_experts, int size_m, int size_n, int size_k, int group_size, int num_token_blocks)
 INVOKE_MOE_WNA16_GEMM(float);
 INVOKE_MOE_WNA16_GEMM(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MOE_WNA16_GEMM(__nv_bfloat16);
-#endif
 #undef INVOKE_MOE_WNA16_GEMM
 
 template <typename T, typename WT, typename OT>
@@ -170,12 +168,8 @@ GET_MOE_GEMM_WORKSPACE_SIZE(float, float, float);
 GET_MOE_GEMM_WORKSPACE_SIZE(half, half, half);
 #ifdef ENABLE_FP8
 GET_MOE_GEMM_WORKSPACE_SIZE(__nv_fp8_e4m3, __nv_fp8_e4m3, half);
-#endif
-#ifdef ENABLE_BFLOAT16
 GET_MOE_GEMM_WORKSPACE_SIZE(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16);
-#  ifdef ENABLE_FP8
 GET_MOE_GEMM_WORKSPACE_SIZE(__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16);
-#  endif
 #endif
 #undef GET_MOE_GEMM_WORKSPACE_SIZE
 
@@ -189,12 +183,8 @@ INVOKE_MOE_GEMM_CONFIG_PROFILE(float, float, float);
 INVOKE_MOE_GEMM_CONFIG_PROFILE(half, half, half);
 #ifdef ENABLE_FP8
 INVOKE_MOE_GEMM_CONFIG_PROFILE(__nv_fp8_e4m3, __nv_fp8_e4m3, half);
-#endif
-#ifdef ENABLE_BFLOAT16
 INVOKE_MOE_GEMM_CONFIG_PROFILE(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16);
-#  ifdef ENABLE_FP8
 INVOKE_MOE_GEMM_CONFIG_PROFILE(__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16);
-#  endif
 #endif
 #undef INVOKE_MOE_GEMM_CONFIG_PROFILE
 
@@ -252,17 +242,15 @@ INVOKE_MOE_CUTLASS_GEMM(__nv_fp8_e4m3, __nv_fp8_e4m3, half,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
 #endif
 
-#ifdef ENABLE_BFLOAT16
 INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
 INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
-#  ifdef ENABLE_FP8
+#if defined(ENABLE_FP8)
 INVOKE_MOE_CUTLASS_GEMM(__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
 INVOKE_MOE_CUTLASS_GEMM(__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
-#  endif
 #endif
 #undef INVOKE_MOE_CUTLASS_GEMM
 
@@ -348,9 +336,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                                      float routed_scaling_factor, int rank, cudaStream_t stream)
 INVOKE_GROUPED_TOPK(float);
 INVOKE_GROUPED_TOPK(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_GROUPED_TOPK(__nv_bfloat16);
-#endif
 #undef INVOKE_GROUPED_TOPK
 
 // Adapted from
@@ -648,9 +634,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
       void* dequant_workspace, int rank, cudaStream_t stream)
 FUSEDMOE(float);
 FUSEDMOE(half);
-#ifdef ENABLE_BFLOAT16
 FUSEDMOE(__nv_bfloat16);
-#endif
 #undef FUSEDMOE
 
 void FusedMarlinMoe(half* output, const half* input, const float* gating_output, const void* w1, const void* w2,

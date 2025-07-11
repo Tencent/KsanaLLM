@@ -106,9 +106,7 @@ Status Mixtral<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingConte
 
 template class Mixtral<float>;
 template class Mixtral<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Mixtral<bfloat16>;
-#endif
 
 /* **************************************
  * MixtralModel
@@ -140,8 +138,6 @@ Status MixtralModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, c
 
 template class MixtralModel<float>;
 template class MixtralModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MixtralModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

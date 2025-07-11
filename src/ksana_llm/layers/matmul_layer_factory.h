@@ -323,14 +323,18 @@ class MatMulLayerFactory {
                                          DataType input_type, DataType output_type,
                                          const std::vector<std::any>& init_params, QuantMode quant_mode = QUANT_NONE,
                                          GroupQuantBackend backend = NONE_QUANT) {
-    KLLM_LOG_DEBUG << fmt::format("weight_name: {}", weight_name);
     DataType weight_type = base_weight->GetModelWeights(weight_name).dtype;
     // deepseek v3
     if (weight_type == TYPE_INVALID) {
       weight_type = input_type;
     }
+    KLLM_LOG_DEBUG << fmt::format(
+        "MatMul Creating weight_name: {}, weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
+        weight_name, GetTypeString(weight_type), GetTypeString(input_type), GetTypeString(output_type),
+        GetQuantModeString(quant_mode), GetGroupQuantBackendString(backend));
     return CreateLayer(weight_type, input_type, output_type, init_params, quant_mode, backend);
   }
+
   std::shared_ptr<BaseLayer> CreateLayer(DataType weight_type, DataType input_type, DataType output_type,
                                          const std::vector<std::any>& init_params, QuantMode quant_mode = QUANT_NONE,
                                          GroupQuantBackend backend = NONE_QUANT) {
@@ -360,13 +364,14 @@ class MatMulLayerFactory {
         }
       }
       layer->SetWorkSpaceBuffer(workspace_buffer_);
-
       layer->Preprocess(model_config_);
-      KLLM_LOG_DEBUG << "return layer";
+      KLLM_LOG_DEBUG << "MatMul Create success.";
       return layer;
     } else {
-      KLLM_THROW(fmt::format("Not support weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
-                             weight_type, input_type, output_type, quant_mode, backend));
+      KLLM_THROW(
+          fmt::format("MatMul Not support weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
+                      GetTypeString(weight_type), GetTypeString(input_type), GetTypeString(output_type),
+                      GetQuantModeString(quant_mode), GetGroupQuantBackendString(backend)));
     }
   }
 

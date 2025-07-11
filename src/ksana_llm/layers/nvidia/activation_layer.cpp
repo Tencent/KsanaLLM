@@ -52,27 +52,19 @@ Status ActivationLayer<ACTIVATION_TYPE, T>::Forward(const std::vector<Tensor>& i
 
 template class ActivationLayer<ActivationType::Gelu, float>;
 template class ActivationLayer<ActivationType::Gelu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Gelu, __nv_bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Relu, float>;
 template class ActivationLayer<ActivationType::Relu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Relu, __nv_bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Geglu, float>;
 template class ActivationLayer<ActivationType::Geglu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Geglu, __nv_bfloat16>;
-#endif
 
 template class ActivationLayer<ActivationType::Swiglu, float>;
 template class ActivationLayer<ActivationType::Swiglu, float16>;
-#ifdef ENABLE_BFLOAT16
 template class ActivationLayer<ActivationType::Swiglu, __nv_bfloat16>;
-#endif
 
 template <typename T>
 Status SigmoidLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
@@ -89,8 +81,6 @@ Status SigmoidLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
 
 template class SigmoidLayer<float>;
 template class SigmoidLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class SigmoidLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

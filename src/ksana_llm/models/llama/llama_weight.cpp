@@ -94,8 +94,6 @@ void LlamaWeight<T>::SetEmbeddingsConfig() {
 
 template class LlamaWeight<float>;
 template class LlamaWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class LlamaWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -102,22 +102,22 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
 
   MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
       output_tensors[0].GetPtr<void>(), q_nope_ptr, q_pe_ptr, k_pe_ptr, compressed_kv_ptr, kv_b_nope_proj_weight,
-      v_head_proj_weight, kv_b_nope_weight_scale, v_head_weight_scale, o_proj_dim,
-      fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
-      this->context_->ext->GetCublasLtHandles()[this->rank_], input_tensors[6].GetPtr<void>(),
-      input_tensors[7].GetPtr<void>(), workspace_buffer, input_tensors[1].GetPtr<void>(),
-      this->attn_scale_, this->rotary_embedding_cuda_, total_tokens, max_tokens, batch_size, this->num_heads_,
-      this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_,
-      this->head_size_, this->stride_size_, this->k_scale_, this->v_scale_, this->attn_dp_atp_size_, this->is_causal_,
-      this->rank_, this->block_token_num_, k_list, v_list, input_tensors[3].GetPtr<void>(),
-      input_tensors[5].GetPtr<void>(), this->alibi_slopes_, this->layer_index_, input_tensors[8].GetPtr<void>(),
-      input_tensors[9].GetPtr<void>(), input_tensors[10].GetPtr<void>(), input_tensors[11].GetPtr<void>(),
-      input_tensors[12].GetPtr<void>(), input_tensors[13].GetPtr<void>(), input_tensors[14].GetPtr<void>(),
-      input_tensors[10].shape[0], this->layernorm_eps_, this->use_qk_norm_, input_tensors[16].GetPtr<void>(),
-      input_tensors[17].GetPtr<void>(), use_cache, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr,
-      v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset,
-      max_forwarding_tokens, total_prefix_len, seqlens_q_ptr, prefix_k_buffer, prefix_v_buffer, prefix_o_buffer,
-      prefix_kv_buffer, prefix_k_up_buffer, prefix_v_up_buffer, this->mm_quant_mode_);
+      v_head_proj_weight, kv_b_nope_weight_scale, v_head_weight_scale, o_proj_dim, fp8_work_buffer,
+      this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
+      input_tensors[6].GetPtr<void>(), input_tensors[7].GetPtr<void>(), workspace_buffer,
+      input_tensors[1].GetPtr<void>(), this->attn_scale_, this->rotary_embedding_cuda_, total_tokens, max_tokens,
+      batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_,
+      this->v_head_dim_, this->num_kv_heads_, this->head_size_, this->stride_size_, this->k_scale_, this->v_scale_,
+      this->attn_dp_atp_size_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
+      input_tensors[3].GetPtr<void>(), input_tensors[5].GetPtr<void>(), this->alibi_slopes_, this->layer_index_,
+      input_tensors[8].GetPtr<void>(), input_tensors[9].GetPtr<void>(), input_tensors[10].GetPtr<void>(),
+      input_tensors[11].GetPtr<void>(), input_tensors[12].GetPtr<void>(), input_tensors[13].GetPtr<void>(),
+      input_tensors[14].GetPtr<void>(), input_tensors[10].shape[0], this->layernorm_eps_, this->use_qk_norm_,
+      input_tensors[16].GetPtr<void>(), input_tensors[17].GetPtr<void>(), use_cache,
+      this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table_ptr,
+      kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset, max_forwarding_tokens, total_prefix_len,
+      seqlens_q_ptr, prefix_k_buffer, prefix_v_buffer, prefix_o_buffer, prefix_kv_buffer, prefix_k_up_buffer,
+      prefix_v_up_buffer, this->mm_quant_mode_);
 
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(this->rank_, this->layer_index_,
@@ -135,8 +135,8 @@ template class FlashMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
 template class FlashMlaAttentionLayer<half, half, KVCacheType::kAuto>;
 template class FlashMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
 template class FlashMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
-#ifdef ENABLE_BFLOAT16
 template class FlashMlaAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
+#if defined(ENABLE_FP8)
 template class FlashMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
 template class FlashMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
 #endif

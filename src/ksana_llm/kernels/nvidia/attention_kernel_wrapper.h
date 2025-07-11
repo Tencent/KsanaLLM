@@ -45,13 +45,11 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  int max_forwarding_tokens = 0, bool enable_qk_pre_norm_before_rotary_pos = false, bool no_rope = false,
                  bool attn_temperature_tuning = false, float attn_scale = 0, size_t floor_scale = 0);
 
-
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void PagedAttentionOp(int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale,
-                    float v_scale, void* out, void* q_tensor_ptr, void* key_cache_ptrs, void* value_cache_ptrs,
-                    void* cache_offsets_ptr, void* context_lens_ptr, int max_context_len, int num_seqs,
-                    cudaStream_t& stream, void* workspace, size_t work_size, const float* alibi_slopes_ptr);
-
+                      float v_scale, void* out, void* q_tensor_ptr, void* key_cache_ptrs, void* value_cache_ptrs,
+                      void* cache_offsets_ptr, void* context_lens_ptr, int max_context_len, int num_seqs,
+                      cudaStream_t& stream, void* workspace, size_t work_size, const float* alibi_slopes_ptr);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* out,                // [num_seqs, num_heads, head_size]

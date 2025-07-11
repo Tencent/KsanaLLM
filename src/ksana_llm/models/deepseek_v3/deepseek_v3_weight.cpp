@@ -42,11 +42,9 @@ void DeepSeekV3Weight<T>::ProcessWeights() {
       tensor_manager_->AddWeightTensor("empty_score_bias", it->second.shape, DataType::TYPE_FP32);
 
       if (it->second.dtype == DataType::TYPE_BF16) {
-#  ifdef ENABLE_BFLOAT16
         DataToFloat<__nv_bfloat16>(it->second.template GetPtr<void>(), it->second.shape[0], 1, 1,
                                    weights_map_["empty_score_bias"].template GetPtr<void>(),
                                    context_->GetMemoryManageStreams()[rank_].Get());
-#  endif
       } else if (it->second.dtype == DataType::TYPE_FP16) {
         DataToFloat<half>(it->second.template GetPtr<void>(), it->second.shape[0], 1, 1,
                           weights_map_["empty_score_bias"].template GetPtr<void>(),
@@ -112,7 +110,6 @@ void DeepSeekV3Weight<T>::ProcessWeights() {
 
 template class DeepSeekV3Weight<float>;
 template class DeepSeekV3Weight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class DeepSeekV3Weight<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

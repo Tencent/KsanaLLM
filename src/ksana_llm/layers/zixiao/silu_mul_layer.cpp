@@ -18,7 +18,5 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
 }
 template class SiluMulLayer<float>;
 template class SiluMulLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class SiluMulLayer<bfloat16>;
-#endif
 }  // namespace ksana_llm

@@ -48,8 +48,6 @@ Status InputRefitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std
 
 template class InputRefitLayer<float>;
 template class InputRefitLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class InputRefitLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

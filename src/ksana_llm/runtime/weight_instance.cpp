@@ -47,11 +47,9 @@ std::shared_ptr<BaseWeight> CreateModelWeight(int rank, ModelConfig& model_confi
     case DataType::TYPE_FP16:
       model_obj = std::make_shared<ClassT<float16>>(model_config, rank, context);
       break;
-#ifdef ENABLE_BFLOAT16
     case DataType::TYPE_BF16:
       model_obj = std::make_shared<ClassT<bfloat16>>(model_config, rank, context);
       break;
-#endif
     case DataType::TYPE_FP32:
       model_obj = std::make_shared<ClassT<float>>(model_config, rank, context);
       break;

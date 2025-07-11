@@ -384,7 +384,6 @@ void CommonMlaWeight<T>::ProcessWeights() {
 
 template class CommonMlaWeight<float>;
 template class CommonMlaWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CommonMlaWeight<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

@@ -159,7 +159,6 @@ bool ModelCommunicator<T>::CheckIfUseCustomReduceSum(const std::vector<Tensor>& 
 
 template class ModelCommunicator<float>;
 template class ModelCommunicator<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ModelCommunicator<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

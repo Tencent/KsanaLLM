@@ -36,8 +36,6 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
 template class LayernormLayer<float>;
 template class LayernormLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class LayernormLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

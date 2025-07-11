@@ -44,8 +44,6 @@ Status TpCommunicator<T>::AllGather(Tensor& gather_tensor, Tensor& buffer, Forwa
 
 template class TpCommunicator<float>;
 template class TpCommunicator<float16>;
-#ifdef ENABLE_BFLOAT16
 template class TpCommunicator<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

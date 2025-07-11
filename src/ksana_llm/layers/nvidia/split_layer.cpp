@@ -31,8 +31,6 @@ Status SplitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vec
 
 template class SplitLayer<float>;
 template class SplitLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class SplitLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -60,8 +60,6 @@ void Llama4Weight<T>::ProcessWeights() {
 
 template class Llama4Weight<float>;
 template class Llama4Weight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Llama4Weight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -118,9 +118,7 @@ Status Fp8MoeLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std
 }
 #  ifdef ENABLE_FP8
 template class Fp8MoeLayer<half, __nv_fp8_e4m3>;
-#    ifdef ENABLE_BFLOAT16
 template class Fp8MoeLayer<__nv_bfloat16, __nv_fp8_e4m3>;
-#    endif
 #  endif
 
 #endif

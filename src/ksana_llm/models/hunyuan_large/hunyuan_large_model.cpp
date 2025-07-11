@@ -126,9 +126,7 @@ Status HunyuanLargeModel<T>::LayerForward(ForwardingContext<T>& forwarding_conte
 
 template class HunyuanLargeModel<float>;
 template class HunyuanLargeModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class HunyuanLargeModel<bfloat16>;
-#endif
 
 template <typename T>
 Status HunyuanLarge<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
@@ -169,11 +167,4 @@ Status HunyuanLarge<T>::Forward(std::vector<Tensor>& residual_buffer, Forwarding
   }
   return Status();
 }
-
-template class HunyuanLarge<float>;
-template class HunyuanLarge<float16>;
-#ifdef ENABLE_BFLOAT16
-template class HunyuanLarge<bfloat16>;
-#endif
-
 }  // namespace ksana_llm

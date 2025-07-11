@@ -476,25 +476,24 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
                                cudaMemcpyDeviceToDevice, stream));
 }
 
-#define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                             \
-  template void MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                      \
-      void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,             \
-      void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,   \
-      void* v_head_weight_scale, size_t o_proj_dim, void* gemm_workspace,                   \
-      cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos,             \
-      void* rotary_embedding_mask, void* mla_workspace, void* seqlen, float attn_scale,                           \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens, \
-      int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,     \
-      int v_head_dim, int num_kv_heads, int head_size, int stride_size, float k_scale, float v_scale,             \
-      size_t tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,            \
-      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, int layer_index,       \
-      void* flexible_rotary_embedding_pos_ptr, void* flexible_rotary_embedding_mask_ptr,                          \
-      void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,         \
-      void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len, float layernorm_eps,  \
-      bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, bool use_cache, cudaStream_t stream,            \
-      void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                 \
-      int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens, int total_prefix_len,    \
-      void* seqlens_q_ptr, void* prefix_k_buffer, void* prefix_v_buffer, void* prefix_o_buffer,                   \
+#define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                 \
+  template void MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                          \
+      void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
+      void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
+      size_t o_proj_dim, void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,    \
+      void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlen, float attn_scale,   \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,     \
+      int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,         \
+      int v_head_dim, int num_kv_heads, int head_size, int stride_size, float k_scale, float v_scale,                 \
+      size_t tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list,                \
+      void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, int layer_index,           \
+      void* flexible_rotary_embedding_pos_ptr, void* flexible_rotary_embedding_mask_ptr,                              \
+      void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,             \
+      void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len, float layernorm_eps,      \
+      bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, bool use_cache, cudaStream_t stream,                \
+      void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                     \
+      int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens, int total_prefix_len,        \
+      void* seqlens_q_ptr, void* prefix_k_buffer, void* prefix_v_buffer, void* prefix_o_buffer,                       \
       void* prefix_kv_buffer, void* prefix_k_up_buffer, void* prefix_v_up_buffer, QuantMode mm_quant_mode)
 MLA_ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 MLA_ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
@@ -502,8 +501,8 @@ MLA_ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 MLA_ATTEN_VARLEN(half, half, llm_kernels::utils::KVCacheType::kAuto);
 MLA_ATTEN_VARLEN(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 MLA_ATTEN_VARLEN(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 MLA_ATTEN_VARLEN(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+#if defined(ENABLE_FP8)
 MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif
@@ -512,13 +511,12 @@ MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokeMlaPagedAttention(
     void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr, void* k_pe_ptr,
-    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
-    void* v_head_weight_scale, size_t o_proj_dim, void* workspace, cublasHandle_t& cublas_handles,
-    cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr,
-    int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads,
-    int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads,
-    int stride_size, int block_size, float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
-    void* rotary_embedding_mask, int total_tokens, float attn_scale,
+    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale,
+    size_t o_proj_dim, void* workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
+    void** key_cache_ptrs, void** value_cache_ptrs, void* context_lens_ptr, int max_context_len, cudaStream_t stream,
+    void* cache_offsets_ptr, int seqs_num, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
+    int v_head_dim, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale,
+    int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr,
     float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,
     const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,
@@ -749,8 +747,8 @@ RUN_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M
 RUN_MLA_PAGED_ATTENTION(half, half, llm_kernels::utils::KVCacheType::kAuto);
 RUN_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 RUN_MLA_PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+#if defined(ENABLE_FP8)
 RUN_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif
@@ -903,8 +901,8 @@ RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::
 RUN_ABSORB_MLA_PAGED_ATTENTION(half, half, llm_kernels::utils::KVCacheType::kAuto);
 RUN_ABSORB_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+#if defined(ENABLE_FP8)
 RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif

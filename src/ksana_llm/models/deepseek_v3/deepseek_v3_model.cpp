@@ -445,7 +445,6 @@ Status DeepSeekV3Model<T>::LayerForward(ForwardingContext<T>& forwarding_context
 
 template class DeepSeekV3Model<float>;
 template class DeepSeekV3Model<float16>;
-#ifdef ENABLE_BFLOAT16
 template class DeepSeekV3Model<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

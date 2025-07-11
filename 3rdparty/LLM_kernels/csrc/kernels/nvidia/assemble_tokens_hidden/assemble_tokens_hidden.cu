@@ -166,9 +166,7 @@ void AssembleTokensHidden(const T* input, const size_t* accepted_tokens_idx, con
 
 INSTANTIATE_ASSEMBLE_TOKENS_HIDDEN(float);
 INSTANTIATE_ASSEMBLE_TOKENS_HIDDEN(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_ASSEMBLE_TOKENS_HIDDEN(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_ASSEMBLE_TOKENS_HIDDEN
 

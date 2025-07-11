@@ -35,13 +35,11 @@ inline void CopyVectorToHostTensor(Tensor host_tensor, DataType dtype, std::vect
 #endif
         break;
       }
-#ifdef ENABLE_BFLOAT16
       case DataType::TYPE_BF16: {
         bfloat16* arr = host_tensor.GetPtr<bfloat16>();
         arr[idx] = (bfloat16)val;
         break;
       }
-#endif
       default:
         assert(false);
     }

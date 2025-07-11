@@ -311,13 +311,11 @@ TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaRotaryEmbeddingFloatTest) {
   ForwardLlamaRotaryEmbedding<float>();
 }
 
-#ifdef ENABLE_BF16
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaRotaryEmbeddingBFloat16Test) {
   rotary_embedding_type = RotaryEmbeddingType::DEFAULT;
   scaling_factor = 1.0f;
   ForwardLlamaRotaryEmbedding<__nv_bfloat16>();
 }
-#endif
 
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaDynamicNTKScalingRotaryEmbeddingHalfTest) {
   rotary_embedding_type = RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
@@ -331,13 +329,11 @@ TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaDynamicNTKScalingRotaryEmbedding
   ForwardLlamaRotaryEmbedding<float>();
 }
 
-#ifdef ENABLE_BF16
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaDynamicNTKScalingRotaryEmbeddingBFloat16Test) {
   rotary_embedding_type = RotaryEmbeddingType::DYNAMIC_NTK_SCALING;
   scaling_factor = 4.0f;
   ForwardLlamaRotaryEmbedding<__nv_bfloat16>();
 }
-#endif
 
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaLinearScalingRotaryEmbeddingHalfTest) {
   rotary_embedding_type = RotaryEmbeddingType::LINEAR_SCALING;
@@ -351,13 +347,11 @@ TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaLinearScalingRotaryEmbeddingFloa
   ForwardLlamaRotaryEmbedding<float>();
 }
 
-#ifdef ENABLE_BF16
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, LlamaLinearScalingRotaryEmbeddingBFloat16Test) {
   rotary_embedding_type = RotaryEmbeddingType::LINEAR_SCALING;
   scaling_factor = 2.0f;
   ForwardLlamaRotaryEmbedding<__nv_bfloat16>();
 }
-#endif
 
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, RotaryEmbeddingPerformanceHalfTest) {
   rotary_embedding_type = RotaryEmbeddingType::DEFAULT;
@@ -383,7 +377,6 @@ TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, RotaryEmbeddingPerformanceFloatTest) 
   TestRotaryEmbeddingPerformance<float>();
 }
 
-#ifdef ENABLE_BF16
 TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, RotaryEmbeddingPerformanceBFloat16Test) {
   rotary_embedding_type = RotaryEmbeddingType::DEFAULT;
   scaling_factor = 1.0f;
@@ -395,7 +388,6 @@ TEST_F(LlamaNvidiaRotaryEmbeddingTestSuit, RotaryEmbeddingPerformanceBFloat16Tes
   num_tokens = 2048;
   TestRotaryEmbeddingPerformance<__nv_bfloat16>();
 }
-#endif
 
 }  // namespace test
 }  // namespace nvidia

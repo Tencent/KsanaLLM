@@ -114,8 +114,6 @@ Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 
 template class TwoLayeredFFN<float>;
 template class TwoLayeredFFN<float16>;
-#ifdef ENABLE_BFLOAT16
 template class TwoLayeredFFN<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

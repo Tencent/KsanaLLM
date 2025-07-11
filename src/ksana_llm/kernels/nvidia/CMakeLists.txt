@@ -2,7 +2,7 @@
 file(GLOB_RECURSE TRITON_SRCS *.cpp)
 list(FILTER TRITON_SRCS EXCLUDE REGEX ".*test.cpp")
 
-find_package(CUDA REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 
 add_library(llm_kernels_nvidia_kernel_triton STATIC ${TRITON_SRCS})
 target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBRARIES} -lcuda -lcudart ksana_llm_libs

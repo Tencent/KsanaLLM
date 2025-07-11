@@ -117,8 +117,6 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& output_tensor, ModelIn
 
 template class PagedMlaAttention<float>;
 template class PagedMlaAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class PagedMlaAttention<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

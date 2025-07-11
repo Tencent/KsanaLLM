@@ -40,11 +40,7 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
   if (unified_data_type_raw_str == "float16") {
     return DataType::TYPE_FP16;
   } else if (unified_data_type_raw_str == "bfloat16") {
-#ifdef ENABLE_BFLOAT16
     return DataType::TYPE_BF16;
-#else
-    return DataType::TYPE_FP16;
-#endif
   } else {
     KLLM_THROW(fmt::format("Not supported model data type: {}.", unified_data_type_raw_str));
   }

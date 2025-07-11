@@ -151,7 +151,7 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -DWMMA -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb -O3 -Werror=return-type -Wall -Wno-strict-aliasing -Wno-pointer-arith -Wno-ignored-attributes -Wno-deprecated -finline-functions -Wno-unknown-pragmas -Wno-pointer-arith -Wno-attributes -Wabi-tag")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0 -gdwarf-4 -gstrict-dwarf")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wall -O0 -gdwarf-4 -gstrict-dwarf")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -gdwarf-4 -gstrict-dwarf")
 
 set(CXX_STD "17" CACHE STRING "C++ standard")

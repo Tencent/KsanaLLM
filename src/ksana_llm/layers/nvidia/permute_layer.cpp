@@ -45,8 +45,6 @@ Status PermuteLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
 
 template class PermuteLayer<float>;
 template class PermuteLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class PermuteLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

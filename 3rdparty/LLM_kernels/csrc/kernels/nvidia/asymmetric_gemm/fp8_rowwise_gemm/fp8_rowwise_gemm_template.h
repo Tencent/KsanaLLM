@@ -152,13 +152,9 @@ size_t genericFp8RowwiseGemmKernelLauncherSm90(void* D, void const* A, void cons
   using ElementInput = cutlass::float_e4m3_t;
   using ElementOutput_ =
       typename cutlass::platform::conditional<cutlass::platform::is_same<T, half>::value, cutlass::half_t, T>::type;
-#  ifdef ENABLE_BF16
   using ElementOutput =
       typename cutlass::platform::conditional<cutlass::platform::is_same<ElementOutput_, __nv_bfloat16>::value,
                                               cutlass::bfloat16_t, ElementOutput_>::type;
-#  else
-  using ElementOutput = ElementOutput_;
-#  endif
 
   using AccumElementType = float;
   using MainloopScheduleType = cutlass::gemm::KernelTmaWarpSpecializedFP8FastAccum;

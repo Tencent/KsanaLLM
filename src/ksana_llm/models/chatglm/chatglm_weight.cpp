@@ -37,8 +37,6 @@ void ChatglmWeight<T>::SetEmbeddingsConfig() {
 
 template class ChatglmWeight<float>;
 template class ChatglmWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ChatglmWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -43,8 +43,6 @@ void Qwen2MoeWeight<T>::ProcessWeights() {
 
 template class Qwen2MoeWeight<float>;
 template class Qwen2MoeWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Qwen2MoeWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

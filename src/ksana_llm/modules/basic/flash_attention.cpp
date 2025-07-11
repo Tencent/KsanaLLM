@@ -222,8 +222,6 @@ Status FlashAttention<T>::RemoveAttentionPrefixCache(std::vector<Tensor>& hidden
 
 template class FlashAttention<float>;
 template class FlashAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class FlashAttention<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

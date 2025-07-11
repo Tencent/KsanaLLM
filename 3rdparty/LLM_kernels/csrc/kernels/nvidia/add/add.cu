@@ -178,9 +178,7 @@ void InvokeAddBiasAttentionFfnResidual(T* block_output, const T* ffn_output, con
                                       const int32_t m, const int32_t n, cudaStream_t stream)
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(float);
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
-#endif
 #undef INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL
 
 template void InvokeAddBiasResidual(float* output, const float* residual1, const float* residual2, const float* bias,
@@ -188,12 +186,9 @@ template void InvokeAddBiasResidual(float* output, const float* residual1, const
 
 template void InvokeAddBiasResidual(half* output, const half* residual1, const half* residual2, const half* bias,
                                     const int32_t m, const int32_t n, cudaStream_t stream);
-
-#ifdef ENABLE_BF16
 template void InvokeAddBiasResidual(__nv_bfloat16* output, const __nv_bfloat16* residual1,
                                     const __nv_bfloat16* residual2, const __nv_bfloat16* bias, const int32_t m,
                                     const int32_t n, cudaStream_t stream);
-#endif
 
 template void InvokeAddBiasAttentionFfnResidual(float* block_output, const float* ffn_output, const float* attn_output,
                                                 const float* input, const float* bias, const int32_t m, const int32_t n,
@@ -202,13 +197,10 @@ template void InvokeAddBiasAttentionFfnResidual(float* block_output, const float
 template void InvokeAddBiasAttentionFfnResidual(half* block_output, const half* ffn_output, const half* attn_output,
                                                 const half* input, const half* bias, const int32_t m, const int32_t n,
                                                 const int32_t block_input_tp_split, cudaStream_t stream);
-
-#ifdef ENABLE_BF16
 template void InvokeAddBiasAttentionFfnResidual(__nv_bfloat16* block_output, const __nv_bfloat16* ffn_output,
                                                 const __nv_bfloat16* attn_output, const __nv_bfloat16* input,
                                                 const __nv_bfloat16* bias, const int32_t m, const int32_t n,
                                                 const int32_t block_input_tp_split, cudaStream_t stream);
-#endif
 
 // NOTE(karlluo): inplace case output can't use __restrict__
 template <typename T>
@@ -234,10 +226,8 @@ template void InvokeT5AddResidual(float* output, const float* input, const int32
                                   cudaStream_t stream);
 template void InvokeT5AddResidual(half* output, const half* input, const int32_t m, const int32_t n,
                                   cudaStream_t stream);
-#ifdef ENABLE_BF16
 template void InvokeT5AddResidual(__nv_bfloat16* output, const __nv_bfloat16* input, const int32_t m, const int32_t n,
                                   cudaStream_t stream);
-#endif
 
 template <typename T>
 void InvokeT5AddBiasResidual(T* output, const T* input, const T* bias, const int32_t m, const int32_t n,
@@ -254,10 +244,8 @@ template void InvokeT5AddBiasResidual(float* output, const float* input, const f
                                       const int32_t n, cudaStream_t stream);
 template void InvokeT5AddBiasResidual(half* output, const half* input, const half* bias, const int32_t m,
                                       const int32_t n, cudaStream_t stream);
-#ifdef ENABLE_BF16
 template void InvokeT5AddBiasResidual(__nv_bfloat16* output, const __nv_bfloat16* input, const __nv_bfloat16* bias,
                                       const int32_t m, const int32_t n, cudaStream_t stream);
-#endif
 
 // InvokeAddBiasResidualCol32 input1/input2/out matrix with layout of cublasLt CUBLASLT_ORDER_COL32 (m*n) (grid, block)
 // must be (m, n/4) using char4

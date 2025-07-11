@@ -25,8 +25,6 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
 
 template class CastLayer<float>;
 template class CastLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class CastLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

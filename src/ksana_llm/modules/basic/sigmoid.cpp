@@ -22,8 +22,6 @@ Status Sigmoid<T>::Forward(std::vector<Tensor>& input_tensors, std::vector<Tenso
 
 template class Sigmoid<float>;
 template class Sigmoid<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Sigmoid<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

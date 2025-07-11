@@ -231,9 +231,7 @@ TEST_F(InvokeGroupedTopkTestSuit, TestHalfWithExpertBiasSigmoid) {
   TestGroupedTopk<half>("sigmoid", /*renormalize*/ true, /*has_bias*/ true);
 }
 
-#ifdef ENABLE_BFLOAT16
 // Test with bfloat16 precision, expert bias, and sigmoid activation function
 TEST_F(InvokeGroupedTopkTestSuit, TestBF16WithExpertBiasSigmoid) {
   TestGroupedTopk<__nv_bfloat16>("sigmoid", /*renormalize*/ true, /*has_bias*/ true);
 }
-#endif

@@ -168,9 +168,7 @@ void InvokeArgMaxReduce(const T* input, const int32_t batch_size, const int32_t 
 
 INSTANTIATE_INVOKE_ARG_MAX_REDUCE(float);
 INSTANTIATE_INVOKE_ARG_MAX_REDUCE(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_ARG_MAX_REDUCE(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_INVOKE_ARG_MAX_REDUCE
 

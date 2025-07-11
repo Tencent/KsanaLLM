@@ -159,9 +159,7 @@ Status Llama4<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContex
 
 template class Llama4<float>;
 template class Llama4<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Llama4<bfloat16>;
-#endif
 
 /* **************************************
  * Llama4Model
@@ -193,8 +191,6 @@ Status Llama4Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, co
 
 template class Llama4Model<float>;
 template class Llama4Model<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Llama4Model<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

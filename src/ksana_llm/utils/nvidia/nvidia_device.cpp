@@ -216,10 +216,8 @@ DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::GetFloatType() {
     return TYPE_FP32;
   } else if (std::is_same<U, half>::value || std::is_same<U, const half>::value) {
     return TYPE_FP16;
-#ifdef ENABLE_BFLOAT16
   } else if (std::is_same<U, __nv_bfloat16>::value || std::is_same<U, const __nv_bfloat16>::value) {
     return TYPE_BF16;
-#endif
 #ifdef ENABLE_FP8
   } else if (std::is_same<U, __nv_fp8_e4m3>::value || std::is_same<U, const __nv_fp8_e4m3>::value) {
     return TYPE_FP8_E4M3;
@@ -282,10 +280,7 @@ template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<unsigned int>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<uint64_t>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<bool>();
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<char>();
-
-#ifdef ENABLE_BFLOAT16
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<__nv_bfloat16>();
-#endif
 #ifdef ENABLE_FP8
 template DataType GetDataTypeT<DEVICE_TYPE_NVIDIA>::impl<__nv_fp8_e4m3>();
 #endif

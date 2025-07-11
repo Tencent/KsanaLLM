@@ -60,10 +60,8 @@ ncclDataType_t CastToNCCLDataType() {
     nccl_data_type = ncclFloat;
   } else if (std::is_same<T, half>::value) {
     nccl_data_type = ncclHalf;
-#ifdef ENABLE_BFLOAT16
   } else if (std::is_same<T, __nv_bfloat16>::value) {
     nccl_data_type = ncclBfloat16;
-#endif
   } else if (std::is_same<T, int>::value) {
     nccl_data_type = ncclInt;
   } else if (std::is_same<T, char>::value) {

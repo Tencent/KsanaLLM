@@ -76,8 +76,6 @@ Status SimpleDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, cons
 
 template class SimpleDecoderLayer<float>;
 template class SimpleDecoderLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class SimpleDecoderLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

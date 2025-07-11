@@ -212,7 +212,7 @@ TEST_F(NcclDataChannelTest, TestDataChannel) {
 
     std::vector<float> recv_buffer_data(8, 0.0);
     Memcpy(recv_buffer_data.data(), worker_recved_dev_hidden_unit->tensors[0].GetPtr<void>(),
-                recv_buffer_data.size() * sizeof(float), MEMCPY_DEVICE_TO_HOST);
+           recv_buffer_data.size() * sizeof(float), MEMCPY_DEVICE_TO_HOST);
     for (auto v : recv_buffer_data) {
       EXPECT_FLOAT_EQ(v, master_value);
     }

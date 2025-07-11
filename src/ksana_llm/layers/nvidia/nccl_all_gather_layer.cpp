@@ -46,8 +46,6 @@ Status NcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
 
 template class NcclAllGatherLayer<float>;
 template class NcclAllGatherLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class NcclAllGatherLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -68,9 +68,7 @@ void DequantInt4Fp8(cudaStream_t stream, void* output, const void* input, const 
   }
 GET_MACHETE_DATA_TYPE(float, llm_kernels::nvidia::vllm_dtype::kFloat);
 GET_MACHETE_DATA_TYPE(half, llm_kernels::nvidia::vllm_dtype::kHalf);
-#ifdef ENABLE_BFLOAT16
 GET_MACHETE_DATA_TYPE(__nv_bfloat16, llm_kernels::nvidia::vllm_dtype::kBFloat16);
-#endif
 #undef GET_MACHETE_DATA_TYPE
 
 std::vector<std::string> GetMacheteSupportedSchedules(
@@ -156,9 +154,7 @@ llm_kernels::nvidia::marlin::WorkspaceInfo GetMarlinWorkspace(bool use_fp32_redu
                                                                             int rank, int64_t size_m, int64_t size_k)
 GET_MARLIN_WORKSPACE(float);
 GET_MARLIN_WORKSPACE(half);
-#ifdef ENABLE_BFLOAT16
 GET_MARLIN_WORKSPACE(__nv_bfloat16);
-#endif
 #undef GET_MARLIN_WORKSPACE
 
 template <typename T>
@@ -172,9 +168,7 @@ void InvokeMarlinPermuteScales(cudaStream_t stream, const void* input, void* out
                                              const size_t n, const int64_t groupsize)
 INVOKE_MARLIN_PERMUTE_SCALES(float);
 INVOKE_MARLIN_PERMUTE_SCALES(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MARLIN_PERMUTE_SCALES(__nv_bfloat16);
-#endif
 #undef INVOKE_MARLIN_PERMUTE_SCALES
 
 template <typename T>
@@ -194,9 +188,7 @@ void InvokeMarlinGemm(void* a, void* a_tmp, void* b_q_weight, void* b_scales, vo
                                     bool has_act_order, bool is_awq, int rank, cudaStream_t stream)
 INVOKE_MARLIN_GEMM(float);
 INVOKE_MARLIN_GEMM(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MARLIN_GEMM(__nv_bfloat16);
-#endif
 #undef INVOKE_MARLIN_GEMM
 
 template <typename T>
@@ -209,9 +201,7 @@ torch::ScalarType GetTorchDataType();
 GET_TORCH_DATA_TYPE(int32_t, torch::kInt32);
 GET_TORCH_DATA_TYPE(float, torch::kFloat32);
 GET_TORCH_DATA_TYPE(half, torch::kFloat16);
-#ifdef ENABLE_BFLOAT16
 GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
-#endif
 #undef GET_TORCH_DATA_TYPE
 
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
@@ -252,10 +242,8 @@ GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::Weigh
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT8);
-#ifdef ENABLE_BFLOAT16
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
-#endif
 #undef GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
@@ -273,10 +261,8 @@ INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(float, llm_kernels::nvidia::WeightType::INT4)
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
-#endif
 #undef INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
@@ -294,10 +280,8 @@ INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::We
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(float, llm_kernels::nvidia::WeightType::INT8);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(half, llm_kernels::nvidia::WeightType::INT8);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
-#endif
 #undef INVOKE_FPA_INTB_GROUP_CUTLASS_GEMM_CONFIG_PROGILE
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
@@ -310,10 +294,8 @@ GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(float, llm_kernels::nvidia::WeightType::I
 GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(half, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(half, llm_kernels::nvidia::WeightType::INT8);
-#ifdef ENABLE_BFLOAT16
 GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
-#endif
 #undef GET_FPA_INTB_GROUP_CUDA_GEMM_SUPPORTED
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
@@ -331,10 +313,8 @@ INVOKE_FPA_INTB_GROUP_CUDA_GEMM(float, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUDA_GEMM(float, llm_kernels::nvidia::WeightType::INT8);
 INVOKE_FPA_INTB_GROUP_CUDA_GEMM(half, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUDA_GEMM(half, llm_kernels::nvidia::WeightType::INT8);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT4);
 INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::INT8);
-#endif
 #undef INVOKE_FPA_INTB_GROUP_CUDA_GEMM
 
 template <typename T>
@@ -362,9 +342,7 @@ void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void*
                                    cudaStream_t stream, void* workspace_ptr)
 LOOKUP_EMBEDDING(float);
 LOOKUP_EMBEDDING(half);
-#ifdef ENABLE_BFLOAT16
 LOOKUP_EMBEDDING(__nv_bfloat16);
-#endif
 #undef LOOKUP_EMBEDDING
 
 template <typename T>
@@ -379,9 +357,7 @@ void InvokeLayerNorm(const void* input, const void* weight, const void* bias, co
                                    const int m, const int n, void* output, cudaStream_t stream)
 INVOKE_LAYER_NORM(float);
 INVOKE_LAYER_NORM(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_LAYER_NORM(__nv_bfloat16);
-#endif
 #undef INVOKE_LAYER_NORM
 
 #define INVOKE_MATMUL(T, CUDA_TYPE)                                                                                    \
@@ -395,9 +371,7 @@ INVOKE_LAYER_NORM(__nv_bfloat16);
   }
 INVOKE_MATMUL(float, CUDA_R_32F);
 INVOKE_MATMUL(half, CUDA_R_16F);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
-#endif
 #undef INVOKE_MATMUL
 
 #define INVOKE_BATCHED_GEMM(T, CUDA_TYPE)                                                                            \
@@ -411,9 +385,7 @@ INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
   }
 INVOKE_BATCHED_GEMM(float, CUDA_R_32F);
 INVOKE_BATCHED_GEMM(half, CUDA_R_16F);
-#ifdef ENABLE_BFLOAT16
 INVOKE_BATCHED_GEMM(__nv_bfloat16, CUDA_R_16BF);
-#endif
 #undef INVOKE_BATCHED_GEMM
 
 template <typename T>
@@ -429,9 +401,7 @@ void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void*
                                          const int n, void* output, cudaStream_t stream)
 INVOKE_ADD_BIAS_RESIDUAL(float);
 INVOKE_ADD_BIAS_RESIDUAL(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
-#endif
 #undef INVOKE_ADD_BIAS_RESIDUAL
 
 template <template <typename T> class Activation, typename T>
@@ -464,9 +434,7 @@ void InvokeRowBasedGatedActivation(const void* input, const int m, const int n, 
                                                              void* output, cudaStream_t stream)
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, float);
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, __nv_bfloat16);
-#endif
 
 #define INVOKE_GATED_ACTIVATION(Activation, T)                                                                       \
   template void InvokeGatedActivation<Activation, T>(const void* input, const void* bias, const void* gated_weights, \
@@ -474,21 +442,15 @@ INVOKE_ROW_BASED_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, __nv_bflo
                                                      cudaStream_t stream)
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, float);
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::GeluActivation, __nv_bfloat16);
-#endif
 
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, float);
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::SiluActivation, __nv_bfloat16);
-#endif
 
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, float);
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_GATED_ACTIVATION(llm_kernels::nvidia::ReluActivation, __nv_bfloat16);
-#endif
 
 template <typename T>
 void AssembleTokensHidden(const void* inputs, const void* logits_idx, const int batch_size, const int hidden_units_num,
@@ -503,9 +465,7 @@ void AssembleTokensHidden(const void* inputs, const void* logits_idx, const int 
                                         const int hidden_units_num, void* output, cudaStream_t& stream);
 ASSEMBEL_LAST_TOKEN(float);
 ASSEMBEL_LAST_TOKEN(half);
-#ifdef ENABLE_BFLOAT16
 ASSEMBEL_LAST_TOKEN(__nv_bfloat16);
-#endif
 #undef ASSEMBEL_LAST_TOKEN
 
 template <typename T>
@@ -521,9 +481,7 @@ void Concat(const void* input_a, const void* input_b, size_t concat_size_a, size
                           size_t outer_dim_size, size_t inner_dim_size, void* output, cudaStream_t& stream);
 CONCAT(float);
 CONCAT(half);
-#ifdef ENABLE_BFLOAT16
 CONCAT(__nv_bfloat16);
-#endif
 #undef CONCAT
 
 template <typename T>
@@ -537,9 +495,7 @@ void Expand(void* input, void* output, const int m, const int expand_size, const
                           const size_t stride, cudaStream_t stream)
 INVOKE_EXPAND(float);
 INVOKE_EXPAND(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_EXPAND(__nv_bfloat16);
-#endif
 #undef INVOKE_EXPAND
 
 // ptr: 指向所维护的CustomAllreduce算子的指针
@@ -557,9 +513,7 @@ void CustomAllReduceInit(void** ptr, void** signals, void* rank_data, size_t ran
                                        int total_ranks, bool is_full_nvlink, uint32_t root_rank);
 CUSTOM_ALL_REDUCE_INIT(float);
 CUSTOM_ALL_REDUCE_INIT(half);
-#ifdef ENABLE_BFLOAT16
 CUSTOM_ALL_REDUCE_INIT(__nv_bfloat16);
-#endif
 #undef CUSTOM_ALL_REDUCE_INIT
 
 template <typename T>
@@ -572,9 +526,7 @@ void CustomAllReduceRegisterBuffer(void* ptr, void** input_handles, cudaStream_t
   template void CustomAllReduceRegisterBuffer<T>(void* ptr, void** input_handles, cudaStream_t& stream);
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(float);
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(half);
-#ifdef ENABLE_BFLOAT16
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(__nv_bfloat16);
-#endif
 #undef CUSTOM_ALL_REDUCE_REGISTER_BUFFER
 
 template <typename T>
@@ -585,10 +537,8 @@ void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cud
 
 template void CustomAllReduceRun<float>(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
 template void CustomAllReduceRun<half>(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
-#ifdef ENABLE_BFLOAT16
 template void CustomAllReduceRun<__nv_bfloat16>(void* ptr, void* input, void* result, int data_size,
                                                 cudaStream_t& stream);
-#endif
 
 template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream) {
@@ -598,10 +548,8 @@ void InvokeSigmoidActivation(void* input, const size_t size, const float scale, 
 
 template void InvokeSigmoidActivation<float>(void* input, const size_t size, const float scale, cudaStream_t& stream);
 template void InvokeSigmoidActivation<half>(void* input, const size_t size, const float scale, cudaStream_t& stream);
-#ifdef ENABLE_BFLOAT16
 template void InvokeSigmoidActivation<__nv_bfloat16>(void* input, const size_t size, const float scale,
                                                      cudaStream_t& stream);
-#endif
 
 template <>
 ncclDataType_t GetNcclDataType<float>() {
@@ -611,12 +559,10 @@ template <>
 ncclDataType_t GetNcclDataType<half>() {
   return ncclHalf;
 }
-#ifdef ENABLE_BFLOAT16
 template <>
 ncclDataType_t GetNcclDataType<__nv_bfloat16>() {
   return ncclBfloat16;
 }
-#endif
 
 template <typename T>
 void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, std::vector<size_t> permutation,
@@ -640,9 +586,7 @@ void InvokePermute(void* input, void* output, std::vector<size_t> input_shape, s
                                  std::vector<size_t> permutation, cudaStream_t& stream);
 INVOKE_PERMUTE(float);
 INVOKE_PERMUTE(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_PERMUTE(__nv_bfloat16);
-#endif
 #undef INVOKE_PERMUTE
 
 template <>
@@ -656,6 +600,7 @@ void DataToFloat<float>(const void* input, const int data_size, const size_t voc
     CUDA_CHECK(cudaMemcpyAsync(output, input, data_size * sizeof(float), cudaMemcpyDeviceToDevice, stream));
   }
 }
+
 template <>
 void DataToFloat<half>(const void* input, const int data_size, const size_t vocab_size, const size_t vocab_size_pad,
                        void* output, cudaStream_t& stream) {
@@ -663,7 +608,7 @@ void DataToFloat<half>(const void* input, const int data_size, const size_t voca
                                                          reinterpret_cast<float*>(output), stream, vocab_size_pad,
                                                          vocab_size));
 }
-#ifdef ENABLE_BFLOAT16
+
 template <>
 void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, const size_t vocab_size,
                                 const size_t vocab_size_pad, void* output, cudaStream_t& stream) {
@@ -671,19 +616,14 @@ void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, const si
                                                              reinterpret_cast<float*>(output), stream, vocab_size_pad,
                                                              vocab_size));
 }
-#endif
 
 Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
   if (tensor.dtype == DataType::TYPE_BF16 && target_dtype == DataType::TYPE_FP16) {
-#ifdef ENABLE_BFLOAT16
     CUDA_CHECK_LAST_ERROR(
         llm_kernels::nvidia::BFloat16ToHalf(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get()));
-#endif
   } else if (tensor.dtype == DataType::TYPE_FP16 && target_dtype == DataType::TYPE_BF16) {
-#ifdef ENABLE_BFLOAT16
     CUDA_CHECK_LAST_ERROR(
         llm_kernels::nvidia::HalfToBFloat16(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get()));
-#endif
   } else if (tensor.dtype == target_dtype) {
     // No need to convert
   } else {
@@ -705,12 +645,8 @@ Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<si
     InvokePermute<half>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
                         stream.Get());
   } else if (input_tensor.dtype == TYPE_BF16) {
-#ifdef ENABLE_BFLOAT16
     InvokePermute<__nv_bfloat16>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape,
                                  permutation, stream.Get());
-#else
-    KLLM_THROW(fmt::format("Permute of type {} is not yet implement", input_tensor.dtype));
-#endif
   } else if (input_tensor.dtype == TYPE_FP8_E4M3) {
 #ifdef ENABLE_FP8
     InvokePermute<__nv_fp8_e4m3>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape,
@@ -737,9 +673,7 @@ void InvokeMul(void* a, void* b, void* c, int m1, int n1, int m2, int n2, int de
   template void InvokeMul<T>(void* a, void* b, void* c, int m1, int n1, int m2, int n2, int device_rank);
 InvokeMUL(float);
 InvokeMUL(half);
-#ifdef ENABLE_BFLOAT16
 InvokeMUL(__nv_bfloat16);
-#endif
 #undef InvokeMUL
 
 // c = InvokeMul(a, b)
@@ -802,9 +736,7 @@ Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_ARG_MAX(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_ARG_MAX
 
@@ -822,9 +754,7 @@ INSTANTIATE_ARG_MAX(__nv_bfloat16);
     }
 INSTANTIATE_FP8_E4M3_QUANTIZE(float);
 INSTANTIATE_FP8_E4M3_QUANTIZE(half);
-#  ifdef ENABLE_BFLOAT16
 INSTANTIATE_FP8_E4M3_QUANTIZE(__nv_bfloat16);
-#  endif
 #  undef INSTANTIATE_FP8_E4M3_QUANTIZE
 
 #  define INVOKE_FP8_QUANTIZED_MATMUL(T, CUDA_TYPE)                                                                    \
@@ -840,9 +770,7 @@ INSTANTIATE_FP8_E4M3_QUANTIZE(__nv_bfloat16);
 
 INVOKE_FP8_QUANTIZED_MATMUL(float, CUDA_R_32F);
 INVOKE_FP8_QUANTIZED_MATMUL(half, CUDA_R_16F);
-#  ifdef ENABLE_BFLOAT16
 INVOKE_FP8_QUANTIZED_MATMUL(__nv_bfloat16, CUDA_R_16BF);
-#  endif
 #  undef INVOKE_FP8_QUANTIZED_MATMUL
 
 void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
@@ -875,9 +803,7 @@ void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* o
                                    int n, cudaStream_t& stream, void* cutlass_buf, size_t cutlass_buf_size)
 BLOCKWISE_GEMM(float);
 BLOCKWISE_GEMM(half);
-#ifdef ENABLE_BFLOAT16
 BLOCKWISE_GEMM(__nv_bfloat16);
-#endif
 #undef BLOCKWISE_GEMM
 
 // Adapted from
@@ -979,9 +905,7 @@ void ScaledQuantizeFp8E4m3(T* x, void* output, float* scale2, std::vector<size_t
                                              int m, int n, int rank)
 
 SCALED_QUANTIZE_FP8_E4M3(half);
-#    ifdef ENABLE_BFLOAT16
 SCALED_QUANTIZE_FP8_E4M3(__nv_bfloat16);
-#    endif
 SCALED_QUANTIZE_FP8_E4M3(float);
 #  endif
 
@@ -1000,9 +924,7 @@ void DequantFp8E4m3BlockWise(const void* d_data, const void* d_s, void* d_output
 
 DEQUANTIZE_FP8_E4M3_BLOCKWISE(half);
 DEQUANTIZE_FP8_E4M3_BLOCKWISE(float);
-#  ifdef ENABLE_BFLOAT16
 DEQUANTIZE_FP8_E4M3_BLOCKWISE(__nv_bfloat16);
-#  endif
 #endif
 
 template <typename T>
@@ -1021,9 +943,7 @@ void InvokePerTokenGroupQuantFp8E4m3(void* input, void* output_q, void* output_s
                                                    float eps, float min_fp8, float max_fp8);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(float);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(__nv_bfloat16);
-#endif
 #undef INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3
 
 template <typename T>
@@ -1035,9 +955,7 @@ void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps
                                          cudaStream_t stream);
 INVOKE_FUSED_ADD_RMS_NORM(float);
 INVOKE_FUSED_ADD_RMS_NORM(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FUSED_ADD_RMS_NORM(__nv_bfloat16);
-#endif
 #undef INVOKE_FUSED_ADD_RMS_NORM
 
 template <typename T>
@@ -1055,9 +973,7 @@ void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs
                                cudaStream_t& stream);
 INVOKE_SPLIT(float);
 INVOKE_SPLIT(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_SPLIT(__nv_bfloat16);
-#endif
 #undef INVOKE_SPLIT
 
 }  // namespace ksana_llm

@@ -36,8 +36,6 @@ Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 
 template class AddLayer<float>;
 template class AddLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class AddLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -28,9 +28,7 @@ void SetTorchStreamLayer<T>::Clear() {
 
 template class SetTorchStreamLayer<float>;
 template class SetTorchStreamLayer<half>;
-#  ifdef ENABLE_BFLOAT16
 template class SetTorchStreamLayer<__nv_bfloat16>;
-#  endif
 
 }  // namespace ksana_llm
 #endif

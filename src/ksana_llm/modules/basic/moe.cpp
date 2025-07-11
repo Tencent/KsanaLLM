@@ -52,8 +52,6 @@ Status MoE<T>::Forward(Tensor hidden_states, Tensor gating_output, std::vector<T
 
 template class MoE<float>;
 template class MoE<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MoE<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -59,7 +59,28 @@ enum QuantMode {
   MOE_QUANT_GPTQ
 };
 
+__attribute__((unused)) static std::string GetQuantModeString(QuantMode quant_mode) {
+  static const std::unordered_map<QuantMode, std::string> quant_mode_map{
+      {QUANT_NONE, "None"},
+      {QUANT_GPTQ, "GPTQ"},
+      {QUANT_AWQ, "AWQ"},
+      {QUANT_FP8_E4M3, "FP8_E4M3"},
+      {QUANT_BLOCK_FP8_E4M3, "BLOCK_FP8_E4M3"},
+      {MOE_QUANT_NONE, "MOE_QUANT None"},
+      {MOE_QUANT_BLOCK_FP8_E4M3, "MOE_QUANT BLOCK_FP8_E4M3"},
+      {MOE_QUANT_FP8_E4M3, "MOE_QUANT FP8_E4M3"},
+      {MOE_QUANT_GPTQ, "MOE_QUANT GPTQ"}};
+  return quant_mode_map.count(quant_mode) ? quant_mode_map.at(quant_mode) : "Unknown";
+}
+
 enum GroupQuantBackend { NONE_QUANT, CUTLASS_BACKEND, MARLIN_BACKEND, MACHETE_BACKEND };
+
+__attribute__((unused)) static std::string GetGroupQuantBackendString(GroupQuantBackend group_quant_backend) {
+  static const std::unordered_map<GroupQuantBackend, std::string> group_quant_backend_map{
+      {NONE_QUANT, "None"}, {CUTLASS_BACKEND, "cutlass"}, {MARLIN_BACKEND, "marlin"}, {MACHETE_BACKEND, "machete"}};
+  return group_quant_backend_map.count(group_quant_backend) ? group_quant_backend_map.at(group_quant_backend)
+                                                            : "Unknown";
+}
 
 enum class DistributedCommunicationType {
   DEFAULT = 0,   // send and recevie

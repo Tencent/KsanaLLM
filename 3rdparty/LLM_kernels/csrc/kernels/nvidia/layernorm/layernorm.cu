@@ -458,11 +458,7 @@ void InvokeLayerNormWithBeta(T* out, const T* input, const T* gamma, const T* be
                              const int32_t int8_mode, cudaStream_t stream, int32_t opt_version) {
   dim3 grid(m);
   const bool dynamic_quant = dynamic_scale != nullptr;
-#ifdef ENABLE_BF16
   if (n % 2 == 0 && (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value)
-#else
-  if (n % 2 == 0 && (std::is_same<T, half>::value)
-#endif
       && opt_version > 0) {
     int32_t half_n = n / 2;
     int32_t half_n_32 = (half_n + 31) / 32 * 32;
@@ -516,12 +512,10 @@ template void InvokeLayerNormWithBeta(half* out, const half* input, const half* 
                                       const float layernorm_eps, const int32_t m, const int32_t n, float* scale,
                                       float* dynamic_scale, const int32_t int8_mode, cudaStream_t stream,
                                       int32_t opt_version);
-#ifdef ENABLE_BF16
 template void InvokeLayerNormWithBeta(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
                                       const __nv_bfloat16* beta, const float layernorm_eps, const int32_t m,
                                       const int32_t n, float* scale, float* dynamic_scale, const int32_t int8_mode,
                                       cudaStream_t stream, int32_t opt_version);
-#endif
 
 template <typename T>
 __global__ void InvokeLayerNormKernel(const T* __restrict input, const T* __restrict gamma, T* output,
@@ -577,11 +571,9 @@ template void InvokeLayerNorm(float* out, const float* input, const float* gamma
                               const float layernorm_eps, const int32_t m, const int32_t n, cudaStream_t stream);
 template void InvokeLayerNorm(half* out, const half* input, const half* gamma, const half* beta,
                               const float layernorm_eps, const int32_t m, const int32_t n, cudaStream_t stream);
-#ifdef ENABLE_BF16
 template void InvokeLayerNorm(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
                               const __nv_bfloat16* beta, const float layernorm_eps, const int32_t m, const int32_t n,
                               cudaStream_t stream);
-#endif
 
 template <typename T>
 __global__ void InvokeAddResLayerNormKernel(const T* __restrict input, const T* __restrict gamma, T* output,
@@ -633,11 +625,9 @@ template void InvokeAddResPreLayerNorm(float* output, float* norm_output, const 
 template void InvokeAddResPreLayerNorm(half* output, half* norm_output, const half* input, const half* gamma,
                                        const float layernorm_eps, int32_t m, int32_t n, cudaStream_t stream);
 
-#ifdef ENABLE_BF16
 template void InvokeAddResPreLayerNorm(__nv_bfloat16* output, __nv_bfloat16* norm_output, const __nv_bfloat16* input,
                                        const __nv_bfloat16* gamma, const float layernorm_eps, int32_t m, int32_t n,
                                        cudaStream_t stream);
-#endif
 
 template <typename T>
 __global__ void InvokeRmsNorm3DKernel(const T* __restrict input, const T* __restrict gamma, T* output,
@@ -710,11 +700,9 @@ template void InvokeRmsNorm3D(float* out, const float* input, const float* gamma
 template void InvokeRmsNorm3D(half* out, const half* input, const half* gamma, const float layernorm_eps,
                               const int32_t len, const int32_t m, const int32_t n, const int32_t start,
                               const int32_t end, const int64_t* mask, cudaStream_t stream);
-#ifdef ENABLE_BF16
 template void InvokeRmsNorm3D(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
                               const float layernorm_eps, const int32_t len, const int32_t m, const int32_t n,
                               const int32_t start, const int32_t end, const int64_t* mask, cudaStream_t stream);
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

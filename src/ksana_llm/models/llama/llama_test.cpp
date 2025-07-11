@@ -301,20 +301,18 @@ TEST_F(LlamaTest, ForwardTest) {
 #endif
 
 #ifdef ENABLE_CUDA
-#  ifdef ENABLE_BFLOAT16
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
   TestLlamaForward<bfloat16>();
-#    ifdef ENABLE_FP8
+#  ifdef ENABLE_FP8
   // fp8 forward
   model_config.is_quant = true;
   model_config.quant_config.method = QUANT_FP8_E4M3;
   model_config.quant_config.is_checkpoint_fp8_serialized = false;
   std::cout << "Test TYPE_BF16 weight_data_type with QUANT_FP8_E4M3 forward" << std::endl;
   TestLlamaForward<bfloat16>();
-#    endif
 #  endif
 #endif
 }

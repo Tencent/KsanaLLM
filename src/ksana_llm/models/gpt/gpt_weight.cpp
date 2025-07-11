@@ -50,8 +50,6 @@ void GPTWeight<T>::ProcessWeights() {
 
 template class GPTWeight<float>;
 template class GPTWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class GPTWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

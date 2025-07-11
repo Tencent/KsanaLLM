@@ -22,7 +22,6 @@
 
 namespace llm_kernels {
 namespace utils {
-#ifdef ENABLE_BF16
 
 // NOTE(karlluo): for override and fallback cuda default function, we need all this function name with cuda's code
 // format rule
@@ -262,8 +261,6 @@ inline __device__ __nv_bfloat162 bf16hfma2(__nv_bfloat162 a, __nv_bfloat162 b, _
   return a * b * c + d;
 #  endif
 }
-
-#endif  // ENABLE_BF16
 
 }  // namespace utils
 }  // namespace llm_kernels

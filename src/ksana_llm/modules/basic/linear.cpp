@@ -35,8 +35,6 @@ Status Linear<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<
 
 template class Linear<float>;
 template class Linear<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Linear<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

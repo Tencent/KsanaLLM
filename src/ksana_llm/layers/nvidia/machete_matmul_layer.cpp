@@ -298,8 +298,6 @@ Status MacheteMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tenso
 
 template class MacheteMatMulLayer<float, TYPE_I4_GROUP>;
 template class MacheteMatMulLayer<half, TYPE_I4_GROUP>;
-#ifdef ENABLE_BFLOAT16
 template class MacheteMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
-#endif
 
 }  // namespace ksana_llm

@@ -2,15 +2,14 @@
  *
  * ==============================================================================*/
 #include <gtest/gtest.h>
-#include <cstdlib> 
-#include <iostream>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 
-class FusedMoeTest : public testing::Test {
-};
+class FusedMoeTest : public testing::Test {};
 
-int RunPythonScript(){
+int RunPythonScript() {
   std::string cmd =
       "python fused_moe.py "
       "--output_dir ./ "
@@ -20,7 +19,7 @@ int RunPythonScript(){
       "--BLOCK_SIZE_N 128 "
       "--BLOCK_SIZE_K 128 "
       "--GROUP_SIZE_M 1 "
-      "--m 32 "  
+      "--m 32 "
       "--MUL_ROUTED_WEIGHT False "
       "--top_k 8 "
       "--compute_type FP16 "
@@ -32,14 +31,14 @@ int RunPythonScript(){
       "--even_Ks True "
       "--tp_size 8";
   int ret = std::system(cmd.c_str());
-  if(ret!= 0){
-    //run python script failed
+  if (ret != 0) {
+    // run python script failed
     return ret;
   }
   std::ifstream file("best_config.json");
   if (!file.is_open()) {
-      // Failed to open the file
-      return -1;
+    // Failed to open the file
+    return -1;
   }
   nlohmann::json data;
   file >> data;
@@ -56,5 +55,3 @@ TEST_F(FusedMoeTest, Test) {
   int ret = RunPythonScript();
   EXPECT_EQ(0, ret);
 }
-
-

@@ -33,8 +33,6 @@ void InvokeCopyElements(T** src_ptrs, T* dest, size_t num_elements, cudaStream_t
 
 INSTANTIATE_INVOKE_COPY_ELEMENTS(float);
 INSTANTIATE_INVOKE_COPY_ELEMENTS(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_COPY_ELEMENTS(__nv_bfloat16);
-#endif
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -68,7 +68,6 @@ struct GeluActivation<half2> {
   }
 };
 
-#ifdef ENABLE_BF16
 template <>
 struct GeluActivation<__nv_bfloat162> {
   using return_type = __nv_bfloat162;
@@ -83,7 +82,6 @@ struct GeluActivation<__nv_bfloat162> {
     return bf16hmul2(val, __floats2bfloat162_rn(tmp.x, tmp.y));
   }
 };
-#endif
 
 template <typename T>
 struct ReluActivation {
@@ -102,7 +100,6 @@ struct ReluActivation<half2> {
   }
 };
 
-#ifdef ENABLE_BF16
 template <>
 struct ReluActivation<__nv_bfloat162> {
   using return_type = __nv_bfloat162;
@@ -111,7 +108,6 @@ struct ReluActivation<__nv_bfloat162> {
     return make_bfloat162(val.x > zero_bf16 ? val.x : zero_bf16, val.y > zero_bf16 ? val.y : zero_bf16);
   }
 };
-#endif
 
 template <typename T>
 struct SiluActivation {
@@ -127,7 +123,6 @@ struct SiluActivation<half2> {
   }
 };
 
-#ifdef ENABLE_BF16
 template <>
 struct SiluActivation<__nv_bfloat162> {
   using return_type = float2;
@@ -135,7 +130,6 @@ struct SiluActivation<__nv_bfloat162> {
     return make_float2(SiluActivation<float>::apply(val.x), SiluActivation<float>::apply(val.y));
   }
 };
-#endif  // ENABLE_BF16
 
 template <typename T>
 struct IdentityActivation {
@@ -195,9 +189,7 @@ void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int
 
 INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float);
 INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, half);
-#ifdef ENABLE_BF16
 INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, __nv_bfloat16);
-#endif
 
 template <template <typename T> class Activation, typename T, typename BT>
 __global__ void InvokeGenericActivationKernel(T* out, const BT* __restrict bias, const T* __restrict gated_weights,
@@ -295,29 +287,21 @@ void InvokeGenericActivation(T* out, const BT* bias, const T* gated_weights, con
 
 INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, half, half);
-#ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, __nv_bfloat16, __nv_bfloat16);
-#endif
 
 INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, half, half);
-#ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, __nv_bfloat16, __nv_bfloat16);
-#endif
 
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
-#ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
-#endif
 
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, half, half);
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, half);
-#ifdef ENABLE_BF16
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, __nv_bfloat16, __nv_bfloat16);
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, __nv_bfloat16);
-#endif
 #undef INSTANCIATE_GENERIC_ACTIVATION
 
 template <typename T>
@@ -347,7 +331,6 @@ __global__ void AddBiasTanhKernel(half* out, const half* __restrict bias, int32_
   }
 }
 
-#ifdef ENABLE_BF16
 template <>
 __global__ void AddBiasTanhKernel(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int32_t m, int32_t n) {
   __nv_bfloat162* out_ptr = (__nv_bfloat162*)out;
@@ -363,7 +346,6 @@ __global__ void AddBiasTanhKernel(__nv_bfloat16* out, const __nv_bfloat16* __res
     out_ptr[id] = val;
   }
 }
-#endif
 
 template <typename T>
 void InvokeAddBiasTanh(T* out, const T* bias, const int32_t m, const int32_t n, cudaStream_t& stream) {
@@ -383,10 +365,8 @@ void InvokeAddBiasTanh(T* out, const T* bias, const int32_t m, const int32_t n, 
 
 template void InvokeAddBiasTanh(float* out, const float* bias, const int32_t m, const int32_t n, cudaStream_t& stream);
 template void InvokeAddBiasTanh(half* out, const half* bias, const int32_t m, const int32_t n, cudaStream_t& stream);
-#ifdef ENABLE_BF16
 template void InvokeAddBiasTanh(__nv_bfloat16* out, const __nv_bfloat16* bias, const int32_t m, const int32_t n,
                                 cudaStream_t& stream);
-#endif
 
 template <typename T2, int32_t N>
 __global__ void AddBiasGeluV2Kernel(T2* out, const T2* __restrict bias, const int32_t* ia3_tasks, const T2* ia3_weights,
@@ -515,11 +495,9 @@ template void InvokeAddBiasGeluV2(float* out, const float* bias, const int32_t* 
 template void InvokeAddBiasGeluV2(half* out, const half* bias, const int32_t* ia3_tasks, const half* ia3_weights,
                                   const int32_t* padding_offset, const int32_t seq_len, const int32_t m,
                                   const int32_t n, cudaStream_t& stream);
-#ifdef ENABLE_BF16
 template void InvokeAddBiasGeluV2(__nv_bfloat16* out, const __nv_bfloat16* bias, const int32_t* ia3_tasks,
                                   const __nv_bfloat16* ia3_weights, const int32_t* padding_offset,
                                   const int32_t seq_len, const int32_t m, const int32_t n, cudaStream_t& stream);
-#endif  // ENABLE_BF16
 
 template <typename T>
 __global__ void InvokeSigmoidKernel(T* data, const int32_t size, const float scale) {
@@ -555,23 +533,18 @@ void InvokeSigmoid(T* data, const int32_t size, const float scale, cudaStream_t&
     // NOTE(karlluo): each instrinct can handle two elements, so we just need half blocks num
     dim3 block(block_threads_num);
     dim3 grid((size + grid_blocks_num - 1) / grid_blocks_num);
-#ifdef ENABLE_BF16
+
     if (std::is_same<T, __nv_bfloat16>::value) {
       InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((__nv_bfloat162*)data, size, scale);
     } else {
-#endif
       InvokeOptiSigmoidKernel<<<grid, block, 0, stream>>>((half2*)data, size, scale);
-#ifdef ENABLE_BF16
     }
-#endif
   }
 }
 
 template void InvokeSigmoid(float* data, const int32_t size, const float scale, cudaStream_t& stream);
 template void InvokeSigmoid(half* data, const int32_t size, const float scale, cudaStream_t& stream);
-#ifdef ENABLE_BF16
 template void InvokeSigmoid(__nv_bfloat16* data, const int32_t size, const float scale, cudaStream_t& stream);
-#endif  // ENABLE_BF16
 
 }  // namespace nvidia
 }  // namespace llm_kernels

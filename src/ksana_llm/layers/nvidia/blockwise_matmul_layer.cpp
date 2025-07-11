@@ -7,8 +7,8 @@
 
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
-#include "ksana_llm/runtime/threadpool.h"
-#include "ksana_llm/profiler/timer.h"
+#  include "ksana_llm/profiler/timer.h"
+#  include "ksana_llm/runtime/threadpool.h"
 
 namespace ksana_llm {
 
@@ -147,9 +147,7 @@ Status BlockwiseMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors
 
 template class BlockwiseMatMulLayer<float>;
 template class BlockwiseMatMulLayer<half>;
-#  ifdef ENABLE_BFLOAT16
 template class BlockwiseMatMulLayer<__nv_bfloat16>;
-#  endif
 
 }  // namespace ksana_llm
 #endif

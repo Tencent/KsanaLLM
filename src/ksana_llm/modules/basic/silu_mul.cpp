@@ -31,8 +31,6 @@ Status SiluMul<T>::Forward(Tensor fused_tensor, std::vector<Tensor>& output_tens
 
 template class SiluMul<float>;
 template class SiluMul<float16>;
-#ifdef ENABLE_BFLOAT16
 template class SiluMul<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

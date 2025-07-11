@@ -13,8 +13,6 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
 
 template class AttentionLayer<float>;
 template class AttentionLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class AttentionLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

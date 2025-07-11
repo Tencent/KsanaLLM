@@ -35,8 +35,6 @@ Status Add<T>::Forward(Tensor A, std::vector<Tensor>& output_tensors) {
 
 template class Add<float>;
 template class Add<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Add<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

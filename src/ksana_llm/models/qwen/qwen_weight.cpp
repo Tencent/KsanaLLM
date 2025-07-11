@@ -38,8 +38,6 @@ void QwenWeight<T>::SetEmbeddingsConfig() {
 
 template class QwenWeight<float>;
 template class QwenWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class QwenWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -155,7 +155,7 @@ void permute_B_rows_for_mixed_gemm(int8_t* permuted_quantized_tensor, int8_t con
   int const num_vec_cols = num_cols / elts_in_int32;
 
   KLLM_KERNEL_CHECK_WITH_INFO(arch_version >= 75,
-                       "Unsupported Arch. Pre-volta not supported. Column interleave not needed on Volta.");
+                              "Unsupported Arch. Pre-volta not supported. Column interleave not needed on Volta.");
 
   KLLM_KERNEL_CHECK_WITH_INFO(
       num_rows % B_ROWS_PER_MMA == 0,
@@ -166,7 +166,8 @@ void permute_B_rows_for_mixed_gemm(int8_t* permuted_quantized_tensor, int8_t con
       fmtstr("Invalid shape for quantized tensor. On turing/Ampere, the number of cols must be a multiple of %d.",
              MMA_SHAPE_N));
 
-  KLLM_KERNEL_CHECK_WITH_INFO(size_t(B_ROWS_PER_MMA) == row_permutation.size(), "Unexpected number of LDSM rows permuted.");
+  KLLM_KERNEL_CHECK_WITH_INFO(size_t(B_ROWS_PER_MMA) == row_permutation.size(),
+                              "Unexpected number of LDSM rows permuted.");
 
   for (int expert = 0; expert < num_experts; ++expert) {
     const int64_t matrix_offset = expert * int64_t(num_rows) * int64_t(num_vec_cols);
@@ -336,7 +337,8 @@ void add_bias_and_interleave_int8s_inplace(int8_t* int8_tensor, const size_t num
   // bit 32                                                      0
   //      [elt_3  elt_1  elt_2  elt_0] (each elt occupies 8 bits)
 
-  KLLM_KERNEL_CHECK_WITH_INFO(num_elts % 4 == 0, "Dimensions of int8 tensor must be a multiple of 4 for register relayout");
+  KLLM_KERNEL_CHECK_WITH_INFO(num_elts % 4 == 0,
+                              "Dimensions of int8 tensor must be a multiple of 4 for register relayout");
   for (size_t base = 0; base < num_elts; base += 4) {
     std::swap(int8_tensor[base + 1], int8_tensor[base + 2]);
   }
@@ -354,9 +356,9 @@ void add_bias_and_interleave_int4s_inplace(int8_t* packed_int4_tensor, const siz
     int8_t transformed_second_elt = (packed_int4_tensor[ii] >> 4) + 8;
 
     KLLM_KERNEL_CHECK_WITH_INFO(transformed_first_elt >= 0 && transformed_first_elt <= 15,
-                         "Illegal result for int4 transform (first elt)");
+                                "Illegal result for int4 transform (first elt)");
     KLLM_KERNEL_CHECK_WITH_INFO(transformed_second_elt >= 0 && transformed_second_elt <= 15,
-                         "Illegal result for int4 transform (second elt)");
+                                "Illegal result for int4 transform (second elt)");
 
     // We don't need to mask in these ops since everything should be in the range 0-15
     transformed_packed_int4s |= transformed_first_elt;
@@ -373,7 +375,8 @@ void add_bias_and_interleave_int4s_inplace(int8_t* packed_int4_tensor, const siz
   // bit 32                                                      0
   //      [elt_7  elt_5  elt_3  elt_1  elt_6  elt_4  elt_2  elt_0] (each elt occupies 4 bits)
 
-  KLLM_KERNEL_CHECK_WITH_INFO(num_bytes % 4 == 0, "Dimensions of int4 tensor must be a multiple of 8 for register relayout");
+  KLLM_KERNEL_CHECK_WITH_INFO(num_bytes % 4 == 0,
+                              "Dimensions of int4 tensor must be a multiple of 8 for register relayout");
   const size_t num_registers = num_bytes / 4;
 
   uint32_t* register_ptr = reinterpret_cast<uint32_t*>(packed_int4_tensor);
@@ -631,13 +634,11 @@ template void symmetric_quantize<half, float>(int8_t*, int8_t*, half*, float con
 template void symmetric_quantize<half, half>(int8_t*, int8_t*, half*, half const*, std::vector<size_t> const&,
                                              QuantType, bool);
 
-#ifdef ENABLE_BF16
 template void symmetric_quantize<__nv_bfloat16, __nv_bfloat16>(int8_t*, int8_t*, __nv_bfloat16*, __nv_bfloat16 const*,
                                                                std::vector<size_t> const&, QuantType, bool);
 
 template void symmetric_quantize<__nv_bfloat16, float>(int8_t*, int8_t*, __nv_bfloat16*, float const*,
                                                        std::vector<size_t> const&, QuantType, bool);
-#endif
 
 template <typename ComputeType, typename WeightType>
 void symmetric_quantize(int8_t* processed_quantized_weight, ComputeType* scale_ptr, WeightType const* input_weight_ptr,
@@ -654,7 +655,6 @@ template void symmetric_quantize<half, float>(int8_t*, half*, float const*, std:
 
 template void symmetric_quantize<half, half>(int8_t*, half*, half const*, std::vector<size_t> const&, QuantType, bool);
 
-#ifdef ENABLE_BF16
 template void symmetric_quantize<__nv_bfloat16, __nv_bfloat16>(int8_t*, __nv_bfloat16*, __nv_bfloat16 const*,
                                                                std::vector<size_t> const&, QuantType, bool);
 
@@ -666,7 +666,6 @@ template void symmetric_quantize<half, __nv_bfloat16>(int8_t*, half*, __nv_bfloa
 
 template void symmetric_quantize<__nv_bfloat16, float>(int8_t*, __nv_bfloat16*, float const*,
                                                        std::vector<size_t> const&, QuantType, bool);
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

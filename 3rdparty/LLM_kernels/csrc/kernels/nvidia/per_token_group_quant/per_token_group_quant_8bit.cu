@@ -15,16 +15,15 @@
  * limitations under the License.
  *
  * Adapted from
- * [SGLang Project] https://github.com/sgl-project/sglang/blob/03886917bd59f12a1420a99150997732ffea52da/sgl-kernel/csrc/gemm/per_token_group_quant_8bit.cu#L19
+ * [SGLang Project]
+ * https://github.com/sgl-project/sglang/blob/03886917bd59f12a1420a99150997732ffea52da/sgl-kernel/csrc/gemm/per_token_group_quant_8bit.cu#L19
  */
 
 #include "per_token_group_quant_8bit.h"
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#ifdef ENABLE_BFLOAT16
-#  include <cuda_bf16.h>
-#endif
 #ifdef ENABLE_FP8
 #  include <cuda_fp8.h>
 #endif
@@ -115,8 +114,7 @@ __global__ void per_token_group_quant_8bit_kernel(const T* __restrict__ input, v
 
 template <typename T>
 void per_token_group_quant_8bit(void* input, void* output_q, void* output_s, int m, int n, int64_t group_size,
-                                    float eps, float min_8bit, float max_8bit, bool is_column_major,
-                                    cudaStream_t stream) {
+                                float eps, float min_8bit, float max_8bit, bool is_column_major, cudaStream_t stream) {
   const int num_groups = m * n / group_size;
 
   constexpr int THREADS_PER_GROUP = 16;
@@ -164,21 +162,19 @@ void per_token_group_quant_8bit(void* input, void* output_q, void* output_s, int
 
 template <typename T>
 void per_token_group_quant_fp8(void* input, void* output_q, void* output_s, int m, int n, int64_t group_size,
-                                   bool is_column_major, cudaStream_t stream, float eps, float min_fp8, float max_fp8) {
+                               bool is_column_major, cudaStream_t stream, float eps, float min_fp8, float max_fp8) {
   per_token_group_quant_8bit<T>(input, output_q, output_s, m, n, group_size, eps, min_fp8, max_fp8, is_column_major,
-                                    stream);
+                                stream);
 }
 
-#  define PER_TOKEN_GROUP_QUANT_FP8(T)                                                                            \
+#  define PER_TOKEN_GROUP_QUANT_FP8(T)                                                                        \
     template void per_token_group_quant_fp8<T>(void* input, void* output_q, void* output_s, int m, int n,     \
-                                                   int64_t group_size, bool is_column_major, cudaStream_t stream, \
-                                                   float eps, float min_fp8, float max_fp8)
+                                               int64_t group_size, bool is_column_major, cudaStream_t stream, \
+                                               float eps, float min_fp8, float max_fp8)
 
 PER_TOKEN_GROUP_QUANT_FP8(float);
 PER_TOKEN_GROUP_QUANT_FP8(half);
-#  ifdef ENABLE_BFLOAT16
 PER_TOKEN_GROUP_QUANT_FP8(__nv_bfloat16);
-#  endif
 #  undef PER_TOKEN_GROUP_QUANT_FP8
 #endif
 }  // namespace nvidia

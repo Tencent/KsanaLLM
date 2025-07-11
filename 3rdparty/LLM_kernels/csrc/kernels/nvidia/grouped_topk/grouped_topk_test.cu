@@ -2,6 +2,7 @@
 
 ==============================================================================*/
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -9,10 +10,6 @@
 #include <cmath>
 #include <random>
 #include <vector>
-
-#ifdef ENABLE_BFLOAT16
-#  include <cuda_bf16.h>
-#endif
 
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
@@ -112,8 +109,8 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     CopyToDevice<float>(h_e_bias, d_e_bias, num_experts);
 
     // Call the function under test
-    InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids, tokens_num, num_experts, topk,
-                                   num_expert_group, topk_group, stream);
+    InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
+                                   tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
 
     // Synchronize stream
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
@@ -128,9 +125,9 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     std::vector<int32_t> ref_topk_ids(tokens_num * topk);
     std::vector<float> ref_topk_weights(tokens_num * topk);
     RunDeepSeekV3GroupedTopkRef<T>(
-        reinterpret_cast<void*>(h_gating_output.data()), reinterpret_cast<void*>(h_e_bias.data()), routed_scaling_factor,
-        reinterpret_cast<void*>(ref_topk_weights.data()), reinterpret_cast<void*>(ref_topk_ids.data()), tokens_num,
-        num_experts, topk, num_expert_group, topk_group);
+        reinterpret_cast<void*>(h_gating_output.data()), reinterpret_cast<void*>(h_e_bias.data()),
+        routed_scaling_factor, reinterpret_cast<void*>(ref_topk_weights.data()),
+        reinterpret_cast<void*>(ref_topk_ids.data()), tokens_num, num_experts, topk, num_expert_group, topk_group);
 
     for (int b_idx = 0; b_idx < tokens_num; ++b_idx) {
       // current result
@@ -180,8 +177,8 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     size_t warmup_times = 10;
     size_t test_times = 50;
     for (size_t run_it = 0; run_it < warmup_times; ++run_it) {
-      InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids, tokens_num, num_experts,
-                                     topk, num_expert_group, topk_group, stream);
+      InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
+                                     tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
@@ -192,8 +189,8 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
     CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
     for (size_t run_it = 0; run_it < test_times; ++run_it) {
-      InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids, tokens_num, num_experts,
-                                     topk, num_expert_group, topk_group, stream);
+      InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
+                                     tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
     CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
@@ -211,9 +208,7 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
 
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonFloatTest) { TestDeepSeekV3GroupedTopk<float>(); }
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonHalfTest) { TestDeepSeekV3GroupedTopk<half>(); }
-#ifdef ENABLE_BFLOAT16
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonBFloat16Test) { TestDeepSeekV3GroupedTopk<__nv_bfloat16>(); }
-#endif
 
 }  // namespace test
 }  // namespace nvidia

@@ -174,8 +174,6 @@ void Internlm2Weight<T>::ProcessWeights() {
 
 template class Internlm2Weight<float>;
 template class Internlm2Weight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Internlm2Weight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -157,7 +157,7 @@ class MmaTensorOpDequantizer<
 
   CUTLASS_DEVICE
   void dequantize(FragmentDequantizedOperand& operand_frag, FragmentScale const& scale_frag) {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
     using _MmaOperandB = typename ArchMmaOperator::FragmentB;
     using ExpandedMmaOperandB = Array<typename _MmaOperandB::Element, kExpansionFactor * _MmaOperandB::kElements>;
     static_assert(
@@ -205,7 +205,7 @@ class MmaTensorOpDequantizer<
   CUTLASS_DEVICE
   void dequantize(FragmentDequantizedOperand& operand_frag, FragmentScale const& scale_frag,
                   FragmentScale const& zero_frag) {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
     using _MmaOperandB = typename ArchMmaOperator::FragmentB;
     using ExpandedMmaOperandB = Array<typename _MmaOperandB::Element, kExpansionFactor * _MmaOperandB::kElements>;
     static_assert(

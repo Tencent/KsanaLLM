@@ -108,4 +108,3 @@ endif()
 # awk -F= '{ if ($1 == "version_dir") print $2 }' /usr/local/Ascend/ascend-toolkit/latest/toolkit/version.info | awk -F. '{ print $1 }'
 execute_process(COMMAND /bin/sh -c "\"${AWK}\" -F= '\{ if ($1 == \"version_dir\") print $2 \}' ${ASCEND_PATH}/toolkit/version.info | awk -F. '\{ print $1 \}'" OUTPUT_VARIABLE ASCEND_TOOLKIT_MAR_VER OUTPUT_STRIP_TRAILING_WHITESPACE)
 add_definitions("-DASCEND_TOOLKIT_MAR_VER_${ASCEND_TOOLKIT_MAR_VER}")
-add_definitions("-DENABLE_BFLOAT16")

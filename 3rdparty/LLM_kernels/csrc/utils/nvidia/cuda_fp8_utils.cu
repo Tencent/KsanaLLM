@@ -52,10 +52,8 @@ INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, float);
 INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, half);
 INVOKE_QUANTIZE_MATRIX(half, __nv_fp8_e4m3);
 INVOKE_QUANTIZE_MATRIX(float, __nv_fp8_e4m3);
-#  ifdef ENABLE_BF16
 INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, __nv_bfloat16);
 INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, __nv_fp8_e4m3);
-#  endif
 
 #  undef INVOKE_QUANTIZE_MATRIX
 
@@ -129,10 +127,8 @@ void InvokeComputeFP8QuantizeScale(float* output, const T_IN* input, const int32
 template void InvokeComputeFP8QuantizeScale(float* output, const half* input, const int32_t num_channels,
                                             const int32_t channel_size, cudaStream_t stream);
 
-#  ifdef ENABLE_BF16
 template void InvokeComputeFP8QuantizeScale(float* output, const __nv_bfloat16* input, const int32_t num_channels,
                                             const int32_t channel_size, cudaStream_t stream);
-#  endif
 
 template void InvokeComputeFP8QuantizeScale(float* output, const float* input, const int32_t num_channels,
                                             const int32_t channel_size, cudaStream_t stream);

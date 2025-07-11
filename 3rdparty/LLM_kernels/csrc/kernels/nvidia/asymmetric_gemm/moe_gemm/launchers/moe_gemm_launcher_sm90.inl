@@ -80,14 +80,9 @@ struct HopperGroupedGemmInfo
     constexpr static bool IsFP8 = false;
 #endif
 
-#ifdef ENABLE_BF16
     static_assert(cutlass::platform::is_same<T, __nv_bfloat16>::value || cutlass::platform::is_same<T, half>::value
             || cutlass::platform::is_same<T, float>::value || IsFP8,
         "Specialized for bfloat16, half, float, fp8");
-#else
-    static_assert(cutlass::platform::is_same<T, half>::value || cutlass::platform::is_same<T, float>::value || IsFP8,
-        "Specialized for half, float, fp8");
-#endif
 
     static_assert(cutlass::platform::is_same<T, WeightType>::value
             || cutlass::platform::is_same<WeightType, uint8_t>::value

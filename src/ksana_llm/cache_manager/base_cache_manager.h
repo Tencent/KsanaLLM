@@ -301,9 +301,7 @@ class BaseCacheManager {
     return Status();
   }
 
-  bool IsPrefixCachingEnabled() {
-    return cache_manager_config_.enable_prefix_caching;
-  }
+  bool IsPrefixCachingEnabled() { return cache_manager_config_.enable_prefix_caching; }
 
  protected:
   CacheManagerConfig cache_manager_config_;

@@ -49,8 +49,6 @@ Status ChatglmModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, c
 
 template class ChatglmModel<float>;
 template class ChatglmModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ChatglmModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

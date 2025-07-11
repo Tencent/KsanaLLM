@@ -94,9 +94,7 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
 template class Fp8MatMulLayer<float>;
 template class Fp8MatMulLayer<half>;
-#  ifdef ENABLE_BFLOAT16
 template class Fp8MatMulLayer<__nv_bfloat16>;
-#  endif
 
 }  // namespace ksana_llm
 #endif

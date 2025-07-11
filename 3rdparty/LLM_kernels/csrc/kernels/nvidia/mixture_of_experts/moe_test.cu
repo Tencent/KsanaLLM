@@ -937,9 +937,7 @@ struct WeightParams {
 
 // TODO Fix int quantized
 using Types = ::testing::Types<
-#ifdef ENABLE_BF16
     WeightParams<__nv_bfloat16>,
-#endif
 #ifdef ENABLE_FP8
     WeightParams<SafeFP8, SafeFP8, half>,
 #endif

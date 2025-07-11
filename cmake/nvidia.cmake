@@ -78,14 +78,8 @@ set(CUDA_LIB_DIRS
 
 add_definitions("-DENABLE_CUDA")
 
-if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
-  # enable BFloat16
-  add_definitions("-DENABLE_BFLOAT16")
-  message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
-
-  # enable FP8
-  if(${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8" OR ${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12")
-    add_definitions("-DENABLE_FP8")
-    message(STATUS "CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
-  endif()
+# enable FP8
+if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
+  add_definitions("-DENABLE_FP8")
+  message(STATUS "CUDA version: ${CUDA_VERSION} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
 endif()

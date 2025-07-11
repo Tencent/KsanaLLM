@@ -3,9 +3,7 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#ifdef ENABLE_BFLOAT16
 #  include <cuda_bf16.h>
-#endif
 
 #include <flashinfer/norm.cuh>
 
@@ -32,10 +30,8 @@ void InvokeFusedAddRMSNorm(void* input, void* residual, void* weight, double eps
 
 FUSED_ADD_RMS_NORM(float);
 FUSED_ADD_RMS_NORM(half);
-
-#ifdef ENABLE_BFLOAT16
 FUSED_ADD_RMS_NORM(__nv_bfloat16);
-#endif
+
 #undef FUSED_ADD_RMS_NORM
 
 }  // namespace nvidia

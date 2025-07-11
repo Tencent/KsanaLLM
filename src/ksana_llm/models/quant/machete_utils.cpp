@@ -26,9 +26,7 @@ torch::Tensor MacheteUtils::PackWeight(torch::Tensor& weight, QuantMode quant_me
 
 template torch::Tensor MacheteUtils::PackWeight<float>(torch::Tensor& weight, QuantMode quant_method);
 template torch::Tensor MacheteUtils::PackWeight<float16>(torch::Tensor& weight, QuantMode quant_method);
-#  ifdef ENABLE_BFLOAT16
 template torch::Tensor MacheteUtils::PackWeight<bfloat16>(torch::Tensor& weight, QuantMode quant_method);
-#  endif
 
 #endif
 

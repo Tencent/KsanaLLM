@@ -286,9 +286,7 @@ Status InternlmxComposer2<T>::Forward(std::vector<Tensor>& residual_buffer, Forw
 
 template class InternlmxComposer2<float>;
 template class InternlmxComposer2<float16>;
-#ifdef ENABLE_BFLOAT16
 template class InternlmxComposer2<bfloat16>;
-#endif
 
 template <typename T>
 InternlmxComposer2Model<T>::InternlmxComposer2Model(const ModelConfig& model_config, const int rank,
@@ -318,8 +316,6 @@ Status InternlmxComposer2Model<T>::LayerForward(ForwardingContext<T>& forwarding
 
 template class InternlmxComposer2Model<float>;
 template class InternlmxComposer2Model<float16>;
-#ifdef ENABLE_BFLOAT16
 template class InternlmxComposer2Model<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

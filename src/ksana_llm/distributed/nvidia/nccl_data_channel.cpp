@@ -131,13 +131,9 @@ Status NcclDataChannel::Disconnect() {
   return Status();
 }
 
-void NcclDataChannel::NotifySendFinished(HiddenUnitDeviceBuffer* hidden_unit) {
-  hidden_unit->waiter->Notify();
-}
+void NcclDataChannel::NotifySendFinished(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
 
-void NcclDataChannel::NotifyRecvFinished(HiddenUnitDeviceBuffer* hidden_unit) {
-  hidden_unit->waiter->Notify();
-}
+void NcclDataChannel::NotifyRecvFinished(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
 
 Status NcclDataChannel::ProcessSendLoop() {
   while (!terminated_) {
@@ -201,7 +197,6 @@ Status NcclDataChannel::ProcessRecvLoop() {
 
   return Status();
 }
-
 
 Status NcclDataChannel::GetNcclDataType(DataType dtype, ncclDataType_t& nccl_dtype) {
   switch (dtype) {
@@ -319,13 +314,11 @@ Status NcclDataChannel::ProcessDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit,
       if (is_send) {
         auto send_streams = context_->GetCommSendStreams();
         SendRecvDeviceData(is_send, hidden_unit->multi_batch_id, dev_id, hidden_unit->comm_type,
-                           hidden_unit->scatter_sender_rank, send_streams, tensor.GetPtr<void>(), count,
-                           nccl_dtype);
+                           hidden_unit->scatter_sender_rank, send_streams, tensor.GetPtr<void>(), count, nccl_dtype);
       } else {
         auto recv_streams = context_->GetCommRecvStreams();
         SendRecvDeviceData(is_send, hidden_unit->multi_batch_id, dev_id, hidden_unit->comm_type,
-                           hidden_unit->scatter_sender_rank, recv_streams, tensor.GetPtr<void>(), count,
-                           nccl_dtype);
+                           hidden_unit->scatter_sender_rank, recv_streams, tensor.GetPtr<void>(), count, nccl_dtype);
       }
     } else {
       auto recv_send_streams = context_->GetComputeStreams();

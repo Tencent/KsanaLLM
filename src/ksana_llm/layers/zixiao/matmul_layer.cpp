@@ -18,7 +18,5 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
 
 template class MatMulLayer<float>;
 template class MatMulLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MatMulLayer<bfloat16>;
-#endif
 }  // namespace ksana_llm

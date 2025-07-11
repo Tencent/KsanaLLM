@@ -25,4 +25,3 @@ FetchContent_Declare(
 )
 
 add_definitions("-DENABLE_TOPS")
-add_definitions("-DENABLE_BFLOAT16")

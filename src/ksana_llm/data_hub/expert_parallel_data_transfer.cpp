@@ -227,8 +227,6 @@ void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext
 
 template class ExpertParallelDataTransfer<float>;
 template class ExpertParallelDataTransfer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class ExpertParallelDataTransfer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

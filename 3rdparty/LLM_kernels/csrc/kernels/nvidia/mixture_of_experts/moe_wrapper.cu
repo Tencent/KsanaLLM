@@ -93,12 +93,10 @@ template class MoeGemmWrapper<half, half, half>;
 #ifdef ENABLE_FP8
 template class MoeGemmWrapper<__nv_fp8_e4m3, __nv_fp8_e4m3, half>;
 #endif
-#ifdef ENABLE_BF16
 template class MoeGemmWrapper<__nv_bfloat16, __nv_bfloat16, __nv_bfloat16>;
 #  ifdef ENABLE_FP8
 template class MoeGemmWrapper<__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16>;
 #  endif
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

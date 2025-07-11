@@ -936,10 +936,8 @@ void CommonWeight<T>::ProcessWeights() {
         torch_dtype = torch::kFloat32;
       } else if (tensor.dtype == DataType::TYPE_FP16) {
         torch_dtype = torch::kFloat16;
-#ifdef ENABLE_BFLOAT16
       } else if (tensor.dtype == DataType::TYPE_BF16) {
         torch_dtype = torch::kBFloat16;
-#endif
       } else {
         KLLM_THROW(fmt::format("Unsupported Tensor type {}.", tensor.dtype));
       }
@@ -1028,8 +1026,6 @@ void CommonWeight<T>::PrintDebugMessage() {
 }
 template class CommonWeight<float>;
 template class CommonWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CommonWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

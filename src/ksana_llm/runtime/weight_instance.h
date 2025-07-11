@@ -8,9 +8,9 @@
 #include <string>
 
 #include "ksana_llm/kernels/cast.h"
-#include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/model_loader/config_parser/model_config_parser.h"
 #include "ksana_llm/model_loader/weight_loader/model_weight_loader.h"
+#include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/threadpool.h"

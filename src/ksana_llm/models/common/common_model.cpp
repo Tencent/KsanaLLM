@@ -199,11 +199,9 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext<T>& forwarding_context) {
   // Wait the computation of input_ids.
-  StreamWaitEvent(context_->GetComputeStreams()[rank_],
-                  forwarding_context.GetModelInput()->input_ids_event);
+  StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->input_ids_event);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_],
-                    forwarding_context.GetModelInput()->rotary_embedding_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
@@ -487,7 +485,7 @@ Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm:
 
   time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   KLLM_LOG_DEBUG << "CommonModel Forward multi_batch_id=" << multi_batch_id << ", epilogue=" << epilogue
-                << ", time cost=" << end_time_ms - start_time_ms << "ms";
+                 << ", time cost=" << end_time_ms - start_time_ms << "ms";
   return Status();
 }
 
@@ -496,7 +494,7 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
                                        std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   KLLM_LOG_DEBUG << "start lookup embedding multi_batch_id=" << forwarding_context.GetMultiBatchId()
-                << ", rank=" << rank_ << "";
+                 << ", rank=" << rank_ << "";
   PROFILE_EVENT_SCOPE(CommonModel_LookupEmbedding, "CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
   // CPU embedding lookup
   // The output is stored in `residual_buffer` for residual connection in common
@@ -507,10 +505,8 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
   }
 
   if (forwarding_context.GetModelInput()->is_cudagraph_capture_request) {
-    StreamWaitEvent(context_->GetComputeStreams()[rank_],
-                    forwarding_context.GetModelInput()->kvcache_offset_event);
-    StreamWaitEvent(context_->GetComputeStreams()[rank_],
-                    forwarding_context.GetModelInput()->rotary_embedding_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->kvcache_offset_event);
+    StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->rotary_embedding_event);
   }
 
   // GPU embedding lookup
@@ -545,8 +541,7 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
     mtp_hidden_tensor.shape = residual_buffer[0].shape;
     mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
     MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
-                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
-                context_->GetComputeStreams()[rank_]);
+                residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank_]);
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -588,7 +583,7 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
 
   // lm_head
   PROFILE_EVENT_SCOPE(CommonModel_LmHead_, fmt::format("CommonModel_LmHead_{}", forwarding_context.GetMultiBatchId()),
-                          forwarding_context.GetCurrentRank());
+                      forwarding_context.GetCurrentRank());
   STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
@@ -612,7 +607,7 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
   }
 
   PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast_{}", forwarding_context.GetMultiBatchId()),
-                          forwarding_context.GetCurrentRank());
+                      forwarding_context.GetCurrentRank());
   forwarding_context.UpdateAfterForward(forward_reqs);
   std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
   STATUS_CHECK_RETURN(cast_layer_->Forward(
@@ -626,8 +621,6 @@ Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
 
 template class CommonModel<float>;
 template class CommonModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class CommonModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

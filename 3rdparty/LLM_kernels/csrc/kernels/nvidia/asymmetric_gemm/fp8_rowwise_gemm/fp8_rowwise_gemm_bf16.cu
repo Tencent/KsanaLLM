@@ -19,8 +19,6 @@
 
 namespace llm_kernels {
 namespace nvidia {
-#ifdef ENABLE_BF16
 template class CutlassFp8RowwiseGemmRunner<__nv_bfloat16>;
-#endif
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -127,10 +127,8 @@ template void InvokeExpand(const float* input, float* output, const int32_t m, c
                            const int32_t n, const size_t stride, cudaStream_t stream);
 template void InvokeExpand(const half* input, half* output, const int32_t m, const int32_t expand_num, const int32_t n,
                            const size_t stride, cudaStream_t stream);
-#ifdef ENABLE_BF16
 template void InvokeExpand(const __nv_bfloat16* input, __nv_bfloat16* output, const int32_t m, const int32_t expand_num,
                            const int32_t n, const size_t stride, cudaStream_t stream);
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -41,12 +41,10 @@ struct TllmToCutlassTypeAdapter<half> {
   using type = cutlass::half_t;
 };
 
-#if defined(ENABLE_BF16)
 template <>
 struct TllmToCutlassTypeAdapter<__nv_bfloat16> {
   using type = cutlass::bfloat16_t;
 };
-#endif
 
 #if defined(ENABLE_FP8)
 template <>
@@ -73,12 +71,10 @@ struct CutlassToTllmTypeAdapter<cutlass::half_t> {
   using type = half;
 };
 
-#if defined(ENABLE_BF16)
 template <>
 struct CutlassToTllmTypeAdapter<cutlass::bfloat16_t> {
   using type = __nv_bfloat16;
 };
-#endif
 
 #if defined(ENABLE_FP8)
 template <>

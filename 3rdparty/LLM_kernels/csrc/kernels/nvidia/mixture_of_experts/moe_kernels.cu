@@ -1940,11 +1940,9 @@ CutlassMoeFCRunner<T, WeightType, OutputType, ScaleBiasType, Enable>::getFiltere
 // ==================== Variable batched GEMM specializations ==================================
 template class CutlassMoeFCRunner<float, float>;
 
-#ifdef ENABLE_BF16
 template class CutlassMoeFCRunner<__nv_bfloat16, __nv_bfloat16>;
 template class CutlassMoeFCRunner<__nv_bfloat16, uint8_t>;
 template class CutlassMoeFCRunner<__nv_bfloat16, cutlass::uint4b_t>;
-#endif
 
 template class CutlassMoeFCRunner<half, half>;
 template class CutlassMoeFCRunner<half, uint8_t>;
@@ -1952,9 +1950,7 @@ template class CutlassMoeFCRunner<half, cutlass::uint4b_t>;
 #ifdef ENABLE_FP8
 // template class CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp8_e4m3>;
 template class CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp8_e4m3, half>;
-#  ifdef ENABLE_BF16
 template class CutlassMoeFCRunner<__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16>;
-#  endif
 #endif
 
 }  // namespace nvidia

@@ -219,9 +219,7 @@ void TritonWrapper::InvokePerTokenGroupQuantFP8(void* d_data, void* d_q, void* d
                                                               bool col_major_scale, cudaStream_t stream)
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8(float);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8(__nv_bfloat16);
-#endif
 #undef INVOKE_PER_TOKEN_GROUP_QUANT_FP8
 
 size_t NextPowerOf2(size_t n) {
@@ -307,9 +305,7 @@ void TritonWrapper::InvokeMlaAttenStage1(void* q, void* k_buffer, void* v_buffer
       cudaStream_t stream)
 INVOKE_MLA_ATTEN_STAGE1(float);
 INVOKE_MLA_ATTEN_STAGE1(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MLA_ATTEN_STAGE1(__nv_bfloat16);
-#endif
 #undef INVOKE_MLA_ATTEN_STAGE1
 
 template <typename T>
@@ -340,9 +336,7 @@ void TritonWrapper::InvokeMlaAttenStage2(void* att_stage1, void* b_seqlen, void*
                                                        int num_heads, int kv_lora_rank, cudaStream_t stream)
 INVOKE_MLA_ATTEN_STAGE2(float);
 INVOKE_MLA_ATTEN_STAGE2(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_MLA_ATTEN_STAGE2(__nv_bfloat16);
-#endif
 #undef INVOKE_MLA_ATTEN_STAGE2
 
 template <typename T>
@@ -395,9 +389,7 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
       std::unordered_map<std::string, int> config, cudaStream_t stream)
 INVOKE_FUSED_MOE_KERNEL(float);
 INVOKE_FUSED_MOE_KERNEL(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FUSED_MOE_KERNEL(__nv_bfloat16);
-#endif
 #undef INVOKE_FUSED_MOE_KERNEL
 
 template <typename T>
@@ -447,9 +439,7 @@ void TritonWrapper::InvokeFusedMoeGptqAwqKernel(
       std::unordered_map<std::string, int> config, cudaStream_t stream)
 INVOKE_FUSED_MOE_GPTQ_AWQ_KERNEL(float);
 INVOKE_FUSED_MOE_GPTQ_AWQ_KERNEL(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FUSED_MOE_GPTQ_AWQ_KERNEL(__nv_bfloat16);
-#endif
 #undef INVOKE_FUSED_MOE_GPTQ_AWQ_KERNEL
 
 template <typename T>
@@ -495,9 +485,7 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
       cudaStream_t stream)
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(float);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(__nv_bfloat16);
-#endif
 #undef INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL
 
 }  // namespace ksana_llm

@@ -67,9 +67,7 @@ void RandomGPUBuffer(T* data_ptr, size_t n_elems, const float max_val, const flo
 
 template void RandomGPUBuffer(float* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(half* data_ptr, const size_t n_elems, const float max_val, const float min_val);
-#ifdef ENABLE_BF16
 template void RandomGPUBuffer(__nv_bfloat16* data_ptr, const size_t n_elems, const float max_val, const float min_val);
-#endif
 template void RandomGPUBuffer(int32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(bool* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 template void RandomGPUBuffer(char* data_ptr, const size_t n_elems, const float max_val, const float min_val);
@@ -107,11 +105,9 @@ template void ResetGPUBufferWithStep(float* data_ptr, const size_t n_elems,
 template void ResetGPUBufferWithStep(half* data_ptr, const size_t n_elems,
                                      const float max_val, const float min_val,
                                      const float step);
-#ifdef ENABLE_BF16
 template void ResetGPUBufferWithStep(__nv_bfloat16* data_ptr,
                                      const size_t n_elems, const float max_val,
                                      const float min_val, const float step);
-#endif
 
 template <typename T_INPUT, typename T_STEP>
 __global__ void InvokeRangeKernel(T_INPUT* output, T_INPUT start, int32_t nstep, T_STEP step) {

@@ -87,9 +87,7 @@ void InvokeQKRmsNorm(void* qkv_ptr, const void* q_gamma, const void* k_gamma, co
                                    const int32_t head_size, const int64_t* mask, cudaStream_t stream)
 INVOKE_QK_LAYER_NORM(float);
 INVOKE_QK_LAYER_NORM(half);
-#ifdef ENABLE_BFLOAT16
 INVOKE_QK_LAYER_NORM(__nv_bfloat16);
-#endif
 #undef INVOKE_QK_LAYER_NORM
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
@@ -309,17 +307,16 @@ ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 ATTEN_VARLEN(half, half, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 ATTEN_VARLEN(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+#if defined(ENABLE_FP8)
 ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif
 #undef ATTEN_VARLEN
 
-
 #define PAGED_ATTENTION(T1, T2, CACHE_T1, CACHE_T2, KV_DTYPE)                                                        \
   template <>                                                                                                        \
-  void PagedAttentionOp<T1, CACHE_T1, KV_DTYPE>(                                                                       \
+  void PagedAttentionOp<T1, CACHE_T1, KV_DTYPE>(                                                                     \
       int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale, \
       void* out, void* q_tensor_ptr, void* key_cache_ptrs, void* value_cache_ptrs, void* cache_offsets_ptr,          \
       void* context_lens_ptr, int max_context_len, int num_seqs, cudaStream_t& stream, void* workspace,              \
@@ -338,11 +335,9 @@ PAGED_ATTENTION(float, float, uint8_t, uint8_t, llm_kernels::utils::KVCacheType:
 PAGED_ATTENTION(half, uint16_t, half, uint16_t, llm_kernels::utils::KVCacheType::kAuto);
 PAGED_ATTENTION(half, uint16_t, uint8_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 PAGED_ATTENTION(half, uint16_t, uint8_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
 PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#endif
 #undef PAGED_ATTENTION
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
@@ -492,9 +487,9 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     const float* alibi_slopes_ptr =
         reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
     PagedAttentionOp<SCALAR_T, CACHE_T, KV_DTYPE>(num_heads, head_size, num_kv_heads, stride_size, block_size, k_scale,
-                                                v_scale, output_ptr, q_tensor_ptr, key_cache_ptrs, value_cache_ptrs,
-                                                cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num, stream,
-                                                workspace_ptr, work_size, alibi_slopes_ptr);
+                                                  v_scale, output_ptr, q_tensor_ptr, key_cache_ptrs, value_cache_ptrs,
+                                                  cache_offsets_ptr, context_lens_ptr, max_context_len, seqs_num,
+                                                  stream, workspace_ptr, work_size, alibi_slopes_ptr);
   }
 }
 
@@ -516,11 +511,9 @@ RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 RUN_PAGED_ATTENTION(half, half, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#ifdef ENABLE_BFLOAT16
 RUN_PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
-#endif
 #undef RUN_PAGED_ATTENTION
 
 }  // namespace ksana_llm

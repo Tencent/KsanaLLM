@@ -11,7 +11,7 @@ ModelWeight::ModelWeight() {}
 
 ModelWeight::~ModelWeight() {}
 
-const Tensor & ModelWeight::GetWeightTensor(const std::string& weight_name) const {
+const Tensor& ModelWeight::GetWeightTensor(const std::string& weight_name) const {
   auto it = weights_map_.find(weight_name);
   if (it == weights_map_.end()) {
     KLLM_LOG_WARNING << fmt::format("weight_name: {} not in weights map", weight_name);

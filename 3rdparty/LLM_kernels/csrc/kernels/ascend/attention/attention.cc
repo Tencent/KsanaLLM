@@ -435,10 +435,8 @@ void ATBAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint32_t k
 
 template class ATBAttention<aclFloat16>;
 template class ATBAttention<float>;
-#ifdef ENABLE_BFLOAT16
 // NOTE(karlluo): there is not bfloat16 type in cann, so we take int16_t as bfloat16 as dtype indicator
 template class ATBAttention<int16_t>;
-#endif
 
 }  // namespace ascend
 }  // namespace llm_kernels

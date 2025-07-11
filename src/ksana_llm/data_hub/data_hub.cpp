@@ -242,7 +242,7 @@ Status SendHiddenUnits(size_t multi_batch_id) {
 
 Status RecvHiddenUnits(size_t multi_batch_id) {
   FreeHiddenUnits(multi_batch_id);
-  HiddenUnitDeviceBuffer* recved_hidden_unit  = nullptr;
+  HiddenUnitDeviceBuffer* recved_hidden_unit = nullptr;
 
   {
     PROFILE_EVENT_SCOPE(RecvHiddenUnits_, fmt::format("RecvHiddenUnits_{}", multi_batch_id));
@@ -313,7 +313,7 @@ Status SetHiddenUnitMeta(const size_t multi_batch_id, const std::vector<size_t>&
 }
 
 Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
-  std::shared_ptr<ModelInstance> model_instance) {
+                         std::shared_ptr<ModelInstance> model_instance) {
   ModelConfig model_config = model_instance->GetModelConfig();
   size_t tokens = 0;
   for (size_t i = 0; i < running_reqs.size(); ++i) {
@@ -330,8 +330,7 @@ Status SetHiddenUnitMeta(size_t multi_batch_id,
   for (size_t i = 0; i < worker_running_reqs.size(); ++i) {
     tokens += worker_running_reqs[i]->forwarding_tokens.size() - worker_running_reqs[i]->kv_cached_token_num;
   }
-  return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units},
-                           model_config.weight_data_type);
+  return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units}, model_config.weight_data_type);
 }
 
 Status SetModelInstance(const std::string model_name, std::shared_ptr<ModelInstance> model_instance) {

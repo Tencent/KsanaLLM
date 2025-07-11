@@ -139,9 +139,7 @@ Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(float16);
-#ifdef ENABLE_BFLOAT16
 INSTANTIATE_ARG_MAX(bfloat16);
-#endif
 
 #undef INSTANTIATE_ARG_MAX
 

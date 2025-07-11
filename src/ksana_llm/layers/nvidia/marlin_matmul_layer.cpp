@@ -89,8 +89,6 @@ Status MarlinMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensor
 
 template class MarlinMatMulLayer<float, TYPE_I4_GROUP>;
 template class MarlinMatMulLayer<half, TYPE_I4_GROUP>;
-#ifdef ENABLE_BFLOAT16
 template class MarlinMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
-#endif
 
 }  // namespace ksana_llm

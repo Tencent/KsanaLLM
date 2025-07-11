@@ -27,8 +27,8 @@ template class FlashMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
 template class FlashMlaAttentionLayer<float16, float16, KVCacheType::kAuto>;
 template class FlashMlaAttentionLayer<float16, uint8_t, KVCacheType::kFp8E4M3>;
 template class FlashMlaAttentionLayer<float16, uint8_t, KVCacheType::kFp8E5M2>;
-#ifdef ENABLE_BFLOAT16
 template class FlashMlaAttentionLayer<bfloat16, bfloat16, KVCacheType::kAuto>;
+#if defined(ENABLE_FP8)
 template class FlashMlaAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
 template class FlashMlaAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
 #endif

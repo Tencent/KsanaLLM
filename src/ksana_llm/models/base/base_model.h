@@ -5,10 +5,10 @@
 
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/base/buffer_manager.h"
+#include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/device_types.h"
-#include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 #ifdef ENABLE_CUDA

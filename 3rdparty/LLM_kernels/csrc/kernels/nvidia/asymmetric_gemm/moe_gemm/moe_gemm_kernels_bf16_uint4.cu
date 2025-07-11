@@ -19,9 +19,9 @@
 
 namespace llm_kernels {
 namespace nvidia {
-#ifdef ENABLE_BF16
+
 template class MoeGemmRunner<__nv_bfloat16, cutlass::uint4b_t, __nv_bfloat16>;
-#endif
+
 }  // namespace nvidia
 }  // namespace llm_kernels
 

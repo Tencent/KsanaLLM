@@ -49,23 +49,17 @@ namespace ksana_llm {
 // The type define.
 #if defined(ENABLE_CUDA)
 typedef half float16;
-#  ifdef ENABLE_BFLOAT16
 typedef __nv_bfloat16 bfloat16;
-#  endif
 #  ifdef ENABLE_FP8
 typedef __nv_fp8_e4m3 fp8e4m3;
 typedef __nv_fp8_e5m2 fp8e5m2;
 #  endif
 #elif defined(ENABLE_ACL)
 typedef aclFloat16 float16;
-#  ifdef ENABLE_BFLOAT16
 typedef int16_t bfloat16;
-#  endif
 #elif defined(ENABLE_TOPS)
 typedef int16_t float16;
-#  ifdef ENABLE_BFLOAT16
 typedef uint16_t bfloat16;
-#  endif
 #endif
 
 // All the available data format, for ascend aclTensor.

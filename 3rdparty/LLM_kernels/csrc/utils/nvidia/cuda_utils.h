@@ -154,14 +154,11 @@ struct PackTypeAlign<half> {
   using type = half2;
 };
 
-#ifdef ENABLE_BF16
 template <>
 struct PackTypeAlign<__nv_bfloat16> {
   using type = __nv_bfloat162;
 };
-#endif
 
-#ifdef ENABLE_BF16
 typedef struct __CUDA_ALIGN__(4) {
   __nv_bfloat16 array[2];
 } __nv_bfloat16_2;
@@ -190,7 +187,6 @@ typedef struct __CUDA_ALIGN__(16) {
 typedef struct __CUDA_ALIGN__(32) {
   __nv_bfloat16 array[16];
 } __nv_bfloat1616;
-#endif
 
 template <typename T>
 struct ElemsNum;
@@ -218,7 +214,6 @@ template <>
 struct ElemsNum<half4> {
   static constexpr int32_t value = 4;
 };
-#ifdef ENABLE_BF16
 template <>
 struct ElemsNum<__nv_bfloat16> {
   static constexpr int32_t value = 1;
@@ -235,7 +230,6 @@ template <>
 struct ElemsNum<__nv_bfloat168> {
   static constexpr int32_t value = 8;
 };
-#endif
 
 template <typename T, int32_t PACK_SIZE>
 struct PackType;
@@ -274,7 +268,6 @@ struct PackType<half2, 1> {
   using type = half;
 };
 
-#ifdef ENABLE_BF16
 template <>
 struct PackType<__nv_bfloat16, 2> {
   using type = __nv_bfloat162;
@@ -292,7 +285,6 @@ template <>
 struct PackType<__nv_bfloat162, 1> {
   using type = __nv_bfloat16;
 };
-#endif
 
 #ifdef ENABLE_FP8
 template <>

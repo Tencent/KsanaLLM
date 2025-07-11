@@ -23,8 +23,6 @@ Status AssembleTokensHiddenLayer<T>::Forward(const std::vector<Tensor>& input_te
 }
 template class AssembleTokensHiddenLayer<float>;
 template class AssembleTokensHiddenLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class AssembleTokensHiddenLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -28,9 +28,7 @@ void LayerCreationContext<T>::Init(std::shared_ptr<BaseWeight> base_weight_,
 
 template class LayerCreationContext<float>;
 template class LayerCreationContext<float16>;
-#ifdef ENABLE_BFLOAT16
 template class LayerCreationContext<bfloat16>;
-#endif
 
 void ModelCreationConfig::Init(const ModelConfig& model_config_, Tensor cos_sin_cache_tensor_,
                                PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node_,

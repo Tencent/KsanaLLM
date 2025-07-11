@@ -162,8 +162,6 @@ Status CutlassMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tenso
 
 template class CutlassMatMulLayer<float, TYPE_I4_GROUP>;
 template class CutlassMatMulLayer<half, TYPE_I4_GROUP>;
-#ifdef ENABLE_BFLOAT16
 template class CutlassMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
-#endif
 
 }  // namespace ksana_llm

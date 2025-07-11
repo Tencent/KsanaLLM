@@ -21,8 +21,7 @@ Status HunyuanLargeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFile
 
 template <typename T>
 Status HunyuanLargeWeight<T>::PermuteQueryWeight(Tensor& last_q_proj_tensor, const int num_layer) {
-  if (model_config_.cla_share_factor == 0)
-    return Status();
+  if (model_config_.cla_share_factor == 0) return Status();
   SetDevice(rank_);
   for (int layer_idx = 0; layer_idx < num_layer; ++layer_idx) {
     if (layer_idx % model_config_.cla_share_factor == 0) continue;
@@ -54,8 +53,6 @@ void HunyuanLargeWeight<T>::ProcessWeights() {
 
 template class HunyuanLargeWeight<float>;
 template class HunyuanLargeWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class HunyuanLargeWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

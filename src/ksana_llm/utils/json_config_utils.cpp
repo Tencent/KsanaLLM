@@ -20,11 +20,7 @@ DataType GetModelDataType(const nlohmann::json &config_json) {
   if (dtype_str == "float16") {
     return DataType::TYPE_FP16;
   } else if (dtype_str == "bfloat16") {
-#ifdef ENABLE_BFLOAT16
     return DataType::TYPE_BF16;
-#else
-    return DataType::TYPE_FP16;
-#endif
   } else {
     KLLM_THROW(fmt::format("Not supported model data type: {}.", dtype_str));
   }

@@ -374,7 +374,6 @@ cudaError_t InvokeCustomSmallMGemmWithFP32ComputeType(cudaStream_t stream, cubla
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16BF) {
-#ifdef ENABLE_BF16
       is_launch_success =
           CustomSmallMGemmWithFP32ComputeTypeLauncher<__nv_bfloat16, __nv_bfloat16>(m, n, k, A, B, C, alpha, stream);
     } else if (c_dtype == CUDA_R_32F) {
@@ -384,10 +383,6 @@ cudaError_t InvokeCustomSmallMGemmWithFP32ComputeType(cudaStream_t stream, cubla
       std::cerr << "Not support output type: " << c_dtype << std::endl;
       return cudaErrorNotSupported;
     }
-#else
-      std::cerr << "Not support bfloat16" << std::endl;
-      return cudaErrorNotSupported;
-#endif
   } else if (a_dtype == CUDA_R_32F) {
     if (k % 8 != 0) {
       std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
@@ -535,7 +530,6 @@ cudaError_t InvokeCustomSmallMGemm(cudaStream_t stream, cublasOperation_t transa
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16BF) {
-#ifdef ENABLE_BF16
       is_launch_success = CustomSmallMGemmLauncher<__nv_bfloat16, __nv_bfloat16>(m, n, k, A, B, C, alpha, stream);
     } else if (c_dtype == CUDA_R_32F) {
       is_launch_success = CustomSmallMGemmLauncher<__nv_bfloat16, float>(m, n, k, A, B, C, alpha, stream);
@@ -543,10 +537,6 @@ cudaError_t InvokeCustomSmallMGemm(cudaStream_t stream, cublasOperation_t transa
       std::cerr << "Not support output type: " << c_dtype << std::endl;
       return cudaErrorNotSupported;
     }
-#else
-        std::cerr << "Not support bfloat16" << std::endl;
-        return cudaErrorNotSupported;
-#endif
   } else if (a_dtype == CUDA_R_32F) {
     if (k % 8 != 0) {
       std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;

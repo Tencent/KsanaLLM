@@ -122,9 +122,7 @@ class LlamaNvidiaExpandTestSuit : public NvidiaTestSuitBase {
 
 TEST_F(LlamaNvidiaExpandTestSuit, ExpandTest) { 
   TestExpand<half>(2048, 64, 128); 
-#ifdef ENABLE_BF16
   TestExpand<__nv_bfloat16>(2048, 64, 128);
-#endif
 }
 
 }  // namespace test

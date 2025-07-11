@@ -148,8 +148,6 @@ float AttentionLayer<T>::common_yarn_get_mscale(const float scale) {
 
 template class AttentionLayer<float>;
 template class AttentionLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class AttentionLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

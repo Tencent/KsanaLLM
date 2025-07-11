@@ -1179,8 +1179,7 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
           down_experts_scale_shape[2] * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
       size_t expert_scale_pitch =
           down_experts_scale_shape[2] * down_experts_scale_shape[1] * GetTypeSize(weight_data_type);
-      size_t src_down_offset =
-          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
+      size_t src_down_offset = model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
       Memcpy2DAsync(
           weights_map_[down_experts_scale_name].GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_scale_pitch,
           dst_pitch, weight_ptr + src_down_offset, src_pitch, dst_pitch, down_experts_scale_shape[1],
@@ -1950,8 +1949,6 @@ void QuantWeight<T>::GetExpertsScaleIdx(const std::string& expert_scale_name, in
 
 template class QuantWeight<float>;
 template class QuantWeight<float16>;
-#ifdef ENABLE_BFLOAT16
 template class QuantWeight<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

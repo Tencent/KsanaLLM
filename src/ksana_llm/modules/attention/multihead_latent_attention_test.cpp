@@ -33,9 +33,7 @@ DataType GetKsanaDataType();
 GET_KSANA_DATA_TYPE(int32_t, TYPE_INT32);
 GET_KSANA_DATA_TYPE(float, TYPE_FP32);
 GET_KSANA_DATA_TYPE(half, TYPE_FP16);
-#ifdef ENABLE_BFLOAT16
 GET_KSANA_DATA_TYPE(__nv_bfloat16, TYPE_BF16);
-#endif
 #undef GET_KSANA_DATA_TYPE
 
 size_t schedule_id = 123;

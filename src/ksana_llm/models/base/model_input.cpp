@@ -987,7 +987,7 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
   flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
   InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, input.dp_reqs.size(), stream.Get());
-  #endif
+#endif
 }
 
 void ModelInput::PrepareSingleDecode() {

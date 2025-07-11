@@ -51,9 +51,7 @@ Status Internlm2<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingCon
 
 template class Internlm2<float>;
 template class Internlm2<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Internlm2<bfloat16>;
-#endif
 
 template <typename T>
 Internlm2Model<T>::Internlm2Model(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
@@ -81,8 +79,6 @@ Status Internlm2Model<T>::LayerForward(ForwardingContext<T>& forwarding_context,
 
 template class Internlm2Model<float>;
 template class Internlm2Model<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Internlm2Model<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

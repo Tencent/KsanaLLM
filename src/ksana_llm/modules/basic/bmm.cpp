@@ -57,8 +57,6 @@ Status Bmm<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Ten
 
 template class Bmm<float>;
 template class Bmm<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Bmm<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

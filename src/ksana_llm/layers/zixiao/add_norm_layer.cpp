@@ -17,7 +17,6 @@ Status AddNormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
 }
 template class AddNormLayer<float>;
 template class AddNormLayer<float16>;
-#ifdef ENABLE_BFLOAT16
 template class AddNormLayer<bfloat16>;
-#endif
+
 }  // namespace ksana_llm

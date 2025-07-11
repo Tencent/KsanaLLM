@@ -227,7 +227,6 @@ TEST_F(LlamaNvidiaPermuteTestSuit, PermutePerformanceHalfTest) {
   );
 }
 
-#ifdef ENABLE_BF16
 TEST_F(LlamaNvidiaPermuteTestSuit, PermuteAccuracyBFloat16Test) {
   TestPermuteAccuracy<__nv_bfloat16, 4>({2, 3, 4, 5},  // input shape
                                         {2, 0, 1, 3}   // permutation order
@@ -269,7 +268,6 @@ TEST_F(LlamaNvidiaPermuteTestSuit, PermutePerformanceBFloat16Test) {
                                            {0, 2, 1, 3}       // permutation order
   );
 }
-#endif
 
 }  // namespace test
 }  // namespace nvidia

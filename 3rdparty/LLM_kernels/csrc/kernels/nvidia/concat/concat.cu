@@ -97,9 +97,7 @@ void Concat(const T* __restrict__ input_a, const T* __restrict__ input_b, size_t
 
 INSTANTIATE_CONCAT(float);
 INSTANTIATE_CONCAT(half);
-#ifdef ENABLE_BF16
 INSTANTIATE_CONCAT(__nv_bfloat16);
-#endif
 
 #undef INSTANTIATE_CONCAT
 

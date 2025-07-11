@@ -22,8 +22,6 @@ Status Mul<T>::Forward(Tensor A, Tensor B, std::vector<Tensor>& output_tensors) 
 
 template class Mul<float>;
 template class Mul<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Mul<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

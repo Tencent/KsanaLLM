@@ -335,12 +335,10 @@ __device__ __forceinline__ half ClampInfForHalf(const float input) {
   return input > 0.0f ? (half)min(input, HALF_FLT_MAX - 1000) : (half)max(input, -HALF_FLT_MAX + 1000);
 }
 
-#ifdef ENABLE_BF16
 template <>
 __device__ __forceinline__ __nv_bfloat16 ClampInfForHalf(const float input) {
   return __float2bfloat16(input);
 }
-#endif
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -160,9 +160,7 @@ torch::Tensor MarlinUtils::PackAwqWeight(torch::Tensor& qweight) {
 
 template torch::Tensor MarlinUtils::MarlinPermuteScales<float>(torch::Tensor s, int k, int n);
 template torch::Tensor MarlinUtils::MarlinPermuteScales<float16>(torch::Tensor s, int k, int n);
-#  ifdef ENABLE_BFLOAT16
 template torch::Tensor MarlinUtils::MarlinPermuteScales<bfloat16>(torch::Tensor s, int k, int n);
-#  endif
 
 #endif
 

@@ -86,4 +86,3 @@ endif()
 set(PLATFORM_CONFIG_PATH "${ASCEND_PATH}/compiler/data/platform_config/${ASCEND_PLATFORM_NAME}.ini")
 
 add_definitions("-DENABLE_ACL" "-DPLATFORM_CONFIG_PATH=\"${PLATFORM_CONFIG_PATH}\"")
-add_definitions("-DENABLE_BFLOAT16")

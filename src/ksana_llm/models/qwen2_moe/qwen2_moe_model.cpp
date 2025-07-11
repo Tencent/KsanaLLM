@@ -167,9 +167,7 @@ Status Qwen2Moe<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingCont
 
 template class Qwen2Moe<float>;
 template class Qwen2Moe<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Qwen2Moe<bfloat16>;
-#endif
 
 /* **************************************
  * Qwen2MoeModel
@@ -201,8 +199,6 @@ Status Qwen2MoeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, 
 
 template class Qwen2MoeModel<float>;
 template class Qwen2MoeModel<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Qwen2MoeModel<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

@@ -831,8 +831,6 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& o
 
 template class MultiHeadLatentAttention<float>;
 template class MultiHeadLatentAttention<float16>;
-#ifdef ENABLE_BFLOAT16
 template class MultiHeadLatentAttention<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

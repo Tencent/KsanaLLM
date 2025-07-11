@@ -35,8 +35,6 @@ Status Activation<T>::Forward(const std::vector<Tensor>& input_tensors, std::vec
 
 template class Activation<float>;
 template class Activation<float16>;
-#ifdef ENABLE_BFLOAT16
 template class Activation<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

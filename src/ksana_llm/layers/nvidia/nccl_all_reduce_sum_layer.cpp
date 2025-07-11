@@ -58,8 +58,6 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
 
 template class NcclAllReduceSumLayer<float>;
 template class NcclAllReduceSumLayer<half>;
-#ifdef ENABLE_BFLOAT16
 template class NcclAllReduceSumLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace ksana_llm

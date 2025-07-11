@@ -106,13 +106,6 @@ __global__ void __launch_bounds__(32, 1, 1)
   }
 }  // namespace nvidia
 
-void run_get_mla_metadata_kernel(Mla_metadata_params &params, cudaStream_t stream) {
-  int smem_size = sizeof(int) * (params.batch_size * 2 + 1);
-  CHECK_CUDA(cudaFuncSetAttribute(get_mla_metadata_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
-  get_mla_metadata_kernel<<<1, 32, smem_size, stream>>>(params);
-  CHECK_CUDA_KERNEL_LAUNCH();
-}
-
 // Ksana function
 void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {
   const int max_smem = sizeof(int) * (max_batch_size * 2 + 1);

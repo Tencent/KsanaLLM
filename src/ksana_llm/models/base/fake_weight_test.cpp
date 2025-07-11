@@ -108,7 +108,6 @@ bool AreTensorValuesSame(const Tensor& a, const Tensor& b) {
       }
       break;
     }
-#ifdef ENABLE_BFLOAT16
     case TYPE_BF16: {
       bfloat16* data_a = a.GetPtr<bfloat16>();
       bfloat16* data_b = b.GetPtr<bfloat16>();
@@ -123,7 +122,6 @@ bool AreTensorValuesSame(const Tensor& a, const Tensor& b) {
       }
       break;
     }
-#endif
     default:
       KLLM_LOG_ERROR << "Unsupported data type";
       return false;
