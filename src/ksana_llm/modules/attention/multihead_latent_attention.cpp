@@ -242,9 +242,7 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   }
 
   CREATE_BUFFER_SCOPE(q_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_rope_buffer);
-  Tensor prefill_hidden_buffer_1 = input;
-  Tensor decode_hidden_buffer_1 = input;
-  Tensor q_b_rope_input = input;
+  Tensor q_b_input = input;
 
   // 降维度，q_lora_rank存在
   if (use_q_lora_) {
@@ -258,73 +256,45 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
       PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
       q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
     }
-    prefill_hidden_buffer_1 = hidden_buffer_tensors_1[0];
-    decode_hidden_buffer_1 = hidden_buffer_tensors_1[0];
-    q_b_rope_input = hidden_buffer_tensors_1[0];
+    q_b_input = hidden_buffer_tensors_1[0];
   }
 
   // q_b_rope proj MatMul
   {
     PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj_weight", rank);
-    STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_rope_input, q_rope_buffer_tensors));
+    STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_input, q_rope_buffer_tensors));
+  }
+
+  {
+    PROFILE_EVENT_SCOPE(q_b_nope_proj_weight, "q_b_nope_proj_weight", rank);
+    STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(q_b_input, q_buffer_tensors));
   }
 
   const size_t decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
                                forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
   const size_t context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
-  prefill_hidden_buffer_1.shape[0] = context_tokens;
-  decode_hidden_buffer_1.shape[0] = decode_tokens;
 
-  Tensor decode_hidden_buffer_1_tmp(decode_hidden_buffer_1.location, decode_hidden_buffer_1.dtype,
-                                    std::vector<size_t>(decode_hidden_buffer_1.shape), decode_hidden_buffer_1.device_id,
-                                    decode_hidden_buffer_1.GetPtr<void>() + prefill_hidden_buffer_1.GetTotalBytes());
-  // 已经统一输入到prefill_hidden_buffer_1和decode_hidden_buffer_1
-
-  /*
-    对于mla，由于两个阶段的升维度操作不一致，需要提前进行拆分，
-    将q_buffer拆分成 prefill_q_buffer 和 decode_q_buffer。
-  */
-  std::vector<Tensor> prefill_q_buffer_tensors{1}, decode_q_buffer_tensors{1};
+  std::vector<Tensor> prefill_q_buffer_tensors{1};
   prefill_q_buffer_tensors[0] = q_buffer_tensors[0];
   prefill_q_buffer_tensors[0].shape = {context_tokens, head_num_per_tp_ * qk_nope_head_dim_};
-  decode_q_buffer_tensors[0] = q_buffer_tensors[0];
 
-  Tensor decode_q_buffer_tmp(decode_q_buffer_tensors[0].location, decode_q_buffer_tensors[0].dtype,
-                             std::vector<size_t>(decode_q_buffer_tensors[0].shape),
-                             decode_q_buffer_tensors[0].device_id,
-                             decode_q_buffer_tensors[0].GetPtr<void>() + prefill_q_buffer_tensors[0].GetTotalBytes());
+  Tensor decode_q_buffer_tmp(prefill_q_buffer_tensors[0].location, prefill_q_buffer_tensors[0].dtype,
+                             std::vector<size_t>({decode_tokens, head_num_per_tp_ * qk_nope_head_dim_}),
+                             prefill_q_buffer_tensors[0].device_id,
+                             prefill_q_buffer_tensors[0].GetPtr<void>() + prefill_q_buffer_tensors[0].GetTotalBytes());
   std::vector<Tensor> decode_q_buffer_tensors_tmp = {decode_q_buffer_tmp};
 
-  // For prefill
-  if (context_tokens) {
-    // q_b_lora proj MatMul
-    PROFILE_EVENT_SCOPE(context_tokens, "context_tokens q_b_nope_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(prefill_hidden_buffer_1, prefill_q_buffer_tensors));
-  }
-
-  // For decode
-  if (decode_tokens) {
-    if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-      {
-        PROFILE_EVENT_SCOPE(q_b_nope_proj, "decode_tokens q_b_nope_proj", rank);
-        STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      }
-      // transpose and w_uk_t bmm
-      {
-        PROFILE_EVENT_SCOPE(attn_w_uk_t_bmm, "decode_tokens attn_w_uk_t_bmm", rank);
-        int decode_tokens_num = decode_q_buffer_tensors_tmp[0].shape[0];
-        decode_q_buffer_tensors_tmp[0].shape = {decode_tokens_num, head_num_per_tp_, qk_nope_head_dim_};
-        STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
-            {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
-            decode_q_buffer_tensors_tmp));
-      }
-
-      hidden_buffer_tensors_0[0].shape[0] = seq_len;
-      hidden_buffer_tensors_1[0].shape[0] = seq_len;
-    } else {
-      PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
+  if (decode_tokens && (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM)) {
+    // transpose and w_uk_t bmm
+    {
+      PROFILE_EVENT_SCOPE(attn_w_uk_t_bmm, "decode_tokens attn_w_uk_t_bmm", rank);
+      decode_q_buffer_tensors_tmp[0].shape = {decode_tokens, head_num_per_tp_, qk_nope_head_dim_};
+      STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
+          {decode_q_buffer_tensors_tmp[0], hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]},
+          decode_q_buffer_tensors_tmp));
     }
+    hidden_buffer_tensors_0[0].shape[0] = seq_len;
+    hidden_buffer_tensors_1[0].shape[0] = seq_len;
   }
 
   // TODO(robertyuan): swap with reduce_buffer_tensors needs optimize.
@@ -705,12 +675,11 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
 
   // For decode
   if (decode_tokens) {
+    {
+      PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
+      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
+    }
     if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-      {
-        PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
-        STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
-      }
-
       // transpose and w_uk_t bmm
       {
         PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens attn_w_uk_t_bmm", rank);
@@ -723,9 +692,6 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
 
       hidden_buffer_tensors_0[0].shape[0] = seq_len;
       hidden_buffer_tensors_1[0].shape[0] = seq_len;
-    } else {
-      PROFILE_EVENT_SCOPE(decode_tokens, "decode_tokens q_b_nope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(decode_hidden_buffer_1_tmp, decode_q_buffer_tensors_tmp));
     }
 
     if (forwarding_context.GetModelCommunicator()) {
