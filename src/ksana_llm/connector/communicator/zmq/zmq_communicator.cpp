@@ -4,6 +4,7 @@
 #include "ksana_llm/connector/communicator/zmq/zmq_communicator.h"
 #include <chrono>
 #include <thread>
+#include "ksana_llm/utils/socket_util.h"
 
 namespace ksana_llm {
 
@@ -59,7 +60,13 @@ Status ZmqCommunicator::Initialize() {
   // Use raw pointer to avoid automatic context termination during shutdown
   zmq_ctx_ = std::make_unique<zmq::context_t>(1);
   socket_ = std::make_unique<zmq::socket_t>(*zmq_ctx_, zmq::socket_type::rep);
-  std::string bind_addr = "tcp://*:" + std::to_string(coordinator_port);
+  std::string interface;
+  std::string ip;
+  Status status = GetAvailableInterfaceAndIP(interface, ip);
+  if (!status.OK() || ip.empty()) {
+    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Failed to get available IP address");
+  }
+  std::string bind_addr = "tcp://" + ip + ":" + std::to_string(coordinator_port);
   socket_->bind(bind_addr);
   KLLM_LOG_INFO << "ZeroMQ REP socket bound to " << bind_addr;
   recv_thread_ = std::thread(&ZmqCommunicator::ReceiveLoop, this);

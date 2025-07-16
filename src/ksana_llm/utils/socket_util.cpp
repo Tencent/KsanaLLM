@@ -17,7 +17,11 @@ Status GetAvailableInterfaceAndIP(std::string& interface, std::string& ip) {
   ifaddrs* if_addr = nullptr;
   getifaddrs(&if_addr);
   for (struct ifaddrs* ifa = if_addr; ifa != nullptr; ifa = ifa->ifa_next) {
+    // 跳过无效、非IPv4、回环和docker开头的接口
     if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+      continue;
+    }
+    if (ifa->ifa_name && strncmp(ifa->ifa_name, "docker", 6) == 0) {
       continue;
     }
 
