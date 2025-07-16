@@ -63,6 +63,8 @@ do
   [[ -n ${param_arr[14]} ]] && cmd+=" --n ${param_arr[14]}"
   [[ -n ${param_arr[15]} ]] && cmd+=" --tune"
   eval $cmd
+  cmd+=" --even_Ks True"  
+  eval $cmd
 done
 
 if [ -n "$DISABLE_EVEN_KS" ] && [ "$DISABLE_EVEN_KS" -eq 1 ]

@@ -16,11 +16,21 @@ def InvokeGenericActivation(args):
     elif args.type == "bfloat16":
         inference_data_type = torch.bfloat16
 
-    activation = "silu"
-    if args.activation == "gelu":
-        activation = "gelu"
+    activation_dic = {}
+    if args.activation == "silu":
+        activation_dic = {"silu": torch.nn.SiLU()}
+    elif args.activation == "gelu":
+        activation_dic = {"gelu": torch.nn.GELU()}
     elif args.activation == "relu":
-        activation = "relu"
+        activation_dic = {"relu": torch.nn.ReLU()}
+    elif args.activation == "all":
+        activation_dic = {
+            "silu": torch.nn.SiLU(),
+            "gelu": torch.nn.GELU(),
+            "relu": torch.nn.ReLU()
+        }
+    else:
+        raise ValueError(f"Unsupported activation type: {args.activation}")
 
     # input
     #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
@@ -30,19 +40,14 @@ def InvokeGenericActivation(args):
     gated_weight = torch.from_numpy(
         np.load("activation_test_gated_weight.npy")).view(inference_data_type).cuda()
 
-    if activation == "silu":
-        act = torch.nn.SiLU()
-    elif activation == "gelu":
-        act = torch.nn.GELU()
-    else:  # activation == "relu"
-        act = torch.nn.ReLU()
-    output = act(input) * gated_weight
-
-    #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
-    #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
-    if args.type == "bfloat16":
-        output = output.view(torch.float16)
-    np.save("activation_test_output.npy", output.cpu().numpy())
+    for activation in activation_dic:
+        act = activation_dic[activation]
+        output = act(input) * gated_weight
+        #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
+        #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
+        if args.type == "bfloat16":
+            output = output.view(torch.float16)
+        np.save(f"activation_test_output_{activation}.npy", output.cpu().numpy())
     
 def InvokeRowBasedActivation(args):
     inference_data_type = torch.float32

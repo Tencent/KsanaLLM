@@ -852,7 +852,8 @@ if __name__ == "__main__":
                   f"_top_k_{topk}" + \
                   f"_compute_type_{args.compute_type}" + \
                   f"_use_fp8_w8a8_{args.use_fp8_w8a8}" + \
-                  f"_use_int8_w8a16_{args.use_int8_w8a16}"
+                  f"_use_int8_w8a16_{args.use_int8_w8a16}" + \
+                  f"_even_Ks_{args.even_Ks}"
     # dump default kernel name
     dump_kernel(default_kernel, args.output_dir, kernel_name,
                 candidate_configs["default"]["config"])

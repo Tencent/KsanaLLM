@@ -61,7 +61,7 @@ TritonWrapper::TritonWrapper() {
   // 初始化,声明kernel关键key的组合顺序
   kernel_key_map_["fused_moe_kernel"] = {"group_n",      "group_k",      "BLOCK_SIZE_M",      "BLOCK_SIZE_N",
                                          "BLOCK_SIZE_K", "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
-                                         "compute_type", "use_fp8_w8a8", "use_int8_w8a16"};
+                                         "compute_type", "use_fp8_w8a8", "use_int8_w8a16", "even_Ks"};
   kernel_key_map_["_per_token_group_quant_fp8"] = {"compute_type", "colmajor"};
   kernel_key_map_["_per_token_group_quant_fp8_colmajor"] = {"compute_type", "colmajor"};
   kernel_key_map_["fused_moe_gptq_awq_kernel"] = {"BLOCK_SIZE_M",      "BLOCK_SIZE_N", "BLOCK_SIZE_K", "GROUP_SIZE_M",
@@ -375,7 +375,9 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
                                                       {"top_k", ConvertToString(top_k)},
                                                       {"compute_type", GetComputeType<T>()},
                                                       {"use_fp8_w8a8", ConvertToString(use_fp8_w8a8)},
-                                                      {"use_int8_w8a16", ConvertToString(use_int8_w8a16)}};
+                                                      {"use_int8_w8a16", ConvertToString(use_int8_w8a16)},
+                                                      {"even_Ks", (k % config["block_size_k"] == 0) ? "True" : "False"}
+                                                    };
   size_t grid_x = CeilDiv(max_num_tokens_padded, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
   InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
 }
