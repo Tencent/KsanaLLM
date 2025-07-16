@@ -199,7 +199,7 @@ TEST_F(KernelWrapperTest, ScaleQuantizeFp8E4m3Test) {
         }
       }
     }  // end j
-  }    // end i
+  }  // end i
 
   for (size_t i = 0; i < num_elements; i++) {
     if (fabsf(h_out[i]) > 0) {
@@ -456,16 +456,16 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
         torch::Tensor sorted_ids, expert_ids, num_tokens_post_pad;
         {
           CudaEventTimer create_moe_tensor("Create MoeAlignBlock output tensor", stream);
-          sorted_ids = torch::empty({max_num_tokens_padded}, int32_options);
+          sorted_ids = torch::empty({static_cast<int32_t>(max_num_tokens_padded)}, int32_options);
           sorted_ids.fill_(static_cast<int>(numel));
-          expert_ids = torch::empty({max_num_m_blocks}, int32_options);
+          expert_ids = torch::empty({static_cast<int32_t>(max_num_m_blocks)}, int32_options);
           expert_ids.fill_(-1);
           num_tokens_post_pad = torch::empty({1}, int32_options);
         }
         {
           CudaEventTimer moe_align_block("AlignBlockSize", stream, cal_moe_align_block);
           if (num_experts_per_rank >= 224) {
-            torch::Tensor cumsum = torch::zeros({num_experts_per_rank + 1}, int32_options);
+            torch::Tensor cumsum = torch::zeros({static_cast<int32_t>(num_experts_per_rank) + 1}, int32_options);
             llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t>(
                 reinterpret_cast<int32_t*>(topk_ids_ptr), sorted_ids.data_ptr<int32_t>(),
                 expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), num_experts_per_rank,

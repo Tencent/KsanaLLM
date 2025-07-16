@@ -293,7 +293,7 @@ TEST(ConvertToScalarTest, ConvertToScalarPerformanceTest) {
 
   // 初始化源数据（初始化一个block）
   std::vector<int8_t> h_src(data_num);
-  for (int i = 0; i < data_num; ++i) {
+  for (size_t i = 0; i < data_num; ++i) {
     h_src[i] = 54;
   }
   // 保证第一个block一定被转换用与校验结果
@@ -345,7 +345,7 @@ TEST(ConvertToScalarTest, ConvertToScalarPerformanceTest) {
 
   // 检查结果（由于是简单映射，源数据应该与目标数据相同）
   bool correct = true;
-  for (int i = 0; i < data_num; ++i) {
+  for (size_t i = 0; i < data_num; ++i) {
     if (h_dst[i] != 16224) {
       printf("%d ", h_dst[i]);
       correct = false;

@@ -1,0 +1,132 @@
+# 全局设置
+setting:
+  # 全局配置
+  global:
+    # TP并行
+    tensor_para_size: 2
+    # PP并行
+    pipeline_para_size: 1
+    # 节点内MHA数据并行（DP）的并行数
+    attn_data_para_size: 1
+    # 专家并行的节点数，也是MHA数据并行的节点数目
+    expert_world_size: 1
+    # 节点内的专家并行数，MoE模块的 moe_tensor_para_size = tensor_para_size / expert_para_size
+    expert_para_size: 1
+    # 是否启用lora适配，false表示不启用，true表示启用
+    enable_lora_adapter: false
+    # 是否使用cpu保存embed_tokens
+    embed_tokens_use_cpu: false
+    # 是否启用cudagraph用于decode阶段加速, 当前启用默认只开启decode阶段batchsize=1,2,3
+    # 不开启更多batchsize是因为每个batchsize的cudagraph实例会占用15~25mb左右显存
+    enable_cuda_graph: false
+    # 是否要在每个节点存储所有的 shared_expert
+    enable_full_shared_expert: false
+    # PP并行（流水线并行）时通讯模式选择，默认值为default
+    # default是send-receive模式，当node0推理完前面任务时，node0上device0发送数据给node1上device0，node0上device1发送数据给node1上device1。
+    # scatter是scatter模式，当node0推理完前面任务时，node0上device0发送数据给node1上device0，device1，device2等等。
+    pipeline_para_comm_type: "default"
+
+  # 调度相关配置
+  batch_scheduler:
+    # 调度策略，0表示continuous_batching，默认为0
+    schedule_strategy: 0
+    # 请求在队列中的超时时间，单位为毫秒
+    waiting_timeout_in_ms: 3600000
+    # 请求队列的最大等待长度，超过对应长度时会丢弃新请求，主要用于流控。
+    max_waiting_queue_len: 1200
+    # 一个调度step处理的最大token个数，一次context decode视为多个token。
+    max_step_tokens: 4096
+    # 每一步推理时的最大batch_size
+    max_batch_size: 128
+    # 最大输入输出长度之和, 相当于prompt_len+max_new_tokens
+    max_token_len: 2048
+    # 单个请求可用blck小于该值触发换出
+    swapout_block_threshold: 1.0
+    # 单个请求可用block大于该值触发换入
+    swapin_block_threshold: 2.0
+    # 单个请求可用block大于该值拉起新任务
+    launch_block_threshold: 2.0
+    # 是否开启自动前缀匹配
+    enable_auto_prefix_cache: true
+    # split_fuse_token_num用于控制在单轮推理过程中，模型处理的最大token数量。
+    # 设置为256意味着在执行推理时，每个处理步骤（或“分割”）将处理最多256个token。
+    # 如果设置为0，则表示不对处理的token数量进行限制，模型将尝试一次性处理整个输入。
+    # 控制此参数可以帮助平衡推理速度与资源消耗，特别是在处理长文本时。
+    split_fuse_token_num: 256
+    # 用于执行异步swap的线程池大小
+    swap_threadpool_size: 8
+    # gpu block不足情况下的抢占模式，0表示SWAP，1表示RECOMPUTE
+    preempt_mode: 0
+    # 多轮对话场景可以设置此值，在前缀缓存查询后，继续查询非前缀的连续灵活缓存，提高cache命中率。
+    # 此时命中的前缀缓存为prefix_tokens + flexible_tokens + 剩余tokens
+    # 此值为最小的命中长度，推荐设置为64，值为0或超过模型最长长度表示不启用。
+    min_flexible_cache_num: 0
+    # 是否开启投机解码。开启后每个Step将生成一定数量的draft_tokens，成功预测的情况下可提高处理速度
+    enable_speculative_decoding: false
+    # 是否开启MTP模块，开启后将使用MTP模块加速推理
+    enable_mtp_module: false
+  # 显存块相关配置
+  block_manager:
+    # 单个block可处理的最大token个数
+    block_token_num: 16
+    # 保留的显存占比，单位为百分比。
+    reserved_device_memory_ratio: 0.05
+    # Lora权重的显存占比
+    lora_deivce_memory_ratio: 0.0
+    # Lora权重在host上的预分配大小，相比device上的倍数
+    lora_host_memory_factor: 10.0
+    # block部分的显存占比，<0表示使用所有剩余显存
+    block_device_memory_ratio: -1.0
+    # block部分在host上的预分配大小，相比device上的倍数
+    block_host_memory_factor: 1.0
+
+  # 选择attention计算中的backend
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: false
+
+  # 量化相关配置
+  quantization_config:
+    # GPTQ/AWQ中的量化后端，支持cutlass和marlin两种，默认为cutlass
+    gptq_backend: cutlass
+    # block中kv cache的量化
+    kv_cache:
+      # 支持fp8_e5m2, fp8_e4m3和auto
+      # dtype: fp8_e5m2 # fp8_e5m2为fp8的一种存储格式，对比auto速度提高约30%，精度下降约0.5%
+      # dtype: fp8_e4m3 # fp8_e4m3为fp8的一种存储格式，对比auto速度提高约20%，精度损失微小
+      dtype: auto # 默认值，跟随推理精度
+    weight:
+      # quant_method支持fp8_e4m3和auto
+      # fp8_e4m3 表示推理使用fp8_e4m3(fp8的一种格式)精度
+      # auto 是默认值，表示推理使用模型默认精度
+      quant_method: auto
+  # 性能统计相关配置
+  profiler:
+    #trace_export_url: "http://example.com/v1/traces"
+    #metrics_export_url: "http://example.com/v1/metrics"
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+    attributes:
+      instance: "1.1.1.1"
+      container_name: "container_name_001"
+      version: "1.1"
+  # 服务端类型，支持python（默认）或自定义的rpc框架（如trpc/grpc）
+  # 自定义的rpc框架需要在src/ksana_llm/endpoints/wrapper 目录下实现服务代码，编译
+  # 为共享库f"lib{endpoint_type}_endpoint.so"，由ksana_llm查找和启动
+  endpoint_type: python
+  # tokenizer配置
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+# 模型配置
+model_spec:
+  # 基础模型配置，只能有一个
+  base_model:
+    # 模型路径
+    model_dir: /model/Qwen3-32B
+  plugin_model:
+    # 插件中的模型是否使用TensorRT加速推理（e.g., 多模态中的ViT）,
+    # 默认为true。设置为false则回退为Torch推理。注：TensorRT推理
+    # 可能出现异常（NaN），该配置允许手动调整为Torch推理。
+    enable_tensorrt: true
+    # 用于推理插件中模型的线程数，默认为1。设置为大于1时需保证线程安全。
+    plugin_thread_pool_size: 1

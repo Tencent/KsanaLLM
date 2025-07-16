@@ -69,11 +69,12 @@ std::vector<int> BlockAllocatorGroup::GetBlockAllocatorDevices() const { return 
 std::shared_ptr<BlockAllocatorInterface> BlockAllocatorGroup::GetHostBlockAllocator() const { return host_allocator; }
 
 std::shared_ptr<BlockAllocatorInterface> BlockAllocatorGroup::GetDeviceBlockAllocator(int index) const {
-  if (index >= block_allocator_group_config_.devices.size()) {
+  size_t ull_idx = static_cast<size_t>(index);
+  if (ull_idx >= block_allocator_group_config_.devices.size()) {
     return nullptr;
   }
 
-  int device_id = block_allocator_group_config_.devices[index];
+  int device_id = block_allocator_group_config_.devices[ull_idx];
   auto device_it = dev_allocators.find(device_id);
   if (device_it == dev_allocators.end()) {
     return nullptr;

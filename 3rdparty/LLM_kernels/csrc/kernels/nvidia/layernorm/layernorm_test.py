@@ -7,7 +7,12 @@ import numpy as np
 parser = argparse.ArgumentParser()
 parser.add_argument("--type", help="inference type", type=str)
 parser.add_argument("--variance_epsilon", help="variance epsilon", type=float)
-parser.add_argument("--use_layernorm_3d", help="variance epsilon", type=str)
+parser.add_argument("--test_mode", type=str,
+                        default="default",
+                        choices=[
+                            'default', 'use_layernorm_3d', 'use_layernorm_fused_qkv',
+                        ],
+                        help='test mode from: default, use_layernorm_3d, use_layernorm_fused_qkv')
 
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -17,7 +22,8 @@ if __name__ == "__main__":
         inference_data_type = torch.float16
     elif args.type == "bfloat16":
         inference_data_type = torch.bfloat16
-    if args.use_layernorm_3d == "false":
+
+    if args.test_mode == "default":
         #  Since NumPy lacks native bf16 support, we store bf16 data as float16 (same binary representation, different type
         #  interpretation). Note: When loading such npy files, you must reinterpret the data to the correct type.
         input = torch.from_numpy(
@@ -48,7 +54,7 @@ if __name__ == "__main__":
             rmsnorm_output = rmsnorm_output.view(torch.float16)
         np.save("rmsnorm_test_output.npy", rmsnorm_output.cpu().numpy())
 
-    elif args.use_layernorm_3d == "true":
+    elif args.test_mode == "use_layernorm_3d":
         # for 3d layer norm test 
         input_3d = torch.from_numpy(
             np.load("rmsnorm_3d_test_input.npy")).view(inference_data_type).cuda()
@@ -68,3 +74,22 @@ if __name__ == "__main__":
         if args.type == "bfloat16":
             rmsnorm_output = rmsnorm_output.view(torch.float16)
         np.save("rmsnorm_3d_test_torch_output.npy", rmsnorm_output.cpu().numpy())
+    elif args.test_mode == "use_layernorm_fused_qkv":
+        # for fused qkv layer norm test 
+        input_fused_qkv = torch.from_numpy(
+            np.load("rmsnorm_fused_qkv_test_input.npy")).view(inference_data_type).cuda()
+        weight_fused_qkv = torch.from_numpy(
+            np.load("rmsnorm_fused_qkv_test_weight.npy")).view(inference_data_type).cuda()
+        mask = torch.from_numpy(
+            np.load("rmsnorm_fused_qkv_test_mask.npy")).view(inference_data_type).cuda()
+
+        input_dtype = input_fused_qkv.dtype
+        hidden_states = input_fused_qkv[2:, :4, :].to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + args.variance_epsilon)
+        hidden_states = weight_fused_qkv * hidden_states.to(input_dtype)
+        input_fused_qkv[2:, :4, :] = hidden_states
+        rmsnorm_output = input_fused_qkv
+        if args.type == "bfloat16":
+            rmsnorm_output = rmsnorm_output.view(torch.float16)
+        np.save("rmsnorm_fused_qkv_test_torch_output.npy", rmsnorm_output.cpu().numpy())        

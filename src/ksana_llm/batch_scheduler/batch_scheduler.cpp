@@ -57,7 +57,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   for (int i = 0; i < dp_num; i++) {
     schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_);
     batch_states_[i].resize(pp_batch_num_);
-    for (int j = 0; j < pp_batch_num_; j++) {
+    for (size_t j = 0; j < pp_batch_num_; j++) {
       batch_states_[i][j] = std::make_shared<BatchState>(j, batch_scheduler_config_);
     }
     dp_waiting_reqs_[i].reserve(batch_scheduler_config_.max_waiting_queue_len);
@@ -70,12 +70,12 @@ BatchScheduler::~BatchScheduler() {
 }
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
-  KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %d.", dp_idx, dp_num_));
+  KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
   schedule_strategies_.at(dp_idx)->SetCacheManager(cache_manager);
 }
 
 std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager(int dp_idx) {
-  KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %d.", dp_idx, dp_num_));
+  KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
   return schedule_strategies_[dp_idx]->GetCacheManager();
 }
 

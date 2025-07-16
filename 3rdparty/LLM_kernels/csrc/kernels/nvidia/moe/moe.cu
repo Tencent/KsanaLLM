@@ -37,7 +37,7 @@ namespace llm_kernels {
 namespace nvidia {
 
 using FP8_TYPE = uint8_t;
-constexpr float FP8_E4M3_MAX = 448.0f;
+static constexpr float FP8_E4M3_MAX = 448.0f;
 
 namespace {
 __device__ __forceinline__ int32_t index(int32_t total_col, int32_t row, int32_t col) {

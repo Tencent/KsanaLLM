@@ -28,8 +28,14 @@ void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, cons
                      const int32_t n, cudaStream_t stream);
 
 template <typename T>
-void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t len,
-                       const int32_t m, const int32_t n, const int32_t start, const int32_t end, const int64_t* mask, cudaStream_t stream);
+void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t total_tokens,
+                     const int32_t m, const int32_t n, const int32_t start, const int32_t end, const int64_t* mask,
+                     cudaStream_t stream);
+
+template <typename T>
+void InvokeFusedQKVRmsNorm(T* out, const T* input, const T* q_gamma, const T* k_gamma, const float layernorm_eps,
+                           const int32_t total_tokens, const int32_t num_heads, const int32_t num_kv_heads,
+                           const int32_t head_size, const int64_t* mask, cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -71,15 +71,10 @@ template <typename T>
 void InvokeQKRmsNorm(void* qkv_ptr, const void* q_gamma, const void* k_gamma, const float layernorm_eps,
                      const int32_t total_tokens, const int32_t num_heads, const int32_t num_kv_heads,
                      const int32_t head_size, const int64_t* mask, cudaStream_t stream) {
-  // q 3D norm
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRmsNorm3D<T>(
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeFusedQKVRmsNorm<T>(
       reinterpret_cast<T*>(qkv_ptr), reinterpret_cast<const T*>(qkv_ptr), reinterpret_cast<const T*>(q_gamma),
-      layernorm_eps, total_tokens, (num_heads + num_kv_heads * 2), head_size, 0, num_heads, mask, stream));
-  // k 3D norm
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRmsNorm3D<T>(
-      reinterpret_cast<T*>(qkv_ptr), reinterpret_cast<const T*>(qkv_ptr), reinterpret_cast<const T*>(k_gamma),
-      layernorm_eps, total_tokens, (num_heads + num_kv_heads * 2), head_size, num_heads, (num_heads + num_kv_heads),
-      mask, stream));
+      reinterpret_cast<const T*>(k_gamma), layernorm_eps, total_tokens, num_heads, num_kv_heads, head_size, mask,
+      stream));
 }
 #define INVOKE_QK_LAYER_NORM(T)                                                                                        \
   template void InvokeQKRmsNorm<T>(void* qkv_ptr, const void* q_gamma, const void* k_gamma, const float layernorm_eps, \

@@ -84,13 +84,15 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
   }
 
   void TestDequantKernel(const size_t num_experts, const size_t n, const size_t k) {
-    torch::Tensor qweight = torch::randint(0, 256, {num_experts, n, k / 2},
-                                           torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
-    torch::Tensor weight = torch::empty({num_experts, n, k},
-                                        torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn));
+    torch::Tensor qweight = torch::randint(
+        0, 256, {static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k / 2)},
+        torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
+    torch::Tensor weight =
+        torch::empty({static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k)},
+                     torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn));
 
     DequantInt4Fp8(stream, reinterpret_cast<void*>(weight.data_ptr()),
-                   reinterpret_cast<const void*>(qweight.data_ptr()), num_experts * n * k / 2);
+                   reinterpret_cast<const void*>(qweight.data_ptr()), static_cast<int32_t>(num_experts * n * k / 2));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     torch::Tensor B = qweight.clone();
@@ -124,10 +126,11 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
     // void* d_qb_scale;  // [num_experts, n, k / group_size]
     torch::Tensor d_a =
         torch::randn({m, k}, torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
-    torch::Tensor d_qb = torch::randint(0, 256, {num_experts, n, k / pack_factor},
-                                        torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
+    torch::Tensor d_qb = torch::randint(
+        0, 256, {static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k / pack_factor)},
+        torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
     torch::Tensor d_qb_scale =
-        torch::randn({num_experts, n, k / group_size},
+        torch::randn({static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k / group_size)},
                      torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
 
     std::unordered_map<std::string, int> config = {
@@ -150,12 +153,12 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
     // void* d_sorted_token_ids;        // [em]
     // void* d_expert_ids;              // [max_num_m_blocks]
     // void* d_num_tokens_post_padded;  // [1]
-    torch::Tensor d_sorted_token_ids =
-        torch::from_blob(sorted_token_ids.data(), {em}, torch::TensorOptions().dtype(torch::kInt32))
-            .to(torch::Device(torch::kCUDA, rank));
-    torch::Tensor d_expert_ids =
-        torch::from_blob(expert_ids.data(), {max_num_m_blocks}, torch::TensorOptions().dtype(torch::kInt32))
-            .to(torch::Device(torch::kCUDA, rank));
+    torch::Tensor d_sorted_token_ids = torch::from_blob(sorted_token_ids.data(), {static_cast<int32_t>(em)},
+                                                        torch::TensorOptions().dtype(torch::kInt32))
+                                           .to(torch::Device(torch::kCUDA, rank));
+    torch::Tensor d_expert_ids = torch::from_blob(expert_ids.data(), {static_cast<int32_t>(max_num_m_blocks)},
+                                                  torch::TensorOptions().dtype(torch::kInt32))
+                                     .to(torch::Device(torch::kCUDA, rank));
     torch::Tensor d_num_tokens_post_padded =
         torch::from_blob(num_tokens_post_padded.data(), {1}, torch::TensorOptions().dtype(torch::kInt32))
             .to(torch::Device(torch::kCUDA, rank));
@@ -215,7 +218,6 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
     torch::Tensor diff = torch::abs(d_16o - d_8o);
     double err = err_ration * d_16o.max().item<double>();
     diff = diff > err;
-    int64_t max_diff = diff.sum().item<int64_t>();
     EXPECT_TRUE(diff.sum().item<int64_t>() == 0);
   }
 };

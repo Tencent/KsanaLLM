@@ -148,7 +148,6 @@ __global__ void AddBiasSoftmaxKernel(T* logits, T** logits_ptrs, T* temperatures
   T temperature = temperatures ? temperatures[batch_idx] : T(1.0f);
   temperature = temperature == T(0.0f) ? T(1.0f) : temperature;
   bool finish = finish_state.isFinished();
-  int offset = (batch_idx_logits * beam_width + beam_idx) * vocab_size_padded;
 
   float max_val = -1 * FLT_MAX;
   bool const IS_FP16 = std::is_same<T, half>::value;

@@ -244,6 +244,7 @@ __inline__ __device__ uint8_t scaled_vec_conversion<uint8_t, __nv_bfloat16>(cons
     __nv_fp8_storage_t res = __nv_cvt_float_to_fp8(__bfloat162float(a) / scale, __NV_SATFINITE, fp8_type);
     return (uint8_t)res;
 #endif
+    __builtin_unreachable();
 }
 
 // float -> fp8
@@ -273,6 +274,7 @@ __inline__ __device__ Tout scaled_convert(const Tin &x, const float scale) {
         return scaled_vec_conversion<Tout, Tin>(x, scale, __NV_E5M2);
     }
     assert(false);
+    __builtin_unreachable();
 }
 
 } // namespace fp8

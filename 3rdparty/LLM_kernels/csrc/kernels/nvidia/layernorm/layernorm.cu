@@ -4,6 +4,8 @@
 
 #include "layernorm.h"
 
+#include <cub/cub.cuh>
+
 #include "csrc/kernels/nvidia/common/reduce_kernel_utils.cuh"
 #include "csrc/utils/nvidia/cuda_type_utils.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
@@ -458,8 +460,7 @@ void InvokeLayerNormWithBeta(T* out, const T* input, const T* gamma, const T* be
                              const int32_t int8_mode, cudaStream_t stream, int32_t opt_version) {
   dim3 grid(m);
   const bool dynamic_quant = dynamic_scale != nullptr;
-  if (n % 2 == 0 && (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value)
-      && opt_version > 0) {
+  if (n % 2 == 0 && (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) && opt_version > 0) {
     int32_t half_n = n / 2;
     int32_t half_n_32 = (half_n + 31) / 32 * 32;
     dim3 block(min(half_n_32, 512));
@@ -641,7 +642,6 @@ __global__ void InvokeRmsNorm3DKernel(const T* __restrict input, const T* __rest
     return;
   }
   __shared__ float s_variance;
-  float variance = 0.0f;
   // The starting index of each row in a 2D matrix
   int32_t matrix_offset = blockIdx.x * m * n + blockIdx.y * n;
 
@@ -652,10 +652,12 @@ __global__ void InvokeRmsNorm3DKernel(const T* __restrict input, const T* __rest
       float diff = (float)(ldg(&input[matrix_offset + i]));
       local_var_sum += diff * diff;
     }
-    variance = BlockReduceSum(local_var_sum);
+    using BlockReduce = cub::BlockReduce<float, 1024>;
+    __shared__ typename BlockReduce::TempStorage reduceStore;
+    local_var_sum = BlockReduce(reduceStore).Reduce(local_var_sum, cub::Sum{}, blockDim.x);
 
     if (threadIdx.x == 0) {
-      s_variance = rsqrtf(variance / (float)n + layernorm_eps);
+      s_variance = rsqrtf(local_var_sum / (float)n + layernorm_eps);
     }
     __syncthreads();
 
@@ -677,32 +679,97 @@ __global__ void InvokeRmsNorm3DKernel(const T* __restrict input, const T* __rest
 // param 'start' 'end': For each 2D matrix, defined 'start' and 'end' params to apply rmsnorm to a specific range of
 // consecutive rows.
 template <typename T>
-void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t len,
+void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t total_tokens,
                      const int32_t m, const int32_t n, const int32_t start, const int32_t end, const int64_t* mask,
                      cudaStream_t stream) {
-  dim3 grid(len, m);
+  dim3 grid(total_tokens, m);
   dim3 block(min(n, 1024));
 
-  // For general cases, n is equal to hidden_units, e.g., 512/1024.
-  // Since we have warp shuffle inside the code, block.x % 32 should be 0.
-  if (n % 32 != 0) {
-    block.x = 1024;
-  }
-  block.x = block.x / (4 / sizeof(T));  // if using half, only need half of block.x
-
   InvokeRmsNorm3DKernel<T>
-      <<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, len, m, n, start, end, mask);  // For gpt-3
+      <<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, total_tokens, m, n, start, end, mask);
 }
 
 template void InvokeRmsNorm3D(float* out, const float* input, const float* gamma, const float layernorm_eps,
-                              const int32_t len, const int32_t m, const int32_t n, const int32_t start,
+                              const int32_t total_tokens, const int32_t m, const int32_t n, const int32_t start,
                               const int32_t end, const int64_t* mask, cudaStream_t stream);
 template void InvokeRmsNorm3D(half* out, const half* input, const half* gamma, const float layernorm_eps,
-                              const int32_t len, const int32_t m, const int32_t n, const int32_t start,
+                              const int32_t total_tokens, const int32_t m, const int32_t n, const int32_t start,
                               const int32_t end, const int64_t* mask, cudaStream_t stream);
 template void InvokeRmsNorm3D(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
-                              const float layernorm_eps, const int32_t len, const int32_t m, const int32_t n,
+                              const float layernorm_eps, const int32_t total_tokens, const int32_t m, const int32_t n,
                               const int32_t start, const int32_t end, const int64_t* mask, cudaStream_t stream);
+
+template <typename T>
+__global__ void InvokeFusedQKVRmsNormKernel(const T* __restrict input, const T* __restrict q_gamma,
+                                            const T* __restrict k_gamma, T* output, const float layernorm_eps,
+                                            const int32_t total_tokens, const int32_t num_heads,
+                                            const int32_t num_kv_heads, const int32_t head_size,
+                                            const int64_t* __restrict__ mask) {
+  const int32_t tid = threadIdx.x;
+  const int token_idx = blockIdx.x;
+  // Filter out some unnecessary 2D matrices.
+  int64_t mask_i = mask[token_idx];
+  if (mask_i == 0) {
+    return;
+  }
+
+  __shared__ float s_variance;
+  // The starting index of each row in a 2D matrix
+  int32_t matrix_offset = blockIdx.x * (num_heads + 2 * num_kv_heads) * head_size + blockIdx.y * head_size;
+
+  float local_var_sum = 0.0f;
+  for (int32_t i = tid; i < head_size; i += blockDim.x) {
+    float diff = (float)(ldg(&input[matrix_offset + i]));
+    local_var_sum += diff * diff;
+  }
+  using BlockReduce = cub::BlockReduce<float, 1024>;
+  __shared__ typename BlockReduce::TempStorage reduceStore;
+  local_var_sum = BlockReduce(reduceStore).Reduce(local_var_sum, cub::Sum{}, blockDim.x);
+
+  if (threadIdx.x == 0) {
+    s_variance = rsqrtf(local_var_sum / (float)head_size + layernorm_eps);
+  }
+  __syncthreads();
+
+  for (int32_t i = tid; i < head_size; i += blockDim.x) {
+    float gamma = 1.0f;
+    if (blockIdx.y >= 0 && blockIdx.y < num_heads) {
+      if (q_gamma != nullptr) {
+        gamma = (float)(ldg(&q_gamma[i]));
+      }
+    } else {
+      if (k_gamma != nullptr) {
+        gamma = (float)(ldg(&k_gamma[i]));
+      }
+    }
+    output[matrix_offset + i] = ClampInfForHalf<T>((((float)input[matrix_offset + i]) * s_variance) * gamma);
+  }
+}
+
+template <typename T>
+void InvokeFusedQKVRmsNorm(T* out, const T* input, const T* q_gamma, const T* k_gamma, const float layernorm_eps,
+                           const int32_t total_tokens, const int32_t num_heads, const int32_t num_kv_heads,
+                           const int32_t head_size, const int64_t* mask, cudaStream_t stream) {
+  dim3 grid(total_tokens, (num_heads + num_kv_heads));
+  dim3 block(min(head_size, 1024));
+
+  InvokeFusedQKVRmsNormKernel<T><<<grid, block, 0, stream>>>(input, q_gamma, k_gamma, out, layernorm_eps, total_tokens,
+                                                             num_heads, num_kv_heads, head_size, mask);
+}
+
+template void InvokeFusedQKVRmsNorm(float* out, const float* input, const float* q_gamma, const float* k_gamma,
+                                    const float layernorm_eps, const int32_t total_tokens, const int32_t num_heads,
+                                    const int32_t num_kv_heads, const int32_t head_size, const int64_t* mask,
+                                    cudaStream_t stream);
+
+template void InvokeFusedQKVRmsNorm(half* out, const half* input, const half* q_gamma, const half* k_gamma,
+                                    const float layernorm_eps, const int32_t total_tokens, const int32_t num_heads,
+                                    const int32_t num_kv_heads, const int32_t head_size, const int64_t* mask,
+                                    cudaStream_t stream);
+template void InvokeFusedQKVRmsNorm(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* q_gamma,
+                                    const __nv_bfloat16* k_gamma, const float layernorm_eps, const int32_t total_tokens,
+                                    const int32_t num_heads, const int32_t num_kv_heads, const int32_t head_size,
+                                    const int64_t* mask, cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -36,7 +36,7 @@ class MlaPagedAttentionTestSuit : public NvidiaTestSuitBase {
       size_t prefix_len = input_prefix_len_[i];
       for (int j = 0; j < input_token_num_[i]; ++j) {
         // Skip shared prefix.
-        if (j < prefix_len) {
+        if (static_cast<size_t>(j) < prefix_len) {
           continue;
         }
 
@@ -196,7 +196,7 @@ class MlaPagedAttentionTestSuit : public NvidiaTestSuitBase {
 
   int num_heads_ = 8;
 
-  int batch_size_ = 2;
+  size_t batch_size_ = 2;
   size_t block_size_ = 64;
 
   float k_scale_ = 1.0;
@@ -277,7 +277,7 @@ TEST_F(MlaPagedAttentionTestSuit, MlaKVCacheCopyKernel) {
     for (int token_idx = 0; token_idx < input_token_num_[batch_idx]; ++token_idx) {
       // Check k.
       for (int k_idx = 0; k_idx < qk_rope_head_dim_; ++k_idx) {
-        if (token_idx >= prefix_len) {
+        if (static_cast<size_t>(token_idx) >= prefix_len) {
           size_t k_total_dst_idx = host_block_offsets_[batch_idx] * block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) +
                                    token_idx * (kv_lora_rank_ + qk_rope_head_dim_) + (kv_lora_rank_ + k_idx);
           EXPECT_FLOAT_EQ(host_k_src_[k_total_idx], host_k_dst[k_total_dst_idx]);
@@ -287,7 +287,7 @@ TEST_F(MlaPagedAttentionTestSuit, MlaKVCacheCopyKernel) {
 
       // Check v.
       for (int v_idx = 0; v_idx < kv_lora_rank_; ++v_idx) {
-        if (token_idx >= prefix_len) {
+        if (static_cast<size_t>(token_idx) >= prefix_len) {
           size_t v_total_dst_idx = host_block_offsets_[batch_idx] * block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) +
                                    token_idx * (kv_lora_rank_ + qk_rope_head_dim_) + v_idx;
           EXPECT_FLOAT_EQ(host_v_src_[v_total_idx], host_k_dst[v_total_dst_idx]);
@@ -330,7 +330,7 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyKeyBlockWithReplicationTest) {
   // kv_lora_rank_: The dimension of the downward projection matrix for keys and values, with a default value of 512.
   size_t kv_stride_size = kv_lora_rank_ + qk_rope_head_dim_;
   std::vector<std::vector<float>> host_block_list;
-  for (size_t i = 0; i < host_block_offsets_.back(); ++i) {
+  for (size_t i = 0; i < static_cast<size_t>(host_block_offsets_.back()); ++i) {
     std::vector<float> block(block_size_ * kv_stride_size, 0);
     // Each cache block stores the key data of block_size_ tokens.
     // The size of each cache block is: block_size_ * kv_stride_size

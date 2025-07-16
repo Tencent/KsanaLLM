@@ -21,10 +21,11 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
  protected:
   using NvidiaTestSuitBase::stream;
-  const std::vector<std::pair<int, int>> m_n_pairs = {{1, 2048}, {2, 4096}, {64000, 8}};;
+  const std::vector<std::pair<int, int>> m_n_pairs = {{1, 2048}, {2, 4096}, {64000, 8}};
+  ;
 
   template <typename T>
-  void RunLayerNormRef(const float variance_epsilon = 1e-6f, const std::string use_layernorm_3d = "false") {
+  void RunLayerNormRef(const float variance_epsilon = 1e-6f, const std::string test_mode = "default") {
     std::string type_str = "float";
     if (std::is_same<T, half>::value) {
       type_str = "half";
@@ -34,7 +35,8 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
     std::stringstream ss;
     ss << "python layernorm_test.py --type=" << type_str << " --variance_epsilon=" << std::to_string(variance_epsilon)
-       << " --use_layernorm_3d=" << use_layernorm_3d;
+       << " --test_mode=" << test_mode;
+    std::cout << "Ref command: " << ss.str() << std::endl;
     system(ss.str().c_str());
   }
 
@@ -66,7 +68,7 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     input_meta.SaveToNpy<T>("layernorm_test_input.npy");
     weight_meta.SaveToNpy<T>("layernorm_test_weight.npy");
     bias_meta.SaveToNpy<T>("layernorm_test_bias.npy");
-    RunLayerNormRef<T>(layernorm_eps, "false");
+    RunLayerNormRef<T>(layernorm_eps, "default");
     layernorm_output_ref_meta.LoadNpy<T>("layernorm_test_output.npy", MemoryType::MEMORY_GPU);
     rmsnorm_output_ref_meta.LoadNpy<T>("rmsnorm_test_output.npy", MemoryType::MEMORY_GPU);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
@@ -140,7 +142,7 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     input_meta.SaveToNpy<T>("rmsnorm_3d_test_input.npy");
     weight_meta.SaveToNpy<T>("rmsnorm_3d_test_weight.npy");
     d_mask.SaveNpy<int64_t>("rmsnorm_3d_test_mask.npy");
-    RunLayerNormRef<T>(layernorm_eps, "true");
+    RunLayerNormRef<T>(layernorm_eps, "use_layernorm_3d");
     rmsnorm_3d_output_ref_meta.LoadNpy<T>("rmsnorm_3d_test_torch_output.npy", MemoryType::MEMORY_GPU);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
@@ -171,6 +173,66 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     DeleteBuffer(weight_meta);
     DeleteBuffer(input_meta);
   }
+
+  template <typename T>
+  void TestLayerNormFusedQKV(const size_t l, const size_t num_heads, const size_t num_kv_heads, const size_t n) {
+    std::string type_str = "float";
+    if (std::is_same<T, half>::value) {
+      type_str = "half";
+    } else if (std::is_same<T, __nv_bfloat16>::value) {
+      type_str = "bfloat16";
+    }
+
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {l, num_heads + 2 * num_kv_heads, n},
+                                            /*is_random_init*/ true);
+    BufferMeta weight_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {n},
+                                             /*is_random_init*/ true);
+    BufferMeta rmsnorm_fused_qkv_output_ref_meta =
+        CreateBuffer<T>(MemoryType::MEMORY_GPU, {l, num_heads + 2 * num_kv_heads, n},
+                        /*is_random_init*/ false);
+    BufferMeta d_mask = CreateBuffer<int64_t>(MemoryType::MEMORY_GPU, {l}, /*is_random_init*/ false);
+    std::vector<int64_t> h_mask(l, 1);
+    std::fill(h_mask.begin(), h_mask.begin() + 2, 0);
+    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_mask.data_ptr, h_mask.data(), l * sizeof(int64_t), cudaMemcpyHostToDevice));
+
+    float layernorm_eps = 1e-6;
+
+    input_meta.SaveToNpy<T>("rmsnorm_fused_qkv_test_input.npy");
+    weight_meta.SaveToNpy<T>("rmsnorm_fused_qkv_test_weight.npy");
+    d_mask.SaveNpy<int64_t>("rmsnorm_fused_qkv_test_mask.npy");
+    RunLayerNormRef<T>(layernorm_eps, "use_layernorm_fused_qkv");
+    rmsnorm_fused_qkv_output_ref_meta.LoadNpy<T>("rmsnorm_fused_qkv_test_torch_output.npy", MemoryType::MEMORY_GPU);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
+
+    // compute rmsnorm fused qkv
+    InvokeFusedQKVRmsNorm<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+                             reinterpret_cast<const T*>(weight_meta.data_ptr),
+                             reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, num_heads,
+                             num_kv_heads, n, reinterpret_cast<int64_t*>(d_mask.data_ptr), stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
+
+    std::string check_msg_str = "rmsnorm_3d_" + type_str + "_l_" + std::to_string(l) + "_m_" +
+                                std::to_string(num_heads + 2 * num_kv_heads) + "_n_" + std::to_string(n);
+    EXPECT_TRUE(CheckResult<T>(check_msg_str, rmsnorm_fused_qkv_output_ref_meta, input_meta, 1e-3f, 1e-3f));
+    input_meta.SaveToNpy<T>("rmsnorm_fused_qkv_test_ksana_output.npy");
+
+    auto cuda_run = [&]() {
+      InvokeFusedQKVRmsNorm<T>(
+          reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+          reinterpret_cast<const T*>(weight_meta.data_ptr), reinterpret_cast<const T*>(weight_meta.data_ptr),
+          layernorm_eps, l, num_heads, num_kv_heads, n, reinterpret_cast<int64_t*>(d_mask.data_ptr), stream);
+    };
+    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    std::cout << std::left << type_str << " l=" << std::setw(6) << l << " m=" << std::setw(6)
+              << num_heads + 2 * num_kv_heads << " n=" << std::setw(6) << n << " execution 1 times : "
+              << "rmsnorm_fused_qkv " << std::setw(10) << milliseconds << " ms" << std::endl;
+    DeleteBuffer(rmsnorm_fused_qkv_output_ref_meta);
+    DeleteBuffer(d_mask);
+    DeleteBuffer(weight_meta);
+    DeleteBuffer(input_meta);
+  }
 };
 
 TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernormCommonTest) {
@@ -196,6 +258,12 @@ TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernorm3DTest) { TestLayerNorm3D<half
 TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernorm3DTest) { TestLayerNorm3D<float>(5, 5, 6); }
 
 TEST_F(LlamaNvidiaLayernormTestSuit, Bf16Layernorm3DTest) { TestLayerNorm3D<__nv_bfloat16>(5, 5, 6); }
+
+TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernormFusedQKVTest) { TestLayerNormFusedQKV<half>(5, 2, 2, 6); }
+
+TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernormFusedQKVTest) { TestLayerNormFusedQKV<float>(5, 2, 2, 6); }
+
+TEST_F(LlamaNvidiaLayernormTestSuit, Bf16LayernormFusedQKVTest) { TestLayerNormFusedQKV<__nv_bfloat16>(5, 2, 2, 6); }
 
 }  // namespace test
 }  // namespace nvidia
