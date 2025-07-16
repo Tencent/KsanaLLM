@@ -26,7 +26,11 @@ class EngineArgs:
     root_path: Optional[str] = None
     tokenization: Optional[Dict[str, Dict[str, bool]]] = None
     multi_modal_vit_model_type: Optional[str] = None
-
+    # OpenAI Adapter related parameters
+    tool_call_parser: Optional[str] = None
+    reasoning_parser: Optional[str] = None
+    enable_auto_tool_choice: bool = False
+    tool_parser_plugin: Optional[str] = None
     @classmethod
     def from_config_file(cls, config_file: str) -> "EngineArgs":
         if not os.path.exists(config_file):
@@ -145,6 +149,47 @@ class EngineArgs:
             default=None,
             help="FastAPI root_path when app is behind a path-based routing proxy.",
         )
+        # OpenAI Adapter related parameters
+        parser.add_argument(
+            "--tool-call-parser",
+            type=str,
+            default=None,
+            help="Tool call parser to use for parsing tool calls in chat completion. "
+                 "Choices: ['mistral', 'internlm2', 'llama3_json', 'llama4_pythonic', "
+                 "'pythonic', 'deepseekv3']",
+        )
+        parser.add_argument(
+            "--reasoning-parser",
+            type=str,
+            default=None,
+            help="Reasoning parser to use for parsing reasoning content. "
+                 "Choices: ['deepseek_r1', 'granite', 'qwen3']",
+        )
+        parser.add_argument(
+            "--enable-auto-tool-choice",
+            action="store_true",
+            default=False,
+            help="Enable auto tool choice for tool calls.",
+        )
+        parser.add_argument(
+            "--tool-parser-plugin",
+            type=str,
+            default=None,
+            help="Path to a custom tool parser plugin file.",
+        )
+        parser.add_argument(
+            "--chat-template",
+            type=str,
+            default=None,
+            help="Path to a custom chat template file.",
+        )
+        parser.add_argument(
+            "--chat-template-content-format",
+            type=str,
+            default=None,
+            help="Content format for the chat template. "
+        )
+        # Default values for CLI arguments
         parser.set_defaults(access_log=True)
 
         args, unknown = parser.parse_known_args()
@@ -172,5 +217,19 @@ class EngineArgs:
             engine_args.ssl_certfile = args.ssl_certfile
         if args.root_path is not None:
             engine_args.root_path = args.root_path
+
+        # OpenAI Adapter related parameters
+        if args.tool_call_parser is not None:
+            engine_args.tool_call_parser = args.tool_call_parser
+        if args.reasoning_parser is not None:
+            engine_args.reasoning_parser = args.reasoning_parser
+        if args.enable_auto_tool_choice is not None:
+            engine_args.enable_auto_tool_choice = args.enable_auto_tool_choice
+        if args.tool_parser_plugin is not None:
+            engine_args.tool_parser_plugin = args.tool_parser_plugin
+        if args.chat_template is not None:
+            engine_args.chat_template = args.chat_template
+        if args.chat_template_content_format is not None:
+            engine_args.chat_template_content_format = args.chat_template_content_format
 
         return engine_args

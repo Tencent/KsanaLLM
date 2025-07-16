@@ -177,6 +177,15 @@ export CUDA_VISIBLE_DEVICES=xx
 python serving_server.py \
     --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml \
     --port 8080
+# KsanaLLM now supports the OpenAI API protocol and has implemented the core /v1/chat/completions API. 
+# you can add specific parameters to enable tool invocation parsing and inference content analysis capabilities.
+# tool-choice:
+--enable-auto-tool-choice     --tool-call-parser deepseek_v3  \
+# reasoning-parser:
+--reasoning-parser  deepseek_r1 \
+# apply specific chat-template:
+--chat-template openaiapi/chat_templates/tool_chat_template_deepseekr1.jinja
+
 ```
 
 Tip: KsanaLLM automatically generates log files in the directory where the service is started. You can view information such as model loading, service startup, and request warning through these log files.

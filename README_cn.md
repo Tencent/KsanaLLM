@@ -177,6 +177,15 @@ export CUDA_VISIBLE_DEVICES=xx
 python serving_server.py \
     --config_file ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml \
     --port 8080
+
+#KsanaLLM 正在支持 OpenAI API 协议，目前已经支持了主要的/v1/chat/completions API
+# 在启动服务时可以添加对应的参数以支持工具调用解析和推理内容解析能力
+# 工具解析：
+--enable-auto-tool-choice     --tool-call-parser deepseek_v3  \
+# 推理内容解析:
+--reasoning-parser  deepseek_r1 \
+#应用特定的 chat-template
+--chat-template openaiapi/chat_templates/tool_chat_template_deepseekr1.jinja
 ```
 
 基于one shot对话的推理测试 

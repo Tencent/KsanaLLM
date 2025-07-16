@@ -17,6 +17,13 @@ from transformers import logging
 import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
 
+try:
+    from openaiapi.openai_adapter import add_openai_routes, OpenAIConfig
+    OPENAI_AVAILABLE = True
+except ImportError as e:
+    print(f"\033[33m------OpenAI modules not available: {e}--------\033[0m")
+    print("OpenAI compatible routes will be disabled.")
+    OPENAI_AVAILABLE = False
 
 # 配置常量
 CONFIG = {
@@ -41,6 +48,32 @@ class LLMServer:
         self.model.initialize()
         self.tokenizer = self.model.tokenizer
         self.pre_post_processor = self.model.pre_post_processor
+
+        if OPENAI_AVAILABLE:
+            try:
+                # 创建OpenAI配置，传入解析器参数, 添加路由函数
+                openai_config = OpenAIConfig(
+                    tool_call_parser=getattr(self.engine_args, 'tool_call_parser', None),
+                    reasoning_parser=getattr(self.engine_args, 'reasoning_parser', None),
+                    enable_auto_tool_choice=getattr(self.engine_args, 'enable_auto_tool_choice', False),
+                    tool_parser_plugin=getattr(self.engine_args, 'tool_parser_plugin', None)
+                )
+                
+                chat_template = getattr(self.engine_args, 'chat_template', None)
+                chat_template_content_format = getattr(self.engine_args, 'chat_template_content_format', None)
+                
+                add_openai_routes(
+                    self,
+                    openai_config,
+                    chat_template=chat_template,
+                    chat_template_content_format=chat_template_content_format
+                )
+                print("\033[32m======OpenAI compatible routes added successfully========\033[0m\n")
+            except AttributeError as e:
+                print(f"\033[33m------OpenAI configuration error: {e}--------\033[0m")
+                print("OpenAI compatible routes will be disabled.")
+        else:
+            print("\033[33m------OpenAI modules not available, skipping OpenAI routes--------\033[0m")
 
     def _setup_routes(self) -> None:
         """设置路由"""
