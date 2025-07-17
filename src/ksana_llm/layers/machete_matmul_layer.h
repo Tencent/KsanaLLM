@@ -26,7 +26,7 @@ class MacheteMatMulLayer : public BaseLayer {
 
   virtual size_t GetWorkSpaceSize() override;
 
-  virtual Status Preprocess(const ModelConfig& model_config_) override;
+  virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 

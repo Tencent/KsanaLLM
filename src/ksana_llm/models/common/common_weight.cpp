@@ -52,16 +52,17 @@ template <typename T>
 CommonWeight<T>::~CommonWeight() {}
 
 template <typename T>
-CommonWeight<T>::CommonWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : BaseWeight(model_config, rank, context) {
+CommonWeight<T>::CommonWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                              std::shared_ptr<Context> context)
+    : BaseWeight(model_config, runtime_config, rank, context) {
   model_path_ = model_config.path;
   rank_ = rank;
-  if (!GetModelInfo(model_config).OK()) {
+  if (!GetModelInfo(model_config, runtime_config).OK()) {
     KLLM_THROW(fmt::format("Load model config file error."));
   }
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
-  quant_weight_solver_ =
-      std::make_shared<QuantWeight<T>>(model_config, rank, context, weights_map_, weights_data_type_map_);
+  quant_weight_solver_ = std::make_shared<QuantWeight<T>>(model_config, runtime_config, rank, context, weights_map_,
+                                                          weights_data_type_map_);
 }
 
 int CheckQKVWeight(const std::string& str, const int head_num, const int num_kv_heads) {
@@ -848,14 +849,14 @@ Tensor CommonWeight<T>::GetModelWeights(const std::string& weight_name) {
 }
 
 template <typename T>
-Status CommonWeight<T>::GetModelInfo(const ModelConfig& model_config) {
+Status CommonWeight<T>::GetModelInfo(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   weight_data_type_ = model_config.weight_data_type;
   model_name_ = model_config.name;
-  tensor_para_size_ = model_config.tensor_para_size;
-  expert_world_size_ = model_config.expert_world_size;
-  expert_para_size_ = model_config.expert_para_size;
+  tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+  expert_world_size_ = runtime_config.parallel_basic_config.expert_world_size;
+  expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size;
   global_expert_para_size_ = expert_world_size_ * expert_para_size_;
-  enable_full_shared_expert_ = model_config.enable_full_shared_expert;
+  enable_full_shared_expert_ = runtime_config.enable_full_shared_expert;
   return Status();
 }
 

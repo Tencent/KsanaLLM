@@ -25,8 +25,8 @@ namespace ksana_llm {
 
 class WeightInstance : public WeightInstanceInterface {
  public:
-  WeightInstance(const ModelConfig& model_config, std::shared_ptr<Context> context)
-      : model_config_(model_config), context_(context) {
+  WeightInstance(const ModelConfig& model_config, const RuntimeConfig& runtime_config, std::shared_ptr<Context> context)
+      : model_config_(model_config), runtime_config_(runtime_config), context_(context) {
     loader_weight_threadpool_ = std::make_shared<ThreadPool>(context->GetTensorParallelSize());
     loader_weight_threadpool_->Start();
   }
@@ -66,6 +66,8 @@ class WeightInstance : public WeightInstanceInterface {
  private:
   // The model config.
   ModelConfig model_config_;
+
+  RuntimeConfig runtime_config_;
 
   // The global context.
   std::shared_ptr<Context> context_ = nullptr;

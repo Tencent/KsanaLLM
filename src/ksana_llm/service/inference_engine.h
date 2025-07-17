@@ -44,9 +44,6 @@ class InferenceEngine {
   // Do warmup run
   Status DoWarmupRun();
 
-  // Cudagraph capture during warmup
-  Status CudaGraphCapture();
-
   // Load operator optimization
   Status LoadOperatorOptimization(ModelConfig &model_config);
 

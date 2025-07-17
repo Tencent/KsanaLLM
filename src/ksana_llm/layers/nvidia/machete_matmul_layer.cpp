@@ -142,7 +142,7 @@ size_t MacheteMatMulLayer<T, WT>::GetWorkSpaceSize() {
 }
 
 template <typename T, DataType WT>
-Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
+Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
   if (record_iters == 0) {
     KLLM_LOG_INFO << "$QUANT_PROFILE==0, Skipping MacheteMatMulLayer Preprocess";
@@ -154,7 +154,7 @@ Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
     // shape配置
     const size_t bits = 4;
     const size_t pack_factor = 32 / bits;
-    const size_t max_posible_m = model_config_.max_batch_size;
+    const size_t max_posible_m = runtime_config.max_batch_size;
     const size_t posible_n = max_n_;
     const size_t posible_k = max_k_;
 
@@ -238,7 +238,7 @@ Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
         std::chrono::duration_cast<std::chrono::milliseconds>(end_profile_time - start_profile_time);
     KLLM_LOG_INFO << fmt::format(
         "Profile MacheteMatMul Layer in rank:{}, mnk=({}~{},{},{}), warmup:{}, record:{}, cost:{}ms", rank_, 1,
-        model_config_.max_batch_size, posible_n, posible_k, warmup_iters, record_iters, duration_profile_ms.count());
+        runtime_config.max_batch_size, posible_n, posible_k, warmup_iters, record_iters, duration_profile_ms.count());
 
     return Status();
   } else {

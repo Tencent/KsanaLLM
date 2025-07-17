@@ -89,8 +89,8 @@ class Gpt : public ModelInterface<T> {
 template <typename T>
 class GptModel : public CommonModel<T> {
  public:
-  GptModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-           std::shared_ptr<BaseWeight> base_weight);
+  GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~GptModel() {}
 
  private:

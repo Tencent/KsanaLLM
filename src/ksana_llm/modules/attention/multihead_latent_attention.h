@@ -53,7 +53,7 @@ class MultiHeadLatentAttention {
                              std::vector<Tensor>& extra_buffer_tensors, ForwardingContext<T>& forwarding_context);
 
   static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                              MlaBuffers& mla_buffers);
+                              const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers);
 
   // Used for 2 stage dp forward.
   Status ContextForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,

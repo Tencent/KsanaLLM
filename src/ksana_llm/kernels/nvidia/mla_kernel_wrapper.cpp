@@ -833,8 +833,8 @@ void InvokeAbsorbMlaPagedAttention(
     KLLM_LOG_DEBUG << "ConvertToScalar num:" << batch * max_blocks_per_seq;
   }
 
-  static const char* enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
-  if (enable_flash_mla != nullptr && strcmp(enable_flash_mla, "1") == 0) {
+  static bool enable_flash_mla = Singleton<Environment>::GetInstance()->IsFlashMlaEnable();
+  if (enable_flash_mla) {
     // Absorb has two versions
     if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
       llm_kernels::nvidia::InvokeFlashMla<SCALAR_T>(

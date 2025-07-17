@@ -6,8 +6,9 @@
 namespace ksana_llm {
 
 template <typename T>
-GPTWeight<T>::GPTWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : CommonWeight<T>(model_config, rank, context) {}
+GPTWeight<T>::GPTWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                        std::shared_ptr<Context> context)
+    : CommonWeight<T>(model_config, runtime_config, rank, context) {}
 
 template <typename T>
 void GPTWeight<T>::ProcessWeights() {
@@ -17,7 +18,7 @@ void GPTWeight<T>::ProcessWeights() {
   // Refer to
   // https://github.com/facebookresearch/fairseq/blob/main/fairseq/modules/sinusoidal_positional_embedding.py#L43
   if (model_config_.vocab_size == 7000) {
-    size_t max_token_num = model_config_.max_token_num;
+    size_t max_seq_len = runtime_config_.max_seq_len;
     size_t hidden_units = model_config_.hidden_units;
     size_t half_hidden_units = hidden_units / 2;
     size_t partition = hidden_units / context_->GetTensorParallelSize();
@@ -26,8 +27,8 @@ void GPTWeight<T>::ProcessWeights() {
     // See https://github.com/huggingface/transformers/issues/15292
     const size_t offset = 1 + model_config_.pad_id;
     const float scale = -std::log(10000.f) / (half_hidden_units - 1);
-    std::vector<T> position_weight_cpu(max_token_num * partition, 0.f);
-    for (size_t pos = 0, index = 0; pos < max_token_num; pos++) {
+    std::vector<T> position_weight_cpu(max_seq_len * partition, 0.f);
+    for (size_t pos = 0, index = 0; pos < max_seq_len; pos++) {
       for (size_t i = rank_ * partition; i < (rank_ + 1) * partition; i++) {
         if (i < half_hidden_units) {
           position_weight_cpu[index++] = std::sin((pos + offset) * std::exp(i * scale));
@@ -38,11 +39,11 @@ void GPTWeight<T>::ProcessWeights() {
     }
 
     const std::string layer_name = "model.embed_positions.weight";
-    tensor_manager_->AddWeightTensor(layer_name, {max_token_num, partition}, model_config_.weight_data_type);
+    tensor_manager_->AddWeightTensor(layer_name, {max_seq_len, partition}, model_config_.weight_data_type);
     Tensor& position_weight_tensor = weights_map_[layer_name];
     weights_data_type_map_[layer_name] = model_config_.weight_data_type;
     size_t pitch = partition * sizeof(T);
-    Memcpy2DAsync(position_weight_tensor.GetPtr<void>(), pitch, position_weight_cpu.data(), pitch, pitch, max_token_num,
+    Memcpy2DAsync(position_weight_tensor.GetPtr<void>(), pitch, position_weight_cpu.data(), pitch, pitch, max_seq_len,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     StreamSynchronize(context_->GetMemoryManageStreams()[rank_]);
   }

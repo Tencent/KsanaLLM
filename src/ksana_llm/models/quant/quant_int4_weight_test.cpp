@@ -20,10 +20,10 @@ class QuantWeightLoadTest : public testing::Test {
  protected:
   void SetUp() override {
     model_config_.moe_config.moe_inter_size = 128;
-    model_config_.tensor_para_size = 1;
-    model_config_.expert_para_size = 1;
-    model_config_.expert_world_size = 1;
-    model_config_.moe_tensor_para_size = 1;
+    runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
+    runtime_config_.parallel_basic_config.expert_parallel_size = 1;
+    runtime_config_.parallel_basic_config.expert_world_size = 1;
+    runtime_config_.parallel_basic_config.moe_tensor_para_size = 1;
     model_config_.moe_config.num_experts = 4;
     model_config_.hidden_units = 128;
     model_config_.quant_config.bits = 4;  // fake bits
@@ -35,7 +35,7 @@ class QuantWeightLoadTest : public testing::Test {
     model_config_.mla_config.qk_rope_head_dim = 64;
     model_config_.mla_config.qk_nope_head_dim = 128;
     model_config_.mla_config.v_head_dim = 128;
-    model_config_.head_num = model_config_.tensor_para_size * 2;
+    model_config_.head_num = runtime_config_.parallel_basic_config.tensor_parallel_size * 2;
     context_ = std::make_shared<Context>(1, 1, 1);
 
     PipelineConfig pipeline_config;
@@ -57,6 +57,7 @@ class QuantWeightLoadTest : public testing::Test {
   std::vector<ArrayInfo> up_g_idx_arrays_;
   std::vector<ArrayInfo> down_g_idx_arrays_;
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_{nullptr};
   std::unordered_map<std::string, Tensor> weights_map_;
   std::unordered_map<std::string, DataType> weights_data_type_map_;
@@ -213,8 +214,8 @@ class QuantWeightLoadTest : public testing::Test {
   template <typename T>
   void TestGPTQMoeQuantWeightload() {
     // Init quant weight
-    std::shared_ptr<QuantWeight<T>> quant_weight_solver =
-        std::make_shared<QuantWeight<T>>(model_config_, rank, context_, weights_map_, weights_data_type_map_);
+    std::shared_ptr<QuantWeight<T>> quant_weight_solver = std::make_shared<QuantWeight<T>>(
+        model_config_, runtime_config_, rank, context_, weights_map_, weights_data_type_map_);
 
     // load moe quant weight
     for (size_t i = 0; i < model_config_.moe_config.num_experts; i++) {
@@ -245,7 +246,7 @@ TEST_F(QuantWeightLoadTest, GPTQMoeQuantWeightloadTest) {
   TestGPTQMoeQuantWeightload<half>();
   size_t num_experts = model_config_.moe_config.num_experts;
   size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
-  size_t tp = model_config_.tensor_para_size;
+  size_t tp = runtime_config_.parallel_basic_config.tensor_parallel_size;
   size_t hidden_units = model_config_.hidden_units;
 
   std::string gate_up_name = "model.layers.0.mlp.experts.up_gate_proj.weight";
@@ -338,8 +339,8 @@ TEST_F(QuantWeightLoadTest, CommonDeQuantTest) {
   model_config_.quant_config.method = QUANT_GPTQ;
   model_config_.quant_config.backend = MACHETE_BACKEND;
 
-  std::shared_ptr<QuantWeight<half>> quant_weight_solver =
-      std::make_shared<QuantWeight<half>>(model_config_, rank, context_, weights_map_, weights_data_type_map_);
+  std::shared_ptr<QuantWeight<half>> quant_weight_solver = std::make_shared<QuantWeight<half>>(
+      model_config_, runtime_config_, rank, context_, weights_map_, weights_data_type_map_);
   // Create quant weight
   torch::Tensor qweight_tensor = torch::zeros(
       {model_config_.hidden_units / pack_factor, static_cast<int64_t>(model_config_.moe_config.moe_inter_size)},
@@ -380,8 +381,8 @@ TEST_F(QuantWeightLoadTest, LoadAndProcessMacheteWeightTest) {
     mla_weight_arrays_.insert(mla_weight_arrays_.end(), up_qweight_arrays_.begin(), up_qweight_arrays_.end());
     mla_weight_arrays_.insert(mla_weight_arrays_.end(), down_qweight_arrays_.begin(), down_qweight_arrays_.end());
   }
-  std::shared_ptr<QuantWeight<half>> quant_weight_solver =
-      std::make_shared<QuantWeight<half>>(model_config_, rank, context_, weights_map_, weights_data_type_map_);
+  std::shared_ptr<QuantWeight<half>> quant_weight_solver = std::make_shared<QuantWeight<half>>(
+      model_config_, runtime_config_, rank, context_, weights_map_, weights_data_type_map_);
   EXPECT_TRUE(quant_weight_solver->IsEnable());
   // Load quant weight
   for (auto& mla_weight_array : mla_weight_arrays_) {

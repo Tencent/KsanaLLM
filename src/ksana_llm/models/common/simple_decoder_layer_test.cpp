@@ -114,6 +114,7 @@ class FakeTinyWeightTest : public testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_config_path_relate, model_config_filename_);
     STATUS_CHECK_FAILURE(env->GetModelConfig(model_config));
+    STATUS_CHECK_FAILURE(env->GetRuntimeConfig(runtime_config));
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
@@ -162,6 +163,7 @@ class FakeTinyWeightTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   PipelineConfig pipeline_config_;
 
   int rank_ = 0;
@@ -205,13 +207,13 @@ class FakeTinyWeightTest : public testing::Test {
 
     bool reuse_prefix_config = false;
     std::shared_ptr<FakeModel<weight_data_type>> fake_model = std::make_shared<FakeModel<weight_data_type>>(
-        llama, context_, rank_, model_config, pipeline_config_, llama_weight, reuse_prefix_config);
+        llama, context_, rank_, model_config, runtime_config, pipeline_config_, llama_weight, reuse_prefix_config);
 
     // ContextDecode
     int hidden_state_len = model_config.head_num * model_config.size_per_head;
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
-    ForwardRequestBuilderForTest request_builder(model_config, cache_manager_);
+    ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     request_builder.CreateForwardRequest(1, forward, input_ids);
 
     std::vector<ForwardRequest> forward_reqs = {forward};
@@ -304,7 +306,7 @@ class FakeTinyWeightTest : public testing::Test {
                    const std::vector<float> &decode_hidden_state_baseline, const TestThresholds &thresholds) {
     DefaultWeightValueInitializer default_weight_initializer;
     std::shared_ptr<BaseWeight> llama_weight = std::make_shared<WeightType>(
-        model_config, rank_, model_test_config.add_qkv_bias, model_test_config.use_shared_moe,
+        model_config, runtime_config, rank_, model_test_config.add_qkv_bias, model_test_config.use_shared_moe,
         model_test_config.use_qk_norm, &default_weight_initializer);
     TestModelInferfaceForward<ModelType, weight_data_type>(llama_weight, prefill_hidden_state_baseline,
                                                            decode_hidden_state_baseline, thresholds);
@@ -327,15 +329,15 @@ class FakeTinyWeightTest : public testing::Test {
     KLLM_LOG_INFO << "Test TYPE_FP16 weight_data_type forward.";
     DefaultWeightValueInitializer default_weight_initializer;
     std::shared_ptr<BaseWeight> gpt_weight =
-        std::make_shared<WeightType>(model_config, rank_, model_test_config.add_qkv_bias,
+        std::make_shared<WeightType>(model_config, runtime_config, rank_, model_test_config.add_qkv_bias,
                                      model_test_config.use_shared_moe, &default_weight_initializer);
     std::shared_ptr<ModelInterface<float16>> gpt = std::make_shared<Gpt<float16>>();
-    std::shared_ptr<FakeModel<float16>> fake_model =
-        std::make_shared<FakeModel<float16>>(gpt, context_, rank_, model_config, pipeline_config_, gpt_weight, false);
+    std::shared_ptr<FakeModel<float16>> fake_model = std::make_shared<FakeModel<float16>>(
+        gpt, context_, rank_, model_config, runtime_config, pipeline_config_, gpt_weight, false);
     // ContextDecode
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
-    ForwardRequestBuilderForTest request_builder(model_config, cache_manager_);
+    ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     request_builder.CreateForwardRequest(1, forward, input_ids);
     std::vector<ForwardRequest> forward_reqs = {forward};
     EXPECT_TRUE(fake_model->Forward(forward_reqs).OK());

@@ -101,9 +101,10 @@ Status HunyuanDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_ten
  ************************************************************************/
 
 template <typename T>
-HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const int rank,
-                                        std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                        const int rank, std::shared_ptr<Context> context,
+                                        std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);
@@ -142,9 +143,10 @@ Status HunyuanLarge<T>::CreateLayers(LayerCreationContext<T>& creation_context,
   cla_share_factor_ = model_config.cla_share_factor;
   DataType weight_type = model_config.weight_data_type;
 
-  CrossLayerAttention<T>::CreateBuffers(creation_context.buffer_mgr_, model_creation_config.attn_config, cla_buffers_);
+  CrossLayerAttention<T>::CreateBuffers(creation_context.buffer_mgr_, model_creation_config.runtime_config,
+                                        model_creation_config.attn_config, cla_buffers_);
 
-  size_t max_token_num = model_config.max_step_token_num;
+  size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_config.hidden_units;
 
   moe_buffer_ = creation_context.buffer_mgr_->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);

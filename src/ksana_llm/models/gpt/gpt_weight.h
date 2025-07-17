@@ -12,7 +12,8 @@ template <typename T>
 class GPTWeight : public CommonWeight<T> {
  public:
   GPTWeight() {}
-  explicit GPTWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit GPTWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                     std::shared_ptr<Context> context);
 
   void ProcessWeights() override;
 
@@ -24,6 +25,7 @@ class GPTWeight : public CommonWeight<T> {
   using BaseWeight::weights_map_;
 
   using BaseWeight::model_config_;
+  using BaseWeight::runtime_config_;
 
   using CommonWeight<T>::tensor_manager_;
 };

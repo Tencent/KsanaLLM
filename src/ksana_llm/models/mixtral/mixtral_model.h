@@ -50,8 +50,8 @@ class Mixtral : public ModelInterface<T> {
 template <typename T>
 class MixtralModel : public CommonModel<T> {
  public:
-  MixtralModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-               std::shared_ptr<BaseWeight> base_weight);
+  MixtralModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~MixtralModel() = default;
 
  private:

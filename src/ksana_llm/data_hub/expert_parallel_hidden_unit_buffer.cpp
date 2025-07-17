@@ -151,9 +151,12 @@ void ExpertParallelHiddenUnitBufferPool::InitializeBufferSize() {
   DistributedCommunicationType comm_type = expert_parallel_config.expert_para_comm_type;
   SetCommType(comm_type);
 
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+
   weight_type_ = model_config.weight_data_type;
-  tensor_para_size_ = model_config.tensor_para_size;
-  max_token_num_ = model_config.max_step_token_num;
+  tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+  max_token_num_ = runtime_config.max_step_token_num;
   hidden_unit_size_ = model_config.size_per_head * model_config.head_num;
   expert_para_size_ = expert_parallel_config.expert_para_size;
   comm_meta_size_ = sizeof(expert_parallel_comm_meta);

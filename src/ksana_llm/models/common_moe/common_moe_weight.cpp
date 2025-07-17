@@ -11,8 +11,9 @@
 namespace ksana_llm {
 
 template <typename T>
-CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : CommonWeight<T>(model_config, rank, context) {
+CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                                    std::shared_ptr<Context> context)
+    : CommonWeight<T>(model_config, runtime_config, rank, context) {
   SetDevice(rank_);
   ExpertParallelConfig expert_parallel_config;
   Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config);
@@ -136,7 +137,8 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
     const bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
 
     const size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
-    const size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
+    const size_t moe_inter_size_per_rank =
+        DivRoundUp(moe_inter_size, runtime_config_.parallel_basic_config.moe_tensor_para_size);
     if (tensor_name.find(".experts.gate_up_proj.") != std::string::npos) {
       // cpu weight is [config.num_experts, hidden_units, 2 * moe_inter_size]
       // Create gpu up_gate_proj Tensor
@@ -211,8 +213,9 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
 
       const size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
       const size_t double_expert_pitch = expert_pitch * 2;
-      const size_t src_upgate_offset =
-          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * expert_pitch : 0;
+      const size_t src_upgate_offset = runtime_config_.parallel_basic_config.moe_tensor_para_size > 1
+                                           ? (rank_ / expert_para_size_) * expert_pitch
+                                           : 0;
       const Tensor& up_gate_experts_tensor = weights_map_[up_gate_experts_name];
       if (tensor_name.find(".up_proj.") != std::string::npos) {
         MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * double_expert_pitch +
@@ -239,11 +242,11 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
       }
 
       const size_t dst_pitch = moe_inter_size_per_rank * GetTypeSize(weight_data_type);
-      const size_t src_pitch =
-          moe_inter_size_per_rank * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
+      const size_t src_pitch = moe_inter_size_per_rank * runtime_config_.parallel_basic_config.moe_tensor_para_size *
+                               GetTypeSize(weight_data_type);
       const size_t expert_pitch = moe_inter_size_per_rank * hidden_units * GetTypeSize(weight_data_type);
       const size_t src_down_offset =
-          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
+          runtime_config_.parallel_basic_config.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
       const Tensor& down_expert_tensor = weights_map_[down_experts_name];
       Memcpy2DAsync(down_expert_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_pitch, dst_pitch,
                     weight_ptr + src_down_offset, src_pitch, dst_pitch, hidden_units, MEMCPY_HOST_TO_DEVICE,

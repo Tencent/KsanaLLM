@@ -25,9 +25,12 @@ class WorkerGroup;
 
 class ModelInstance {
  public:
-  ModelInstance(const ModelConfig& model_config, std::shared_ptr<Context> context,
+  ModelInstance(const ModelConfig& model_config, const RuntimeConfig& runtime_config, std::shared_ptr<Context> context,
                 std::shared_ptr<WeightInstanceInterface>& weight_instance)
-      : model_config_(model_config), context_(context), weight_instance_(weight_instance) {
+      : model_config_(model_config),
+        runtime_config_(runtime_config),
+        context_(context),
+        weight_instance_(weight_instance) {
     loader_models_threadpool_ = std::make_shared<ThreadPool>(context->GetTensorParallelSize());
     loader_models_threadpool_->Start();
   }
@@ -58,7 +61,7 @@ class ModelInstance {
 
   const ModelConfig& GetModelConfig() { return model_config_; }
 
-  size_t GetMaxTokenNum() { return model_config_.max_token_num; }
+  size_t GetMaxTokenNum() { return runtime_config_.max_seq_len; }
 
   uint32_t GetLayerNum() {
     static bool initialized = false;
@@ -88,6 +91,7 @@ class ModelInstance {
  private:
   // The model config.
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
 
   PipelineConfig pipeline_config_;
 

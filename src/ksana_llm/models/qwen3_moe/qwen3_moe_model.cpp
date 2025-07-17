@@ -85,7 +85,7 @@ Status Qwen3Moe<T>::CreateLayers(LayerCreationContext<T>& creation_context,
   auto& model_config = model_creation_config.attn_config.model_config;
   model_creation_config.attn_config.model_config.moe_config.norm_topk_prob = true;
   DataType weight_type = model_config.weight_data_type;
-  size_t max_token_num = model_config.max_step_token_num;
+  size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_config.hidden_units;
   KLLM_LOG_DEBUG << "moe_buffer_size: " << moe_buffer_size;
   KLLM_LOG_DEBUG << "max_token_num: " << max_token_num;
@@ -118,9 +118,9 @@ template class Qwen3Moe<bfloat16>;
  * Qwen3MoeModel
  */
 template <typename T>
-Qwen3MoeModel<T>::Qwen3MoeModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                                std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+Qwen3MoeModel<T>::Qwen3MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                                std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   qwen3moe_.GetModelRunConfig(model_run_config, model_config);
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);

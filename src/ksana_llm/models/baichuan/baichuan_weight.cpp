@@ -6,9 +6,10 @@
 namespace ksana_llm {
 
 template <typename T>
-BaichuanWeight<T>::BaichuanWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : BaseWeight(model_config, rank, context) {
-  common_weight_ = std::make_shared<CommonWeight<T>>(model_config, rank, context);
+BaichuanWeight<T>::BaichuanWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                                  std::shared_ptr<Context> context)
+    : BaseWeight(model_config, runtime_config, rank, context) {
+  common_weight_ = std::make_shared<CommonWeight<T>>(model_config, runtime_config, rank, context);
 }
 
 template <typename T>

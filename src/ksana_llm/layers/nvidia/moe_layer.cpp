@@ -111,9 +111,9 @@ Status MoeLayer<T>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_
 }
 
 template <typename T>
-Status MoeLayer<T>::Preprocess(const ModelConfig& model_config_) {
-  config_map_.resize(model_config_.max_batch_size + 1);
-  for (size_t m = 1; m <= static_cast<size_t>(model_config_.max_batch_size); m++) {
+Status MoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+  config_map_.resize(runtime_config.max_batch_size + 1);
+  for (size_t m = 1; m <= static_cast<size_t>(runtime_config.max_batch_size); m++) {
     size_t best_config_index = InvokeMoeGemmConfigProfile<T, T, T>();
     config_map_[m] = best_config_index;
   }

@@ -6,8 +6,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Internlm2Weight<T>::Internlm2Weight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : CommonWeight<T>(model_config, rank, context) {}
+Internlm2Weight<T>::Internlm2Weight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                                    std::shared_ptr<Context> context)
+    : CommonWeight<T>(model_config, runtime_config, rank, context) {}
 
 template <typename T>
 Status Internlm2Weight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,

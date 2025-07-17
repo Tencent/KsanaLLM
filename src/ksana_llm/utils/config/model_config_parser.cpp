@@ -267,7 +267,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     }
   }
 
-  model_config.max_token_num = static_cast<int>(derived_max_model_len);
+  model_config.max_training_seq_len = static_cast<int>(derived_max_model_len);
 }
 
 void UpdateEndIdFromGeneration(const std::string &model_dir, ModelConfig &model_config) {
@@ -376,7 +376,7 @@ Status EnvModelConfigParser::ParseModelConfigFromGGUF(const std::string &meta_fi
     } else {
       model_config.end_ids = {2};
     }
-    model_config.max_token_num = model_config.max_position_embeddings;
+    model_config.max_training_seq_len = model_config.max_position_embeddings;
 
     size_t size_per_head = model_config.hidden_units / model_config.head_num;
     model_config.size_per_head = size_per_head;

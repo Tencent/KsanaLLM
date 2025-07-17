@@ -22,17 +22,18 @@
 
 namespace ksana_llm {
 
-ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : model_config_(model_config), rank_(rank), context_(context) {
+ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                       std::shared_ptr<Context> context)
+    : model_config_(model_config), runtime_config_(runtime_config), rank_(rank), context_(context) {
   auto env = Singleton<Environment>::GetInstance();
   PipelineConfig pipeline_config;
   env->GetPipelineConfig(pipeline_config);
-  env->GetAttnBackendConfig(attn_backend_config_);
+  enable_blocked_multi_token_forwarding_kv_ = env->IsBlockedMultiTokenForwardingEnabled();
   enable_flash_mla_ = env->IsFlashMlaEnable();
 
   block_size_ = env->GetBlockSize();
-  const size_t max_batch_size = model_config_.max_batch_size;
-  const size_t max_token_num = model_config.max_step_token_num;  // max step token num
+  const size_t max_batch_size = runtime_config_.max_batch_size;
+  const size_t max_token_num = runtime_config.max_step_token_num;  // max step token num
   layer_num_on_node_ = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
   if (pipeline_config.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
     layer_num_on_node_ += pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1;
@@ -46,9 +47,9 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   KLLM_LOG_INFO << "rank:" << rank_ << ", attn_dp_group_id_: " << attn_dp_group_id_
                 << ", attn_dp_rank_id_: " << attn_dp_rank_id_ << ", attn_dp_group_size_: " << attn_dp_group_size_;
 
-  const size_t max_seq_len = model_config.max_token_num;  // max seq len for one request
+  const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
   size_t max_block_num =
-      (max_seq_len * max_batch_size + model_config.block_token_num - 1) / model_config.block_token_num;
+      (max_seq_len * max_batch_size + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
 
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
@@ -178,10 +179,10 @@ ModelInput::ModelInput(const ModelConfig& model_config, int rank, std::shared_pt
   // k/v_cache_blocks_base only support float16
   k_cache_blocks_base =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-             {1, model_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
+             {1, runtime_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
   v_cache_blocks_base =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-             {1, model_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
+             {1, runtime_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
   // 0: layers_slot_mapping_dim_1, 1: max_num_blocks_per_query
   atb_attention_attr = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {2}, rank);
   last_token_index_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_batch_size}, rank_);
@@ -203,10 +204,10 @@ ModelInput::~ModelInput() {
 void ModelInput::CreateVLTensors() {
   if (model_config_.type == "qwen2_vl") {
     dp_mrotary_embedding_pos =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {3, model_config_.max_step_token_num}, rank_);
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {3, runtime_config_.max_step_token_num}, rank_);
   }
   if (model_config_.type == "internlmxcomposer2") {
-    im_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {model_config_.max_step_token_num}, rank_);
+    im_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {runtime_config_.max_step_token_num}, rank_);
   }
 }
 
@@ -216,9 +217,9 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   batch_size = forward_reqs.size();
   if (batch_size == 0) {
     KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
-  } else if (batch_size > (size_t)model_config_.max_batch_size) {
-    KLLM_THROW(
-        fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size, model_config_.max_batch_size));
+  } else if (batch_size > (size_t)runtime_config_.max_batch_size) {
+    KLLM_THROW(fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size,
+                           runtime_config_.max_batch_size));
   }
   multi_token_request_total_seq_len = 0;
   dp_multi_token_request_total_seq_len = 0;
@@ -559,12 +560,12 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
     k_cache_blocks_base =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
                {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
-                model_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
+                runtime_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
                rank_, k_cache_base_ptr);
     v_cache_blocks_base =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
                {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
-                model_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
+                runtime_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
                rank_, v_cache_base_ptr);
   }
 
@@ -641,12 +642,12 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
       if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
           for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].forwarding_tokens->size(); ++token_idx) {
-            int32_t inner_block_offset = token_idx % model_config_.block_token_num;
+            int32_t inner_block_offset = token_idx % runtime_config_.block_token_num;
             layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
                 (forward_reqs[f_req_idx]
-                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][token_idx / model_config_.block_token_num] +
+                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][token_idx / runtime_config_.block_token_num] +
                  layer_idx) *
-                    model_config_.block_token_num +
+                    runtime_config_.block_token_num +
                 inner_block_offset;
           }
         }
@@ -669,10 +670,10 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
           int32_t block_id =
               forward_reqs[f_req_idx]
                   .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
-                                                               model_config_.block_token_num];
+                                                               runtime_config_.block_token_num];
           layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
-              (block_id + layer_idx) * model_config_.block_token_num +
-              ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % model_config_.block_token_num);
+              (block_id + layer_idx) * runtime_config_.block_token_num +
+              ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % runtime_config_.block_token_num);
         }
       }
     }
@@ -699,7 +700,7 @@ void ModelInput::CheckUseCache(const std::vector<ForwardRequest>& forward_reqs) 
   const auto& env = Singleton<Environment>::GetInstance();
   use_cache = env->IsPrefixCachingEnabled() || env->IsFlexibleCachingEnabled() || env->IsPrefillDecodeSeparation();
 
-  if (attn_backend_config_.enable_blocked_multi_token_forwarding_kv) use_cache = true;
+  if (enable_blocked_multi_token_forwarding_kv_) use_cache = true;
 
   if (use_cache) {
     return;
@@ -849,7 +850,7 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
 
   size_t rotary_host_idx = 0;
   for (const auto& req : input.dp_reqs) {
-    if (attn_backend_config_.enable_blocked_multi_token_forwarding_kv) {
+    if (enable_blocked_multi_token_forwarding_kv_) {
       std::iota(rotary_pos_host.begin() + rotary_host_idx,
                 rotary_pos_host.begin() + rotary_host_idx + req->forwarding_tokens->size() - req->prefix_cache_len,
                 req->prefix_cache_len);
@@ -901,7 +902,7 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
 
 void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
   PROFILE_EVENT_SCOPE(PrepareKVCacheBlockTable, "PrepareKVCacheBlockTable", rank_);
-  if (!attn_backend_config_.enable_blocked_multi_token_forwarding_kv) {
+  if (!enable_blocked_multi_token_forwarding_kv_) {
     return;
   }
 
@@ -1115,7 +1116,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     const size_t input_ids_len = input_length - skip_token_num;
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
-    if (attn_backend_config_.enable_blocked_multi_token_forwarding_kv && in_dp_group) {
+    if (enable_blocked_multi_token_forwarding_kv_ && in_dp_group) {
       dp_input_without_prefix_list_uint64.emplace_back(dp_input_without_prefix_list_uint64.back() + input_ids_len);
     }
 
@@ -1213,7 +1214,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
               dp_input_prefix_list_uint64.size() * sizeof(decltype(dp_input_prefix_list_uint64)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 
-  if (attn_backend_config_.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv_) {
     dp_input_without_prefix_uint64_tensor.shape = {dp_input_without_prefix_list_uint64.size()};
     dp_input_without_prefix_uint64_tensor.dtype = TYPE_UINT64;
     MemcpyAsync(

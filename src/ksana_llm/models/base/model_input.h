@@ -16,7 +16,8 @@ namespace ksana_llm {
 // Convert input ids to expected format.
 class ModelInput {
  public:
-  ModelInput(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+             std::shared_ptr<Context> context);
   ~ModelInput();
 
   // Parse forward request.
@@ -199,7 +200,9 @@ class ModelInput {
 
  private:
   ModelConfig model_config_;
-  AttnBackendConfig attn_backend_config_;
+  RuntimeConfig runtime_config_;
+
+  bool enable_blocked_multi_token_forwarding_kv_;
 
   const int rank_;
   std::shared_ptr<Context> context_;

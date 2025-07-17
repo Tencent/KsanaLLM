@@ -41,17 +41,18 @@ namespace ksana_llm {
 
 // Create the object and return a shared pointer.
 template <template <class> class ClassT, class... Args>
-std::shared_ptr<BaseWeight> CreateModelWeight(int rank, ModelConfig& model_config, std::shared_ptr<Context>& context) {
+std::shared_ptr<BaseWeight> CreateModelWeight(int rank, ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                              std::shared_ptr<Context>& context) {
   std::shared_ptr<BaseWeight> model_obj = nullptr;
   switch (model_config.weight_data_type) {
     case DataType::TYPE_FP16:
-      model_obj = std::make_shared<ClassT<float16>>(model_config, rank, context);
+      model_obj = std::make_shared<ClassT<float16>>(model_config, runtime_config, rank, context);
       break;
     case DataType::TYPE_BF16:
-      model_obj = std::make_shared<ClassT<bfloat16>>(model_config, rank, context);
+      model_obj = std::make_shared<ClassT<bfloat16>>(model_config, runtime_config, rank, context);
       break;
     case DataType::TYPE_FP32:
-      model_obj = std::make_shared<ClassT<float>>(model_config, rank, context);
+      model_obj = std::make_shared<ClassT<float>>(model_config, runtime_config, rank, context);
       break;
     default:
       KLLM_THROW(fmt::format("Unsupported Tensor type: {}.", model_config.weight_data_type));
@@ -60,12 +61,12 @@ std::shared_ptr<BaseWeight> CreateModelWeight(int rank, ModelConfig& model_confi
 }
 
 template <template <class> class WeightType>
-void CreateWeightInstance(const std::string model_name, ModelConfig& model_config, std::shared_ptr<Context>& context,
-                          std::vector<std::shared_ptr<BaseWeight>>& weights) {
+void CreateWeightInstance(const std::string model_name, ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                          std::shared_ptr<Context>& context, std::vector<std::shared_ptr<BaseWeight>>& weights) {
   KLLM_LOG_INFO << "Start to init model instance " << model_name;
   for (int worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
     KLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
-    weights.push_back(CreateModelWeight<WeightType>(worker_id, model_config, context));
+    weights.push_back(CreateModelWeight<WeightType>(worker_id, model_config, runtime_config, context));
   }
 }
 
@@ -76,40 +77,40 @@ void WeightInstance::CreateWeightInstances() {
                  [](unsigned char c) { return std::tolower(c); });
 
   if (unified_model_type.find("llama4") != std::string::npos) {
-    CreateWeightInstance<Llama4Weight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<Llama4Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("llama") != std::string::npos) {
-    CreateWeightInstance<LlamaWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<LlamaWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("qwen3_moe") != std::string::npos) {
-    CreateWeightInstance<Qwen3MoeWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<Qwen3MoeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("qwen2_moe") != std::string::npos) {
-    CreateWeightInstance<Qwen2MoeWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<Qwen2MoeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("qwen") != std::string::npos) {
-    CreateWeightInstance<QwenWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<QwenWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("baichuan") != std::string::npos) {
-    CreateWeightInstance<BaichuanWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<BaichuanWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("chatglm") != std::string::npos) {
-    CreateWeightInstance<ChatglmWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<ChatglmWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("gpt") != std::string::npos ||
              unified_model_type.find("fairseq-transformer") != std::string::npos) {
-    CreateWeightInstance<GPTWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<GPTWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("mixtral") != std::string::npos) {
-    CreateWeightInstance<MixtralWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<MixtralWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("internvl_chat") != std::string::npos ||
              unified_model_type.find("internlm2") != std::string::npos ||
              unified_model_type.find("internlmxcomposer2") != std::string::npos) {
     CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, context_, weights_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
-    CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("deepseek_v3") != std::string::npos ||
              unified_model_type.find("deepseek_v2") != std::string::npos) {
-    CreateWeightInstance<DeepSeekV3Weight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<DeepSeekV3Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();
     std::string& weight_map =
         optional_file->GetOptionalFile(model_config_.path, "weight_map", unified_model_type + "_weight_map.json");
     if (weight_map != "") {
-      CreateWeightInstance<LlamaWeight>(unified_model_type, model_config_, context_, weights_);
+      CreateWeightInstance<LlamaWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
     } else {
       KLLM_THROW(fmt::format("Model type {} is not supported.", unified_model_type));
     }

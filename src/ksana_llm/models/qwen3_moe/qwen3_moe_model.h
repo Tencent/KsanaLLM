@@ -56,8 +56,8 @@ class Qwen3Moe : public ModelInterface<T> {
 template <typename T>
 class Qwen3MoeModel : public CommonModel<T> {
  public:
-  Qwen3MoeModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                std::shared_ptr<BaseWeight> base_weight);
+  Qwen3MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~Qwen3MoeModel() = default;
 
  private:

@@ -12,7 +12,8 @@ template <typename T>
 class LlamaWeight : public BaseWeight {
  public:
   LlamaWeight() {}
-  explicit LlamaWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit LlamaWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                       std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name);
 

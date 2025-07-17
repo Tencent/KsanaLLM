@@ -25,6 +25,7 @@ class WeightInstanceTest : public ::testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/deepseek_v3");
     env->GetModelConfig(model_config_);
+    env->GetRuntimeConfig(runtime_config_);
 
     AttnBackendConfig attn_backend_config;
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
@@ -46,15 +47,16 @@ class WeightInstanceTest : public ::testing::Test {
   }
 
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_{nullptr};
   std::filesystem::path tmp_cache_model_path_;
 };
 
 TEST_F(WeightInstanceTest, SaveAndLoadCacheModel) {
-  WeightInstance instance_to_save_cache(model_config_, context_);
+  WeightInstance instance_to_save_cache(model_config_, runtime_config_, context_);
   instance_to_save_cache.Load();
 
-  WeightInstance instance_to_load_cache(model_config_, context_);
+  WeightInstance instance_to_load_cache(model_config_, runtime_config_, context_);
   instance_to_load_cache.CreateWeightInstances();
 
   // test load from cache

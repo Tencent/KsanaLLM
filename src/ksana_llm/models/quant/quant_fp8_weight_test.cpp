@@ -27,6 +27,7 @@ class QuantWeightTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/hunyuan_large");
     env->GetModelConfig(model_config);
+    env->GetRuntimeConfig(runtime_config);
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
@@ -108,6 +109,7 @@ class QuantWeightTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   std::shared_ptr<Context> context_{nullptr};
   int32_t device_rank = 0;
   std::unordered_map<std::string, Tensor> weights_map;
@@ -172,7 +174,7 @@ TEST_F(QuantWeightTest, BindFp8E4m3ScaleOfMoeWeight) {
   StreamSynchronize(context_->GetMemoryManageStreams()[device_rank]);
 
   QuantWeight<half> quant_weight =
-      QuantWeight<half>(model_config, device_rank, context_, weights_map, weights_data_type_map);
+      QuantWeight<half>(model_config, runtime_config, device_rank, context_, weights_map, weights_data_type_map);
   EXPECT_TRUE(quant_weight.BindFp8E4m3ScaleOfMoeWeight().OK());
 
   // check scales
@@ -229,7 +231,7 @@ TEST_F(QuantWeightTest, ProcessMlaFp8E4m3BlockWiseScaleOfWeightTest) {
   // kv_b_proj scale value: [1,1]
   AddFp8BlockWiseScaleTensor("model.layers.0.self_attn.kv_b_proj.weight_scale_inv", kv_b_scale_shape, 1.0f);
   QuantWeight<half> quant_weight =
-      QuantWeight<half>(model_config, device_rank, context_, weights_map, weights_data_type_map);
+      QuantWeight<half>(model_config, runtime_config, device_rank, context_, weights_map, weights_data_type_map);
   // new compressed_kv process
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   quant_weight.ProcessMlaFp8E4m3BlockWiseScaleOfWeight();

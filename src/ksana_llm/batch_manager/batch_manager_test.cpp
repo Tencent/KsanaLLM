@@ -132,10 +132,11 @@ TEST_F(BatchManagerTest, RegisterModelInstance) {
   model_config.name = "test_model";
   model_config.end_ids = {1, 2};
   model_config.pad_id = 0;
+  RuntimeConfig runtime_config;
 
   std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
 
-  auto model_instance = std::make_shared<ModelInstance>(model_config, context_, weight_instance);
+  auto model_instance = std::make_shared<ModelInstance>(model_config, runtime_config, context_, weight_instance);
   model_instance->name = "test_model";
 
   Status status = batch_manager_->RegisterModelInstance(model_instance);

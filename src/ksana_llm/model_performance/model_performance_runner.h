@@ -34,6 +34,7 @@ class ModelPerformanceRunner {
 
  private:
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_ = nullptr;
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<WorkerGroup> worker_group_ = nullptr;

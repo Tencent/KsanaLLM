@@ -55,8 +55,8 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   void** k_list = (input_tensors[2].GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
 
-  AttnBackendConfig attn_backend_config;
-  Singleton<Environment>::GetInstance()->GetAttnBackendConfig(attn_backend_config);
+  bool enable_blocked_multi_token_forwarding_kv =
+      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
 
   int64_t kv_cache_block_num = 0;
   void** layer_kv_cache_ptr = nullptr;
@@ -68,7 +68,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int max_forwarding_tokens = 0;
 
   // blocked_prefill.
-  if (attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv) {
     kv_cache_block_num = *(input_tensors[18].GetPtr<int64_t>());
     layer_kv_cache_ptr = input_tensors[18].GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];

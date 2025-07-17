@@ -26,7 +26,7 @@ struct LayerCreationContext {
 
   void Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Tensor>& shared_matmul_workspace_buffer_,
             std::shared_ptr<Context> context_, int rank_, PipelineConfig& pipeline_config_, ModelConfig& model_config,
-            BufferManager* buffer_mgr);
+            const RuntimeConfig& runtime_config, BufferManager* buffer_mgr);
 };
 
 // TODO(robertyuan): clear useless params
@@ -66,9 +66,11 @@ struct LayernormCreationConfig {
 struct ModelCreationConfig {
   AttentionCreationConfig attn_config;
   LayernormCreationConfig layernorm_config;
+  RuntimeConfig runtime_config;
 
-  void Init(const ModelConfig& model_config_, Tensor cos_sin_cache_tensor_, PositionEncoding position_encoding,
-            bool reuse_prefix_caching, int layer_num_on_node_, const int* mrope_section_ptr);
+  void Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config, Tensor cos_sin_cache_tensor_,
+            PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node_,
+            const int* mrope_section_ptr);
 };
 
 // Temp, remove later

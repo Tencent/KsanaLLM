@@ -52,6 +52,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
     KLLM_LOG_ERROR << "GetModelConfig failed. status: " << status.ToString();
     return;
   }
+  env->GetRuntimeConfig(runtime_config_);
 
 #ifdef ENABLE_CUDA
   // load gemm_algo_map
@@ -126,9 +127,10 @@ size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num) {
 }
 
 void ModelPerformanceRunner::LoadModel() {
-  std::shared_ptr<WeightInstanceInterface> weight_instance = std::make_shared<WeightInstance>(model_config_, context_);
+  std::shared_ptr<WeightInstanceInterface> weight_instance =
+      std::make_shared<WeightInstance>(model_config_, runtime_config_, context_);
   weight_instance->Load();
-  model_instance_ = std::make_shared<ModelInstance>(model_config_, context_, weight_instance);
+  model_instance_ = std::make_shared<ModelInstance>(model_config_, runtime_config_, context_, weight_instance);
   model_instance_->Load();
 }
 

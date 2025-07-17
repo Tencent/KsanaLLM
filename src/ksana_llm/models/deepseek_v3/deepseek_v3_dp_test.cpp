@@ -48,6 +48,8 @@ class DeepSeekV3DPTest : public testing::Test {
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    env->GetRuntimeConfig(runtime_config);
+
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
@@ -93,6 +95,7 @@ class DeepSeekV3DPTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   std::vector<std::shared_ptr<BlockAllocatorGroupInterface>> block_allocator_groups;
   std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
   std::shared_ptr<Context> context{nullptr};
@@ -103,11 +106,12 @@ class DeepSeekV3DPTest : public testing::Test {
   void LoadModel(std::filesystem::path &model_path) {
     for (int device_id : {0, 1}) {
       SetDevice(device_id);
-      std::unique_ptr<WeightInstance> weight_instance = std::make_unique<WeightInstance>(model_config, context);
+      std::unique_ptr<WeightInstance> weight_instance =
+          std::make_unique<WeightInstance>(model_config, runtime_config, context);
       weight_instance->Load();
       std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(device_id);
-      std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 =
-          std::make_shared<DeepSeekV3Model<bfloat16>>(model_config, device_id, context, deepseek_v3_weight);
+      std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 = std::make_shared<DeepSeekV3Model<bfloat16>>(
+          model_config, runtime_config, device_id, context, deepseek_v3_weight);
       deepseek_v3->AllocResources(multi_batch_id);
 
       deepseek_v3_dps.push_back(deepseek_v3);
@@ -136,7 +140,7 @@ class DeepSeekV3DPTest : public testing::Test {
     forward.input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
-    int use_block_num = (input_ids.size() + model_config.block_token_num - 1) / model_config.block_token_num;
+    int use_block_num = (input_ids.size() + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
     block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
     forward.kv_cache_ptrs.resize(1);  // device num in dp group.
     block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);

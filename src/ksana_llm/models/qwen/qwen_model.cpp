@@ -46,9 +46,9 @@ template class Qwen<bfloat16>;
  * QwenModel
  */
 template <typename T>
-QwenModel<T>::QwenModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                        std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+QwenModel<T>::QwenModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                        std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   qwen_.GetModelRunConfig(model_run_config, model_config);
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);

@@ -6,8 +6,9 @@
 namespace ksana_llm {
 
 template <typename T>
-ChatglmWeight<T>::ChatglmWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context) {
-  common_weight_ = std::make_shared<CommonWeight<T>>(model_config, rank, context);
+ChatglmWeight<T>::ChatglmWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                                std::shared_ptr<Context> context) {
+  common_weight_ = std::make_shared<CommonWeight<T>>(model_config, runtime_config, rank, context);
 }
 
 template <typename T>

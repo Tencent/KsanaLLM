@@ -12,7 +12,8 @@ template <typename T>
 class ChatglmWeight : public BaseWeight {
  public:
   ChatglmWeight() {}
-  explicit ChatglmWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit ChatglmWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                         std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name);
 

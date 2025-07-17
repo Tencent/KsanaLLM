@@ -112,9 +112,9 @@ template class Mixtral<bfloat16>;
  * MixtralModel
  */
 template <typename T>
-MixtralModel<T>::MixtralModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                              std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+MixtralModel<T>::MixtralModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   mixtral_.GetModelRunConfig(model_run_config, model_config);
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);

@@ -11,7 +11,8 @@ template <typename T>
 class Qwen2MoeWeight : public CommonMoeWeight<T> {
  public:
   Qwen2MoeWeight() {}
-  explicit Qwen2MoeWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit Qwen2MoeWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                          std::shared_ptr<Context> context);
 
   Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
                              const std::vector<std::string>& weight_name_list,

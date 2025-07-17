@@ -201,13 +201,14 @@ class FakeWeight : public BaseWeight {
 
 class FakeBaseLayersWeight : public FakeWeight {
  public:
-  FakeBaseLayersWeight(const ModelConfig& model_config, int rank,
+  FakeBaseLayersWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer) {
     DataType dtype = model_config.weight_data_type;
     MemoryLocation location = MemoryLocation::LOCATION_DEVICE;
-    KLLM_CHECK_WITH_INFO(model_config.tensor_para_size == 1,
-                         fmt::format("only tensor_para_size == 1 supported, given {}", model_config.tensor_para_size));
+    KLLM_CHECK_WITH_INFO(runtime_config.parallel_basic_config.tensor_parallel_size == 1,
+                         fmt::format("only tensor_para_size == 1 supported, given {}",
+                                     runtime_config.parallel_basic_config.tensor_parallel_size));
     // embedding
     CreateWeight("model.embed_tokens.weight", {model_config.vocab_size, model_config.hidden_units}, dtype, location);
     // lm_head_proj_
@@ -227,7 +228,8 @@ class FakeBaseLayersWeight : public FakeWeight {
 
 class FakeMultiHeadAttentionWeight : public FakeWeight {
  public:
-  FakeMultiHeadAttentionWeight(const ModelConfig& model_config, int rank, bool add_qkv_bias, bool use_qk_norm,
+  FakeMultiHeadAttentionWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                               bool add_qkv_bias, bool use_qk_norm,
                                FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer), add_qkv_bias_(add_qkv_bias), use_qk_norm_(use_qk_norm) {
     DataType dtype = model_config.weight_data_type;
@@ -298,8 +300,8 @@ class FakeTwoLayeredFFNWeight : public FakeWeight {
 
 class FakeMoeLayersWeight : public FakeWeight {
  public:
-  FakeMoeLayersWeight(const ModelConfig& model_config, int rank, bool use_shared_moe,
-                      FakeWeightValueInitializer* value_initializer = nullptr)
+  FakeMoeLayersWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                      bool use_shared_moe, FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer), use_shared_moe_(use_shared_moe) {
     DataType dtype = model_config.weight_data_type;
     const std::vector<size_t>& moe_layers = model_config.moe_config.moe_layers;
@@ -358,14 +360,15 @@ class FakeMoeLayersWeight : public FakeWeight {
 
 class FakeGptBaseBiasLayersWeight : public FakeWeight {
  public:
-  FakeGptBaseBiasLayersWeight(const ModelConfig& model_config, int rank,
+  FakeGptBaseBiasLayersWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                               FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer) {
     DataType dtype = model_config.weight_data_type;
     MemoryLocation location = MemoryLocation::LOCATION_DEVICE;
-    KLLM_CHECK_WITH_INFO(model_config.tensor_para_size == 1,
-                         fmt::format("only tensor_para_size == 1 supported, given {}", model_config.tensor_para_size));
-    CreateWeight("model.embed_positions.weight", {model_config.max_token_num, model_config.hidden_units}, dtype,
+    KLLM_CHECK_WITH_INFO(runtime_config.parallel_basic_config.tensor_parallel_size == 1,
+                         fmt::format("only tensor_para_size == 1 supported, given {}",
+                                     runtime_config.parallel_basic_config.tensor_parallel_size));
+    CreateWeight("model.embed_positions.weight", {runtime_config.max_seq_len, model_config.hidden_units}, dtype,
                  location);
     for (uint32_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
       std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -389,12 +392,12 @@ class FakeGptBaseBiasLayersWeight : public FakeWeight {
 
 class FakeSimpleWeight : public FakeWeight {
  public:
-  FakeSimpleWeight(const ModelConfig& model_config, int rank, bool add_qkv_bias, bool use_shared_moe, bool use_qk_norm,
-                   FakeWeightValueInitializer* value_initializer = nullptr)
+  FakeSimpleWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank, bool add_qkv_bias,
+                   bool use_shared_moe, bool use_qk_norm, FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer) {
-    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, rank, value_initializer);
-    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, rank, add_qkv_bias, use_qk_norm,
-                                                                     value_initializer);
+    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, runtime_config, rank, value_initializer);
+    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, runtime_config, rank, add_qkv_bias,
+                                                                     use_qk_norm, value_initializer);
     auto mlp_weight = std::make_shared<FakeTwoLayeredFFNWeight>(model_config, rank, value_initializer);
 
     MergeWeight(base_weight);
@@ -405,13 +408,14 @@ class FakeSimpleWeight : public FakeWeight {
 
 class FakeGptSimpleWeight : public FakeWeight {
  public:
-  FakeGptSimpleWeight(const ModelConfig& model_config, int rank, bool add_qkv_bias, bool use_shared_moe,
-                      FakeWeightValueInitializer* value_initializer = nullptr)
+  FakeGptSimpleWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank, bool add_qkv_bias,
+                      bool use_shared_moe, FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer) {
-    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, rank, value_initializer);
-    auto bias_weight = std::make_shared<FakeGptBaseBiasLayersWeight>(model_config, rank, value_initializer);
-    auto mha_weight =
-        std::make_shared<FakeMultiHeadAttentionWeight>(model_config, rank, add_qkv_bias, value_initializer);
+    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, runtime_config, rank, value_initializer);
+    auto bias_weight =
+        std::make_shared<FakeGptBaseBiasLayersWeight>(model_config, runtime_config, rank, value_initializer);
+    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, runtime_config, rank, add_qkv_bias,
+                                                                     value_initializer);
     auto mlp_weight = std::make_shared<FakeTwoLayeredFFNWeight>(model_config, rank, value_initializer);
     MergeWeight(base_weight);
     MergeWeight(mha_weight);
@@ -422,13 +426,14 @@ class FakeGptSimpleWeight : public FakeWeight {
 
 class FakeMoeWeight : public FakeWeight {
  public:
-  FakeMoeWeight(const ModelConfig& model_config, int rank, bool add_qkv_bias, bool use_shared_moe, bool use_qk_norm,
-                FakeWeightValueInitializer* value_initializer = nullptr)
+  FakeMoeWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank, bool add_qkv_bias,
+                bool use_shared_moe, bool use_qk_norm, FakeWeightValueInitializer* value_initializer = nullptr)
       : FakeWeight(rank, value_initializer) {
-    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, rank, value_initializer);
-    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, rank, add_qkv_bias, use_qk_norm,
-                                                                     value_initializer);
-    auto moe_weight = std::make_shared<FakeMoeLayersWeight>(model_config, rank, use_shared_moe, value_initializer);
+    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, runtime_config, rank, value_initializer);
+    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, runtime_config, rank, add_qkv_bias,
+                                                                     use_qk_norm, value_initializer);
+    auto moe_weight =
+        std::make_shared<FakeMoeLayersWeight>(model_config, runtime_config, rank, use_shared_moe, value_initializer);
 
     MergeWeight(base_weight);
     MergeWeight(mha_weight);

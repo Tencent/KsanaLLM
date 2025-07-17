@@ -30,8 +30,8 @@ class CrossLayerAttention {
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
 
-  static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                              ClaBuffers& cla_buffers);
+  static Status CreateBuffers(BufferManager* buffer_mgr, const RuntimeConfig& runtime_config,
+                              const AttentionCreationConfig& attn_config, ClaBuffers& cla_buffers);
 
  private:
   Status QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,

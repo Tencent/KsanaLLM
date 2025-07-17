@@ -21,7 +21,7 @@ class FakeWeightTest : public testing::Test {
   void SetUp() override {
     nlohmann::json config_json = nlohmann::json::parse("{}");
     PrepareCommonModelAttributes(config_json, model_config_);
-    model_config_.tensor_para_size = 1;
+    runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
     model_config_.weight_data_type = TYPE_FP16;
   }
 
@@ -30,6 +30,7 @@ class FakeWeightTest : public testing::Test {
  protected:
   int rank_ = 0;
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
 };
 
 TEST_F(FakeWeightTest, FakeWeightBasic) {
@@ -159,7 +160,7 @@ TEST_F(FakeWeightTest, DefaultWeightValueInitializerConsistency) {
 }
 
 TEST_F(FakeWeightTest, FakeLlamaWeightStructure) {
-  FakeSimpleWeight llama_weight(model_config_, rank_, false, false, false);
+  FakeSimpleWeight llama_weight(model_config_, runtime_config_, rank_, false, false, false);
 
   // 验证基础权重形状
   const auto& embed_shape = llama_weight.GetModelWeights("model.embed_tokens.weight").shape;

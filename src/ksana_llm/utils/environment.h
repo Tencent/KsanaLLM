@@ -64,11 +64,6 @@ struct ProfilerConfig {
   std::unordered_map<std::string, std::string> resource_attributes;
 };
 
-// The config of attention backend.
-struct AttnBackendConfig {
-  bool enable_blocked_multi_token_forwarding_kv;
-};
-
 class Environment {
  public:
   Environment();
@@ -86,6 +81,8 @@ class Environment {
 
   // Get the config of cached manager.
   Status GetCacheManagerConfig(CacheManagerConfig &cache_manager_config);
+
+  Status GetRuntimeConfig(RuntimeConfig &runtime_config);
 
   // Whether the auto-prefix-caching is enabled.
   bool IsPrefixCachingEnabled();
@@ -115,11 +112,6 @@ class Environment {
   DataType GetKVCacheType();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
 
-  // Whether specific dp group is enabled in current step.
-  void SetDataParaGroupStatus(int dp_group_id, bool enabled);
-  bool GetDataParaGroupStatus(int dp_group_id);
-
-
   // Get the config of profiler.
   Status GetProfilerConfig(ProfilerConfig &profiler_config);
 
@@ -133,8 +125,6 @@ class Environment {
   // attn dp group size is 2.
   size_t GetAttentionTensorParallel();
 
-  size_t GetPipeLineParallelSize() const { return schedule_config_parser_.GetPipeLineParallelSize(); }
-
   size_t GetExpertParallelSize() { return schedule_config_parser_.GetExpertParallelSize(); }
 
   size_t GetExpertWorldSize() { return schedule_config_parser_.GetExpertWorldSize(); }
@@ -147,14 +137,9 @@ class Environment {
 
   bool IsReportVersion() { return is_version_report_; }
 
-  bool IsCudagraphEnabled() { return cuda_graph_; }
-
   size_t GetMaxBatchSize() const { return schedule_config_parser_.GetMaxBatchSize(); }
 
-  bool IsFlashMlaEnable() {
-    const char *const enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
-    return enable_flash_mla != nullptr && strcmp(std::getenv("ENABLE_FLASH_MLA"), "1") == 0;
-  }
+  bool IsFlashMlaEnable() { return schedule_config_parser_.IsFlashMlaEnable(); }
 
   Status GetPipelineConfig(PipelineConfig &pipeline_config) const {
     return schedule_config_parser_.GetPipelineConfig(pipeline_config);
@@ -164,9 +149,8 @@ class Environment {
     return schedule_config_parser_.GetExpertParallelConfig(expert_parallel_config);
   }
 
-  Status GetAttnBackendConfig(AttnBackendConfig &attn_backend_config) const {
-    attn_backend_config = attn_backend_config_;
-    return Status();
+  bool IsBlockedMultiTokenForwardingEnabled() const {
+    return schedule_config_parser_.IsBlockedMultiTokenForwardingEnabled();
   }
 
   Status GetConnectorConfigs(ConnectorConfig &connector_config) const {
@@ -201,8 +185,9 @@ class Environment {
   }
 
   void SetAttnBackendConfig(const AttnBackendConfig &attn_backend_config) {
-    attn_backend_config_ = attn_backend_config;
+    schedule_config_parser_.SetAttnBackendConfig(attn_backend_config);
   }
+
   void SetConnectorConfigs(const ConnectorConfig &connector_config) {
     schedule_config_parser_.SetConnectorConfigs(connector_config);
   }
@@ -245,17 +230,12 @@ class Environment {
   // The config of quantization.
   std::string yaml_weight_quant_method_;
 
-
   // The config of profiler.
   ProfilerConfig profiler_config_;
 
   // Embed_tokens gather operation is processed on the CPU.
   bool embed_tokens_use_cpu_ = false;
   bool is_version_report_ = true;
-  bool cuda_graph_ = false;
-
-  // For attention backend.
-  AttnBackendConfig attn_backend_config_;
 
   ScheduleConfigParser schedule_config_parser_;
 };

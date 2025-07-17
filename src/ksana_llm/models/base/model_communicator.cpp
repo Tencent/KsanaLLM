@@ -30,8 +30,6 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer<T>>();
   nccl_all_gather_layer_->Init({}, context_, rank_);
 
-  use_cuda_graph_ = Singleton<Environment>::GetInstance()->IsCudagraphEnabled();
-
   is_full_nvlink_ = context_->ext->IsFullNvLink();
 
   tp_size_ = context_->GetTensorParallelSize();
@@ -152,9 +150,7 @@ bool ModelCommunicator<T>::CheckIfUseCustomReduceSum(const std::vector<Tensor>& 
   }
 #endif
   int batch_size = input_tensors[0].shape[0];
-  return use_custom && (tp_size_ == 2 || is_full_nvlink_) &&
-         (!use_cuda_graph_ || (use_cuda_graph_ && context_->GetSupportedCudaGraphCaptureSizes().find(batch_size) ==
-                                                      context_->GetSupportedCudaGraphCaptureSizes().end()));
+  return use_custom && (tp_size_ == 2 || is_full_nvlink_);
 }
 
 template class ModelCommunicator<float>;

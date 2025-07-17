@@ -76,10 +76,9 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                   std::vector<Tensor>& shared_buffer_tensors,
                                   const AttentionForwardContext& forward_context, Tensor query_layernorm_weight,
                                   Tensor key_layernorm_weight) {
-  // attn_backend config.
-  AttnBackendConfig attn_backend_config;
-  Singleton<Environment>::GetInstance()->GetAttnBackendConfig(attn_backend_config);
-  if (reuse_prefix_caching_ && !attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  bool enable_blocked_multi_token_forwarding_kv =
+      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
+  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv) {
     AddAttentionPrefixCache(hidden_buffer_tensors_0, model_input, hidden_buffer_tensors_1, shared_buffer_tensors);
   }
 
@@ -117,7 +116,7 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 #endif
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
-  if (reuse_prefix_caching_ && !attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv) {
     RemoveAttentionPrefixCache(hidden_buffer_tensors_0, model_input, hidden_buffer_tensors_1, shared_buffer_tensors);
   }
 

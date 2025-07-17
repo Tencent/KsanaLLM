@@ -75,8 +75,8 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   out.dtype = query.dtype;
   out.shape = {query.shape[0], this->num_heads_ * (size_t)this->head_size_};
 
-  AttnBackendConfig attn_backend_config;
-  Singleton<Environment>::GetInstance()->GetAttnBackendConfig(attn_backend_config);
+  bool enable_blocked_multi_token_forwarding_kv =
+      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
 
   int64_t kv_cache_block_num = 0;
   void** layer_kv_cache_ptr = nullptr;
@@ -85,7 +85,7 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int32_t* block_table_ptr = nullptr;
   int max_blocks_per_seq = 0;
 
-  if (attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv) {
     kv_cache_block_num = *(input_tensors[11].GetPtr<int64_t>());
     layer_kv_cache_ptr = input_tensors[11].GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];

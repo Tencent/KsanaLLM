@@ -126,12 +126,12 @@ TEST_F(EnvironmentTest, PrefixCachingStatus) {
 TEST_F(EnvironmentTest, DeviceCompatibilityCheck) {
   ASSERT_TRUE(env_.ParseConfig(FLAGS_config_file_test).OK());
 
-  ksana_llm::ModelConfig config;
-  auto status = env_.GetModelConfig(config);
+  ksana_llm::RuntimeConfig config;
+  auto status = env_.GetRuntimeConfig(config);
   EXPECT_TRUE(status.OK());
 
   // 验证设备相关配置
-  EXPECT_GT(config.tensor_para_size, 0);
+  EXPECT_GT(config.parallel_basic_config.tensor_parallel_size, 0);
 }
 
 // 测试配置参数边界条件
@@ -189,6 +189,8 @@ TEST_F(EnvironmentTest, RequiredParametersValidation) {
   ksana_llm::ModelConfig model_config;
   auto status = env_.GetModelConfig(model_config);
   EXPECT_TRUE(status.OK());
+  RuntimeConfig runtime_config;
+  env_.GetRuntimeConfig(runtime_config);
 
   // 验证必需的模型参数
   EXPECT_FALSE(model_config.type.empty());
@@ -197,7 +199,7 @@ TEST_F(EnvironmentTest, RequiredParametersValidation) {
   EXPECT_GT(model_config.num_layer, 0);
   EXPECT_GT(model_config.head_num, 0);
   EXPECT_GT(model_config.size_per_head, 0);
-  EXPECT_GT(model_config.max_token_num, 0);
+  EXPECT_GT(runtime_config.max_seq_len, 0);
 }
 
 // 测试性能相关配置

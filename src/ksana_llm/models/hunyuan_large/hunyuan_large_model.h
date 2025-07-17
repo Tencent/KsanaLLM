@@ -65,8 +65,8 @@ class HunyuanLarge : public ModelInterface<T> {
 template <typename T>
 class HunyuanLargeModel : public CommonModel<T> {
  public:
-  HunyuanLargeModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                    std::shared_ptr<BaseWeight> base_weight);
+  HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                    std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
 
  private:
   Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;

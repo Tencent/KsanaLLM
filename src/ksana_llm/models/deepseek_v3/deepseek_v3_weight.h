@@ -13,7 +13,8 @@ template <typename T>
 class DeepSeekV3Weight : public CommonMlaWeight<T>, public CommonMoeWeight<T> {
  public:
   DeepSeekV3Weight() {}
-  explicit DeepSeekV3Weight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit DeepSeekV3Weight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                            std::shared_ptr<Context> context);
 
   Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
                              const std::vector<std::string>& weight_name_list,

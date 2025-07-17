@@ -10,8 +10,8 @@ namespace ksana_llm {
 template <typename T>
 class ChatglmModel : public CommonModel<T> {
  public:
-  ChatglmModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-               std::shared_ptr<BaseWeight> base_weight);
+  ChatglmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~ChatglmModel() {}
 
  private:

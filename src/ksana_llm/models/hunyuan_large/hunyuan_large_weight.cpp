@@ -7,8 +7,10 @@
 namespace ksana_llm {
 
 template <typename T>
-HunyuanLargeWeight<T>::HunyuanLargeWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : CommonWeight<T>(model_config, rank, context), CommonMoeWeight<T>(model_config, rank, context) {}
+HunyuanLargeWeight<T>::HunyuanLargeWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                          int rank, std::shared_ptr<Context> context)
+    : CommonWeight<T>(model_config, runtime_config, rank, context),
+      CommonMoeWeight<T>(model_config, runtime_config, rank, context) {}
 
 template <typename T>
 Status HunyuanLargeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,

@@ -70,7 +70,8 @@ struct ModelRunConfig {
 template <typename T>
 class CommonModel : public BaseModel {
  public:
-  CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context);
+  CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+              std::shared_ptr<Context> context);
   ~CommonModel() override;
 
   // Initialize the run config.
@@ -130,6 +131,8 @@ class CommonModel : public BaseModel {
 
   // The model config.
   ModelConfig model_config_;
+
+  RuntimeConfig runtime_config_;
 
   // The pipeline_config for distributed mode.
   PipelineConfig pipeline_config_;

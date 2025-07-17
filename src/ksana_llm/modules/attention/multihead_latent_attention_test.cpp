@@ -73,9 +73,10 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
   std::shared_ptr<MultiHeadLatentAttention<T>> mla_;
   MlaBuffers mla_buffers_;
 
-  MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
+  MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                    const int rank, std::shared_ptr<Context> context,
                                     std::shared_ptr<BaseWeight> base_weight)
-      : CommonModel<T>(model_config, rank, context) {
+      : CommonModel<T>(model_config, runtime_config, rank, context) {
     ModelRunConfig model_run_config;
     model_run_config.position_encoding = PositionEncoding::ROPE;
     CommonModel<T>::InitRunConfig(model_run_config, base_weight);
@@ -87,7 +88,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
 
   Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
-                                               mla_buffers_);
+                                               model_creation_config.runtime_config, mla_buffers_);
     bool is_neox = true;
     int layer_idx = 0;
     mla_ = std::make_shared<MultiHeadLatentAttention<T>>(layer_idx, is_neox, creation_context, model_creation_config,
@@ -174,8 +175,10 @@ class MultiHeadLatentAttentionTestWeight : public CommonMlaWeight<T> {
   using CommonWeight<T>::weights_map_;
   using CommonWeight<T>::tensor_manager_;
 
-  MultiHeadLatentAttentionTestWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-      : CommonWeight<T>(model_config, rank, context), CommonMlaWeight<T>(model_config, rank, context) {}
+  MultiHeadLatentAttentionTestWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                                     std::shared_ptr<Context> context)
+      : CommonWeight<T>(model_config, runtime_config, rank, context),
+        CommonMlaWeight<T>(model_config, runtime_config, rank, context) {}
 
   void AddWeight(int device_id = 0) {
     std::unordered_map<std::string, std::vector<size_t>> add_tensor_map;
@@ -232,9 +235,10 @@ class MlaTest : public testing::Test {
     env->ParseConfig(config_path, std::filesystem::absolute(parent_path / "../../../../examples/deepseekv2/").string());
 
     env->GetModelConfig(model_config);
-    model_config.max_batch_size = 5;
-    model_config.max_token_num = 20;
-    model_config.max_step_token_num = 40;
+    env->GetRuntimeConfig(runtime_config);
+    runtime_config.max_batch_size = 5;
+    runtime_config.max_seq_len = 20;
+    runtime_config.max_step_token_num = 40;
 
     BlockManagerConfig block_manager_config;
     if (test_name.find("ForwardNewAbsorbWithFlashMlaKvFP8Test") != std::string::npos) {
@@ -280,6 +284,7 @@ class MlaTest : public testing::Test {
  protected:
   int origin_stderr_verbosity = loguru::Verbosity_MAX;
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
   std::shared_ptr<PrefixCacheManager> cache_manager = nullptr;
 
@@ -289,11 +294,13 @@ class MlaTest : public testing::Test {
   void TestMlaForward(int device_id = 0) {
     SetDevice(device_id);
     std::shared_ptr<MultiHeadLatentAttentionTestWeight<weight_data_type>> base_weight =
-        std::make_shared<MultiHeadLatentAttentionTestWeight<weight_data_type>>(model_config, 0, context_);
+        std::make_shared<MultiHeadLatentAttentionTestWeight<weight_data_type>>(model_config, runtime_config, 0,
+                                                                               context_);
     base_weight->AddWeight();
     std::shared_ptr<ksana_llm::BaseWeight> bs1 = base_weight;
     std::shared_ptr<MultiHeadLatentAttentionTestModel<weight_data_type>> test_mla_model =
-        std::make_shared<MultiHeadLatentAttentionTestModel<weight_data_type>>(model_config, 0, context_, bs1);
+        std::make_shared<MultiHeadLatentAttentionTestModel<weight_data_type>>(model_config, runtime_config, 0, context_,
+                                                                              bs1);
 
     // ContextDecode
     SamplingConfig sampling_config;

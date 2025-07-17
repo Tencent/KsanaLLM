@@ -58,7 +58,7 @@ size_t CutlassMatMulLayer<T, WT>::GetWorkSpaceSize() {
 }
 
 template <typename T, DataType WT>
-Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
+Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
   if (record_iters == 0) {
     KLLM_LOG_DEBUG << "$QUANT_PROFILE==0, Skipping CutlassMatMulLayer Preprocess";
@@ -67,7 +67,7 @@ Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
   const size_t warmup_iters = std::max(1UL, record_iters / 2);  // warmup不能为0
 
   if constexpr (WT == TYPE_I4_GROUP) {
-    const size_t max_posible_m = model_config_.max_batch_size;
+    const size_t max_posible_m = runtime_config.max_batch_size;
     const size_t posible_n = max_n_;
     const size_t posible_k = max_k_;
 
@@ -116,7 +116,7 @@ Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_) {
     auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     KLLM_LOG_INFO << fmt::format(
         "Profile CutlassMatMul Layer in rank:{}, mnk=({}~{},{},{}), warmup:{}, record:{}, cost:{}ms", rank_, 1,
-        model_config_.max_batch_size, posible_n, posible_k, warmup_iters, record_iters, duration_ms.count());
+        runtime_config.max_batch_size, posible_n, posible_k, warmup_iters, record_iters, duration_ms.count());
 
     return Status();
   } else {

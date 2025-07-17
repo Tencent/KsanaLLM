@@ -25,8 +25,8 @@ class Baichuan : public ModelInterface<T> {
 template <typename T>
 class BaichuanModel : public CommonModel<T> {
  public:
-  BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                std::shared_ptr<BaseWeight> base_weight);
+  BaichuanModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~BaichuanModel() = default;
 
  private:

@@ -17,7 +17,8 @@ class CommonWeight : public BaseWeight {
  public:
   CommonWeight() {}
   ~CommonWeight() override;
-  explicit CommonWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit CommonWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                        std::shared_ptr<Context> context);
 
   Tensor GetModelWeights(const std::string& weight_name) override;
 
@@ -41,7 +42,7 @@ class CommonWeight : public BaseWeight {
   Status ConvertOprojTensor();
   Status ConvertQkvTensor();
 
-  Status GetModelInfo(const ModelConfig& model_config);
+  Status GetModelInfo(const ModelConfig& model_config, const RuntimeConfig& runtime_config);
 
   std::string ConcatLayerName(std::string layer_flag, int& layer_index, bool is_bias = false);
 

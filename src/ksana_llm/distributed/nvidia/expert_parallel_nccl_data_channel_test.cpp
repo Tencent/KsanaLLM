@@ -84,6 +84,7 @@ class ExpertParallelNcclDataChannelTest : public testing::Test {
   PipelineConfig pipeline_config_;
   ExpertParallelConfig expert_parallel_config_;
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<ExpertParallelDataTransfer<float>> ep_data_transfer_;
   // The model input information.
   std::shared_ptr<ModelInput> model_input_;
@@ -124,9 +125,10 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     env_->GetModelConfig(model_config_);
+    env_->GetRuntimeConfig(runtime_config_);
 
     // model_config, rank, context.
-    model_input_ = std::make_shared<ModelInput>(model_config_, 0, context_);
+    model_input_ = std::make_shared<ModelInput>(model_config_, runtime_config_, 0, context_);
     model_input_->infer_stage == InferStage::STAGE_CONTEXT;
 
     // Must initialized before create data channel instance.
@@ -206,9 +208,9 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     env_->GetModelConfig(model_config_);
-
+    env_->GetRuntimeConfig(runtime_config_);
     // model_config, rank, context.
-    model_input_ = std::make_shared<ModelInput>(model_config_, 0, context_);
+    model_input_ = std::make_shared<ModelInput>(model_config_, runtime_config_, 0, context_);
     model_input_->infer_stage == InferStage::STAGE_CONTEXT;
 
     // Must initialized before create data channel instance.

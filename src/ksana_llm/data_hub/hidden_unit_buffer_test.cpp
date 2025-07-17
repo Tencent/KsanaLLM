@@ -40,10 +40,12 @@ class HiddenUnitBufferTest : public testing::Test {
     if (!status.OK()) {
       throw std::runtime_error("No model_config provided.");
     }
+    RuntimeConfig runtime_config;
+    Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
 
     weight_type_ = model_config.weight_data_type;
-    tensor_para_size_ = model_config.tensor_para_size;
-    max_token_num_ = model_config.max_step_token_num;
+    tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+    max_token_num_ = runtime_config.max_step_token_num;
     hidden_unit_size_ = model_config.size_per_head * model_config.head_num;
   }
 

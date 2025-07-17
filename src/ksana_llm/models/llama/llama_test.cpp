@@ -37,7 +37,7 @@ class LlamaTest : public testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
-
+    env->GetRuntimeConfig(runtime_config);
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
@@ -71,7 +71,7 @@ class LlamaTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
-
+  RuntimeConfig runtime_config;
   std::shared_ptr<Context> context_{nullptr};
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
@@ -102,7 +102,7 @@ class LlamaTest : public testing::Test {
     EventCreate(&stop);
 
     std::shared_ptr<BaseWeight> llama_weight =
-        std::make_shared<LlamaWeight<weight_data_type>>(model_config, 0, context_);
+        std::make_shared<LlamaWeight<weight_data_type>>(model_config, runtime_config, 0, context_);
     // Start Loader Weight
     ModelFileFormat model_file_format;
     std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
@@ -126,7 +126,7 @@ class LlamaTest : public testing::Test {
     }
     llama_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<LlamaModel<weight_data_type>> llama =
-        std::make_shared<LlamaModel<weight_data_type>>(model_config, 0, context_, llama_weight);
+        std::make_shared<LlamaModel<weight_data_type>>(model_config, runtime_config, 0, context_, llama_weight);
     llama->AllocResources(schedule_id);
 
     // Weight Name Check
@@ -150,7 +150,7 @@ class LlamaTest : public testing::Test {
     // ContextDecode
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
-    ForwardRequestBuilderForTest request_builder(model_config, cache_manager_);
+    ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     request_builder.CreateForwardRequest(1, forward, input_ids);
 
     // TODO(robertyuan): these settings are used in Sampling, should be removed from ForwardRequest
@@ -255,7 +255,7 @@ class LlamaTest : public testing::Test {
     request_target["logits"] = target_describe;
     forward.request_target = &request_target;
     std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
-    ModelInput model_input(model_config, 0, context_);
+    ModelInput model_input(model_config, runtime_config, 0, context_);
     model_input.ParseFromRequests(prompt_probs_forward_reqs);
     std::vector<uint64_t> result(model_input.logits_idx_uint64_tensor.GetElementNumber());
     std::vector<uint64_t> dst = {0, 1, 2, 3, 4, 9, 10, 11, 12, 13};

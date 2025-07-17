@@ -24,11 +24,12 @@ template <typename T>
 class MatMulLayerFactory {
  public:
   typedef std::shared_ptr<BaseLayer> (MatMulLayerFactory<T>::*BuildLayerFunc)();
-  MatMulLayerFactory(std::shared_ptr<Tensor>& workspace_buffer, const ModelConfig& model_config, const int rank,
-                     std::shared_ptr<Context> context) {
+  MatMulLayerFactory(std::shared_ptr<Tensor>& workspace_buffer, const ModelConfig& model_config,
+                     const RuntimeConfig& runtime_config, const int rank, std::shared_ptr<Context> context) {
     context_ = context;
     rank_ = rank;
     model_config_ = model_config;
+    runtime_config_ = runtime_config;
     workspace_buffer_ = workspace_buffer;
 
     builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, QUANT_NONE, NONE_QUANT}] =
@@ -134,11 +135,11 @@ class MatMulLayerFactory {
     // gptq layer
     if (model_config_.is_quant &&
         (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
-      size_t tp = model_config_.tensor_para_size;
+      size_t tp = runtime_config_.parallel_basic_config.tensor_parallel_size;
       size_t attn_tp = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
       size_t hidden_size = model_config_.hidden_units;
       size_t inter_size = model_config_.inter_size;
-      size_t shared_expert_inter_size_per_rank = model_config_.enable_full_shared_expert
+      size_t shared_expert_inter_size_per_rank = runtime_config_.enable_full_shared_expert
                                                      ? model_config_.moe_config.shared_expert_inter_size
                                                      : model_config_.moe_config.shared_expert_inter_size / tp;
       uint32_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
@@ -180,7 +181,7 @@ class MatMulLayerFactory {
       for (const auto& kn : kn_pairs) {
         if (weight_name.find(kn.first) != std::string::npos) {
           std::vector<std::any> group_matmul_param;
-          group_matmul_param.push_back(model_config_.max_step_token_num);                                   // m
+          group_matmul_param.push_back(runtime_config_.max_step_token_num);                                 // m
           group_matmul_param.push_back(std::get<1>(kn.second));                                             // n
           group_matmul_param.push_back(std::get<0>(kn.second));                                             // k
           group_matmul_param.push_back(model_config_.quant_config.group_size);                              // groupsize
@@ -199,19 +200,19 @@ class MatMulLayerFactory {
     if (base_weight->GetModelWeights(weight_name).dtype == TYPE_FP8_E4M3) {
       if (model_config_.quant_config.method == QUANT_BLOCK_FP8_E4M3) {
         std::vector<std::any> fp8_blockwise_matmul_params;
-        fp8_blockwise_matmul_params.push_back(model_config_.max_step_token_num);  // m
+        fp8_blockwise_matmul_params.push_back(runtime_config_.max_step_token_num);  // m
         // weight is [n， k]
         fp8_blockwise_matmul_params.push_back(size_t(base_weight->GetModelWeights(weight_name).shape[0]));  // n
         fp8_blockwise_matmul_params.push_back(size_t(base_weight->GetModelWeights(weight_name).shape[1]));  // k
         // block_k size
         fp8_blockwise_matmul_params.push_back(model_config_.quant_config.weight_block_size[1]);
-        fp8_blockwise_matmul_params.push_back(model_config_.tensor_para_size);
+        fp8_blockwise_matmul_params.push_back(runtime_config_.parallel_basic_config.tensor_parallel_size);
         return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_blockwise_matmul_params, QUANT_BLOCK_FP8_E4M3,
                            NONE_QUANT);
       } else {
         std::vector<std::any> fp8_matmul_params;
         // max_m_
-        fp8_matmul_params.push_back(model_config_.max_step_token_num);
+        fp8_matmul_params.push_back(runtime_config_.max_step_token_num);
         // weight is [n, k], k is shape[1]
         fp8_matmul_params.push_back(size_t(base_weight->GetModelWeights(weight_name).shape[1]));
         return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_matmul_params, QUANT_FP8_E4M3, NONE_QUANT);
@@ -232,7 +233,7 @@ class MatMulLayerFactory {
     // moe layer   (weight_names[0]: up_gate_experts, weight_names[1]: down_experts)
     bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
     std::vector<std::any> moe_matmul_param = init_params;
-    moe_matmul_param.push_back(model_config_.max_step_token_num);
+    moe_matmul_param.push_back(runtime_config_.max_step_token_num);
     size_t up_gate_experts_num = base_weight->GetModelWeights(weight_names[0]).shape[0];
     size_t down_experts_num = base_weight->GetModelWeights(weight_names[1]).shape[0];
     if (up_gate_experts_num != down_experts_num) {
@@ -240,7 +241,8 @@ class MatMulLayerFactory {
                              up_gate_experts_num, down_experts_num));
     }
     moe_matmul_param.push_back(model_config_.moe_config.num_experts /
-                               (model_config_.expert_para_size * model_config_.expert_world_size));  // num_experts
+                               (runtime_config_.parallel_basic_config.expert_parallel_size *
+                                runtime_config_.parallel_basic_config.expert_world_size));  // num_experts
     size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
     size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
     if (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4) {
@@ -260,19 +262,19 @@ class MatMulLayerFactory {
     }
 
     size_t hidden_size = static_cast<size_t>(model_config_.hidden_units);
-    size_t moe_inter_size_per_rank =
-        static_cast<size_t>(DivRoundUp(model_config_.moe_config.moe_inter_size, model_config_.moe_tensor_para_size));
-    moe_matmul_param.push_back(hidden_size);                                           // hidden_size
-    moe_matmul_param.push_back(moe_inter_size_per_rank);                               // Inter_size
-    moe_matmul_param.push_back(model_config_.moe_config.experts_topk);                 // experts topk
-    moe_matmul_param.push_back(model_config_.tensor_para_size);                        // TP_size
-    moe_matmul_param.push_back(use_vllm_moe);                                          // use_vllm_moe
-    moe_matmul_param.push_back(model_config_.moe_config.num_expert_group);             // num_expert_group
-    moe_matmul_param.push_back(model_config_.moe_config.expert_groups_topk);           // expert_groups_topk
-    moe_matmul_param.push_back(model_config_.moe_config.scoring_func);                 // scoring_func
-    moe_matmul_param.push_back(model_config_.moe_config.topk_method);                  // topk_method
-    moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);               // norm_topk_prob
-    moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);        // routed_scaling_factor
+    size_t moe_inter_size_per_rank = static_cast<size_t>(DivRoundUp(
+        model_config_.moe_config.moe_inter_size, runtime_config_.parallel_basic_config.moe_tensor_para_size));
+    moe_matmul_param.push_back(hidden_size);                                                 // hidden_size
+    moe_matmul_param.push_back(moe_inter_size_per_rank);                                     // Inter_size
+    moe_matmul_param.push_back(model_config_.moe_config.experts_topk);                       // experts topk
+    moe_matmul_param.push_back(runtime_config_.parallel_basic_config.tensor_parallel_size);  // TP_size
+    moe_matmul_param.push_back(use_vllm_moe);                                                // use_vllm_moe
+    moe_matmul_param.push_back(model_config_.moe_config.num_expert_group);                   // num_expert_group
+    moe_matmul_param.push_back(model_config_.moe_config.expert_groups_topk);                 // expert_groups_topk
+    moe_matmul_param.push_back(model_config_.moe_config.scoring_func);                       // scoring_func
+    moe_matmul_param.push_back(model_config_.moe_config.topk_method);                        // topk_method
+    moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);                     // norm_topk_prob
+    moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);              // routed_scaling_factor
     moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
     if (model_config_.quant_config.enable_moe_int4) {
       moe_matmul_param.push_back(DataType::TYPE_INVALID);
@@ -364,7 +366,7 @@ class MatMulLayerFactory {
         }
       }
       layer->SetWorkSpaceBuffer(workspace_buffer_);
-      layer->Preprocess(model_config_);
+      layer->Preprocess(model_config_, runtime_config_);
       KLLM_LOG_DEBUG << "MatMul Create success.";
       return layer;
     } else {
@@ -382,6 +384,7 @@ class MatMulLayerFactory {
   int rank_;
   std::shared_ptr<Tensor> workspace_buffer_ = nullptr;
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
 
   // std::map<std::tuple<weight_type, input_type, output_type, quant_mode, backend>, BuildLayerFunc>
   std::map<std::tuple<DataType, DataType, DataType, QuantMode, GroupQuantBackend>, BuildLayerFunc> builder_map_;

@@ -50,9 +50,9 @@ template class Baichuan<bfloat16>;
  * BaichuanModel
  */
 template <typename T>
-BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                                std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                                std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   baichuan_.GetModelRunConfig(model_run_config, model_config);
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);

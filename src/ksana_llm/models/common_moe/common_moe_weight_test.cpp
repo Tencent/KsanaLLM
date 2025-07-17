@@ -132,12 +132,12 @@ class CommonMoeWeightTest : public testing::Test {
 
   void TestSingleDevice() {
     // Create model config
-    model_config.tensor_para_size = 1;
-    model_config.expert_para_size = 1;
-    model_config.expert_world_size = 1;
-    model_config.moe_tensor_para_size = 1;
+    runtime_config.parallel_basic_config.tensor_parallel_size = 1;
+    runtime_config.parallel_basic_config.expert_parallel_size = 1;
+    runtime_config.parallel_basic_config.expert_world_size = 1;
+    runtime_config.parallel_basic_config.moe_tensor_para_size = 1;
     std::shared_ptr<CommonMoeWeight<float16>> weight =
-        std::make_shared<CommonMoeWeight<float16>>(model_config, 0, context_);
+        std::make_shared<CommonMoeWeight<float16>>(model_config, runtime_config, 0, context_);
 
     // load weights.
     weight->LoadWeightsFromFile(loader, weight_name_list, custom_name_list);
@@ -213,19 +213,20 @@ class CommonMoeWeightTest : public testing::Test {
 
   void TestTensorParallel() {
     // Create model_config
-    model_config.tensor_para_size = 2;
-    model_config.expert_para_size = 1;
-    model_config.expert_world_size = 1;
-    model_config.moe_tensor_para_size = 2;
+    size_t tensor_para_size = 2;
+    runtime_config.parallel_basic_config.tensor_parallel_size = tensor_para_size;
+    runtime_config.parallel_basic_config.expert_parallel_size = 1;
+    runtime_config.parallel_basic_config.expert_world_size = 1;
+    runtime_config.parallel_basic_config.moe_tensor_para_size = 2;
     std::shared_ptr<CommonMoeWeight<float16>> weight_rank_0 =
-        std::make_shared<CommonMoeWeight<float16>>(model_config, 0, context_);
+        std::make_shared<CommonMoeWeight<float16>>(model_config, runtime_config, 0, context_);
     std::shared_ptr<CommonMoeWeight<float16>> weight_rank_1 =
-        std::make_shared<CommonMoeWeight<float16>>(model_config, 1, context_);
+        std::make_shared<CommonMoeWeight<float16>>(model_config, runtime_config, 1, context_);
 
     size_t num_experts = model_config.moe_config.num_experts;
     size_t moe_inter_size = model_config.moe_config.moe_inter_size;
     size_t hidden_units = model_config.hidden_units;
-    size_t elements_per_expert = moe_inter_size * hidden_units / model_config.tensor_para_size;
+    size_t elements_per_expert = moe_inter_size * hidden_units / tensor_para_size;
 
     // Load weight into rank 0
     SetDevice(0);
@@ -239,7 +240,7 @@ class CommonMoeWeightTest : public testing::Test {
       Tensor& up_gate_tensor_rank_0 = weight_rank_0->weights_map_[up_gate_name];
       EXPECT_EQ(up_gate_tensor_rank_0.shape.size(), 3);
       EXPECT_EQ(up_gate_tensor_rank_0.shape[0], num_experts);
-      EXPECT_EQ(up_gate_tensor_rank_0.shape[1], moe_inter_size * 2 / model_config.tensor_para_size);
+      EXPECT_EQ(up_gate_tensor_rank_0.shape[1], moe_inter_size * 2 / tensor_para_size);
       EXPECT_EQ(up_gate_tensor_rank_0.shape[2], hidden_units);
       // Shape [2, 6, 5]
       // array([[[0.  , 0.01, 0.02, 0.03, 0.04],
@@ -258,11 +259,11 @@ class CommonMoeWeightTest : public testing::Test {
       size_t up_gate_element_size = up_gate_data.size();
       for (size_t i = 0; i < up_gate_element_size; ++i) {
         size_t expert_id = i / (2 * elements_per_expert);
-        size_t inter_id = ((i - (expert_id * 2 * elements_per_expert)) / hidden_units) %
-                          (moe_inter_size / model_config.tensor_para_size);
+        size_t inter_id =
+            ((i - (expert_id * 2 * elements_per_expert)) / hidden_units) % (moe_inter_size / tensor_para_size);
         size_t hidden_id = i % hidden_units;
-        size_t value = expert_id * moe_inter_size * 2 * hidden_units / model_config.tensor_para_size +
-                       inter_id * hidden_units + hidden_id;
+        size_t value =
+            expert_id * moe_inter_size * 2 * hidden_units / tensor_para_size + inter_id * hidden_units + hidden_id;
         EXPECT_NEAR(static_cast<float>(up_gate_data[i]), value * 0.01f, 1e-3);
       }
 
@@ -272,7 +273,7 @@ class CommonMoeWeightTest : public testing::Test {
       EXPECT_EQ(down_tensor_rank_0.shape.size(), 3);
       EXPECT_EQ(down_tensor_rank_0.shape[0], num_experts);
       EXPECT_EQ(down_tensor_rank_0.shape[1], hidden_units);
-      EXPECT_EQ(down_tensor_rank_0.shape[2], moe_inter_size / model_config.tensor_para_size);
+      EXPECT_EQ(down_tensor_rank_0.shape[2], moe_inter_size / tensor_para_size);
       // Shape [2, 5, 3]
       // array([[[0.  , 0.01, 0.02],
       //         [0.06, 0.07, 0.08],
@@ -287,9 +288,8 @@ class CommonMoeWeightTest : public testing::Test {
       auto down_data = GetFP16DeviceData(down_tensor_rank_0.GetPtr<void>(), down_tensor_rank_0.shape);
       size_t down_element_size = down_data.size();
       for (size_t i = 0; i < down_element_size; ++i) {
-        size_t value = (i / (moe_inter_size / model_config.tensor_para_size)) *
-                           (moe_inter_size / model_config.tensor_para_size * 2) +
-                       (i % (moe_inter_size / model_config.tensor_para_size));
+        size_t value = (i / (moe_inter_size / tensor_para_size)) * (moe_inter_size / tensor_para_size * 2) +
+                       (i % (moe_inter_size / tensor_para_size));
         EXPECT_NEAR(static_cast<float>(down_data[i]), value * 0.01f, 1e-3);
       }
     }
@@ -319,7 +319,7 @@ class CommonMoeWeightTest : public testing::Test {
       Tensor& up_gate_tensor_rank_1 = weight_rank_1->weights_map_[up_gate_name];
       EXPECT_EQ(up_gate_tensor_rank_1.shape.size(), 3);
       EXPECT_EQ(up_gate_tensor_rank_1.shape[0], num_experts);
-      EXPECT_EQ(up_gate_tensor_rank_1.shape[1], moe_inter_size * 2 / model_config.tensor_para_size);
+      EXPECT_EQ(up_gate_tensor_rank_1.shape[1], moe_inter_size * 2 / tensor_para_size);
       EXPECT_EQ(up_gate_tensor_rank_1.shape[2], hidden_units);
       // Shape [2, 6, 5]
       // array([[[0.15, 0.16, 0.17, 0.18, 0.19],
@@ -338,12 +338,11 @@ class CommonMoeWeightTest : public testing::Test {
       size_t up_gate_element_size = up_gate_data.size();
       for (size_t i = 0; i < up_gate_element_size; ++i) {
         size_t expert_id = i / (2 * elements_per_expert);
-        size_t inter_id = ((i - (expert_id * 2 * elements_per_expert)) / hidden_units) %
-                          (moe_inter_size / model_config.tensor_para_size);
+        size_t inter_id =
+            ((i - (expert_id * 2 * elements_per_expert)) / hidden_units) % (moe_inter_size / tensor_para_size);
         size_t hidden_id = i % hidden_units;
-        size_t value = expert_id * moe_inter_size * 2 * hidden_units / model_config.tensor_para_size +
-                       inter_id * hidden_units + hidden_id +
-                       moe_inter_size * hidden_units / model_config.tensor_para_size;
+        size_t value = expert_id * moe_inter_size * 2 * hidden_units / tensor_para_size + inter_id * hidden_units +
+                       hidden_id + moe_inter_size * hidden_units / tensor_para_size;
         EXPECT_NEAR(static_cast<float>(up_gate_data[i]), value * 0.01f, 1e-3);
       }
 
@@ -353,7 +352,7 @@ class CommonMoeWeightTest : public testing::Test {
       EXPECT_EQ(down_tensor_rank_1.shape.size(), 3);
       EXPECT_EQ(down_tensor_rank_1.shape[0], num_experts);
       EXPECT_EQ(down_tensor_rank_1.shape[1], hidden_units);
-      EXPECT_EQ(down_tensor_rank_1.shape[2], moe_inter_size / model_config.tensor_para_size);
+      EXPECT_EQ(down_tensor_rank_1.shape[2], moe_inter_size / tensor_para_size);
       // Shape [2, 5, 3]
       // array([[[0.03, 0.04, 0.05],
       //         [0.09, 0.1 , 0.11],
@@ -368,10 +367,8 @@ class CommonMoeWeightTest : public testing::Test {
       auto down_data = GetFP16DeviceData(down_tensor_rank_1.GetPtr<void>(), down_tensor_rank_1.shape);
       size_t down_element_size = down_data.size();
       for (size_t i = 0; i < down_element_size; ++i) {
-        size_t value = (i / (moe_inter_size / model_config.tensor_para_size)) *
-                           (moe_inter_size / model_config.tensor_para_size * 2) +
-                       (i % (moe_inter_size / model_config.tensor_para_size)) +
-                       moe_inter_size / model_config.tensor_para_size;
+        size_t value = (i / (moe_inter_size / tensor_para_size)) * (moe_inter_size / tensor_para_size * 2) +
+                       (i % (moe_inter_size / tensor_para_size)) + moe_inter_size / tensor_para_size;
         EXPECT_NEAR(static_cast<float>(down_data[i]), value * 0.01f, 1e-3);
       }
     }
@@ -394,14 +391,15 @@ class CommonMoeWeightTest : public testing::Test {
 
   void TestExpertParallel() {
     // Create model_config
-    model_config.tensor_para_size = 2;
-    model_config.expert_para_size = 2;
-    model_config.expert_world_size = 1;
-    model_config.moe_tensor_para_size = 1;
+    size_t tensor_para_size = 2;
+    runtime_config.parallel_basic_config.tensor_parallel_size = tensor_para_size;
+    runtime_config.parallel_basic_config.expert_parallel_size = 2;
+    runtime_config.parallel_basic_config.expert_world_size = 1;
+    runtime_config.parallel_basic_config.moe_tensor_para_size = 1;
     std::shared_ptr<CommonMoeWeight<float16>> weight_rank_0 =
-        std::make_shared<CommonMoeWeight<float16>>(model_config, 0, context_);
+        std::make_shared<CommonMoeWeight<float16>>(model_config, runtime_config, 0, context_);
     std::shared_ptr<CommonMoeWeight<float16>> weight_rank_1 =
-        std::make_shared<CommonMoeWeight<float16>>(model_config, 1, context_);
+        std::make_shared<CommonMoeWeight<float16>>(model_config, runtime_config, 1, context_);
 
     size_t num_experts = model_config.moe_config.num_experts;
     size_t moe_inter_size = model_config.moe_config.moe_inter_size;
@@ -418,7 +416,8 @@ class CommonMoeWeightTest : public testing::Test {
       std::string up_gate_name = fmt::format("model.layers.{}.mlp.experts.up_gate_proj.weight", layer_idx);
       Tensor& up_gate_tensor_rank_0 = weight_rank_0->weights_map_[up_gate_name];
       EXPECT_EQ(up_gate_tensor_rank_0.shape.size(), 3);
-      EXPECT_EQ(up_gate_tensor_rank_0.shape[0], num_experts / model_config.expert_para_size);
+      EXPECT_EQ(up_gate_tensor_rank_0.shape[0],
+                num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       EXPECT_EQ(up_gate_tensor_rank_0.shape[1], moe_inter_size * 2);
       EXPECT_EQ(up_gate_tensor_rank_0.shape[2], hidden_units);
       // Shape [1, 12, 5]
@@ -449,7 +448,7 @@ class CommonMoeWeightTest : public testing::Test {
       std::string down_name = fmt::format("model.layers.{}.mlp.experts.down_proj.weight", layer_idx);
       Tensor& down_tensor_rank_0 = weight_rank_0->weights_map_[down_name];
       EXPECT_EQ(down_tensor_rank_0.shape.size(), 3);
-      EXPECT_EQ(down_tensor_rank_0.shape[0], num_experts / model_config.expert_para_size);
+      EXPECT_EQ(down_tensor_rank_0.shape[0], num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       EXPECT_EQ(down_tensor_rank_0.shape[1], hidden_units);
       EXPECT_EQ(down_tensor_rank_0.shape[2], moe_inter_size);
       // Shape [1, 5, 6]
@@ -471,10 +470,10 @@ class CommonMoeWeightTest : public testing::Test {
     Memcpy(expert_map_rank_0.data(), expert_map_tensor_rank_0.GetPtr<void>(), num_experts * sizeof(int),
            MEMCPY_DEVICE_TO_HOST);
     for (size_t i = 0; i < num_experts; ++i) {
-      if (i < num_experts / model_config.expert_para_size) {
+      if (i < num_experts / runtime_config.parallel_basic_config.expert_parallel_size) {
         EXPECT_EQ(expert_map_rank_0[i], i);
       } else {
-        EXPECT_EQ(expert_map_rank_0[i], num_experts / model_config.expert_para_size + 1);
+        EXPECT_EQ(expert_map_rank_0[i], num_experts / runtime_config.parallel_basic_config.expert_parallel_size + 1);
       }
     }
 
@@ -489,7 +488,8 @@ class CommonMoeWeightTest : public testing::Test {
       std::string up_gate_name = fmt::format("model.layers.{}.mlp.experts.up_gate_proj.weight", layer_idx);
       Tensor& up_gate_tensor_rank_1 = weight_rank_1->weights_map_[up_gate_name];
       EXPECT_EQ(up_gate_tensor_rank_1.shape.size(), 3);
-      EXPECT_EQ(up_gate_tensor_rank_1.shape[0], num_experts / model_config.expert_para_size);
+      EXPECT_EQ(up_gate_tensor_rank_1.shape[0],
+                num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       EXPECT_EQ(up_gate_tensor_rank_1.shape[1], moe_inter_size * 2);
       EXPECT_EQ(up_gate_tensor_rank_1.shape[2], hidden_units);
       // Shape [1, 12, 5]
@@ -520,7 +520,7 @@ class CommonMoeWeightTest : public testing::Test {
       std::string down_name = fmt::format("model.layers.{}.mlp.experts.down_proj.weight", layer_idx);
       Tensor& down_tensor_rank_1 = weight_rank_1->weights_map_[down_name];
       EXPECT_EQ(down_tensor_rank_1.shape.size(), 3);
-      EXPECT_EQ(down_tensor_rank_1.shape[0], num_experts / model_config.expert_para_size);
+      EXPECT_EQ(down_tensor_rank_1.shape[0], num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       EXPECT_EQ(down_tensor_rank_1.shape[1], hidden_units);
       EXPECT_EQ(down_tensor_rank_1.shape[2], moe_inter_size);
       // Shape [1, 5, 6]
@@ -542,10 +542,10 @@ class CommonMoeWeightTest : public testing::Test {
     Memcpy(expert_map_rank_1.data(), expert_map_tensor_rank_1.GetPtr<void>(), num_experts * sizeof(int),
            MEMCPY_DEVICE_TO_HOST);
     for (size_t i = 0; i < num_experts; ++i) {
-      if (i < num_experts / model_config.expert_para_size) {
-        EXPECT_EQ(expert_map_rank_1[i], num_experts / model_config.expert_para_size + 1);
+      if (i < num_experts / runtime_config.parallel_basic_config.expert_parallel_size) {
+        EXPECT_EQ(expert_map_rank_1[i], num_experts / runtime_config.parallel_basic_config.expert_parallel_size + 1);
       } else {
-        EXPECT_EQ(expert_map_rank_1[i], i - num_experts / model_config.expert_para_size);
+        EXPECT_EQ(expert_map_rank_1[i], i - num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       }
     }
 
@@ -554,6 +554,7 @@ class CommonMoeWeightTest : public testing::Test {
 
   int origin_stderr_verbosity;
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   std::shared_ptr<Context> context_{nullptr};
   std::vector<std::string> weight_name_list;
   std::vector<std::string> custom_name_list;

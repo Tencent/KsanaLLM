@@ -32,6 +32,53 @@
 
 namespace ksana_llm {
 
+void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
+  // Search for the optional kv_cache_scales.json file
+  auto optional_file = Singleton<OptionalFile>::GetInstance();
+  // TODO(zhongzhicao): 当前仅尝试从模型文件夹下读取，后续需要从python_dir/kv_scales下读取，并校验模型是否相同
+  std::string &kv_scale_path = optional_file->GetOptionalFile(model_dir, "kv_scales", "kv_cache_scales.json");
+  if (kv_scale_path == "") {
+    KLLM_LOG_WARNING << fmt::format(
+        "Loading KV cache scaling factors file error. File not found. Using defalt value 1.0 ");
+    return;
+  }
+  KLLM_LOG_INFO << fmt::format("Found KV cache scaling factors file at {}.", kv_scale_path);
+
+  nlohmann::json kv_scale_json;
+  std::ifstream kv_scale_file(kv_scale_path);
+  if (!kv_scale_file.is_open()) {
+    // TODO(zhongzhicao): load kv scale from model weights
+    KLLM_LOG_WARNING << fmt::format("Failed opening KV cache scaling factors file: {}. Using defalt value 1.0 ",
+                                    kv_scale_path);
+  } else {
+    kv_scale_file >> kv_scale_json;
+    kv_scale_file.close();
+  }
+
+  uint32_t num_layers = kv_scale_json.at("kv_cache").at("scaling_factor").at("0").size();
+  // TODO(zhongzhicao): 进行简单校验，后续移除
+  if (model_config.num_layer != num_layers) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Loading KV cache scaling factors error, layer num not aligned. Using "
+        "default value 1.0.");
+    return;
+  }
+
+  // TODO(zhongzhicao): load kv scale for tensor_para_size > 1
+  size_t tensor_parallel_size_kv_ = kv_scale_json.at("kv_cache").at("scaling_factor").size();
+  if (tensor_parallel_size_kv_ != 1) {
+    KLLM_LOG_WARNING << fmt::format(
+        "Loading KV cache scaling factors from TP=0. Currently only tp_size = 1 is supported.");
+  }
+  for (uint32_t i = 0; i < model_config.num_layer; ++i) {
+    model_config.k_scales[i] = model_config.v_scales[i] =
+        kv_scale_json.at("kv_cache").at("scaling_factor").at("0").at(std::to_string(i));
+  }
+
+  KLLM_LOG_INFO << fmt::format(
+      "Successfully Loaded KV cache scaling factors. Currently K and V are using the same scaling factors.");
+}
+
 ScheduleConfigParser::ScheduleConfigParser() { Reset(); }
 
 size_t ScheduleConfigParser::GetCommonBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
@@ -43,15 +90,19 @@ size_t ScheduleConfigParser::GetCommonBlockSize(const ModelConfig &model_config,
   const size_t node_layer_num =
       pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1 + node_nextn_layer_num;
 
-  const size_t token_size = node_layer_num *
-                            (model_config.num_key_value_heads / (tensor_parallel_size_ / attn_data_parallel_size_)) *
-                            model_config.size_per_head;
+  const size_t token_size =
+      node_layer_num *
+      (model_config.num_key_value_heads / (runtime_config_.parallel_basic_config.tensor_parallel_size /
+                                           runtime_config_.parallel_basic_config.attn_data_parallel_size)) *
+      model_config.size_per_head;
   const size_t block_token_num = block_manager_config.device_allocator_config.block_token_num;
   const size_t block_dtype_size = GetTypeSize(block_manager_config.device_allocator_config.kv_cache_dtype);
 
   const size_t cache_block_size = token_size * block_token_num * 2 * block_dtype_size;
   KLLM_LOG_INFO << fmt::format("Init block num for key or value: ({} / {}) * ({} / {}) * {} = {}", node_layer_num, 1,
-                               model_config.num_key_value_heads, (tensor_parallel_size_ / attn_data_parallel_size_),
+                               model_config.num_key_value_heads,
+                               (runtime_config_.parallel_basic_config.tensor_parallel_size /
+                                runtime_config_.parallel_basic_config.attn_data_parallel_size),
                                model_config.size_per_head, token_size);
 
   KLLM_LOG_INFO << fmt::format("Init token size (bytes) of init block for both key and value: {} * {} * 2 * {} = {}",
@@ -111,59 +162,58 @@ std::tuple<size_t, size_t> ScheduleConfigParser::GetCacheBlockSize(const ModelCo
 }
 
 void ScheduleConfigParser::Reset() {
-  tensor_parallel_size_ = 1;
-  attn_data_parallel_size_ = 1;
-  pipeline_parallel_size_ = 1;
-  expert_parallel_size_ = 1;
-  expert_world_size_ = 1;
   batch_scheduler_config_ = {};
   cache_manager_config_ = {};
   block_manager_config_ = {};
   pipeline_config_ = {};
-  dp_group_status_.resize(16, false);
   expert_parallel_config_ = {};
   connector_config_ = {};
-  enable_flash_mla_ = false;
-  enable_full_shared_expert_ = false;
+  runtime_config_ = {};
 }
 
 Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
   // Read global setting.
-  tensor_parallel_size_ =
+  runtime_config_.parallel_basic_config.tensor_parallel_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 0);
-  attn_data_parallel_size_ =
+  runtime_config_.parallel_basic_config.attn_data_parallel_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.attn_data_para_size", 1);
-  pipeline_parallel_size_ =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.pipeline_para_size", 1);
-  expert_world_size_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.expert_world_size", 1);
-  expert_parallel_size_ =
+  runtime_config_.parallel_basic_config.expert_world_size =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.expert_world_size", 1);
+  runtime_config_.parallel_basic_config.expert_parallel_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.expert_para_size", 1);
-  enable_full_shared_expert_ =
+  runtime_config_.enable_full_shared_expert =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_full_shared_expert", false);
-  if (tensor_parallel_size_ == 0) {
+  if (runtime_config_.parallel_basic_config.tensor_parallel_size == 0) {
     int device_size = -1;
     GetDeviceCount(&device_size);
-    tensor_parallel_size_ = static_cast<size_t>(device_size);
+    runtime_config_.parallel_basic_config.tensor_parallel_size = static_cast<size_t>(device_size);
   }
 
-  if (attn_data_parallel_size_ > 1 && std::getenv("PYTORCH_CUDA_ALLOC_CONF") != nullptr) {
+  if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1 &&
+      std::getenv("PYTORCH_CUDA_ALLOC_CONF") != nullptr) {
     KLLM_THROW(
-        fmt::format("Set env PYTORCH_CUDA_ALLOC_CONF to backend:cudaMallocAsync while attn_data_parallel_size_ > 1 may "
+        fmt::format("Set env PYTORCH_CUDA_ALLOC_CONF to backend:cudaMallocAsync while "
+                    "runtime_config_.parallel_basic_config.attn_data_parallel_size > 1 may "
                     "cause libtorch blocked, please unset it."));
   }
 
   KLLM_CHECK_WITH_INFO(
-      tensor_parallel_size_ >= attn_data_parallel_size_,
+      runtime_config_.parallel_basic_config.tensor_parallel_size >=
+          runtime_config_.parallel_basic_config.attn_data_parallel_size,
       fmt::format("Tensor Para Size(tensor_para_size) {} should >= Attention Data Para Size(attn_data_para_size) {}",
-                  tensor_parallel_size_, attn_data_parallel_size_));
+                  runtime_config_.parallel_basic_config.tensor_parallel_size,
+                  runtime_config_.parallel_basic_config.attn_data_parallel_size));
 
   KLLM_CHECK_WITH_INFO(
-      tensor_parallel_size_ % attn_data_parallel_size_ == 0,
+      runtime_config_.parallel_basic_config.tensor_parallel_size %
+              runtime_config_.parallel_basic_config.attn_data_parallel_size ==
+          0,
       fmt::format("Tensor Para Size(tensor_para_size) {} % Attention Data Para Size(attn_data_para_size) {} != 0",
-                  tensor_parallel_size_, attn_data_parallel_size_));
+                  runtime_config_.parallel_basic_config.tensor_parallel_size,
+                  runtime_config_.parallel_basic_config.attn_data_parallel_size));
 
 #if (defined(ENABLE_ACL) || defined(ENABLE_TOPS))
-  if (attn_data_parallel_size_ > 1) {
+  if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1) {
     KLLM_THROW(
         fmt::format("Huawei Ascend does not support data parallelism, please set attn_data_parallel_size to 1."));
   }
@@ -180,9 +230,11 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
     pipeline_config_.pipeline_para_comm_type = DistributedCommunicationType::SCATTER;
   }
 
-  if (!(tensor_parallel_size_ > 0 && attn_data_parallel_size_ > 0)) {
-    KLLM_THROW(fmt::format("Tensor Para Size {}, Data Para Size {} should > 0", tensor_parallel_size_,
-                           attn_data_parallel_size_));
+  if (!(runtime_config_.parallel_basic_config.tensor_parallel_size > 0 &&
+        runtime_config_.parallel_basic_config.attn_data_parallel_size > 0)) {
+    KLLM_THROW(fmt::format("Tensor Para Size {}, Data Para Size {} should > 0",
+                           runtime_config_.parallel_basic_config.tensor_parallel_size,
+                           runtime_config_.parallel_basic_config.attn_data_parallel_size));
   }
 
   // Read batch scheduler config.
@@ -224,11 +276,13 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
   // When MTP is enabled, each request requires calculating 2 tokens while decoding.
   batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.enable_mtp_module ? 2 : 1;
 
-  if (attn_data_parallel_size_ > 1) {
+  if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1) {
     KLLM_CHECK_WITH_INFO(
-        batch_scheduler_config_.max_step_token_num / attn_data_parallel_size_ >= batch_scheduler_config_.max_token_len,
+        batch_scheduler_config_.max_step_token_num / runtime_config_.parallel_basic_config.attn_data_parallel_size >=
+            batch_scheduler_config_.max_token_len,
         fmt::format("max_step_token_num({}) / attn_data_para_size({}) must >= max_token_len({})",
-                    batch_scheduler_config_.max_step_token_num, attn_data_parallel_size_,
+                    batch_scheduler_config_.max_step_token_num,
+                    runtime_config_.parallel_basic_config.attn_data_parallel_size,
                     batch_scheduler_config_.max_token_len));
   }
 
@@ -240,7 +294,7 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
 
   const char *enable_flash_mla = std::getenv("ENABLE_FLASH_MLA");
   if (enable_flash_mla != nullptr && strcmp(enable_flash_mla, "1") == 0) {
-    enable_flash_mla_ = true;
+    runtime_config_.enable_flash_mla = true;
     block_manager_config_.host_allocator_config.block_token_num = 64;
     block_manager_config_.device_allocator_config.block_token_num = 64;
     KLLM_LOG_INFO << "ENABLE_FLASH_MLA=1 detected, setting block_token_num to 64 for flash_mla";
@@ -258,7 +312,7 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
   cache_manager_config_.min_flexible_cache_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.min_flexible_cache_num", 0);
   cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
-  cache_manager_config_.tensor_para_size = tensor_parallel_size_;
+  cache_manager_config_.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   cache_manager_config_.enable_prefix_caching =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_auto_prefix_cache", false);
 #ifdef ENABLE_ACL
@@ -280,11 +334,34 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
   expert_parallel_config_.expert_para_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.expert_para_size", 1);
 
+  // Read attn backend config.
+  runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = yaml_reader.GetScalar<bool>(
+      yaml_reader.GetRootNode(), "setting.attn_backend.enable_blocked_multi_token_forwarding_kv", false);
+  KLLM_LOG_INFO << "enable_blocked_multi_token_forwarding_kv: "
+                << runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+
   InitConnectorConfig(yaml_reader);
   return Status();
 }
 
-void ScheduleConfigParser::UpdateMembers(const ModelConfig &model_config, DataType kv_cache_dtype) {
+void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConfig &model_config,
+                                         std::string &kv_cache_dtype_str) {
+  DataType kv_cache_dtype = model_config.weight_data_type;
+
+  if (runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
+      !(IsFlashMlaEnable() && !IsPrefixCachingEnabled())) {
+    if (kv_cache_dtype_str == "fp8_e5m2" || kv_cache_dtype_str == "fp8_e4m3") {
+      KLLM_THROW("FlashAttention not support fp8 kv cache");
+    }
+  } else {
+    if (kv_cache_dtype_str == "fp8_e5m2") {
+      kv_cache_dtype = TYPE_FP8_E5M2;
+    } else if (kv_cache_dtype_str == "fp8_e4m3") {
+      kv_cache_dtype = TYPE_FP8_E4M3;
+      PrepareKVScales(model_dir, model_config);
+    }
+  }
+
   if (model_config.is_quant == true && model_config.quant_config.method == QUANT_FP8_E4M3 &&
       model_config.quant_config.is_checkpoint_fp8_serialized == false) {
     if (block_manager_config_.reserved_device_memory_ratio < 0.02) {
@@ -401,52 +478,59 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     KLLM_LOG_WARNING << "flexible cache and qk norm cannot be used together, set min_flexible_cache_num to 0";
   }
 
-  if (tensor_parallel_size_ > model_config.num_key_value_heads ||
-      model_config.num_key_value_heads % tensor_parallel_size_ != 0) {
+  if (runtime_config_.parallel_basic_config.tensor_parallel_size > model_config.num_key_value_heads ||
+      model_config.num_key_value_heads % runtime_config_.parallel_basic_config.tensor_parallel_size != 0) {
     KLLM_THROW(
-        fmt::format("The size of key_value_heads cannot be evenly divided by the size of tensor_parallel_size_. "
+        fmt::format("The size of key_value_heads cannot be evenly divided by the size of "
+                    "runtime_config_.parallel_basic_config.tensor_parallel_size. "
                     "{} % {} != 0 ",
-                    model_config.num_key_value_heads, tensor_parallel_size_));
+                    model_config.num_key_value_heads, runtime_config_.parallel_basic_config.tensor_parallel_size));
   }
 
-  if (tensor_parallel_size_ < expert_parallel_size_ || tensor_parallel_size_ % expert_parallel_size_ != 0) {
+  if (runtime_config_.parallel_basic_config.tensor_parallel_size <
+          runtime_config_.parallel_basic_config.expert_parallel_size ||
+      runtime_config_.parallel_basic_config.tensor_parallel_size %
+              runtime_config_.parallel_basic_config.expert_parallel_size !=
+          0) {
     KLLM_THROW(
-        fmt::format("The size of tensor_parallel_size_ cannot be evenly divided by the size of expert_parallel_size_. "
+        fmt::format("The size of runtime_config_.parallel_basic_config.tensor_parallel_size cannot be evenly divided "
+                    "by the size of "
+                    "runtime_config_.parallel_basic_config.expert_parallel_size. "
                     "{} % {} != 0 ",
-                    tensor_parallel_size_, expert_parallel_size_));
+                    runtime_config_.parallel_basic_config.tensor_parallel_size,
+                    runtime_config_.parallel_basic_config.expert_parallel_size));
   }
 
   if (batch_scheduler_config_.max_token_len > 0) {
-    if (batch_scheduler_config_.max_token_len > model_config.max_token_num) {
+    if (batch_scheduler_config_.max_token_len > model_config.max_training_seq_len) {
       KLLM_LOG_WARNING << fmt::format(
-          "The max_token_num configured in the model's config.json is less than the "
+          "The max_training_seq_len configured in the model's config.json is less than the "
           "max_token_len configured in the ksana yaml file. {} < {}, use {}",
-          model_config.max_token_num, batch_scheduler_config_.max_token_len, model_config.max_token_num);
+          model_config.max_training_seq_len, batch_scheduler_config_.max_token_len, model_config.max_training_seq_len);
+      runtime_config_.max_seq_len = model_config.max_training_seq_len;
     } else {
-      model_config.max_token_num = batch_scheduler_config_.max_token_len;
+      runtime_config_.max_seq_len = batch_scheduler_config_.max_token_len;
     }
+  } else {
+    runtime_config_.max_seq_len = model_config.max_training_seq_len;
   }
-  batch_scheduler_config_.max_token_len = model_config.max_token_num;
+  batch_scheduler_config_.max_token_len = runtime_config_.max_seq_len;
   if ((batch_scheduler_config_.split_fuse_token_num == 0) &&
-      (batch_scheduler_config_.max_step_token_num < model_config.max_token_num)) {
+      (batch_scheduler_config_.max_step_token_num < batch_scheduler_config_.max_token_len)) {
     // if no split fuse, request cannot be processed if max_step_num < input token num
-    batch_scheduler_config_.max_step_token_num = model_config.max_token_num;
+    batch_scheduler_config_.max_step_token_num = batch_scheduler_config_.max_token_len;
   }
 
   // TODO(robertyuan): These members should be moved to other configs
-  model_config.tensor_para_size = tensor_parallel_size_;
-  model_config.attn_data_para_size = attn_data_parallel_size_;
-  model_config.expert_world_size = expert_world_size_;
-  model_config.expert_para_size = expert_parallel_size_;
-  model_config.moe_tensor_para_size = tensor_parallel_size_ / expert_parallel_size_;
-  model_config.enable_full_shared_expert = enable_full_shared_expert_;
+  runtime_config_.parallel_basic_config.moe_tensor_para_size =
+      runtime_config_.parallel_basic_config.tensor_parallel_size /
+      runtime_config_.parallel_basic_config.expert_parallel_size;
 
-  model_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
-  model_config.max_batch_size = batch_scheduler_config_.max_batch_size;
-  model_config.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
-  model_config.max_step_token_num = batch_scheduler_config_.max_step_token_num;
-
-  model_config.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
+  runtime_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+  runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
+  runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
+  runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
+  runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
 
   return Status();
 }
@@ -515,6 +599,11 @@ Status ScheduleConfigParser::GetBlockManagerConfig(BlockManagerConfig &block_man
 
 void ScheduleConfigParser::SetBlockManagerConfig(const BlockManagerConfig &block_manager_config) {
   block_manager_config_ = block_manager_config;
+}
+
+Status ScheduleConfigParser::GetRuntimeConfig(RuntimeConfig &runtime_config) {
+  runtime_config = runtime_config_;
+  return Status();
 }
 
 Status ScheduleConfigParser::CalculateBlockNumber() {
@@ -631,8 +720,8 @@ size_t ScheduleConfigParser::GetTotalHostBlockNum() { return block_manager_confi
 DataType ScheduleConfigParser::GetKVCacheType() { return block_manager_config_.device_allocator_config.kv_cache_dtype; }
 
 std::vector<int> ScheduleConfigParser::GetDataParaGroupDevices(int dp_id) {
-  size_t device_count = tensor_parallel_size_;
-  size_t group_device_count = device_count / attn_data_parallel_size_;
+  size_t device_count = runtime_config_.parallel_basic_config.tensor_parallel_size;
+  size_t group_device_count = device_count / runtime_config_.parallel_basic_config.attn_data_parallel_size;
 
   std::vector<int> group_devices;
   for (size_t i = 0; i < group_device_count; ++i) {
@@ -642,16 +731,9 @@ std::vector<int> ScheduleConfigParser::GetDataParaGroupDevices(int dp_id) {
   return group_devices;
 }
 
-size_t ScheduleConfigParser::GetAttentionTensorParallel() { return tensor_parallel_size_ / attn_data_parallel_size_; }
-
-void ScheduleConfigParser::SetDataParaGroupStatus(int dp_group_id, bool enabled) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  dp_group_status_[dp_group_id] = enabled;
-}
-
-bool ScheduleConfigParser::GetDataParaGroupStatus(int dp_group_id) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return dp_group_status_[dp_group_id];
+size_t ScheduleConfigParser::GetAttentionTensorParallel() {
+  return runtime_config_.parallel_basic_config.tensor_parallel_size /
+         runtime_config_.parallel_basic_config.attn_data_parallel_size;
 }
 
 bool ScheduleConfigParser::IsPrefixCachingEnabled() { return cache_manager_config_.enable_prefix_caching; }
@@ -677,8 +759,9 @@ void ScheduleConfigParser::InitializeExpertParallelConfig() {
   ExpertParallelConfig expert_parallel_config;
   GetExpertParallelConfig(expert_parallel_config);
   expert_parallel_config.expert_node_rank = expert_node_rank ? std::stoi(expert_node_rank) : 0;
-  expert_parallel_config.expert_para_size = expert_parallel_size_;
-  expert_parallel_config.expert_tensor_para_size = tensor_parallel_size_ / expert_parallel_size_;
+  expert_parallel_config.expert_para_size = runtime_config_.parallel_basic_config.expert_parallel_size;
+  expert_parallel_config.expert_tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size /
+                                                   runtime_config_.parallel_basic_config.expert_parallel_size;
   expert_parallel_config.global_expert_para_size =
       expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
   if (expert_parallel_config.expert_world_size > 1) {

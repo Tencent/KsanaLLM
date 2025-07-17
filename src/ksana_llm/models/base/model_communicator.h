@@ -67,8 +67,6 @@ class ModelCommunicator {
   // Whether the communication is finished.
   Event comm_finish_event_;
 
-  bool use_cuda_graph_ = false;
-
   uint32_t tp_size_ = 1;
 
   bool is_full_nvlink_ = false;

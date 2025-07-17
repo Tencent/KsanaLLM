@@ -29,8 +29,10 @@ void RecordRequestSchedEventWithFContext(ForwardingContext<T>& forwarding_contex
 }
 
 template <typename T>
-CommonModel<T>::CommonModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context) {
+CommonModel<T>::CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                            std::shared_ptr<Context> context) {
   model_config_ = model_config;
+  runtime_config_ = runtime_config;
   context_ = context;
   rank_ = rank;
   GetBufferManager()->SetRank(rank_);
@@ -65,10 +67,11 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   model_run_config_.return_hidden_states =
       pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer);
 
-  model_buffers_.Init(context_, rank_, model_config_, model_run_config_.return_hidden_states, GetBufferManager());
+  model_buffers_.Init(context_, rank_, model_config_, runtime_config_, model_run_config_.return_hidden_states,
+                      GetBufferManager());
 
   // Initialize the buffer of forwarding contexts based on max_pp_batch_num
-  size_t forwarding_context_buffer_size = model_config_.max_pp_batch_num > 0 ? model_config_.max_pp_batch_num : 1;
+  size_t forwarding_context_buffer_size = runtime_config_.max_pp_batch_num > 0 ? runtime_config_.max_pp_batch_num : 1;
   // Clear any existing contexts in the buffer
   {
     std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
@@ -80,8 +83,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     for (size_t multi_batch_id = 0; multi_batch_id < forwarding_context_buffer_size; ++multi_batch_id) {
       auto forwarding_context = std::make_unique<ForwardingContext<T>>();
       // TODO(karlluo): each forwarding_context binding different model buffer
-      forwarding_context->Init(context_, rank_, model_config_, pipeline_config_, model_buffers_.buffers_.get(),
-                               GetBufferManager(), multi_batch_id);
+      forwarding_context->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
+                               model_buffers_.buffers_.get(), GetBufferManager(), multi_batch_id);
       forwarding_context_buffer_.push_back(std::move(forwarding_context));
     }
 
@@ -102,7 +105,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
   // Initialize instances for each layer.
   layer_creation_context_.Init(base_weight, shared_matmul_workspace_buffer_, context_, rank_, pipeline_config_,
-                               model_config_, GetBufferManager());
+                               model_config_, runtime_config_, GetBufferManager());
 
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
@@ -132,7 +135,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 
   if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
     DataType input_data_type = TYPE_INT32;
-    size_t max_token_num = model_config_.max_step_token_num;
+    size_t max_token_num = runtime_config_.max_step_token_num;
     cpu_input_tokens_tensor_ = Tensor(MemoryLocation::LOCATION_HOST, input_data_type, {max_token_num}, rank_);
     cpu_tokens_emb_tensor_ =
         Tensor(MemoryLocation::LOCATION_HOST, input_data_type, {max_token_num * hidden_units}, rank_);
@@ -153,8 +156,9 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
                 3 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
   }
   bool reuse_prefix_config = prefix_caching_enabled_ || speculative_decoding_enabled_;
-  model_creation_config.Init(model_config_, model_buffers_.cos_sin_cache_tensor_, model_run_config_.position_encoding,
-                             reuse_prefix_config, layer_num_on_node_, mrotary_section_tensor_.GetPtr<const int>());
+  model_creation_config.Init(model_config_, runtime_config_, model_buffers_.cos_sin_cache_tensor_,
+                             model_run_config_.position_encoding, reuse_prefix_config, layer_num_on_node_,
+                             mrotary_section_tensor_.GetPtr<const int>());
 
   // create matmul layer
   CreateLayers(layer_creation_context_, model_creation_config);

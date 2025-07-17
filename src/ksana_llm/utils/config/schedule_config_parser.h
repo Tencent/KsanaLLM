@@ -48,19 +48,19 @@ struct BatchSchedulerConfig {
   size_t max_waiting_queue_len = 256;
 
   // The max token number for one scheduler step.
-  size_t max_step_token_num = 4096;
+  size_t max_step_token_num = 4096;  // to be removed
 
   // The max batch size.
-  size_t max_batch_size = 8;
+  size_t max_batch_size = 8;  // to be removed
 
-  size_t max_pp_batch_num = 1;  // max number of batchs in pipeline parallel.
+  size_t max_pp_batch_num = 1;  // to be removed
 
   // The max vocab size.
-  size_t max_vocab_size = 32000;
+  size_t max_vocab_size = 32000;  // TODO(robertyuan): Use model_config.vocab_size. To be removed
 
   // The maximum length the generated tokens can have
   // orresponds to the length of the input prompt + max_new_tokens.
-  size_t max_token_len = 2048;
+  size_t max_token_len = 2048;  // to be removed
 
   // The swapin block threshold.
   float swapout_block_threshold = 1.0;
@@ -261,6 +261,47 @@ struct ExpertParallelConfig {
   DistributedCommunicationType expert_para_comm_type = DistributedCommunicationType::DEFAULT;
 };
 
+// The config of attention backend.
+struct AttnBackendConfig {
+  bool enable_blocked_multi_token_forwarding_kv = false;
+  // std::vector<float> k_scales;  // to be removed
+  // std::vector<float> v_scales;  // to be removed
+};
+
+struct ParallelismBasicConfig {
+  size_t tensor_parallel_size{1};
+  size_t attn_data_parallel_size{1};
+  size_t expert_parallel_size{1};
+  size_t expert_world_size{1};
+  size_t moe_tensor_para_size{1};
+};
+
+// Config info used during runtime
+// Some configs are determined by ModelConfig and BatchSchedulerConfig
+struct RuntimeConfig {
+  // Group 1: parallelism config
+  ParallelismBasicConfig parallel_basic_config;
+
+  // Group 2: execution graph config
+  // For attention backend.
+  AttnBackendConfig attn_backend_config;
+  bool enable_flash_mla = false;
+  bool enable_full_shared_expert = false;
+  // Whether enable prefix caching.
+  bool enable_prefix_caching = false;
+  // Whether to normalize q and k before rotary position embedding in attention.
+  // bool enable_qk_pre_norm_before_rotary_pos = false;
+
+  // Schedule related. determined by schedule configs and cache related configs.
+  size_t max_pp_batch_num{1};  // max number of batchs in pipeline parallel.
+  size_t block_token_num;
+  int max_batch_size;
+  size_t max_seq_len;         // The max token number of a sequence
+  size_t max_step_token_num;  //  The max token number of step
+
+  // DataType kv_cache_dtype;
+};
+
 class ScheduleConfigParser {
  public:
   ScheduleConfigParser();
@@ -272,7 +313,7 @@ class ScheduleConfigParser {
 
   Status UpdateModelConfig(ModelConfig &model_config);
 
-  void UpdateMembers(const ModelConfig &model_config, DataType kv_cache_dtype);
+  void UpdateMembers(const std::string &model_dir, ModelConfig &model_config, std::string &kv_cache_dtype_str);
 
   Status CheckEnvironment();
 
@@ -284,6 +325,8 @@ class ScheduleConfigParser {
   Status GetCacheManagerConfig(CacheManagerConfig &cache_manager_config);
 
   void SetCacheManagerConfig(CacheManagerConfig &cache_manager_config);
+
+  Status GetRuntimeConfig(RuntimeConfig &runtime_config);
 
   // Whether the auto-prefix-caching is enabled.
   bool IsPrefixCachingEnabled();
@@ -314,15 +357,13 @@ class ScheduleConfigParser {
   DataType GetKVCacheType();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
 
-  // Whether specific dp group is enabled in current step.
-  void SetDataParaGroupStatus(int dp_group_id, bool enabled);
-  bool GetDataParaGroupStatus(int dp_group_id);
+  size_t GetTensorParallelSize() const { return runtime_config_.parallel_basic_config.tensor_parallel_size; }
 
-  size_t GetTensorParallelSize() const { return tensor_parallel_size_; }
+  void SetTensorParallelSize(size_t tensor_parallel_size) {
+    runtime_config_.parallel_basic_config.tensor_parallel_size = tensor_parallel_size;
+  }
 
-  void SetTensorParallelSize(size_t tensor_parallel_size) { tensor_parallel_size_ = tensor_parallel_size; }
-
-  size_t GetAttnDataParallelSize() const { return attn_data_parallel_size_; }
+  size_t GetAttnDataParallelSize() const { return runtime_config_.parallel_basic_config.attn_data_parallel_size; }
 
   // Get each atten data parallel group size.
   // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the number of
@@ -330,15 +371,17 @@ class ScheduleConfigParser {
   // attn dp group size is 2.
   size_t GetAttentionTensorParallel();
 
-  void SetAttnDataParallelSize(size_t attn_data_parallel_size) { attn_data_parallel_size_ = attn_data_parallel_size; }
+  void SetAttnDataParallelSize(size_t attn_data_parallel_size) {
+    runtime_config_.parallel_basic_config.attn_data_parallel_size = attn_data_parallel_size;
+  }
 
-  size_t GetPipeLineParallelSize() const { return pipeline_parallel_size_; }
+  size_t GetExpertParallelSize() { return runtime_config_.parallel_basic_config.expert_parallel_size; }
 
-  size_t GetExpertParallelSize() { return expert_parallel_size_; }
+  void SetExpertParallelSize(size_t expert_parallel_size) {
+    runtime_config_.parallel_basic_config.expert_parallel_size = expert_parallel_size;
+  }
 
-  void SetExpertParallelSize(size_t expert_parallel_size) { expert_parallel_size_ = expert_parallel_size; }
-
-  size_t GetExpertWorldSize() { return expert_world_size_; }
+  size_t GetExpertWorldSize() { return runtime_config_.parallel_basic_config.expert_world_size; }
 
   size_t GetMaxBatchSize() const { return batch_scheduler_config_.max_batch_size; }
 
@@ -351,6 +394,14 @@ class ScheduleConfigParser {
   Status GetPipelineConfig(PipelineConfig &pipeline_config) const {
     pipeline_config = pipeline_config_;
     return Status();
+  }
+
+  bool IsBlockedMultiTokenForwardingEnabled() const {
+    return runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  }
+
+  void SetAttnBackendConfig(const AttnBackendConfig &attn_backend_config) {
+    runtime_config_.attn_backend_config = attn_backend_config;
   }
 
   Status GetExpertParallelConfig(ExpertParallelConfig &expert_parallel_config) const {
@@ -376,7 +427,7 @@ class ScheduleConfigParser {
     return;
   }
 
-  bool IsFlashMlaEnable() { return enable_flash_mla_; }
+  bool IsFlashMlaEnable() { return runtime_config_.enable_flash_mla; }
 
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
@@ -409,27 +460,16 @@ class ScheduleConfigParser {
   // The config of block manager.
   BlockManagerConfig block_manager_config_;
 
-  size_t tensor_parallel_size_;
-  size_t attn_data_parallel_size_;
-  size_t pipeline_parallel_size_;
-  size_t expert_parallel_size_;
-  size_t expert_world_size_;
+  RuntimeConfig runtime_config_;
 
+  // TODO(robertyuan): This two configs will be set by data channel, fix them later
   // For distributed multiple node pipeline.
   PipelineConfig pipeline_config_;
-
-  // For attn data parallel status
-  std::vector<bool> dp_group_status_;
-
   // For expert parallel.
   ExpertParallelConfig expert_parallel_config_;
 
   // Store parsed connector configurations
   ConnectorConfig connector_config_;
-
-  bool enable_flash_mla_;
-  bool enable_full_shared_expert_;
-  std::mutex mutex_;
 };
 
 }  // namespace ksana_llm

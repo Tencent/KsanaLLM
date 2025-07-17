@@ -23,6 +23,7 @@ class CommunicationPerformanceRunner {
 
  private:
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_ = nullptr;
   std::shared_ptr<DistributedCoordinator> distributed_coordinator_ = nullptr;
 };

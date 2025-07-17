@@ -45,13 +45,14 @@ struct ForwardingBuffers {
   // This buffer is used among multiple forward calls
   std::vector<Tensor> mtp_hidden_buffer_tensors;
 
-  void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
-            BufferManager* buffer_mgr);
+  void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
+            const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
 
   void CalculateBuffersShape(size_t batch_size, size_t token_num);
 
   // Model config
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
 
   // Is use multi-token prediction
   bool use_mtp{false};
@@ -66,8 +67,8 @@ struct ModelBuffers {
   std::vector<Tensor> local_residual_buffer_tensors_{1};
   Tensor cos_sin_cache_tensor_;
 
-  void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
-            BufferManager* buffer_mgr);
+  void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
+            const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
 };
 
 template <typename T>
@@ -75,8 +76,8 @@ class ForwardingContext {
  public:
   ~ForwardingContext() {}
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-            const PipelineConfig& pipeline_config, ForwardingBuffers* buffers, BufferManager* buffer_mgr,
-            size_t multi_batch_id);
+            const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
+            BufferManager* buffer_mgr, size_t multi_batch_id);
 
   void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
 

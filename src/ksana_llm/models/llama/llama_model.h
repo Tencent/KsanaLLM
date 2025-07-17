@@ -25,8 +25,8 @@ class Llama : public ModelInterface<T> {
 template <typename T>
 class LlamaModel : public CommonModel<T> {
  public:
-  LlamaModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-             std::shared_ptr<BaseWeight> base_weight);
+  LlamaModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+             std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~LlamaModel() = default;
 
  private:

@@ -69,6 +69,8 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get model config error:" + status.ToString());
   }
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
 
   // Initialize schedule output and hidden unit buffer pool.
   // Must be called after block manager is set.
@@ -161,7 +163,7 @@ Status InferenceEngine::Initialize() {
   status = env->GetProfilerConfig(profiler_config);
   Singleton<Profiler>::GetInstance()->Init(profiler_config);
 
-  size_t max_batch_size = (size_t)model_config.max_batch_size;
+  size_t max_batch_size = (size_t)runtime_config.max_batch_size;
   size_t max_vocab_size = (size_t)model_config.vocab_size;
 
   status = LoadOperatorOptimization(model_config);
@@ -184,11 +186,12 @@ Status InferenceEngine::Initialize() {
   // Register model instance.
   {
     // Update pipeline_config first, and then load model.
-    model_config.max_pp_batch_num = batch_scheduler_config.max_pp_batch_num;
-    std::shared_ptr<WeightInstanceInterface> weight_instance = std::make_shared<WeightInstance>(model_config, context_);
+    runtime_config.max_pp_batch_num = batch_scheduler_config.max_pp_batch_num;  // TODO(robertyuan): to be removed
+    std::shared_ptr<WeightInstanceInterface> weight_instance =
+        std::make_shared<WeightInstance>(model_config, runtime_config, context_);
     weight_instance->Load();
     std::shared_ptr<ModelInstance> model_instance =
-        std::make_shared<ModelInstance>(model_config, context_, weight_instance);
+        std::make_shared<ModelInstance>(model_config, runtime_config, context_, weight_instance);
     model_instance->Load();
 
     // Register model instance.
@@ -338,7 +341,9 @@ Status InferenceEngine::DoWarmupRun() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "No model config found for warmup run. " + status.ToString());
   }
-  size_t max_warmup_input_length = std::min(model_config.max_token_num, (size_t)2048);
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+  size_t max_warmup_input_length = std::min(runtime_config.max_seq_len, (size_t)2048);
   if (std::getenv("MAX_WARMUP_INPUT_LENGTH") != nullptr) {
     max_warmup_input_length = std::stoi(std::getenv("MAX_WARMUP_INPUT_LENGTH"));
   }
@@ -379,51 +384,6 @@ Status InferenceEngine::DoWarmupRun() {
   pybind11::gil_scoped_acquire acquire;
   return Status();
 }
-
-#ifdef ENABLE_CUDA
-Status InferenceEngine::CudaGraphCapture() {
-  if (!Singleton<Environment>::GetInstance()->IsCudagraphEnabled()) {
-    KLLM_LOG_INFO << "cuda graph capture is disabled";
-    return Status();
-  }
-  pybind11::gil_scoped_release release;
-  auto cuda_graph_builder = std::make_shared<CudaGraphBuilder>();
-  // currently support cudagraph bs=1,2,3
-  // for VRAM usage consideration (each cudagraph for specific bs takes 15~25mb VRAM)
-  const int capture_batch_sizes = 3;
-  size_t max_batch_size =
-      cuda_graph_builder->GetMaxGraphBatchSize(model_instances_[0]->GetModelConfig().max_batch_size);
-  std::vector<int> batch_size_capture_list;
-  batch_size_capture_list.reserve(cuda_graph_builder->GetBatchSizeCaptureList().size());
-  std::copy_if(cuda_graph_builder->GetBatchSizeCaptureList().begin(),
-               cuda_graph_builder->GetBatchSizeCaptureList().end(), std::back_inserter(batch_size_capture_list),
-               [&](size_t bs) { return bs <= max_batch_size; });
-  std::vector<int> input_tokens(batch_size_capture_list.back(), 0);
-  for (int batchsize = 1; batchsize <= capture_batch_sizes; ++batchsize) {
-    KLLM_LOG_INFO << "start to capture graph: batchsize: " << batchsize;
-    auto warmup_run_input = std::make_shared<KsanaPythonInput>();
-    warmup_run_input->input_tokens = std::vector<int>(input_tokens.begin(), input_tokens.begin() + capture_batch_sizes);
-    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-    auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
-    for (int i = 0; i <= batchsize; ++i) {
-      std::vector<int> output_tuple_;
-      output_tuple_.emplace_back(std::get<0>(req->output_group[0])[0]);
-      std::vector<std::vector<std::pair<int, float>>> req_logprobs;
-      auto req_tuple = std::make_tuple(output_tuple_, req_logprobs, std::get<2>(req->output_group[0]));
-      req->output_group.emplace_back(req_tuple);
-    }
-    req->is_cudagraph_capture_request = true;
-    // we only need one context decode + one decode process
-    req->sampling_config.max_new_tokens = 2;
-    req->waiter = std::make_shared<Waiter>(1);
-    HandleRequest(req);
-    req->waiter->Wait();
-    KLLM_LOG_INFO << "end to capture graph batchsize: " << batchsize;
-  }
-  pybind11::gil_scoped_acquire acquire;
-  return Status();
-}
-#endif
 
 Status InferenceEngine::LoadOperatorOptimization(ModelConfig &model_config) {
 #ifdef ENABLE_CUDA
@@ -469,10 +429,6 @@ Status InferenceEngine::Start() {
   if (context_->IsChief()) {
     DoWarmupRun();
   }
-#endif
-
-#ifdef ENABLE_CUDA
-  CudaGraphCapture();
 #endif
 
   return Status();

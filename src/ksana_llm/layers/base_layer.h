@@ -38,7 +38,7 @@ class BaseLayer {
     return Status();
   }
 
-  virtual Status Preprocess(const ModelConfig& model_config_) { return Status(); }
+  virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) { return Status(); }
 
   virtual void Clear() {}
 

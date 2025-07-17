@@ -113,8 +113,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
 
   // attn_backend config.
-  AttnBackendConfig attn_backend_config;
-  Singleton<Environment>::GetInstance()->GetAttnBackendConfig(attn_backend_config);
+  bool enable_blocked_multi_token_forwarding_kv =
+      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
   c10::optional<at::Tensor> null_tensor = c10::nullopt;
   c10::optional<const at::Tensor> const_null_tensor = c10::nullopt;
 
@@ -129,7 +129,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
         block_size, layer_index, flexible_len, num_kv_heads, head_size, stride_size, stream));
   }
 
-  if (use_cache && !attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (use_cache && !enable_blocked_multi_token_forwarding_kv) {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
         v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
@@ -169,7 +169,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
   if (use_cache) {
-    if (attn_backend_config.enable_blocked_multi_token_forwarding_kv)
+    if (enable_blocked_multi_token_forwarding_kv)
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
           v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
@@ -215,7 +215,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   // vllm-attn apis.
 #  ifdef ENABLE_VLLM_FLASH_ATTN_MINOR_6
   std::vector<at::Tensor> mha_output;
-  if (attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv) {
     torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
     auto cache_options = options;
     if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
@@ -366,8 +366,8 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* k_tensor_ptr = k_tensor.data_ptr();
   void* v_tensor_ptr = v_tensor.data_ptr();
 
-  AttnBackendConfig attn_backend_config;
-  Singleton<Environment>::GetInstance()->GetAttnBackendConfig(attn_backend_config);
+  bool enable_blocked_multi_token_forwarding_kv =
+      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
 
   if (!no_rope && rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(
@@ -391,7 +391,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     torch::mul_out(q_tensor, q_tensor, attn_scale_tensor);
   }
 
-  if (attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv) {
     constexpr size_t kReqQLen = 1;
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
@@ -404,7 +404,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
         block_size, batch, total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
   }
 
-  if (attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv) {
     auto cache_options = options;
     if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
         KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {

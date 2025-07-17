@@ -24,8 +24,8 @@ class Internlm2 : public ModelInterface<T> {
 template <typename T>
 class Internlm2Model : public CommonModel<T> {
  public:
-  Internlm2Model(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                 std::shared_ptr<BaseWeight> base_weight);
+  Internlm2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                 std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~Internlm2Model() {}
 
  private:

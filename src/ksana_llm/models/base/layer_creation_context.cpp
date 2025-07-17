@@ -12,10 +12,11 @@ template <typename T>
 void LayerCreationContext<T>::Init(std::shared_ptr<BaseWeight> base_weight_,
                                    std::shared_ptr<Tensor>& shared_matmul_workspace_buffer_,
                                    std::shared_ptr<Context> context_, int rank_, PipelineConfig& pipeline_config_,
-                                   ModelConfig& model_config_, BufferManager* buffer_mgr) {
+                                   ModelConfig& model_config_, const RuntimeConfig& runtime_config,
+                                   BufferManager* buffer_mgr) {
   base_weight = base_weight_;
-  matmul_layer_factory =
-      std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_, rank_, context_);
+  matmul_layer_factory = std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_,
+                                                                 runtime_config, rank_, context_);
 
   context = context_;
   rank = rank_;
@@ -30,15 +31,17 @@ template class LayerCreationContext<float>;
 template class LayerCreationContext<float16>;
 template class LayerCreationContext<bfloat16>;
 
-void ModelCreationConfig::Init(const ModelConfig& model_config_, Tensor cos_sin_cache_tensor_,
-                               PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node_,
-                               const int* mrope_section_ptr) {
+void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config,
+                               Tensor cos_sin_cache_tensor_, PositionEncoding position_encoding,
+                               bool reuse_prefix_caching, int layer_num_on_node_, const int* mrope_section_ptr) {
   auto env = Singleton<Environment>::GetInstance();
   const int size_per_head = model_config_.size_per_head;
   const int head_num_per_tp = model_config_.head_num / env->GetAttentionTensorParallel();
   const int num_kv_heads_per_tp = model_config_.num_key_value_heads / env->GetAttentionTensorParallel();
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
+
+  this->runtime_config = runtime_config;
 
   layernorm_config.layernorm_eps = model_config_.layernorm_eps;
 
@@ -50,13 +53,13 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, Tensor cos_sin_
   attn_config.size_per_head = size_per_head;
   attn_config.stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
   attn_config.tensor_para_size = env->GetAttentionTensorParallel();
-  attn_config.data_para_size = model_config_.attn_data_para_size;
+  attn_config.data_para_size = runtime_config.parallel_basic_config.attn_data_parallel_size;
   attn_config.data_type = model_config_.weight_data_type;
   attn_config.rotary_embedding = model_config_.rotary_embedding;
   attn_config.rope_theta = model_config_.rope_theta;
   attn_config.position_encoding = position_encoding;
   attn_config.cos_sin_cache_ptr = std::any(cos_sin_cache_tensor_.GetPtr<void>());
-  attn_config.max_batch_size = model_config_.max_batch_size;
+  attn_config.max_batch_size = runtime_config.max_batch_size;
   attn_config.max_decode_tokens_per_req = batch_scheduler_config.max_decode_tokens_per_req;
   attn_config.use_qk_norm = model_config_.use_qk_norm;
   attn_config.mrope_section_ptr = mrope_section_ptr;

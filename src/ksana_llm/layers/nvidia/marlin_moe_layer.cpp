@@ -51,7 +51,7 @@ Status MarlinMoeLayer<T>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& work
 }
 
 template <typename T>
-Status MarlinMoeLayer<T>::Preprocess(const ModelConfig& model_config_) {
+Status MarlinMoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   return Status();
 }
 

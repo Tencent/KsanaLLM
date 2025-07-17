@@ -76,11 +76,11 @@ class DeepseekV3AbosrbWeightTest : public testing::Test {
  protected:
   void SetUp() override {
     model_config_.moe_config.moe_inter_size = 128;
-    model_config_.tensor_para_size = 1;
-    model_config_.attn_data_para_size = 1;
-    model_config_.expert_para_size = 1;
-    model_config_.expert_world_size = 1;
-    model_config_.moe_tensor_para_size = 1;
+    runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
+    runtime_config_.parallel_basic_config.attn_data_parallel_size = 1;
+    runtime_config_.parallel_basic_config.expert_parallel_size = 1;
+    runtime_config_.parallel_basic_config.expert_world_size = 1;
+    runtime_config_.parallel_basic_config.moe_tensor_para_size = 1;
     model_config_.moe_config.num_experts = 4;
     model_config_.hidden_units = 128;
     model_config_.weight_data_type = TYPE_FP16;
@@ -105,6 +105,7 @@ class DeepseekV3AbosrbWeightTest : public testing::Test {
   int rank = 0;
   size_t pack_factor = 8;
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_{nullptr};
   std::vector<std::string> weight_name_list;
   std::vector<std::string> custom_name_list;
@@ -123,15 +124,15 @@ TEST_F(DeepseekV3AbosrbWeightTest, GPTQAbsorbWeightV2Test) {
   model_config_.has_shared_experts = false;
   model_config_.moe_config.first_k_dense_replace = 0;
 
-  size_t head_num_per_tp =
-      model_config_.head_num / (model_config_.tensor_para_size / model_config_.attn_data_para_size);
+  size_t head_num_per_tp = model_config_.head_num / (runtime_config_.parallel_basic_config.tensor_parallel_size /
+                                                     runtime_config_.parallel_basic_config.attn_data_parallel_size);
   loader = std::make_shared<GPTQMlaMockSafeTensorsLoader>("mock_safetensors", true);
   const std::vector<std::string>& tensor_names = loader->GetTensorNameList();
   weight_name_list = tensor_names;
   custom_name_list = tensor_names;
   // init weights
   std::shared_ptr<DeepSeekV3Weight<float16>> weight =
-      std::make_shared<DeepSeekV3Weight<float16>>(model_config_, 0, context_);
+      std::make_shared<DeepSeekV3Weight<float16>>(model_config_, runtime_config_, 0, context_);
   // load weights.
   weight->LoadWeightsFromFile(loader, weight_name_list, custom_name_list);
   weight->ProcessWeights();

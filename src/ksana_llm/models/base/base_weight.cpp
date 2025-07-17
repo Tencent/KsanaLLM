@@ -15,8 +15,9 @@
 
 namespace ksana_llm {
 
-BaseWeight::BaseWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context)
-    : context_(context), model_config_(model_config), rank_(rank) {
+BaseWeight::BaseWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                       std::shared_ptr<Context> context)
+    : context_(context), model_config_(model_config), runtime_config_(runtime_config), rank_(rank) {
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
 
@@ -144,7 +145,7 @@ std::string BaseWeight::GetCacheFolder() {
     base_path = std::string(model_cache_path_env);
   }
   std::string model_info = fmt::format("/cached_model_{}/tp{}", GetTypeString(model_config_.weight_data_type),
-                                       model_config_.tensor_para_size);
+                                       runtime_config_.parallel_basic_config.tensor_parallel_size);
   if (GetAbsorbWeightsType() != AbsorbWeightsType::kAbsorbDisabled) {
     model_info += fmt::format("/absorb_{}", GetAbsorbWeightsType());
   }

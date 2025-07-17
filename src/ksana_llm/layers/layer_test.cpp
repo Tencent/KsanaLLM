@@ -51,10 +51,10 @@ class LayerTest : public testing::Test {
     model_config.inter_size = 11008;
     model_config.num_layer = 32;
     model_config.vocab_size = 32000;
-    model_config.tensor_para_size = 1;
+    runtime_config.parallel_basic_config.tensor_parallel_size = 1;
     model_config.layernorm_eps = 1e-6;
-    model_config.max_batch_size = 128;
-    model_config.max_token_num = 1024;
+    runtime_config.max_batch_size = 128;
+    runtime_config.max_seq_len = 1024;
     model_config.rotary_embedding = 128;
     model_config.max_position_embeddings = 2048;
     model_config.rope_theta = 10000.0f;
@@ -90,6 +90,7 @@ class LayerTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
+  RuntimeConfig runtime_config;  // TODO(robertyuan): seems nobody use it
   std::shared_ptr<Context> context_{nullptr};
 };
 
@@ -563,8 +564,8 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
     default_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - begin_time).count();
   }
 
-  machete_matmul_layer.Preprocess(model_config);
-  machete_matmul_layer.Preprocess(model_config);
+  machete_matmul_layer.Preprocess(model_config, runtime_config);
+  machete_matmul_layer.Preprocess(model_config, runtime_config);
 
   // 执行最优矩阵计算
   Tensor output1 = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, max_n}, kDeviceRank);
@@ -677,8 +678,8 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
     default_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - begin_time).count();
   }
 
-  cutlass_matmul_layer.Preprocess(model_config);
-  cutlass_matmul_layer.Preprocess(model_config);
+  cutlass_matmul_layer.Preprocess(model_config, runtime_config);
+  cutlass_matmul_layer.Preprocess(model_config, runtime_config);
 
   // 执行最优矩阵计算
   int64_t best_duration = 0;
@@ -954,8 +955,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
   auto t1 = std::chrono::high_resolution_clock::now();
   {
     std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(shared_matmul_workspace_buffer, model_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
+        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
       std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
           TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
@@ -970,8 +971,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
   auto t2 = std::chrono::high_resolution_clock::now();
   {
     std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(shared_matmul_workspace_buffer, model_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
+        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
@@ -1021,8 +1022,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
   auto t1 = std::chrono::high_resolution_clock::now();
   {
     std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(shared_matmul_workspace_buffer, model_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
+        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
       std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
           TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
@@ -1037,8 +1038,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
   auto t2 = std::chrono::high_resolution_clock::now();
   {
     std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(shared_matmul_workspace_buffer, model_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
+        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
@@ -1177,7 +1178,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3, {workspace_size}, kDeviceRank);
   std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
   moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
-  moe_layer.Preprocess(model_config);
+  moe_layer.Preprocess(model_config, runtime_config);
   EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
 
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
@@ -1290,7 +1291,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
   std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
   moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
-  moe_layer.Preprocess(model_config);
+  moe_layer.Preprocess(model_config, runtime_config);
   EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
 
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);

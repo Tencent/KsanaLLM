@@ -11,7 +11,7 @@ namespace ksana_llm {
 
 void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_num) {
   auto env = Singleton<Environment>::GetInstance();
-  const size_t tensor_para_size = model_config.tensor_para_size;
+  const size_t tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
   const size_t head_num = model_config.head_num;
   const size_t size_per_head = model_config.size_per_head;
   const size_t hidden_units = size_per_head * head_num;
@@ -26,7 +26,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   size_t inter_size_per_tp = model_config.inter_size / tensor_para_size;
   if (model_config.has_shared_experts) {
     size_t shared = model_config.moe_config.shared_expert_inter_size;
-    if (!model_config.enable_full_shared_expert) {
+    if (!runtime_config.enable_full_shared_expert) {
       // When enable_full_shared_expert is enabled, each GPU stores the complete shared experts without tensor
       // parallelism sharding across devices.
       shared /= tensor_para_size;
@@ -73,7 +73,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
                        {"shared_buffer", {shared_buffer_size}},
                        {"dp_input_buffer", {hidden_buffer_size}}};
 
-  const size_t max_seq_len = model_config.max_token_num;  // max seq len for one request
+  const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
   // TODO(robertyuan): This buffer is too large
   // TODO(jinxcwu): Move all env to environment
   // Use double-checking to avoid cases where environment variables are configured for non-MLA models.
@@ -88,11 +88,12 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   }
 }
 
-void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
-                             BufferManager* buffer_mgr) {
+void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
+                             const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr) {
   this->use_mtp = use_mtp;
   this->model_config = model_config;
-  CalculateBuffersShape(model_config.max_batch_size, model_config.max_step_token_num);
+  this->runtime_config = runtime_config;
+  CalculateBuffersShape(runtime_config.max_batch_size, runtime_config.max_step_token_num);
 
   Stream* stream = &(context->GetMemoryManageStreams()[rank]);
 
@@ -120,15 +121,15 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
   StreamSynchronize(*stream);
 }
 
-void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config, bool use_mtp,
-                        BufferManager* buffer_mgr) {
+void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
+                        const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr) {
   buffers_ = std::make_unique<ForwardingBuffers>();
-  buffers_->Init(context, rank, model_config, use_mtp, buffer_mgr);
+  buffers_->Init(context, rank, model_config, runtime_config, use_mtp, buffer_mgr);
 
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
-  size_t max_token_num = model_config.max_step_token_num;
+  size_t max_token_num = runtime_config.max_step_token_num;
   const size_t residual_buffer_size = max_token_num * hidden_units;
   const DataType weight_type = model_config.weight_data_type;
   // For distributed mode, the device buffer is used directly.
@@ -167,34 +168,35 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
 
 template <typename T>
 void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-                                const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
-                                BufferManager* buffer_mgr, size_t multi_batch_id) {
+                                const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config,
+                                ForwardingBuffers* buffers, BufferManager* buffer_mgr, size_t multi_batch_id) {
   pipeline_config_ = pipeline_config;
   context_ = context;
   rank_ = rank;
-  attn_data_parallel_size_ = model_config.attn_data_para_size;
+  attn_data_parallel_size_ = runtime_config.parallel_basic_config.attn_data_parallel_size;
   buffers_ = buffers;
   multi_batch_id_ = multi_batch_id;
 
   vocab_size_ = model_config.vocab_size;
-  vocab_size_pad_ = DivRoundUp(model_config.vocab_size, model_config.tensor_para_size) * model_config.tensor_para_size;
+  vocab_size_pad_ = DivRoundUp(model_config.vocab_size, runtime_config.parallel_basic_config.tensor_parallel_size) *
+                    runtime_config.parallel_basic_config.tensor_parallel_size;
   const DataType weight_type = model_config.weight_data_type;
 
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
-  int tensor_para_size = model_config.tensor_para_size;
+  int tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
 
-  size_t max_token_num = model_config.max_step_token_num;
-  size_t max_batch_size = model_config.max_batch_size;
+  size_t max_token_num = runtime_config.max_step_token_num;
+  size_t max_batch_size = runtime_config.max_batch_size;
   KLLM_LOG_DEBUG << fmt::format("Max Batch Size = {}, Max Seq Len = {}, Max Token Num = {}",
-                                model_config.max_batch_size, model_config.max_token_num, max_token_num);
+                                runtime_config.max_batch_size, runtime_config.max_seq_len, max_token_num);
 
   // TODO(karlluo): we needn't tensor's shape to transfer attribute
   TensorBuffer* forward_shape_buffer = buffer_mgr->CreateBufferTensor("forward_shape", {1}, TYPE_INVALID);
   attn_ctx_.forward_shape = forward_shape_buffer->GetTensors()[0];
 
-  model_input_ = std::make_shared<ModelInput>(model_config, rank_, context_);
+  model_input_ = std::make_shared<ModelInput>(model_config, runtime_config, rank_, context_);
 
   attn_ctx_.flag_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_BOOL, {1}, rank_);
 

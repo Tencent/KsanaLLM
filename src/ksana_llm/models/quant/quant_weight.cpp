@@ -48,22 +48,23 @@ namespace ksana_llm {
 #define NameReplace(ss, src, dst) std::regex_replace((ss), std::regex((src)), (dst))
 
 template <typename T>
-QuantWeight<T>::QuantWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context,
-                            std::unordered_map<std::string, Tensor>& weights_map,
+QuantWeight<T>::QuantWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                            std::shared_ptr<Context> context, std::unordered_map<std::string, Tensor>& weights_map,
                             std::unordered_map<std::string, DataType>& weights_data_type_map)
     : weights_map_(weights_map),
       weights_data_type_map_(weights_data_type_map),
       rank_(rank),
       context_(context),
-      model_config_(model_config) {
+      model_config_(model_config),
+      runtime_config_(runtime_config) {
   enable_ = CheckQuantModel();
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
-  tensor_para_size_ = model_config.tensor_para_size;
-  expert_world_size_ = model_config.expert_world_size;
-  expert_para_size_ = model_config.expert_para_size;
+  tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+  expert_world_size_ = runtime_config.parallel_basic_config.expert_world_size;
+  expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size;
   global_expert_para_size_ = expert_world_size_ * expert_para_size_;
   weight_data_type_ = model_config.weight_data_type;
-  enable_full_shared_expert_ = model_config.enable_full_shared_expert;
+  enable_full_shared_expert_ = runtime_config.enable_full_shared_expert;
 
   cutlass_helper_ = std::make_shared<CutlassUtils>(context_, rank, model_config_.quant_config.bits);
   marlin_helper_ = std::make_shared<MarlinUtils>(context_, rank, model_config_.quant_config.bits,
@@ -183,7 +184,8 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
                                            DataType& weight_data_type, void* weight_ptr) {
   SetDevice(rank_);
   size_t moe_inter_size = model_config_.moe_config.moe_inter_size;
-  size_t moe_inter_size_per_rank = DivRoundUp(moe_inter_size, model_config_.moe_tensor_para_size);
+  size_t moe_inter_size_per_rank =
+      DivRoundUp(moe_inter_size, runtime_config_.parallel_basic_config.moe_tensor_para_size);
   size_t hidden_units = model_config_.hidden_units;
   size_t pack_factor = 32 / model_config_.quant_config.bits;
   size_t group_size = model_config_.quant_config.group_size;
@@ -194,7 +196,7 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
     return;
   }
   expert_idx = expert_map_[expert_idx];
-  int tp_rank = (model_config_.moe_tensor_para_size > 1 ? rank_ / expert_para_size_ : 0);
+  int tp_rank = (runtime_config_.parallel_basic_config.moe_tensor_para_size > 1 ? rank_ / expert_para_size_ : 0);
   if (!model_config_.use_mla && !model_config_.moe_config.use_vllm_moe &&
       tensor_name.find(".g_idx") != std::string::npos) {
     if (tensor_name.find("up_proj") != std::string::npos || tensor_name.find("gate_proj") != std::string::npos) {
@@ -267,8 +269,9 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
       size_t expert_pitch =
           moe_inter_size_per_rank * static_cast<size_t>(tensor.sizes()[1]) * GetTypeSize(processed_tensor_type);
       size_t double_expert_pitch = expert_pitch * 2;
-      size_t src_upgate_offset =
-          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * expert_pitch : 0;
+      size_t src_upgate_offset = runtime_config_.parallel_basic_config.moe_tensor_para_size > 1
+                                     ? (rank_ / expert_para_size_) * expert_pitch
+                                     : 0;
       Tensor& up_gate_experts_tensor = weights_map_[up_gate_experts_name];
       if (tensor_name.find(".gate_proj.") != std::string::npos) {
         MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx * double_expert_pitch,
@@ -289,8 +292,8 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
         KLLM_THROW(fmt::format("The weight named {} cast data type failed.", tensor_name));
       }
 
-      size_t down_inter_size_per_rank =
-          DivRoundUp(static_cast<size_t>(tensor.sizes()[1]), model_config_.moe_tensor_para_size);
+      size_t down_inter_size_per_rank = DivRoundUp(static_cast<size_t>(tensor.sizes()[1]),
+                                                   runtime_config_.parallel_basic_config.moe_tensor_para_size);
       std::vector<size_t> down_experts_shape = {num_experts_per_rank_, hidden_units, down_inter_size_per_rank};
       std::string down_experts_name =
           fmt::format("model.layers.{}.mlp.experts.down_proj.{}", layer_idx, is_qweight ? "weight" : "scales");
@@ -302,7 +305,8 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
       size_t dst_pitch = down_inter_size_per_rank * GetTypeSize(processed_tensor_type);
       size_t src_pitch = static_cast<size_t>(tensor.sizes()[1]) * GetTypeSize(processed_tensor_type);
       size_t expert_pitch = down_inter_size_per_rank * hidden_units * GetTypeSize(processed_tensor_type);
-      size_t src_down_offset = model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
+      size_t src_down_offset =
+          runtime_config_.parallel_basic_config.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
       Tensor& down_experts_tensor = weights_map_[down_experts_name];
       Memcpy2DAsync(down_experts_tensor.GetPtr<void>() + expert_idx * expert_pitch, dst_pitch,
                     tensor.data_ptr() + src_down_offset, src_pitch, dst_pitch, hidden_units, MEMCPY_HOST_TO_DEVICE,
@@ -1121,7 +1125,7 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
     size_t block_k = model_config_.quant_config.weight_block_size[1];
 
     size_t moe_inter_size_per_rank =
-        DivRoundUp(model_config_.moe_config.moe_inter_size, model_config_.moe_tensor_para_size);
+        DivRoundUp(model_config_.moe_config.moe_inter_size, runtime_config_.parallel_basic_config.moe_tensor_para_size);
     if (moe_inter_size_per_rank % block_n != 0) {
       KLLM_THROW(fmt::format(
           "The moe_inter_size_per_rank of gate's and up's weight = {}, is not divisible by weight quant block_n = {}",
@@ -1152,8 +1156,9 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
       size_t expert_scale_pitch =
           up_gate_experts_scale_shape[1] / 2 * up_gate_experts_scale_shape[2] * GetTypeSize(weight_data_type);
       size_t double_expert_scale_pitch = expert_scale_pitch * 2;
-      size_t src_upgate_offset =
-          model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * expert_scale_pitch : 0;
+      size_t src_upgate_offset = runtime_config_.parallel_basic_config.moe_tensor_para_size > 1
+                                     ? (rank_ / expert_para_size_) * expert_scale_pitch
+                                     : 0;
       if (tensor_name.find(".gate_proj.") != std::string::npos) {
         MemcpyAsync(weights_map_[up_gate_experts_scale_name].GetPtr<void>() +
                         static_cast<size_t>(expert_idx) * double_expert_scale_pitch,
@@ -1175,11 +1180,12 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
       }
 
       size_t dst_pitch = down_experts_scale_shape[2] * GetTypeSize(weight_data_type);
-      size_t src_pitch =
-          down_experts_scale_shape[2] * model_config_.moe_tensor_para_size * GetTypeSize(weight_data_type);
+      size_t src_pitch = down_experts_scale_shape[2] * runtime_config_.parallel_basic_config.moe_tensor_para_size *
+                         GetTypeSize(weight_data_type);
       size_t expert_scale_pitch =
           down_experts_scale_shape[2] * down_experts_scale_shape[1] * GetTypeSize(weight_data_type);
-      size_t src_down_offset = model_config_.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
+      size_t src_down_offset =
+          runtime_config_.parallel_basic_config.moe_tensor_para_size > 1 ? (rank_ / expert_para_size_) * dst_pitch : 0;
       Memcpy2DAsync(
           weights_map_[down_experts_scale_name].GetPtr<void>() + static_cast<size_t>(expert_idx) * expert_scale_pitch,
           dst_pitch, weight_ptr + src_down_offset, src_pitch, dst_pitch, down_experts_scale_shape[1],
@@ -1196,7 +1202,8 @@ Status QuantWeight<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight() {
   size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
   size_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
   size_t v_head_dim = model_config_.mla_config.v_head_dim;
-  size_t tp_size = model_config_.tensor_para_size / model_config_.attn_data_para_size;
+  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size /
+                   runtime_config_.parallel_basic_config.attn_data_parallel_size;
   size_t head_num_tp = DivRoundUp(model_config_.head_num, tp_size);
   for (const auto layer_idx : required_layer_idx_.all) {
     // Process q_b_proj

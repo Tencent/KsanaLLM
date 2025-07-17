@@ -55,6 +55,7 @@ class ForwardTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
+    env->GetRuntimeConfig(runtime_config);
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
@@ -100,7 +101,7 @@ class ForwardTest : public testing::Test {
     }
 
     std::shared_ptr<BaseWeight> llama_weight =
-        std::make_shared<LlamaWeight<weight_data_type>>(model_config, 0, context_);
+        std::make_shared<LlamaWeight<weight_data_type>>(model_config, runtime_config, 0, context_);
     // Start Loader Weight
     ModelFileFormat model_file_format;
     std::vector<std::string> weights_file_list = SearchLocalPath(model_path, model_file_format);
@@ -124,7 +125,7 @@ class ForwardTest : public testing::Test {
     }
     llama_weight->ProcessWeights();  // End Loader Weight
     std::shared_ptr<LlamaModel<weight_data_type>> llama =
-        std::make_shared<LlamaModel<weight_data_type>>(model_config, 0, context_, llama_weight);
+        std::make_shared<LlamaModel<weight_data_type>>(model_config, runtime_config, 0, context_, llama_weight);
     llama->AllocResources(multi_batch_id);
 
     return {llama, llama_weight};
@@ -148,7 +149,7 @@ class ForwardTest : public testing::Test {
     // 创建 ForwardRequest
     ForwardRequest forward;
     std::vector<int> input_ids = {1, 529};  // 示例输入 token
-    ForwardRequestBuilderForTest request_builder(model_config, cache_manager_);
+    ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     request_builder.CreateForwardRequest(1, forward, input_ids);
 
     // 设置 logits 相关参数
@@ -271,7 +272,7 @@ class ForwardTest : public testing::Test {
     // 创建 ForwardRequest
     ForwardRequest forward;
     std::vector<int> input_ids = {1, 529};  // 示例输入 token
-    ForwardRequestBuilderForTest request_builder(model_config, cache_manager_);
+    ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     request_builder.CreateForwardRequest(1, forward, input_ids);
 
     // 设置 request_target 参数，使用 GATHER_ALL 模式
@@ -359,7 +360,7 @@ class ForwardTest : public testing::Test {
 
  protected:
   ModelConfig model_config;
-
+  RuntimeConfig runtime_config;
   std::shared_ptr<Context> context_{nullptr};
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = nullptr;
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;

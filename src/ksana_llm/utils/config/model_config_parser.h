@@ -187,20 +187,8 @@ struct ModelConfig {
   // Type of weight
   DataType weight_data_type;
 
-  // The max input token number of request(input)
-  size_t max_token_num;
-
-  // The max token number of step
-  size_t max_step_token_num;
-
-  size_t tensor_para_size;
-  size_t attn_data_para_size;
-  size_t max_pp_batch_num = 1;  // max number of batchs in pipeline parallel.
-
-  // The expert parallel size
-  size_t expert_world_size;
-  size_t expert_para_size;
-  size_t moe_tensor_para_size;
+  // Max sequence length during model training (unit: token num)
+  size_t max_training_seq_len;
 
   size_t head_num;
   uint32_t size_per_head;
@@ -215,12 +203,11 @@ struct ModelConfig {
   uint32_t start_id;
   std::vector<uint32_t> end_ids;
   uint32_t pad_id;
-  size_t num_key_value_heads;
-  int max_batch_size;
+  size_t num_key_value_heads;  // nobody use it, to be removed
   int max_position_embeddings;
-  size_t block_token_num;
-  std::vector<float> k_scales;
-  std::vector<float> v_scales;
+
+  std::vector<float> k_scales;  // to be removed
+  std::vector<float> v_scales;  // to be removed
 
   RoPEScalingFactor rope_scaling_factor_config;
 
@@ -241,7 +228,6 @@ struct ModelConfig {
   // Determines if the model is a moe model.
   bool is_moe = false;
   bool has_shared_experts = false;
-  bool enable_full_shared_expert = false;
   MoeConfig moe_config;
 
   // others attributes
@@ -258,13 +244,10 @@ struct ModelConfig {
   bool use_mla = false;
   MlaConfig mla_config;
 
-  // Whether enable prefix caching.
-  bool enable_prefix_caching = false;
-
   // Whether to normalize q and k before rotary position embedding in attention.
-  bool enable_qk_pre_norm_before_rotary_pos = false;
+  bool enable_qk_pre_norm_before_rotary_pos = false;  // to be removed
 
-  bool enable_add_qkv_bias = false;
+  bool enable_add_qkv_bias = false;  // TODO(robertyuan): this is a model config, not func switch. Change name
 
   // for llama4
   std::vector<size_t> no_rope_layers;

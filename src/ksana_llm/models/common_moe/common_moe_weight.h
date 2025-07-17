@@ -12,7 +12,8 @@ template <typename T>
 class CommonMoeWeight : virtual public CommonWeight<T> {
  public:
   CommonMoeWeight() {}
-  explicit CommonMoeWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context);
+  explicit CommonMoeWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                           std::shared_ptr<Context> context);
 
   Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
                              const std::vector<std::string>& weight_name_list,
@@ -34,7 +35,7 @@ class CommonMoeWeight : virtual public CommonWeight<T> {
   using BaseWeight::weights_map_;
 
   using BaseWeight::model_config_;
-
+  using BaseWeight::runtime_config_;
   using CommonWeight<T>::tensor_manager_;
 
   using CommonWeight<T>::quant_weight_solver_;

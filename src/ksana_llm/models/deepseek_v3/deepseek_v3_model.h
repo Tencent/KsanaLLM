@@ -95,8 +95,8 @@ class DeepSeekV3MtpLayer {
 template <typename T>
 class DeepSeekV3Model : public CommonModel<T> {
  public:
-  DeepSeekV3Model(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                  std::shared_ptr<BaseWeight> base_weight);
+  DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                  std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
 
   Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
 

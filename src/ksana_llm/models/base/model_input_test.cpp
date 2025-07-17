@@ -41,6 +41,8 @@ class ModelInputTest : public testing::Test {
 
     // 修改kv_lora_rank为512
     model_config.mla_config.kv_lora_rank = 512;
+    RuntimeConfig runtime_config;
+    env->GetRuntimeConfig(runtime_config);
 
     // Initialize the block manager.
     env->InitializeBlockManagerConfig();
@@ -52,7 +54,7 @@ class ModelInputTest : public testing::Test {
     env->SetBlockManagerConfig(block_manager_config);
 
     // Initialize the model input object.
-    model_input = std::make_unique<ModelInput>(model_config, rank, context);
+    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context);
 
     // Initialize the random seed with 0.
     std::srand(0);
@@ -257,7 +259,7 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
   model_input->model_config_.mla_config.kv_lora_rank = 512;
   model_input->single_token_request_num = 4;
   model_input->model_config_.head_num = 16;
-  model_input->model_config_.tensor_para_size = 1;
+  model_input->runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
 
   // 创建输入长度张量
   std::vector<int> input_lengths = {0, 20, 30, 40, 50};

@@ -55,6 +55,7 @@ class DeepSeekV3Test : public testing::Test {
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    env->GetRuntimeConfig(runtime_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
@@ -97,6 +98,7 @@ class DeepSeekV3Test : public testing::Test {
 
  protected:
   ModelConfig model_config;
+  RuntimeConfig runtime_config;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
   std::shared_ptr<PrefixCacheManager> cache_manager = nullptr;
   std::shared_ptr<Context> context{nullptr};
@@ -120,11 +122,13 @@ class DeepSeekV3Test : public testing::Test {
     constexpr int rounds = 10;
     EventCreate(&start);
     EventCreate(&stop);
-    std::unique_ptr<WeightInstance> weight_instance = std::make_unique<WeightInstance>(model_config, context);
+    std::unique_ptr<WeightInstance> weight_instance =
+        std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(/*rank*/ 0);
     std::shared_ptr<DeepSeekV3Model<weight_data_type>> deepseek_v3 =
-        std::make_shared<DeepSeekV3Model<weight_data_type>>(model_config, device_id, context, deepseek_v3_weight);
+        std::make_shared<DeepSeekV3Model<weight_data_type>>(model_config, runtime_config, device_id, context,
+                                                            deepseek_v3_weight);
     deepseek_v3->AllocResources(multi_batch_id);
 
     // ContextDecode
@@ -160,7 +164,7 @@ class DeepSeekV3Test : public testing::Test {
     forward.input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
-    int use_block_num = (input_ids.size() + model_config.block_token_num - 1) / model_config.block_token_num;
+    int use_block_num = (input_ids.size() + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
     block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
     forward.kv_cache_ptrs.resize(1);  // rank num = 1
     block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
@@ -340,6 +344,6 @@ TEST_F(DeepSeekV3Test, EnableFullShardExpertTest) {
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
-  model_config.enable_full_shared_expert = true;
+  runtime_config.enable_full_shared_expert = true;
   TestDeepSeekV3Forward<bfloat16>();
 }

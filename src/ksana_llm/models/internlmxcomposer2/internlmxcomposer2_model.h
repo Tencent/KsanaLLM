@@ -104,8 +104,8 @@ class InternlmxComposer2 : public ModelInterface<T> {
 template <typename T>
 class InternlmxComposer2Model : public CommonModel<T> {
  public:
-  InternlmxComposer2Model(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                          std::shared_ptr<BaseWeight> base_weight);
+  InternlmxComposer2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
   ~InternlmxComposer2Model() {}
 
  private:

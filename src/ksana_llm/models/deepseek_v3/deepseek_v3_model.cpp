@@ -24,7 +24,7 @@ DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, La
   bool is_neox = false;
   layer_idx_ = layer_idx;
   rank_ = creation_context.rank;
-  enable_full_shared_expert_ = model_creation_config.attn_config.model_config.enable_full_shared_expert;
+  enable_full_shared_expert_ = model_creation_config.runtime_config.enable_full_shared_expert;
 
   MoeScaleNormMode moe_scale_norm_mode;
   if (model_creation_config.attn_config.model_config.mla_config.q_lora_rank != 0) {
@@ -360,9 +360,10 @@ Status DeepSeekV3MtpLayer<T>::Forward(std::vector<Tensor>& residual_buffer, Forw
  ***********************************************************/
 
 template <typename T>
-DeepSeekV3Model<T>::DeepSeekV3Model(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
+DeepSeekV3Model<T>::DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                    const int rank, std::shared_ptr<Context> context,
                                     std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context),
+    : CommonModel<T>(model_config, runtime_config, rank, context),
       first_k_dense_replace_(model_config.moe_config.first_k_dense_replace) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
@@ -374,14 +375,14 @@ template <typename T>
 Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_context,
                                         ModelCreationConfig& model_creation_config) {
   MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
-                                             mla_buffers_);
+                                             model_creation_config.runtime_config, mla_buffers_);
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
-  const size_t max_token_num = model_creation_config.attn_config.model_config.max_step_token_num;
+  const size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
   // Used for TwoLayeredFFN
   moe_buffer_size = std::max(
       moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size * 2);
-  if (model_creation_config.attn_config.model_config.enable_full_shared_expert) {
+  if (model_creation_config.runtime_config.enable_full_shared_expert) {
     moe_buffer_size = std::max(
         moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size *
                              model_creation_config.attn_config.model_config.moe_config.num_shared_experts);

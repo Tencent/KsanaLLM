@@ -101,11 +101,11 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
 
 template <typename T>
 Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                                                  MlaBuffers& mla_buffers) {
+                                                  const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers) {
   const DataType weight_type = attn_config.model_config.weight_data_type;
-  const size_t max_token_num = attn_config.model_config.max_step_token_num;
+  const size_t max_token_num = runtime_config.max_step_token_num;
   const size_t head_num = attn_config.model_config.head_num;
-  const size_t max_decode_tokens = attn_config.model_config.max_batch_size * attn_config.max_decode_tokens_per_req;
+  const size_t max_decode_tokens = runtime_config.max_batch_size * attn_config.max_decode_tokens_per_req;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
   head_num_per_tp_ = head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
@@ -139,7 +139,7 @@ Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, con
   size_t prefix_v_up_buffer_size = max_token_num * head_num_per_tp_ * v_head_dim;
 
   // 不启用prefix cache时不创建prefix buffer节约显存
-  if (!attn_config.model_config.enable_prefix_caching) {
+  if (!runtime_config.enable_prefix_caching) {
     KLLM_LOG_INFO << "Not using prefix cache, so set all prefix buffer to 0 for saving vram";
     prefix_k_buffer_size = 0;
     prefix_v_buffer_size = 0;
@@ -183,16 +183,6 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   const int attn_dp_atp_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
   const int attn_dp_group_id = rank / attn_dp_atp_size;
   const int attn_dp_rank_id = rank % attn_dp_atp_size;
-
-  // if no request in this dp group, skip.
-  if (forwarding_context.GetModelInput()->dp_multi_token_request_num +
-          forwarding_context.GetModelInput()->dp_single_token_request_num ==
-      0) {
-    Singleton<Environment>::GetInstance()->SetDataParaGroupStatus(attn_dp_group_id, false);
-    return Status();
-  }
-
-  Singleton<Environment>::GetInstance()->SetDataParaGroupStatus(attn_dp_group_id, true);
 
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];

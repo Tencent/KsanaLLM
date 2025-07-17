@@ -37,7 +37,7 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
   if (cla_share_factor_) {
     auto& model_config = model_creation_config.attn_config.model_config;
     int size_per_head = model_config.size_per_head;
-    size_t tensor_para_size = model_config.tensor_para_size;
+    size_t tensor_para_size = model_creation_config.runtime_config.parallel_basic_config.tensor_parallel_size;
     int num_kv_heads_per_tp = model_config.num_key_value_heads / tensor_para_size;
     int head_num_per_tp = model_creation_config.attn_config.head_num_per_tp;
     qkv_pitch_ = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head * sizeof(T);
@@ -108,14 +108,14 @@ Status CrossLayerAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensor
 }
 
 template <typename T>
-Status CrossLayerAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                                             ClaBuffers& cla_buffers) {
+Status CrossLayerAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const RuntimeConfig& runtime_config,
+                                             const AttentionCreationConfig& attn_config, ClaBuffers& cla_buffers) {
   auto& model_config = attn_config.model_config;
   DataType weight_type = model_config.weight_data_type;
 
-  size_t max_token_num = model_config.max_step_token_num;
+  size_t max_token_num = runtime_config.max_step_token_num;
   int size_per_head = model_config.size_per_head;
-  size_t tensor_para_size = model_config.tensor_para_size;
+  size_t tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
   int num_kv_heads_per_tp = model_config.num_key_value_heads / tensor_para_size;
   int cla_buffer_size = max_token_num * num_kv_heads_per_tp * size_per_head;
 

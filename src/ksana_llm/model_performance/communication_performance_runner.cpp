@@ -67,7 +67,7 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
 
 void CommunicationPerformanceRunner::Run() {
   size_t test_token_num = 1;
-  while (test_token_num <= model_config_.max_step_token_num) {
+  while (test_token_num <= runtime_config_.max_step_token_num) {
     TestCommunicatePerformance({test_token_num, model_config_.hidden_units}, model_config_.weight_data_type);
     test_token_num *= 2;
   }
@@ -94,7 +94,7 @@ void CommunicationPerformanceRunner::TestCommunicatePerformance(const std::vecto
     FreeHiddenUnits(DEFAULT_MULTI_BATCH_ID);
     std::cout << fmt::format("Master elapsed time: {} seconds of {} rounds\n", elapsed.count(), rounds);
     std::cout << fmt::format("Tensor shape: {}, Tensor dtype: {} TP: {}\n", Vector2Str(shape), GetTypeString(data_type),
-                             model_config_.tensor_para_size);
+                             runtime_config_.parallel_basic_config.tensor_parallel_size);
     std::cout << fmt::format("Average time per round: {} ms\n\n", (elapsed.count() / rounds) * 1000);
 
   } else {  // worker node receive tensors
@@ -114,7 +114,7 @@ void CommunicationPerformanceRunner::TestCommunicatePerformance(const std::vecto
 
     std::cout << fmt::format("Worker elapsed time: {} seconds of {} rounds\n", elapsed.count(), rounds);
     std::cout << fmt::format("Tensor shape: {}, Tensor dtype: {} TP: {}\n", Vector2Str(shape), GetTypeString(data_type),
-                             model_config_.tensor_para_size);
+                             runtime_config_.parallel_basic_config.tensor_parallel_size);
     std::cout << fmt::format("Average time per round: {} ms\n\n", (elapsed.count() / rounds) * 1000);
   }
 }

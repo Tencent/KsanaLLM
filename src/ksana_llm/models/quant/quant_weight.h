@@ -20,8 +20,8 @@ namespace ksana_llm {
 template <typename T>
 class QuantWeight {
  public:
-  QuantWeight(const ModelConfig& model_config, int rank, std::shared_ptr<Context> context,
-              std::unordered_map<std::string, Tensor>& weights_map,
+  QuantWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+              std::shared_ptr<Context> context, std::unordered_map<std::string, Tensor>& weights_map,
               std::unordered_map<std::string, DataType>& weights_data_type_map);
   ~QuantWeight();
 
@@ -131,6 +131,7 @@ class QuantWeight {
   int rank_ = 0;
   std::shared_ptr<Context> context_{nullptr};
   ModelConfig model_config_;
+  RuntimeConfig runtime_config_;
   PipelineConfig pipeline_config_;
 
   DataType weight_data_type_ = TYPE_FP16;

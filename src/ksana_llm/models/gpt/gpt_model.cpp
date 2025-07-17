@@ -167,9 +167,10 @@ Status Gpt<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelCo
 template <typename T>
 Status Gpt<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
+  auto& runtime_config = model_creation_config.runtime_config;
   int hidden_units = model_config.size_per_head * model_config.head_num;
-  int inter_size_per_tp = model_config.inter_size / model_config.tensor_para_size;
-  size_t shared_buffer_size = model_config.max_step_token_num * std::max(inter_size_per_tp, hidden_units * 2);
+  int inter_size_per_tp = model_config.inter_size / runtime_config.parallel_basic_config.tensor_parallel_size;
+  size_t shared_buffer_size = runtime_config.max_step_token_num * std::max(inter_size_per_tp, hidden_units * 2);
   mlp_temp_buffer_ = creation_context.buffer_mgr_->CreateBufferTensor("mlp_temp_buffer_", {shared_buffer_size},
                                                                       model_config.weight_data_type);
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
@@ -199,9 +200,9 @@ template class Gpt<bfloat16>;
  * GptModel
  ***********************************************************/
 template <typename T>
-GptModel<T>::GptModel(const ModelConfig& model_config, const int rank, std::shared_ptr<Context> context,
-                      std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, rank, context) {
+GptModel<T>::GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                      std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+    : CommonModel<T>(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   gpt_.GetModelRunConfig(model_run_config, model_config);
   CommonModel<T>::InitRunConfig(model_run_config, base_weight);

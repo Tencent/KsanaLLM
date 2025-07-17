@@ -19,7 +19,8 @@ template <typename T>
 class FakeModel {
  public:
   FakeModel(std::shared_ptr<ModelInterface<T>> model, std::shared_ptr<Context> context, const int rank,
-            ModelConfig& model_config, PipelineConfig pipeline_config, std::shared_ptr<BaseWeight> base_weight,
+            ModelConfig& model_config, RuntimeConfig& runtime_config, PipelineConfig pipeline_config,
+            std::shared_ptr<BaseWeight> base_weight,
             bool reuse_prefix_config)  // TODO(robertyuan): reuse_prefix_config is a weird param
       : model_(model),
         context_(context),
@@ -30,12 +31,13 @@ class FakeModel {
     buffer_mgr_.SetRank(rank_);
 
     bool return_hidden_states = pipeline_config.lower_nextn_layer_idx >= static_cast<int>(model_config.num_layer);
-    buffers_.Init(context_, rank_, model_config, return_hidden_states, &buffer_mgr_);
-    forwarding_context_.Init(context, rank, model_config, pipeline_config, buffers_.buffers_.get(), &buffer_mgr_,
+    buffers_.Init(context_, rank_, model_config, runtime_config, return_hidden_states, &buffer_mgr_);
+    forwarding_context_.Init(context, rank, model_config, runtime_config, pipeline_config, buffers_.buffers_.get(),
+                             &buffer_mgr_,
                              /*multi_batch_id*/ 0);
     // Initialize instances for each layer.
     layer_creation_context_.Init(base_weight, shared_matmul_workspace_buffer_, context, rank, pipeline_config,
-                                 model_config, &buffer_mgr_);
+                                 model_config, runtime_config, &buffer_mgr_);
 
     Tensor& residual_buffer_tensor = buffers_.local_residual_buffer_tensors_[0];
     host_residual_buffer_tensor_ =
@@ -47,7 +49,8 @@ class FakeModel {
     // Flash Attention requires the input shape to match the actual token length.
     // When dealing with prefix_cache or speculative decoding, it is necessary to
     // first fill in the missing parts
-    int layer_num_on_node = model_config.num_layer / model_config.tensor_para_size;
+    int layer_num_on_node = model_config.num_layer / runtime_config.parallel_basic_config.tensor_parallel_size;
+
     ModelRunConfig model_run_config;
     model_->GetModelRunConfig(model_run_config, model_config);
 
@@ -56,8 +59,9 @@ class FakeModel {
       MemcpyAsync(mrotary_section_tensor_.GetPtr<void>(), model_config.rope_scaling_factor_config.mrope_section.data(),
                   3 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     }
-    model_creation_config.Init(model_config, buffers_.cos_sin_cache_tensor_, model_run_config.position_encoding,
-                               reuse_prefix_config, layer_num_on_node, mrotary_section_tensor_.GetPtr<const int>());
+    model_creation_config.Init(model_config, runtime_config, buffers_.cos_sin_cache_tensor_,
+                               model_run_config.position_encoding, reuse_prefix_config, layer_num_on_node,
+                               mrotary_section_tensor_.GetPtr<const int>());
 
     model_->CreateLayers(layer_creation_context_, model_creation_config);
 
@@ -157,11 +161,11 @@ class FakeModel {
 
 class ForwardRequestBuilderForTest {
  public:
-  explicit ForwardRequestBuilderForTest(const ModelConfig& model_config,
+  explicit ForwardRequestBuilderForTest(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                         std::shared_ptr<CacheManagerInterface> cache_manager)
       : layer_num_(model_config.num_layer),
-        block_token_num_(model_config.block_token_num),
-        tensor_para_size_(model_config.tensor_para_size) {
+        block_token_num_(runtime_config.block_token_num),
+        tensor_para_size_(runtime_config.parallel_basic_config.tensor_parallel_size) {
     cache_manager_ = cache_manager;
   }
   ~ForwardRequestBuilderForTest() { Destroy(); }
