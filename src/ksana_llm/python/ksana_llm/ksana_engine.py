@@ -359,6 +359,13 @@ class KsanaLLMEngine:
                 ksana_python_input.input_refit_embedding.embeddings = (
                     input_refit_embedding["embeddings"]
                 )
+        else:
+            # Support independent pos and embeddings parameters for faster transmission
+            if "pos" in request_dict:
+                ksana_python_input.input_refit_embedding.pos = request_dict["pos"]
+            if "embeddings" in request_dict:
+                ksana_python_input.input_refit_embedding.embeddings = request_dict["embeddings"]
+            
         if "structured_output_regex" in request_dict:
             ksana_python_input.structured_output_regex = request_dict[
                 "structured_output_regex"

@@ -36,7 +36,9 @@ TRITON_TO_KSANA = {
     "text_input": "prompt",
     "sampling_parameters": "sampling_config",
     "messages": "messages",
-    "input_refit_embedding": "input_refit_embedding"
+    "input_refit_embedding": "input_refit_embedding",
+    "pos": "pos",
+    "embeddings": "embeddings"
 }
 
 GENERATION_CONFIG_KEYS = {
@@ -79,6 +81,18 @@ def parse_input(log, request, input_dtypes):
             # Parse the bytes to a dictionary
             params_dict = orjson.loads(params_bytes)
             request_dict[ksana_key] = params_dict
+            continue
+
+        if input_name == "pos":
+            # Handle pos as uint32 array
+            value = input_tensor.as_numpy()[0].astype(np.uint32).tolist()
+            request_dict[ksana_key] = value
+            continue
+
+        if input_name == "embeddings":
+            # Handle embeddings as float array
+            value = input_tensor.as_numpy()[0].astype(np.float32).tolist()
+            request_dict[ksana_key] = value
             continue
 
         if input_name == "text_input":
