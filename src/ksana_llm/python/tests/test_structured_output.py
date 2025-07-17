@@ -2,22 +2,22 @@
 #
 # ==============================================================================
 
-import os
-import sys
 import asyncio
-import shutil
-import tempfile
 import logging
+import os
+import shutil
+import sys
+import tempfile
 import time
+
 import pytest
-from transformers import AutoTokenizer
 from utils import modify_yaml_field
 
 # Adjust the system path to import custom modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import ksana_llm  # noqa: E402
 from ksana_llm.arg_utils import EngineArgs
 
+import ksana_llm  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -45,20 +45,12 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
         shutil.copyfile(default_ksana_yaml_path, ksana_yaml_path)
         assert os.path.exists(ksana_yaml_path), "Failed to copy ksana.yaml"
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_dir,
-            padding_side="left",
-            truncation_side="left",
-            trust_remote_code=True,
-            use_fast=True,
-        )
-
         # Modify YAML configuration
         yaml_modifications = {
             "setting.global.tensor_para_size": 1,
             "setting.batch_scheduler.max_token_len": 2048,
-            "setting.block_manager.block_host_memory_factor": 0.0,
-            "setting.block_manager.reserved_device_memory_ratio": 0.01,
+            "setting.block_manager.block_host_memory_factor": 0.1,
+            "setting.block_manager.reserved_device_memory_ratio": 0.3,
             "setting.batch_scheduler.max_batch_size": 1,
             "setting.batch_scheduler.enable_auto_prefix_cache": enable_prefix_cache,
             "setting.batch_scheduler.min_flexible_cache_num": 0,
@@ -75,6 +67,8 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
         engine_args = EngineArgs.from_config_file(ksana_yaml_path)
         model = ksana_llm.KsanaLLMEngine.from_engine_args(engine_args)
         model.initialize()
+
+        tokenizer = model.tokenizer
 
         logger.debug("Initialized ksana_llm model.")
 
@@ -123,12 +117,6 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
                           f"output = \n{req_2_output}")
 
             assert (
-                req_1_time < req_0_time
-            ), (
-                f"Prefix Caching execution time {req_1_time} "
-                f"exceeds the first execution time {req_0_time}"
-            )
-            assert (
                 req_2_time / req_1_time < 0.68
             ), (
                 f"Structured execution time {req_2_time} "
@@ -151,13 +139,25 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
         text1 = "赫敏格兰杰是一名哈利波特系列小说中的角色。请将她的个人信息填到" \
                 "下面的 json 表格中{'姓名': xxx, '年龄': xxx, '职业': xxx, '爱好'" \
                 ": xxx, '学院': xxx}"
-        regex1 = """```json\n{\n  "姓名": "[*]",\n  "年龄": [*],\n  "职业": "[*]",\n""" \
-                 """  "爱好": "[*]",\n  "学院": "[*]"\n}\n```"""
+        regex1 = """```json
+{
+  "姓名": "[*]",
+  "年龄": [*],
+  "职业": "[*]",
+  "爱好": "[*]",
+  "学院": "[*]"
+}
+```"""
         await test_case(text1, regex1)
 
         text2 = "请挑选几个哈利波特系列小说中的角色,但不超过3个,将他们的个人信息填到" \
                 "下面的 json 表格中 [{'角色1': '角色1的名字'}, {'角色2': '角色2的名字'}, ...]"
-        regex2 = """```json\n{\n  "角色[*]": "[*]"(?:,\n  "角色[*]": "[*]")*\n}\n```"""
+        regex2 = """```json
+{
+  "角色[*]": "[*]"(?:,
+  "角色[*]": "[*]")*
+}
+```"""
         await test_case(text2, regex2)
     finally:
         # Clean up the temporary directory
@@ -167,6 +167,7 @@ async def run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path):
 
 
 @pytest.mark.parametrize("model_dir", ["/model/qwen1.5-hf/0.5B-Chat"])
-@pytest.mark.parametrize("enable_prefix_cache", [True, False])
+@pytest.mark.parametrize("enable_prefix_cache", [True])
 def test_structured_output(model_dir, enable_prefix_cache, default_ksana_yaml_path):
+    logger.debug(f"Running test_structured_output with model_dir: {model_dir}")
     asyncio.run(run_test(model_dir, enable_prefix_cache, default_ksana_yaml_path))

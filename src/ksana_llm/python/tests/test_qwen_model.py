@@ -12,7 +12,7 @@ test_models = [
 
 test_nums = [1, 10]
 
-test_configs = [(1, 0, 0.3, 4096, False), (1, 0, 0.3, 4096, True)]
+test_configs = [(1, 0, 0.3, 4096, False), (1, 0.1, 0.3, 128, True)]
 
 # Parametrized Test
 

@@ -3,25 +3,25 @@
 # ==============================================================================
 
 
-import os
-import sys
 import asyncio
-import tempfile
-import shutil
 import logging
+import os
+import shutil
+import sys
+import tempfile
+
 import msgpack
 import numpy as np
-from transformers import AutoTokenizer
 from utils import modify_yaml_field
 
 # Adjust the system path to import custom modules
 # Note: Ensure that the path adjustment is correct relative to the new file
 # location
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from serving_forward_client import python_tensor_to_numpy
-import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
+from serving_forward_client import python_tensor_to_numpy
 
+import ksana_llm
 
 # Configure logging
 logging.basicConfig(
@@ -107,13 +107,6 @@ async def async_run_test(
 
         # Prepare inputs
         inputs = benchmark_inputs[:test_num]
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_dir,
-            padding_side="left",
-            truncation_side="left",
-            trust_remote_code=True,
-            use_fast=True,
-        )
 
         # Modify YAML configuration
         yaml_modifications = {
@@ -213,6 +206,7 @@ async def async_run_test(
 
     finally:
         # Clean up the temporary directory
+        del engine
         shutil.rmtree(temp_dir)
         logger.debug(f"Deleted temporary directory: {temp_dir}")
 

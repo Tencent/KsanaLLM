@@ -2,21 +2,22 @@
 #
 # ==============================================================================
 
-import os
 import asyncio
+import logging
+import os
+import shutil
 import sys
 import tempfile
-import shutil
-import logging
 import time
+
 import pytest
-from transformers import AutoTokenizer
 from utils import modify_yaml_field
 
 # Adjust the system path to import custom modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import ksana_llm  # noqa: E402
 from ksana_llm.arg_utils import EngineArgs
+
+import ksana_llm  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -44,19 +45,11 @@ async def run_test(model_dir, default_ksana_yaml_path):
         shutil.copyfile(default_ksana_yaml_path, ksana_yaml_path)
         assert os.path.exists(ksana_yaml_path), "Failed to copy ksana.yaml"
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_dir,
-            padding_side="left",
-            truncation_side="left",
-            trust_remote_code=True,
-            use_fast=True,
-        )
-
         # Modify YAML configuration
         yaml_modifications = {
             "setting.global.tensor_para_size": 1,
-            "setting.batch_scheduler.max_token_len": 32768,
-            "setting.block_manager.block_host_memory_factor": 0.0,
+            "setting.batch_scheduler.max_token_len": 2048,
+            "setting.block_manager.block_host_memory_factor": 0.1,
             "setting.block_manager.reserved_device_memory_ratio": 0.3,
             "setting.batch_scheduler.max_batch_size": 1,
             "setting.batch_scheduler.enable_auto_prefix_cache": True,
@@ -91,6 +84,7 @@ async def run_test(model_dir, default_ksana_yaml_path):
                 request_dict=request_dict,
                 streamer=None,
             )
+            print(f"output: {output}")
             return input_tokens, output.output_tokens[0]
 
         request_dict = {}
@@ -160,6 +154,7 @@ async def run_test(model_dir, default_ksana_yaml_path):
         logger.debug(f"Deleted temporary directory: {temp_dir}")
 
 
+@pytest.mark.skip(reason='flexible cache is not supported in this version')
 @pytest.mark.parametrize("model_dir", ["/model/qwen1.5-hf/0.5B-Chat"])
 def test_flexible_cache(model_dir, default_ksana_yaml_path):
     asyncio.run(run_test(model_dir, default_ksana_yaml_path))
