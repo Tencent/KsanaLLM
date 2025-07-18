@@ -42,6 +42,9 @@ class DistributedCoordinator {
   Status SynchronizeCacheBlockNum();
   Status Barrier();
 
+  // Stop to accept any new connection.
+  Status Frozen();
+
  private:
   PipelineConfig pipeline_config_;
 

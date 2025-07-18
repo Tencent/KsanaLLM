@@ -493,6 +493,8 @@ Status ControlChannel::Barrier() {
   return Status();
 }
 
+Status ControlChannel::Frozen() { return raw_socket_->Frozen(); }
+
 Status ControlChannel::AddNode() {
   PipelineConfig pipeline_config;
   env_->GetPipelineConfig(pipeline_config);

@@ -127,6 +127,12 @@ Status ExpertParallelDataChannel::Connect() {
 
 Status ExpertParallelDataChannel::Disconnect() { return client_raw_socket_->Disconnect(); }
 
+Status ExpertParallelDataChannel::Frozen() {
+  server_raw_socket_->Frozen();
+  client_raw_socket_->Frozen();
+  return Status();
+}
+
 Status ExpertParallelDataChannel::ProcessHiddenUnitRequest(NodeInfo* node_info, Packet* req_packet) {
   // Add to recv queue.
   return hidden_unit_buffer_pool_->PutToHostRecvQueue(req_packet);

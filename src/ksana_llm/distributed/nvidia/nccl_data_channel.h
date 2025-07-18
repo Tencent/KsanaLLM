@@ -35,6 +35,9 @@ class NcclDataChannel : public DataChannelInterface {
   // disconnect from master.
   virtual Status Disconnect() override;
 
+  // Stop to accept any new connection.
+  virtual Status Frozen() override;
+
  protected:
   // Convert data type to nccl data type.
 #ifdef ENABLE_CUDA

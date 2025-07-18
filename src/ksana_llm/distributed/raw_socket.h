@@ -60,6 +60,9 @@ class RawSocket {
   // disconnect from master.
   Status Disconnect();
 
+  // Stop to accept any new connection.
+  Status Frozen();
+
   // Send data to remote, maybe from device directly.
   Status Send(NodeInfo node_info, const Packet* packet);
 
@@ -114,6 +117,7 @@ class RawSocket {
   std::mutex mutex_;
 
   bool is_connected_ = false;
+  bool is_frozen_ = false;
 };
 
 }  // namespace ksana_llm

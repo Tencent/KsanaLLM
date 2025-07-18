@@ -213,6 +213,11 @@ Status ExpertParallelNcclDataChannel::Disconnect() {
   return Status();
 }
 
+Status ExpertParallelNcclDataChannel::Frozen() {
+  KLLM_LOG_INFO << "ExpertParallelNcclDataChannel skip frozen." << std::endl;
+  return Status();
+}
+
 Status ExpertParallelNcclDataChannel::ProcessRecvLoop(int node_rank) {
   while (!terminated_) {
     // Wait util recv invoked.

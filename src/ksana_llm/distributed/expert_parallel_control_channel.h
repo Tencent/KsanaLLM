@@ -39,6 +39,9 @@ class ExpertParallelControlChannel : public ControlChannel {
   // Wait until all nodes arrive same location.
   Status Barrier();
 
+  // Stop to accept any new connection.
+  Status Frozen();
+
   // Add node to cluster.
   Status AddNode();
 

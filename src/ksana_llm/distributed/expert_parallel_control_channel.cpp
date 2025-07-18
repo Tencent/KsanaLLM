@@ -482,6 +482,8 @@ Status ExpertParallelControlChannel::Barrier() {
   return Status();
 }
 
+Status ExpertParallelControlChannel::Frozen() { return raw_socket_->Frozen(); }
+
 // ToDo.
 Status ExpertParallelControlChannel::AddNode() {
   ExpertParallelConfig expert_parallel_config;

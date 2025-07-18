@@ -227,6 +227,24 @@ Status DistributedCoordinator::SynchronizeCacheBlockNum() { return control_chann
 
 Status DistributedCoordinator::Barrier() { return control_channel_->Barrier(); }
 
+Status DistributedCoordinator::Frozen() {
+  if (!context_->IsStandalone()) {
+    if (control_channel_) {
+      control_channel_->Frozen();
+    }
+    if (data_channel_) {
+      data_channel_->Frozen();
+    }
+    if (expert_parallel_control_channel_) {
+      expert_parallel_control_channel_->Frozen();
+    }
+    if (expert_parallel_data_channel_) {
+      expert_parallel_data_channel_->Frozen();
+    }
+  }
+  return Status();
+}
+
 Status DistributedCoordinator::DestroyCluster() {
   if (!context_->IsStandalone()) {
     // Close all data channels.

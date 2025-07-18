@@ -133,6 +133,11 @@ Status NcclDataChannel::Disconnect() {
   return Status();
 }
 
+Status NcclDataChannel::Frozen() {
+  KLLM_LOG_INFO << "NcclDataChannel skip frozen." << std::endl;
+  return Status();
+}
+
 void NcclDataChannel::NotifySendCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }
 
 void NcclDataChannel::NotifyRecvCommandLaunched(HiddenUnitDeviceBuffer* hidden_unit) { hidden_unit->waiter->Notify(); }

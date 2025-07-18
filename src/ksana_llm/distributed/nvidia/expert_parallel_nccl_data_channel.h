@@ -33,6 +33,9 @@ class ExpertParallelNcclDataChannel : public DataChannelInterface {
     return;
   }
 
+  // Stop to accept any new connection.
+  virtual Status Frozen() override;
+
  private:
   virtual Status ProcessSendDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit);
   virtual Status ProcessRecvDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit, int node_rank);

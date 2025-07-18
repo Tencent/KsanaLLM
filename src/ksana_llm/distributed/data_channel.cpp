@@ -107,6 +107,12 @@ Status DataChannel::Connect() {
 
 Status DataChannel::Disconnect() { return client_raw_socket_->Disconnect(); }
 
+Status DataChannel::Frozen() {
+  server_raw_socket_->Frozen();
+  client_raw_socket_->Frozen();
+  return Status();
+}
+
 Status DataChannel::ProcessHiddenUnitRequest(NodeInfo* node_info, Packet* req_packet) {
   // Add to recv queue.
   return hidden_unit_buffer_pool_->PutToHostRecvQueue(req_packet);

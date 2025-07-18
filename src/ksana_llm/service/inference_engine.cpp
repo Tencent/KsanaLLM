@@ -422,6 +422,7 @@ Status InferenceEngine::Start() {
 
   if (!context_->IsStandalone()) {
     distributed_coordinator_->Barrier();
+    distributed_coordinator_->Frozen();
     KLLM_LOG_INFO << "All Nodes are ready, ready to server";
   }
 #ifndef ENABLE_ACL

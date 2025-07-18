@@ -23,6 +23,9 @@ class DataChannelInterface {
 
   // disconnect from master.
   virtual Status Disconnect() = 0;
+
+  // Stop to accept any new connection.
+  virtual Status Frozen() = 0;
 };
 
 }  // namespace ksana_llm

@@ -40,6 +40,9 @@ class ControlChannel {
   // Wait until all nodes arrive same location.
   virtual Status Barrier();
 
+  // Stop to accept any new connection.
+  virtual Status Frozen();
+
   // Add node to cluster.
   virtual Status AddNode();
 

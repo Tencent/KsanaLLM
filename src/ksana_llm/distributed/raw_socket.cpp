@@ -365,6 +365,14 @@ Status RawSocket::Listen(const std::string& host, uint16_t port, PacketProcessFu
           NodeInfo node_info;
           ExtractHostPort(&client_address, node_info.host, node_info.port);
 
+          // Refuse any new connection if forzen.
+          if (is_frozen_) {
+            KLLM_LOG_WARNING << "New connect from " << node_info.host << ":" << node_info.port
+                             << " is rejected,  because of the socket is frozen.";
+            close(client_fd);
+            continue;
+          }
+
           // Add a new handler.
           AddPacketHandle(node_info, client_fd);
         }
@@ -406,6 +414,11 @@ Status RawSocket::Close() {
 }
 
 Status RawSocket::Connect(const std::string& host, uint16_t port, PacketProcessFunc cb) {
+  if (is_frozen_) {
+    KLLM_LOG_WARNING << "Connect to " << host << ":" << port << " error, the socket is frozen.";
+    return Status(RET_RUNTIME_FAILED, "Could not connect, the socket is frozen yet.");
+  }
+
   packet_handle_cb_ = cb;
 
   // The client_fd_ is in blocking mode in default.
@@ -436,6 +449,12 @@ Status RawSocket::Connect(const std::string& host, uint16_t port, PacketProcessF
 Status RawSocket::Disconnect() {
   is_connected_ = false;
   DelPacketHandle(client_fd_);
+  return Status();
+}
+
+Status RawSocket::Frozen() {
+  KLLM_LOG_INFO << "Set socket to frozen, any new connection will be rejected.";
+  is_frozen_ = true;
   return Status();
 }
 

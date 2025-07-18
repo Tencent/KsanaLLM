@@ -34,6 +34,9 @@ class DataChannel : public DataChannelInterface {
   // disconnect from master.
   virtual Status Disconnect() override;
 
+  // Stop to accept any new connection.
+  virtual Status Frozen() override;
+
  public:
   // Invoked when data arrives.
   virtual Status HandleServerPacket(NodeInfo* node_info, Packet* packet);

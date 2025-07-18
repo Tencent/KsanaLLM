@@ -36,6 +36,9 @@ class ExpertParallelDataChannel : public DataChannelInterface {
   // disconnect from master.
   virtual Status Disconnect() override;
 
+  // Stop to accept any new connection.
+  virtual Status Frozen() override;
+
  private:
   // Invoked when data arrives.
   Status HandleServerPacket(NodeInfo* node_info, Packet* packet);
