@@ -80,28 +80,14 @@ float GetCublasGPUElapsedTime(const int warmup_rounds, const int tested_rounds, 
                               void* c_buffer, int32_t ldc, cudaDataType_t c_data_type, float alpha, float beta,
                               cudaDataType_t compute_type, cudaStream_t& stream, cudaEvent_t& start, cudaEvent_t& stop,
                               void* workspace_ptr = nullptr, cublasLtMatmulAlgo_t* cublaslt_algo = nullptr) {
-  float time_elapsed_ms = 0;
   constexpr int batch_count = 1;
-  for (int i = 0; i < warmup_rounds; ++i) {
+  auto cuda_run = [&]() {
     CHECK_NVIDIA_CUDA_ERROR(llm_kernels::nvidia::InvokeCublasGemm(
         cublas_handle, cublaslt_handle, trans_b, trans_a, n_val, m_val, k_val, b_buffer, ldb, b_data_type, a_buffer,
         lda, a_data_type, c_buffer, ldc, c_data_type, batch_count, alpha, beta, compute_type, stream, workspace_ptr, 0,
         cublaslt_algo));
-  }
-  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-  for (int i = 0; i < tested_rounds; ++i) {
-    CHECK_NVIDIA_CUDA_ERROR(llm_kernels::nvidia::InvokeCublasGemm(
-        cublas_handle, cublaslt_handle, trans_b, trans_a, n_val, m_val, k_val, b_buffer, ldb, b_data_type, a_buffer,
-        lda, a_data_type, c_buffer, ldc, c_data_type, batch_count, alpha, beta, compute_type, stream, workspace_ptr, 0,
-        cublaslt_algo));
-  }
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&time_elapsed_ms, start, stop));
-
-  return time_elapsed_ms;
+  };
+  return MeasureCudaExecutionTime(cuda_run, stream, warmup_rounds, tested_rounds);
 }
 
 int main(int argc, char* argv[]) {

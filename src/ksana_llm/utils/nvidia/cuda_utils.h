@@ -88,25 +88,25 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
 template <typename Func>
 float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100) {
   cudaEvent_t begin, end;
-  cudaEventCreate(&begin);
-  cudaEventCreate(&end);
+  CUDA_CHECK(cudaEventCreate(&begin));
+  CUDA_CHECK(cudaEventCreate(&end));
 
   for (int i = 0; i < warmups; ++i) {
     func();
   }
 
-  cudaEventRecord(begin, stream);
+  CUDA_CHECK(cudaEventRecord(begin, stream));
   for (int i = 0; i < iterations; ++i) {
     func();
   }
-  cudaEventRecord(end, stream);
-  cudaEventSynchronize(end);
+  CUDA_CHECK(cudaEventRecord(end, stream));
+  CUDA_CHECK(cudaEventSynchronize(end));
 
   float cost_time;
-  cudaEventElapsedTime(&cost_time, begin, end);
+  CUDA_CHECK(cudaEventElapsedTime(&cost_time, begin, end));
 
-  cudaEventDestroy(begin);
-  cudaEventDestroy(end);
+  CUDA_CHECK(cudaEventDestroy(begin));
+  CUDA_CHECK(cudaEventDestroy(end));
 
   return cost_time / iterations;
 }

@@ -225,8 +225,8 @@ class FusedMoeKernelTestSuit : public testing::Test {
 
   template <typename T>
   void TestFusedMoeKernelPerformance() {
-    size_t warmup_rounds = 10;
-    size_t run_rounds = 50;
+    constexpr size_t warmup_rounds = 10;
+    constexpr size_t run_rounds = 10;
     int m = 256;
     int k = 7168;
     int n = 4096;
@@ -284,32 +284,15 @@ class FusedMoeKernelTestSuit : public testing::Test {
       em = std::min(em, m * topk * config["block_size_m"]);
     }
 
-    for (size_t run_it = 0; run_it < warmup_rounds; ++run_it) {
+    auto cuda_run = [&]() {
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeKernel<T>(
           d_a, d_b, d_c, nullptr, nullptr, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, n, k, em,
           numel, k, 1, n * k, 1, k, n, 1, k / 128, 1, n / 128 * k / 128, 1, k / 128, 0, 0, mul_routed_weight, topk,
           use_fp8_w8a8, use_int8_w8a16, config, stream);
-    }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    float time_elapsed_ms = 0;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    CUDA_CHECK(cudaEventRecord(start));
-    for (size_t run_it = 0; run_it < run_rounds; ++run_it) {
-      Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeKernel<T>(
-          d_a, d_b, d_c, nullptr, nullptr, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, n, k, em,
-          numel, k, 1, n * k, 1, k, n, 1, k / 128, 1, n / 128 * k / 128, 1, k / 128, 0, 0, mul_routed_weight, topk,
-          use_fp8_w8a8, use_int8_w8a16, config, stream);
-    }
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaEventElapsedTime(&time_elapsed_ms, start, stop));
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_rounds, run_rounds);
     std::cout << "TestFusedMoeKernelPerformance " << (std::is_same<T, half>::value ? "half" : "bfloat16")
-              << " time elapsed: " << time_elapsed_ms / run_rounds << " ms" << std::endl;
+              << " time elapsed: " << time_elapsed_ms << " ms" << std::endl;
 
     CUDA_CHECK(cudaFree(d_a));
     CUDA_CHECK(cudaFree(d_b));

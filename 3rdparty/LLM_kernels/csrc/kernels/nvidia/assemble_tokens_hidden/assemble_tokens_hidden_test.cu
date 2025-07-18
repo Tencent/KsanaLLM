@@ -66,10 +66,6 @@ class LlamaNvidiaAssembleTokensHiddenTestSuit : public NvidiaTestSuitBase {
 
   template <typename T>
   void CommonTest() {
-    cudaEvent_t start_evt, stop_evt;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start_evt));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop_evt));
-
     // input batch size is 2
     // prompt 1 tensor shape [2, 4096]
     // [[0.1, 0.2, ..., 409.6],
@@ -103,28 +99,13 @@ class LlamaNvidiaAssembleTokensHiddenTestSuit : public NvidiaTestSuitBase {
     PrepareInputsOutputs<T>(input_meta, ref_output_meta, total_ids_num);
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
-    for (size_t i = 0; i < warmup_times; ++i) {
-      // Execute AssembleTokensHidden kernel warmup
+    auto cuda_run = [&]() {
       AssembleTokensHidden(reinterpret_cast<const T*>(input_meta.data_ptr),
                         reinterpret_cast<const size_t*>(ids_index.data_ptr), batch_size, hidden_units,
                         reinterpret_cast<T*>(output_meta.data_ptr), stream);
-    }
+    };
+    float elapsed_time_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, profile_run_times);
 
-    // Record start event
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start_evt, stream));
-    for (size_t i = 0; i < profile_run_times; ++i) {
-      AssembleTokensHidden(reinterpret_cast<const T*>(input_meta.data_ptr),
-                        reinterpret_cast<const size_t*>(ids_index.data_ptr), batch_size, hidden_units,
-                        reinterpret_cast<T*>(output_meta.data_ptr), stream);
-    }
-    // Record end event
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop_evt, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    // Calculate and print execution time
-    float elapsed_time_ms = 0.0f;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&elapsed_time_ms, start_evt, stop_evt));
-    elapsed_time_ms /= profile_run_times;
     std::cout << "AssembleTokensHidden execution time: " << elapsed_time_ms << " ms" << std::endl;
 
     // Calculate theoretical performance of AssembleTokensHidden
@@ -153,10 +134,6 @@ class LlamaNvidiaAssembleTokensHiddenTestSuit : public NvidiaTestSuitBase {
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaFreeHost(ref_output_host));
     CHECK_NVIDIA_CUDA_ERROR(cudaFreeHost(output_half_host));
-
-    // Destroy CUDA events
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start_evt));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop_evt));
   }
 };
 

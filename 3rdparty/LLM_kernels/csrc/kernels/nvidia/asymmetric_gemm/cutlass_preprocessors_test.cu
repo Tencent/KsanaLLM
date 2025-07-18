@@ -262,18 +262,14 @@ class NvidiaAsymmetricGemmPreprocessTestSuit : public NvidiaTestSuitBase {
     cudaMemcpy(device_row_permutation.data_ptr, row_permutation.data(), device_row_permutation.buf_size,
                cudaMemcpyHostToDevice);
 
-    cudaEvent_t cuda_begin, cuda_end;
-    cudaEventCreate(&cuda_begin);
-    cudaEventCreate(&cuda_end);
-    cudaEventRecord(cuda_begin, stream);
-    fast_preprocess_weights_for_mixed_gemm(reinterpret_cast<int8_t*>(device_preprocessed_quantized_weight.data_ptr),
-                                           reinterpret_cast<int8_t*>(device_row_major_quantized_weight.data_ptr),
-                                           reinterpret_cast<const int32_t*>(device_row_permutation.data_ptr),
-                                           row_permutation.size(), {1, num_rows, num_cols}, quant_type, false, stream);
-    cudaEventRecord(cuda_end, stream);
-    cudaEventSynchronize(cuda_end);
-    float cuda_time = 0.f;
-    cudaEventElapsedTime(&cuda_time, cuda_begin, cuda_end);
+    auto cuda_run = [&]() {
+      fast_preprocess_weights_for_mixed_gemm(reinterpret_cast<int8_t*>(device_preprocessed_quantized_weight.data_ptr),
+                                             reinterpret_cast<int8_t*>(device_row_major_quantized_weight.data_ptr),
+                                             reinterpret_cast<const int32_t*>(device_row_permutation.data_ptr),
+                                             row_permutation.size(), {1, num_rows, num_cols}, quant_type, false,
+                                             stream);
+    };
+    float cuda_time = MeasureCudaExecutionTime(cuda_run, stream, /*warmup_times*/ 0, /*profile_run_times*/ 1);
 
     printf("preprocess_weights_for_mixed_gemm(%zu,%zu): cpu time:%f ms, cuda time: %f ms\n", num_rows, num_cols,
            cpp_time, cuda_time);
@@ -281,9 +277,6 @@ class NvidiaAsymmetricGemmPreprocessTestSuit : public NvidiaTestSuitBase {
     EXPECT_TRUE(CheckResult<int32_t>("TestAsymmetricGemmPreprocessPreprocessWeightsForMixedGemm",
                                      buffer_preprocessed_quantized_weight, device_preprocessed_quantized_weight, 1e-5f,
                                      1e-5f));
-
-    cudaEventDestroy(cuda_begin);
-    cudaEventDestroy(cuda_end);
 
     DeleteBuffer(buffer_row_major_quantized_weight);
     DeleteBuffer(device_row_major_quantized_weight);

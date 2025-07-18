@@ -397,23 +397,13 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
     }
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
-    const int num_iterations = 100;
-    cudaEvent_t start, stop;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-    for (int i = 0; i < num_iterations; ++i) {
+    const int num_iterations = 10;
+    auto cuda_run = [&]() {
       BlockwiseGemmKernel<half>(static_cast<void*>(a_fp8_device), a_scales_device, static_cast<void*>(b_fp8_device),
                                 b_scales_device, static_cast<void*>(c_device), m, k, n, stream, cutlass_buffer,
                                 cutlass_buffer_size);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-
-    float elapsed_ms;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&elapsed_ms, start, stop));
-    elapsed_ms /= num_iterations;
+    };
+    float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
 
     double flops = 2.0 * m * n * k;
     double gflops = (flops * 1e-9) / (elapsed_ms * 1e-3);
@@ -428,9 +418,6 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
     CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_scales_device));
     CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_fp8_device));
     CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_fp8_device));
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
   }
 }
 

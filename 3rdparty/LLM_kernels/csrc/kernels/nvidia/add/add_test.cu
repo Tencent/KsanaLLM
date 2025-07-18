@@ -158,24 +158,16 @@ class LlamaNvidiaAddTestSuit : public NvidiaTestSuitBase {
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
 
     // performance
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    float time_elapsed_ms = 0;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
-    const int kRounds = 10;
-    for (int i = 0; i < kRounds; i++) {
+    const int k_rounds = 10;
+    auto cuda_run = [&]() {
       InvokeAddBiasResidual<T>(
           reinterpret_cast<T*>(output_meta.data_ptr), reinterpret_cast<const T*>(input_a_meta.data_ptr),
           reinterpret_cast<const T*>(input_b_meta.data_ptr), nullptr, nullptr, nullptr, nullptr, m, n, stream);
-    }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaStreamSynchronize(stream);
-    cudaEventElapsedTime(&time_elapsed_ms, start, stop);
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, k_rounds, k_rounds);
+
     std::cout << "add_bias_residual_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n)
-              << " time elapsed : " << time_elapsed_ms / kRounds << " ms ";
+              << " time elapsed : " << time_elapsed_ms << " ms ";
 
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());

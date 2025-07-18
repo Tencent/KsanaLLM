@@ -352,24 +352,8 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyKeyBlockWithReplicationTest) {
     }
   }
 
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-
-  cudaEventRecord(start);
-  MlaCopyKeyBlockWithReplication<float, float, llm_kernels::utils::KVCacheType::kAuto>(
-      dev_attn_k_states_ /*k_out*/, dev_k_list_ /*k_list*/, kv_lora_rank_ + qk_rope_head_dim_ /*src_stride_size*/,
-      kv_lora_rank_ /*src_copy_offset*/, qk_rope_head_dim_ /*src_copy_len*/, num_heads_ /*dst_num_heads*/,
-      qk_nope_head_dim_ + qk_rope_head_dim_ /*dst_head_size*/, qk_nope_head_dim_ /*dst_copy_offset*/,
-      dev_prefix_offsets_ /*prefix_offsets*/, dev_without_prefix_offsets_ /*without_prefix_offsets*/,
-      dev_block_offsets_ /*block_offsets*/, block_size_ /*block_size*/, total_prefix_len_ /*total_prefix_len*/,
-      nullptr);
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  const int RUNS = 10;
-  float total_time = 0;
-  for (int i = 0; i < RUNS; ++i) {
-    cudaEventRecord(start);
+  const int num_iterations = 10;
+  auto cuda_run = [&]() {
     MlaCopyKeyBlockWithReplication<float, float, llm_kernels::utils::KVCacheType::kAuto>(
         dev_attn_k_states_ /*k_out*/, dev_k_list_ /*k_list*/, kv_lora_rank_ + qk_rope_head_dim_ /*src_stride_size*/,
         kv_lora_rank_ /*src_copy_offset*/, qk_rope_head_dim_ /*src_copy_len*/, num_heads_ /*dst_num_heads*/,
@@ -377,13 +361,10 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyKeyBlockWithReplicationTest) {
         dev_prefix_offsets_ /*prefix_offsets*/, dev_without_prefix_offsets_ /*without_prefix_offsets*/,
         dev_block_offsets_ /*block_offsets*/, block_size_ /*block_size*/, total_prefix_len_ /*total_prefix_len*/,
         nullptr);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float t;
-    cudaEventElapsedTime(&t, start, stop);
-    total_time += t;
-  }
-  printf("MlaCopyKeyBlockWithReplication Average time: %.3f ms\n", total_time / RUNS);
+  };
+  float total_avg_time = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
+
+  printf("MlaCopyKeyBlockWithReplication Average time: %.3f ms\n", total_avg_time);
 
   // Copy result to host.
   std::vector<float> host_attn_k_dst(host_attn_k_states_.size());
@@ -452,30 +433,15 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyValueBlockToBufferTest) {
     }
   }
 
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-
-  cudaEventRecord(start);
-  MlaCopyValueBlockToBuffer<float, float, llm_kernels::utils::KVCacheType::kAuto>(
-      dev_kv_buffer_, dev_v_list_, kv_stride_size, 0, kv_lora_rank_, kv_lora_rank_, dev_prefix_offsets_,
-      dev_block_offsets_, block_size_, total_prefix_len_, nullptr);
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  const int RUNS = 10;
-  float total_time = 0;
-  for (int i = 0; i < RUNS; ++i) {
-    cudaEventRecord(start);
+  const int num_iterations = 10;
+  auto cuda_run = [&]() {
     MlaCopyValueBlockToBuffer<float, float, llm_kernels::utils::KVCacheType::kAuto>(
         dev_kv_buffer_, dev_v_list_, kv_stride_size, 0, kv_lora_rank_, kv_lora_rank_, dev_prefix_offsets_,
         dev_block_offsets_, block_size_, total_prefix_len_, nullptr);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float t;
-    cudaEventElapsedTime(&t, start, stop);
-    total_time += t;
-  }
-  printf("MlaCopyValueBlockToBufferTest Average time: %.3f ms\n", total_time / RUNS);
+  };
+  float total_avg_time = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
+
+  printf("MlaCopyValueBlockToBufferTest Average time: %.3f ms\n", total_avg_time);
 
   // Copy result to host.
   std::vector<float> host_kv_buffer_dst(host_kv_buffer_.size());

@@ -63,25 +63,6 @@ TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
   cudaEvent_t start, stop;
   CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
   CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-
-  /*
-  for (int k = 1; k <= 80; k++) {
-    if (k > 16 && k % 8 != 0) continue;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-
-    for (int i = 0; i < 1000; ++i) {
-      InvokeMoeSum<float, false>(
-          d_input, d_output, nullptr, nullptr, num_tokens, num_experts, topk, hidden_size, stream);
-    }
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-    float milliseconds = 0;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
-    std::cout << "Kernel execution 1 times(TopK = " << k << "): " << (milliseconds / 1000) << " ms" << std::endl;
-  }
-  */
-
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(output.data(), d_output, output_elements * sizeof(float), cudaMemcpyDeviceToHost));
 
   for (size_t i = 0; i < output_elements; ++i) {
@@ -291,37 +272,12 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelTest) {
     CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_total_tokens_post_pad, reinterpret_cast<void*>(h_token_post_pad.data()),
                                        1 * sizeof(int), cudaMemcpyHostToDevice));
 
-    // 预热运行
-    for (int i = 0; i < 0; ++i) {
-      InvokeMoeAlignBlockSize<int, uint16_t, true>(
-          reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
-          reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
-          reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel,
-          0, stream);
-    }
-
-    cudaEvent_t start, stop;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-
-    // 计时运行100次取平均值
-    const int num_iterations = 1;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-
-    for (int i = 0; i < num_iterations; ++i) {
-      InvokeMoeAlignBlockSize<int, uint16_t, true>(
-          reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
-          reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
-          reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel, 0,
-          stream);
-    }
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-    float milliseconds = 0;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
-    std::cout << "Kernel execution " << num_iterations << " times, average: " << (milliseconds / num_iterations)
-              << " ms" << std::endl;
+    InvokeMoeAlignBlockSize<int, uint16_t, true>(
+        reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
+        reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
+        reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel, 0,
+        stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // 对比正确性结果 Expert Ids
     CHECK_NVIDIA_CUDA_ERROR(
@@ -343,13 +299,23 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelTest) {
       EXPECT_EQ(h_token_post_pad[i], token_post_pad[i]);
     }
 
-    cudaFree(d_topk_ids);
-    cudaFree(d_sorted_token_ids);
-    cudaFree(d_experts_ids);
-    cudaFree(d_total_tokens_post_pad);
-    cudaFree(d_expert_map);
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
+    const int num_iterations = 1;
+    auto cuda_run = [&]() {
+      InvokeMoeAlignBlockSize<int, uint16_t, true>(
+          reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
+          reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
+          reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel, 0,
+          stream);
+    };
+
+    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
+    std::cout << "Kernel execution " << num_iterations << " times, average: " << milliseconds << " ms" << std::endl;
+
+    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_topk_ids));
+    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_sorted_token_ids));
+    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_experts_ids));
+    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_total_tokens_post_pad));
+    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_expert_map));
   }
 }
 

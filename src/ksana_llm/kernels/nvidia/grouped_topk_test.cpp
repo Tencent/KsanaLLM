@@ -189,29 +189,15 @@ class InvokeGroupedTopkTestSuit : public testing::Test {
         }
       }
     }
-    size_t warmup_times = 10;
-    size_t test_times = 50;
-    for (size_t run_it = 0; run_it < warmup_times; ++run_it) {
-      InvokeGroupedTopk<T>(d_gating_output, topk_weights_ptr, topk_ids_ptr, tokens_num, num_experts, topk, renormalize,
-                           num_expert_group, topk_group, scoring_func, e_bias, routed_scaling_factor, rank, stream);
-    }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    float time_elapsed_ms = 0;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    CUDA_CHECK(cudaEventRecord(start));
-    for (size_t run_it = 0; run_it < test_times; ++run_it) {
+    constexpr size_t warmup_times = 10;
+    constexpr size_t test_times = 50;
+    auto cuda_run = [&]() {
       InvokeGroupedTopk<T>(d_gating_output, topk_weights_ptr, topk_ids_ptr, tokens_num, num_experts, topk, renormalize,
                            num_expert_group, topk_group, scoring_func, e_bias, routed_scaling_factor, rank, stream);
-    }
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaEventElapsedTime(&time_elapsed_ms, start, stop));
-    KLLM_LOG_INFO << "InvokeGroupedTopk time elapsed: " << time_elapsed_ms / test_times << " ms";
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, test_times);
+    KLLM_LOG_INFO << "InvokeGroupedTopk time elapsed: " << time_elapsed_ms << " ms";
 
     // Clean up resources
     FreeDeviceMemory(topk_weights_ptr);

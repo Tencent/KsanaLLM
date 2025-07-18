@@ -321,22 +321,14 @@ TEST(ConvertToScalarTest, ConvertToScalarPerformanceTest) {
   cudaStreamSynchronize(stream);
 
   // 多次运行并计时
-  const int num_runs = 1000;
-  float total_time = 0.0f;
-
-  cudaEventRecord(start, stream);
-  for (int run = 0; run < num_runs; ++run) {
+  const int num_runs = 10;
+  auto cuda_run = [&]() {
     llm_kernels::nvidia::ConvertToScalar<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
         reinterpret_cast<u_int8_t*>(d_src), reinterpret_cast<__nv_bfloat16*>(d_dst), d_src_table, d_dst_table,
         table_len, data_num, k_scale, v_scale, stream);
-  }
-  cudaEventRecord(stop, stream);
-  cudaEventSynchronize(stop);
-
-  cudaEventElapsedTime(&total_time, start, stop);
-
+  };
   // 计算平均运行时间
-  float avg_time = total_time / num_runs;
+  float avg_time = MeasureCudaExecutionTime(cuda_run, stream, num_runs, num_runs);
   printf("ConvertToScalar cost: %.6f ms\n", avg_time);
 
   // 验证结果的正确性
@@ -356,8 +348,6 @@ TEST(ConvertToScalarTest, ConvertToScalarPerformanceTest) {
   EXPECT_TRUE(correct);
 
   // 释放资源
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
   cudaStreamDestroy(stream);
   cudaFree(d_src);
   cudaFree(d_dst);

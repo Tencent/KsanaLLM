@@ -176,27 +176,12 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
 
     size_t warmup_times = 10;
     size_t test_times = 50;
-    for (size_t run_it = 0; run_it < warmup_times; ++run_it) {
+    auto cuda_run = [&]() {
       InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
                                      tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    float time_elapsed_ms = 0;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-    for (size_t run_it = 0; run_it < test_times; ++run_it) {
-      InvokeDeepSeekV3GroupedTopk<T>(d_gating_output, d_e_bias, routed_scaling_factor, d_topk_weights, d_topk_ids,
-                                     tokens_num, num_experts, topk, num_expert_group, topk_group, stream);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&time_elapsed_ms, start, stop));
-    std::cout << "InvokeDeepSeekV3GroupedTopk time elapsed: " << time_elapsed_ms / test_times << " ms" << std::endl;
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, test_times);
+    std::cout << "InvokeDeepSeekV3GroupedTopk time elapsed: " << time_elapsed_ms << " ms" << std::endl;
 
     // Free device memory
     FreeDeviceMemory(d_gating_output);

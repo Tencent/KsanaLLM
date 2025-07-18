@@ -106,8 +106,7 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
     // sync all threads
     counter++;
-    while (counter != total_ranks)
-      ;
+    while (counter != total_ranks);
     CHECK_NVIDIA_CUDA_ERROR(cudaMemset(data_handles[cur_rank], 0, buffer_size));
 
     BufferMeta refer_result_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {static_cast<size_t>(data_size)}, false);
@@ -130,49 +129,27 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
     CHECK_NVIDIA_CUDA_ERROR(
         cudaMemcpyAsync(refer_result, self_data, data_size * sizeof(T), cudaMemcpyDeviceToDevice, stream));
-    cudaEvent_t start, stop;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
     constexpr int warmup_iters = 10;
     constexpr int num_iters = 25;
 
     dummy_kernel<<<1, 1, 0, stream>>>();
-    // warmup
-    for (int i = 0; i < warmup_iters; i++) {
-      NCCLCHECK(ncclAllReduce(self_data, refer_result, data_size, ncclDtype, ncclSum, comm, stream));
-    }
-    float allreduce_ms = 0;
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-    for (int i = 0; i < num_iters; i++) {
+    auto nccl_run = [&]() {
       NCCLCHECK(ncclAllReduce(self_data, refer_result, data_size, ncclDtype, ncclSum, comm, stream));
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    cudaEventElapsedTime(&allreduce_ms, start, stop);
+    };
+    float allreduce_ms = MeasureCudaExecutionTime(nccl_run, stream, warmup_iters, num_iters);
 
     dummy_kernel<<<1, 1, 0, stream>>>();
-
-    // warm up
-    for (int i = 0; i < warmup_iters; i++) {
+    auto custom_allreduce_run = [&]() {
       custom_all_reduce.AllReduce<T>(stream, self_data, result, data_size);
-    }
-    float duration_ms = 0;
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-    for (int i = 0; i < num_iters; i++) {
-      custom_all_reduce.AllReduce<T>(stream, self_data, result, data_size);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    cudaEventElapsedTime(&duration_ms, start, stop);
+    };
+    float duration_ms = MeasureCudaExecutionTime(custom_allreduce_run, stream, warmup_iters, num_iters);
 
     if (cur_rank == 0) {
       printf(
           "Rank %d done, nGPUs:%d, sz (kb), %ld, my time,%.2f,us, nccl "
           "time,%.2f,us\n",
-          cur_rank, total_ranks, data_size * sizeof(T) / 1024, duration_ms * 1e3 / num_iters,
-          allreduce_ms * 1e3 / num_iters);
+          cur_rank, total_ranks, data_size * sizeof(T) / 1024, duration_ms * 1e3, allreduce_ms * 1e3);
     }
 
     // And wait for all the queued up work to complete
@@ -185,16 +162,12 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     constexpr float rtol = std::is_same<T, half>::value ? 1e-4 : std::is_same<T, __nv_bfloat16>::value ? 5e-3 : 1e-5;
     EXPECT_TRUE(CheckResult<T>("custom_all_reduce_" + type_str + "_size_" + std::to_string(data_size * sizeof(T)),
                                refer_result_meta, result_meta, atol, rtol));
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamDestroy(stream));
 
     // sync
     counter--;
-    while (counter != 0)
-      ;
+    while (counter != 0);
   }
 
   template <typename T>
@@ -305,8 +278,7 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
 
     // sync all threads
     counter++;
-    while (counter != total_ranks)
-      ;
+    while (counter != total_ranks);
     CHECK_NVIDIA_CUDA_ERROR(cudaMemset(data_handles[cur_rank], 0, buffer_size));
 
     size_t rank_data_sz = 8 * 1024 * 1024;
@@ -323,20 +295,12 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     }
     custom_all_reduce.RegisterBuffer(data, stream);
 
-    cudaEvent_t start, stop;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
     constexpr int num_iters = 25;
     dummy_kernel<<<1, 1, 0, stream>>>();
-    float duration_ms = 0;
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start, stream));
-    for (int i = 0; i < num_iters; i++) {
-      custom_all_reduce.AllReduce<T>(stream, self_data, result, data_size);
-    }
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop, stream));
+
+    custom_all_reduce.AllReduce<T>(stream, self_data, result, data_size);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-    cudaEventElapsedTime(&duration_ms, start, stop);
 
     BufferMeta result_meta_cpu = CopyToHost<T>(result_meta);
 
@@ -354,15 +318,12 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     EXPECT_TRUE(CheckResult<T>("custom_group_all_reduce_" + type_str + "_size_" + std::to_string(data_size * sizeof(T)),
                                refer_result_meta_cpu, result_meta_cpu, atol, rtol));
 
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamDestroy(stream));
 
     // sync
     counter--;
-    while (counter != 0)
-      ;
+    while (counter != 0);
   }
 
   template <typename T>

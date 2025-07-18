@@ -37,25 +37,25 @@ namespace fs = std::filesystem;
 
 namespace ksana_llm {
 
-// 使用CUDA事件来测量GPU操作的耗时
+// CUDA events provide accurate timing measurements for GPU operations
 class CudaEventTimer {
  public:
   CudaEventTimer(const std::string& name, cudaStream_t stream, size_t flops = 0) : name_(name), stream_(stream) {
-    cudaEventCreate(&start_);
-    cudaEventCreate(&stop_);
-    cudaEventRecord(start_, stream_);
+    CUDA_CHECK(cudaEventCreate(&start_));
+    CUDA_CHECK(cudaEventCreate(&stop_));
+    CUDA_CHECK(cudaEventRecord(start_, stream_));
     flops_ = flops;
   }
 
   ~CudaEventTimer() {
-    cudaEventRecord(stop_, stream_);
-    cudaEventSynchronize(stop_);
+    CUDA_CHECK(cudaEventRecord(stop_, stream_));
+    CUDA_CHECK(cudaEventSynchronize(stop_));
     float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start_, stop_);
+    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start_, stop_));
     std::string flops_str = flops_ != 0 ? fmt::format(", {} TFlops", flops_ / milliseconds / 1e9) : "";
     KLLM_LOG_INFO << fmt::format("{} cost: {} ms{}", name_, milliseconds, flops_str);
-    cudaEventDestroy(start_);
-    cudaEventDestroy(stop_);
+    CUDA_CHECK(cudaEventDestroy(start_));
+    CUDA_CHECK(cudaEventDestroy(stop_));
   }
 
  private:

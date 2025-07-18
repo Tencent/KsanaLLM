@@ -244,10 +244,6 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
     }
 
     // test performance
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
     constexpr int warmup_rounds = 5;
     constexpr int tested_rounds = 5;
     for (auto& op_pair : cublas_op_pairs) {
@@ -260,90 +256,49 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       std::string test_name = GenerateCublasGemmTestName<INPUT_DTYPE>(std::string("TestCublasGemmPerformance"),
                                                                       op_pair.transa, op_pair.transb, 1ul, m, n, k);
 
-      float InvokeCublasGemmEx_time_elapsed_ms = 0.f;
-      // warmup InvokeCublasGemmEx
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto InvokeCublasGemmEx_cuda_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemmEx(cublas_handle, op_pair.transb, op_pair.transa, n, m, k,
                                                    (const void*)&alpha, b_buffer.data_ptr, btype, ldb,
                                                    a_buffer.data_ptr, atype, lda, (const void*)&beta, c_buffer.data_ptr,
                                                    ctype, ldc, compute_type, CUBLAS_GEMM_DEFAULT));
-        CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-        CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      }
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemmEx(cublas_handle, op_pair.transb, op_pair.transa, n, m, k,
-                                                   (const void*)&alpha, b_buffer.data_ptr, btype, ldb,
-                                                   a_buffer.data_ptr, atype, lda, (const void*)&beta, c_buffer.data_ptr,
-                                                   ctype, ldc, compute_type, CUBLAS_GEMM_DEFAULT));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&InvokeCublasGemmEx_time_elapsed_ms, start, stop));
+      };
+      float InvokeCublasGemmEx_time_elapsed_ms =
+          MeasureCudaExecutionTime(InvokeCublasGemmEx_cuda_run, stream, warmup_rounds, tested_rounds);
 
-      float InvokeCublasGemm_1_time_elapsed_ms = 0.f;
-      // warmup InvokeCublasGemm_1
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto InvokeCublasGemm_1_cuda_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
                                                  k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                  c_buffer.data_ptr, ldc, ctype, compute_type, stream));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
-                                                 k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                 c_buffer.data_ptr, ldc, ctype, compute_type, stream));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&InvokeCublasGemm_1_time_elapsed_ms, start, stop));
+      };
+      float InvokeCublasGemm_1_time_elapsed_ms =
+          MeasureCudaExecutionTime(InvokeCublasGemm_1_cuda_run, stream, warmup_rounds, tested_rounds);
 
-      float InvokeCublasGemm_2_time_elapsed_ms = 0.f;
-      // warmup InvokeCublasGemm_2
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto InvokeCublasGemm_2_cuda_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
                                                  k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                  c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
                                                  stream, nullptr, default_ws_size, nullptr));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
-                                                 k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                 c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                                 stream, nullptr, default_ws_size, nullptr));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&InvokeCublasGemm_2_time_elapsed_ms, start, stop));
+      };
+      float InvokeCublasGemm_2_time_elapsed_ms =
+          MeasureCudaExecutionTime(InvokeCublasGemm_2_cuda_run, stream, warmup_rounds, tested_rounds);
 
-      float InvokeCublasGemm_3_time_elapsed_ms = 0.f;
       cublasLtMatmulAlgo_t cublaslt_algo = HeuristicSearchCublasAlgo(
           cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr,
           lda, atype, c_buffer.data_ptr, ldc, ctype, alpha, beta, compute_type, GetCublasWorkspaceSize());
-      // warmup InvokeCublasGemm_3 and prerun
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto InvokeCublasGemm_3_cuda_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
                                                  k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                  c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
                                                  stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
-                                                 k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                 c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                                 stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&InvokeCublasGemm_3_time_elapsed_ms, start, stop));
+      };
+      float InvokeCublasGemm_3_time_elapsed_ms =
+          MeasureCudaExecutionTime(InvokeCublasGemm_3_cuda_run, stream, warmup_rounds, tested_rounds);
+
+      std::cout << test_name << " performance InvokeCublasGemmEx: " << InvokeCublasGemmEx_time_elapsed_ms
+                << ", InvokeCublasGemm_1: " << InvokeCublasGemm_1_time_elapsed_ms
+                << ", InvokeCublasGemm_2: " << InvokeCublasGemm_2_time_elapsed_ms
+                << ", InvokeCublasGemm_3(with heuristic search gemm algo): " << InvokeCublasGemm_3_time_elapsed_ms
+                << std::endl;
     }
 
     DeleteBuffer(expected_buffer);
@@ -437,23 +392,13 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       size_t default_ws_size = 0;
 
       // original cublas
-      float cublas_time_elapsed_ms = 0.f;
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto original_cublas_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
                                                  k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                  c_buffer.data_ptr, ldc, ctype, compute_type, stream));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
-                                                 k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
-                                                 c_buffer.data_ptr, ldc, ctype, compute_type, stream));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&cublas_time_elapsed_ms, start, stop));
+      };
+      float cublas_time_elapsed_ms =
+          MeasureCudaExecutionTime(original_cublas_run, stream, warmup_rounds, tested_rounds);
 
       // cublas with heuristic Search
       float candidate_algo_time_elapsed_ms = std::numeric_limits<float>::max();
@@ -464,65 +409,34 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
           /*top_algo_num*/ DEFAULT_ALGO_SEARCH_NUM);
 
       for (size_t algo_idx = 0; algo_idx < cublas_algos.size(); ++algo_idx) {
-        for (int i = 0; i < warmup_rounds; ++i) {
+        auto cuda_run = [&]() {
           CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
               cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
               a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
               stream, cublas_workspace_buffer_ptr, default_ws_size, &(cublas_algos[algo_idx].algo)));
-        }
-        CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-        CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-        for (int i = 0; i < tested_rounds; ++i) {
-          CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
-              cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
-              a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-              stream, cublas_workspace_buffer_ptr, default_ws_size, &(cublas_algos[algo_idx].algo)));
-        }
-        CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-        CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-        CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-        CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&candidate_algo_time_elapsed_ms, start, stop));
+        };
+        candidate_algo_time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_rounds, tested_rounds);
 
         if (candidate_algo_time_elapsed_ms < min_time_elapsed_ms) {
           min_time_elapsed_ms = candidate_algo_time_elapsed_ms;
         }
       }
 
-      float custom_with_compute_fp32_dtype_time_elapsed_ms = 0.f;
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto custom_with_compute_fp32_dtype_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCustomGemm(stream, op_pair.transa, op_pair.transb, m, n, k, a_buffer.data_ptr,
                                                  lda, atype, b_buffer.data_ptr, ldb, btype, c_buffer.data_ptr, ldc,
                                                  ctype, compute_type, alpha));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCustomGemm(stream, op_pair.transa, op_pair.transb, m, n, k, a_buffer.data_ptr,
-                                                 lda, atype, b_buffer.data_ptr, ldb, btype, c_buffer.data_ptr, ldc,
-                                                 ctype, compute_type, alpha));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&custom_with_compute_fp32_dtype_time_elapsed_ms, start, stop));
+      };
+      float custom_with_compute_fp32_dtype_time_elapsed_ms =
+          MeasureCudaExecutionTime(custom_with_compute_fp32_dtype_run, stream, warmup_rounds, tested_rounds);
 
-      float custom_time_elapsed_ms = 0.f;
-      for (int i = 0; i < warmup_rounds; ++i) {
+      auto custom_gemm_run = [&]() {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCustomGemm(stream, op_pair.transa, op_pair.transb, m, n, k, a_buffer.data_ptr,
                                                  lda, atype, b_buffer.data_ptr, ldb, btype, c_buffer.data_ptr, ldc,
-                                                 ctype, ctype, alpha));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(start));
-      for (int i = 0; i < tested_rounds; ++i) {
-        CHECK_NVIDIA_CUDA_ERROR(InvokeCustomGemm(stream, op_pair.transa, op_pair.transb, m, n, k, a_buffer.data_ptr,
-                                                 lda, atype, b_buffer.data_ptr, ldb, btype, c_buffer.data_ptr, ldc,
-                                                 ctype, ctype, alpha));
-      }
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventRecord(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventSynchronize(stop));
-      CHECK_NVIDIA_CUDA_ERROR(cudaEventElapsedTime(&custom_time_elapsed_ms, start, stop));
+                                                 ctype, compute_type, alpha));
+      };
+      float custom_gemm_time_elapsed_ms =
+          MeasureCudaExecutionTime(custom_gemm_run, stream, warmup_rounds, tested_rounds);
 
       // custom gemm must better than cublas
       EXPECT_GT(min_time_elapsed_ms, custom_with_compute_fp32_dtype_time_elapsed_ms);
@@ -530,10 +444,11 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       std::cout << "m: " << m << ", n: " << n << ", k: " << k << ", finally performnance enhance: "
                 << (min_time_elapsed_ms - custom_with_compute_fp32_dtype_time_elapsed_ms) / min_time_elapsed_ms * 100.0
                 << "%"
-                << ", cublas_time_elapsed_ms: " << cublas_time_elapsed_ms / tested_rounds
-                << ", heuristic_search_time_elapsed_ms: " << min_time_elapsed_ms / tested_rounds
+                << ", cublas_time_elapsed_ms: " << cublas_time_elapsed_ms
+                << ", heuristic_search_time_elapsed_ms: " << min_time_elapsed_ms
                 << ", custom_with_compute_fp32_dtype_time_elapsed_ms: "
-                << custom_with_compute_fp32_dtype_time_elapsed_ms / tested_rounds << std::endl;
+                << custom_with_compute_fp32_dtype_time_elapsed_ms
+                << ", custom_gemm_time_elapsed_ms: " << custom_gemm_time_elapsed_ms << std::endl;
     }
 
     DeleteBuffer(expected_buffer);
