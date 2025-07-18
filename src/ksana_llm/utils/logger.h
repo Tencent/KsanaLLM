@@ -1,18 +1,24 @@
-/* Copyright 2024 Tencent Inc.  All rights reserved.
+/* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 #pragma once
 
 #include <chrono>
 #include <string>
+#include <vector>
+#include <fstream>
+#include <iostream>
 #include <unordered_map>
-
+#include <filesystem>
+#include <memory>
 #include "loguru.hpp"
 
 namespace ksana_llm {
+extern std::vector<std::string> g_categories;
 
 // Log level.
-enum Level { DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3, FATAL = 4 };
+enum Level { DEBUG = 0, INFO = 1, WARNING = 2, ERROR = 3, FATAL = 4,
+  ATTENTION = 5, COMMUNICATE = 6, MOE = 7, MODEL = 8};
 
 // Get log level from environment, this function called only once.
 static Level GetLogLevel() {
@@ -20,12 +26,23 @@ static Level GetLogLevel() {
   const char* env_log_level = std::getenv("KLLM_LOG_LEVEL");
   std::string log_level_str = env_log_level ? env_log_level : default_log_level;
 
+  // Split the categories by comma (',') and store in a vector
+  std::stringstream ss(log_level_str);  // Create a stringstream from the categories string
+  std::string category;
+
+  // Split the string at each comma
+  while (std::getline(ss, category, ',')) {
+      g_categories.push_back(category);  // Add each category to the vector
+  }
+
   std::unordered_map<std::string, Level> log_name_to_level = {
-      {"DEBUG", DEBUG}, {"INFO", INFO}, {"WARNING", WARNING}, {"ERROR", ERROR}, {"FATAL", FATAL}};
+      {"DEBUG", DEBUG}, {"INFO", INFO}, {"WARNING", WARNING}, {"ERROR", ERROR}, {"FATAL", FATAL},
+      {"ATTENTION", ATTENTION}, {"COMMUNICATE", COMMUNICATE}, {"MOE", MOE},
+      {"MODEL", MODEL}};
 
   Level level = Level::INFO;
-  if (log_name_to_level.find(log_level_str) != log_name_to_level.end()) {
-    level = log_name_to_level[log_level_str];
+  if (log_name_to_level.find(g_categories[0]) != log_name_to_level.end()) {
+    level = log_name_to_level[g_categories[0]];
   }
   return level;
 }
@@ -36,6 +53,8 @@ static std::string GetLogFile() {
   const char* env_log_file = std::getenv("KLLM_LOG_FILE");
   return env_log_file ? env_log_file : default_log_file;
 }
+
+void category_log_handler(void* user_data, const loguru::Message& message);
 
 // Get name from log level.
 inline std::string GetLevelName(const Level level) {
@@ -70,19 +89,37 @@ inline void InitLoguru() {
     verbosity = loguru::Verbosity_ERROR;
   } else if (log_level == Level::FATAL) {
     verbosity = loguru::Verbosity_FATAL;
+  } else if (log_level == Level::ATTENTION) {
+    verbosity = loguru::Verbosity_MAX;
+  } else if (log_level == Level::COMMUNICATE) {
+    verbosity = loguru::Verbosity_MAX;
+  } else if (log_level == Level::MOE) {
+    verbosity = loguru::Verbosity_MAX;
+  } else if (log_level == Level::MODEL) {
+    verbosity = loguru::Verbosity_MAX;
   }
 
   loguru::g_stderr_verbosity = loguru::Verbosity_OFF;
   static bool kIsLoggerInitialized = false;
   if (!kIsLoggerInitialized) {
-    loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
+    if (g_categories[0] == "INFO") {
+      loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
+    } else {
+      loguru::add_file(GetLogFile().c_str(), loguru::Append, loguru::Verbosity_INFO);
+      loguru::add_callback("CATEGORY", category_log_handler, nullptr, verbosity);
+    }
     kIsLoggerInitialized = true;
   }
 }
 
 #define NO_CC_IF if  // For CodeCC compatibility.
 
-#define KLLM_LOG_DEBUG LOG_S(1) << __FUNCTION__ << "| "
+#define KLLM_LOG_DEBUG LOG_S(1) << "DEBUG| " << __FUNCTION__ << " | "
+#define KLLM_LOG_ATTENTION LOG_S(1)  << "ATTENTION| " << __FUNCTION__ << " | "
+#define KLLM_LOG_COMMUNICATE LOG_S(1) << "COMMUNICATE| " << __FUNCTION__ << " | "
+#define KLLM_LOG_MOE LOG_S(1) << "MOE| " << __FUNCTION__ << " | "
+#define KLLM_LOG_MODEL LOG_S(1) << "MODEL| " << __FUNCTION__ << " | "
+
 #define KLLM_LOG_INFO LOG_S(INFO)
 #define KLLM_LOG_WARNING LOG_S(WARNING)
 #define KLLM_LOG_ERROR LOG_S(ERROR)
