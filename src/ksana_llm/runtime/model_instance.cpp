@@ -21,7 +21,6 @@
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/models/gpt/gpt_model.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_model.h"
-#include "ksana_llm/models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "ksana_llm/models/internlm2/internlm_model.h"
 #include "ksana_llm/models/internlmxcomposer2/internlmxcomposer2_model.h"
 #include "ksana_llm/models/llama/llama_model.h"

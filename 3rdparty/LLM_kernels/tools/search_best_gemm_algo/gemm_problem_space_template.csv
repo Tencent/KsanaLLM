@@ -1,0 +1,4 @@
+batch_size,m,n,k,input_dtype,output_dtype,inner_compute_dtype,input_a_transop,input_b_transop,op_type
+1,16,36864,7168,fp8,bf16,bf16,false,false,4
+1,1024,33,33,fp16,fp16,fp32,false,false,0
+1,32,64,128,fp8_e4m3,fp16,fp32,true,false,0
