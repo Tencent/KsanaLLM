@@ -41,6 +41,18 @@ model_transaction_policy {
 # Any change here needs to also be made in model.py
 input [
   {
+    name: "request_type"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "request_bytes"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
     name: "text_input"
     data_type: TYPE_STRING
     dims: [ -1 ]
@@ -198,6 +210,11 @@ input [
 ]
 
 output [
+  {
+    name: "forward_response" 
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
   {
     name: "text_output"
     data_type: TYPE_STRING

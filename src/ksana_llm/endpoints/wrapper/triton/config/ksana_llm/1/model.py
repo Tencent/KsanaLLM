@@ -4,16 +4,14 @@
 import asyncio
 import os
 import threading
-import traceback
 import time
+import traceback
 import uuid
-import orjson
 
+import ksana_llm
 import numpy as np
 import orjson
 import triton_python_backend_utils as pb_utils
-
-import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
 
 _KSANA_CONFIG_FILENAME = "ksana_llm.yaml"
@@ -38,7 +36,9 @@ TRITON_TO_KSANA = {
     "messages": "messages",
     "input_refit_embedding": "input_refit_embedding",
     "pos": "pos",
-    "embeddings": "embeddings"
+    "embeddings": "embeddings",
+    "request_type": "request_type",
+    "request_bytes": "request_bytes"
 }
 
 GENERATION_CONFIG_KEYS = {
@@ -370,7 +370,7 @@ class TritonPythonModel:
                 )
             )
 
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError, KeyError) as e:
             self.logger.log_error(
                 f"Error in generate_per_req: {e}\n{traceback.format_exc()}"
             )
@@ -382,25 +382,114 @@ class TritonPythonModel:
             response_sender.send(flags=pb_utils.TRITONSERVER_RESPONSE_COMPLETE_FINAL)
             self.ongoing_request_count -= 1
 
-    async def generate(self, request):
-        response_sender = request.get_response_sender()
+    async def forward_per_req(self, response_sender, request_bytes, req_id):
+        self.ongoing_request_count += 1
         try:
-            request_dic = parse_input(self.logger, request, self.input_dtypes)
-            self.create_task(
-                self.generate_per_req(
-                    response_sender, request_dic, request.request_id()
+            request_id = uuid.uuid4()
+            start_time = time.time()
+
+            status, response_bytes = await self.llm_engine.forward(request_bytes, {})
+
+            if response_sender.is_cancelled():
+                self.logger.log_warn(f"Request {request_id} cancelled")
+                return
+
+            if not status.OK() or response_bytes is None:
+                error = pb_utils.TritonError(
+                    f"Error in forward request: {status.GetMessage()}")
+                response = pb_utils.InferenceResponse(error=error)
+                response_sender.send(response)
+                return
+
+            # Create a tensor with the msgpack response bytes
+            output_tensor = pb_utils.Tensor(
+                "forward_response",
+                np.array([response_bytes], dtype=np.object_)
+            )
+
+            response = pb_utils.InferenceResponse(
+                output_tensors=[output_tensor])
+            response_sender.send(response)
+
+            finished_time = time.time()
+            exec_t = (finished_time - start_time) * 1000
+
+            self.logger.log_info(
+                "req_id {}, forward request processed, exec_t={:.3f}ms".format(
+                    request_id if req_id is None else req_id,
+                    exec_t
                 )
             )
+
         except Exception as e:
-            self.logger.log_error(f"Error in generate: {e}\n{traceback.format_exc()}")
-            error = pb_utils.TritonError(f"Error generating stream: {e}")
+            self.logger.log_error(
+                f"Error in forward_per_req: {e}\n{traceback.format_exc()}"
+            )
+            error = pb_utils.TritonError(
+                f"Error processing forward request: {e}")
             response = pb_utils.InferenceResponse(error=error)
             response_sender.send(response)
-            raise
+        finally:
+            response_sender.send(
+                flags=pb_utils.TRITONSERVER_RESPONSE_COMPLETE_FINAL)
+            self.ongoing_request_count -= 1
+
+    async def process_request(self, request):
+        response_sender = request.get_response_sender()
+        try:
+            # Get request type
+            request_type = None
+            for input_tensor in request.inputs():
+                if input_tensor.name() == "request_type":
+                    request_type = input_tensor.as_numpy()[
+                        0][0].decode("utf-8")
+                    break
+
+            if request_type == "forward":
+                # Process as forward request
+                self.logger.log_info(f"Processing forward request")
+                request_bytes = None
+                for input_tensor in request.inputs():
+                    if input_tensor.name() == "request_bytes":
+                        request_bytes = input_tensor.as_numpy()[0][0]
+                        break
+
+                if request_bytes is None:
+                    self.logger.log_error(
+                        "No request_bytes found for forward request")
+                    error = pb_utils.TritonError(
+                        "No request_bytes found for forward request")
+                    response = pb_utils.InferenceResponse(error=error)
+                    response_sender.send(response)
+                    return
+
+                self.create_task(
+                    self.forward_per_req(
+                        response_sender, request_bytes, request.request_id()
+                    )
+                )
+            else:
+                self.logger.log_info(f"Processing generate request")
+                # Default to generate request
+                request_dic = parse_input(
+                    self.logger, request, self.input_dtypes)
+                self.create_task(
+                    self.generate_per_req(
+                        response_sender, request_dic, request.request_id()
+                    )
+                )
+        except Exception as e:
+            self.logger.log_error(
+                f"Error in process_request: {e}\n{traceback.format_exc()}")
+            error = pb_utils.TritonError(f"Error processing request: {e}")
+            response = pb_utils.InferenceResponse(error=error)
+            response_sender.send(response)
+            response_sender.send(
+                flags=pb_utils.TRITONSERVER_RESPONSE_COMPLETE_FINAL)
 
     def execute(self, requests):
         for request in requests:
-            self.create_task(self.generate(request))
+            self.create_task(self.process_request(request))
         return None
 
     def finalize(self):
