@@ -155,7 +155,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   size_t num_experts_per_rank = DivRoundUp(num_experts, global_expoert_para_size);
   // init expert map
   std::vector<int> expert_map(num_experts, num_experts_per_rank + 1);
-  size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size;
+  size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
   size_t expert_offset = (global_expoert_para_size > 1)
                              ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
                              : 0;
