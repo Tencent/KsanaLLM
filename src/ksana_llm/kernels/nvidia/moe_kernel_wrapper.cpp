@@ -269,6 +269,9 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                                                         topk_group, stream);
     return;
   }
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
+#endif
 
   auto origin_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
   torch::Tensor gating_tensor = torch::from_blob(
@@ -328,6 +331,10 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                              cudaMemcpyDeviceToDevice, stream));
   CUDA_CHECK(cudaMemcpyAsync(topk_ids_ptr, output_topk_ids.data_ptr(), topk_ids.numel() * sizeof(int32_t),
                              cudaMemcpyDeviceToDevice, stream));
+
+#ifdef ENABLE_VLLM_FLASH_ATTN_2
+  InvokeSetTorchStream(torch_stream, rank);
+#endif
 }
 #define INVOKE_GROUPED_TOPK(T)                                                                                      \
   template void InvokeGroupedTopk<T>(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows, \
@@ -413,7 +420,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
 // [vLLM Project]
 // https://github.com/Chen-XiaoBing/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L1271
 template <typename T, bool UseExpertParallel>
-void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output, int* expert_map, int topk,
+void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk,
                     bool renormalize, const std::string& scoring_func_, void* e_bias, bool inplace,
                     bool use_grouped_topk, int num_expert_group, int topk_group, DataType weight_dtype,
                     DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale,
@@ -424,7 +431,6 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
                     int num_experts, int hidden_size, int inter_size, void* dequant_workspace, int rank,
                     cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
-  // gating_output [num_tokens, num_experts]
   // w1 [num_experts, inter_size * 2, hidden_size]
   // w2 [num_experts, hidden_size, inter_size]
   // topk_ids [num_tokens, topk]
@@ -437,27 +443,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
   // expert_map [num_experts]
 
   // a1_q, a2_q: FP8  需要将 FP16 输入量化成 FP8 + FLOAT32,这两个是两个对应空间
-  // TODO(zezhao): 使用 num_experts / expert_para_size 来替换 total_num_experts. 不再维护 ExpertParallelSize
   size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize();
-  size_t expert_world_size = Singleton<Environment>::GetInstance()->GetExpertWorldSize();
-  int total_num_experts = num_experts * expert_para_size * expert_world_size;
-
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
-  cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
-#endif
-  if (use_grouped_topk) {
-    InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk,
-                         renormalize, num_expert_group, topk_group, scoring_func_, e_bias, routed_scaling_factor, rank,
-                         stream);
-  } else {
-    // 需要对非group的做优化，目前直接复用
-    InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk,
-                         renormalize, num_expert_group, topk_group, scoring_func_, e_bias, routed_scaling_factor, rank,
-                         stream);
-  }
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
-  InvokeSetTorchStream(torch_stream, rank);
-#endif
   // Expert parallel.
   // hidden_state[num_tokens][hidden_dim]
   // topk_ids_ptr[num_tokens][topk]
@@ -615,7 +601,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
 
 #define FUSEDMOE(T)                                                                                                   \
   template void InvokeFusedMoe<T, true>(                                                                              \
-      void* hidden_states, void* w1, void* w2, void* gating_output, int* expert_map, int topk, bool renormalize,      \
+      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,                           \
       const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,      \
       int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, \
       void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,               \
@@ -624,7 +610,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, void* gating_output
       void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,                        \
       void* dequant_workspace, int rank, cudaStream_t stream);                                                        \
   template void InvokeFusedMoe<T, false>(                                                                             \
-      void* hidden_states, void* w1, void* w2, void* gating_output, int* expert_map, int topk, bool renormalize,      \
+      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,                           \
       const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,      \
       int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, \
       void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,               \

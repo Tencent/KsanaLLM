@@ -1,9 +1,10 @@
-/* Copyright 2024 Tencent Inc.  All rights reserved.
+/* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 #include "ksana_llm/layers/moe_layer.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_preprocessors.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/utils.h"
@@ -57,6 +58,15 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
   }
 
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
+
+  // 初始化 GroupedTopkLayer
+  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer<T>>();
+  std::vector<std::any> grouped_topk_params = {
+      static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
+      static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
+      use_e_score_correction_bias_};
+  grouped_topk_layer_->Init(grouped_topk_params, context, rank);
+
   return Status();
 }
 #  define VLLM_FUSED_MOE_CHUNK_SIZE ((size_t)(32 * 1024))
@@ -174,13 +184,16 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
       w1_scale = input_tensors[2].scales->GetPtr<void>();
       w2_scale = input_tensors[3].scales->GetPtr<void>();
     }
+
+    // 使用 GroupedTopkLayer 计算 topk
+    int num_tokens = input_tensors[0].shape[0];
+    ExecuteGroupedTopk(input_tensors, num_tokens);
     size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize() *
                               Singleton<Environment>::GetInstance()->GetExpertWorldSize();
     if (expert_para_size == 1) {
       InvokeFusedMoe<T, false>(input_tensors[0].GetPtr<void>(),              // hidden_states
                                input_tensors[2].GetPtr<void>(),              // w1
                                input_tensors[3].GetPtr<void>(),              // w2
-                               input_tensors[1].GetPtr<void>(),              // gating_output
                                input_tensors[4].GetPtr<int>(),               // expert_map
                                expert_topk_,                                 // topk
                                norm_topk_prob_,                              // renormalize
@@ -222,7 +235,6 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
       InvokeFusedMoe<T, true>(input_tensors[0].GetPtr<void>(),              // hidden_states
                               input_tensors[2].GetPtr<void>(),              // w1
                               input_tensors[3].GetPtr<void>(),              // w2
-                              input_tensors[1].GetPtr<void>(),              // gating_output
                               input_tensors[4].GetPtr<int>(),               // expert_map
                               expert_topk_,                                 // topk
                               norm_topk_prob_,                              // renormalize
@@ -262,7 +274,7 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
                               context_->GetComputeStreams()[rank_].Get());  // stream
     }
     // template void InvokeFusedMoe<T>(
-    //   void* hidden_states, void* w1, void* w2, void* gating_output, int topk, bool renormalize,
+    //   void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,
     //   const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,
     //   int topk_group, bool use_fp8_w8a8, bool use_int8_w8a16, bool use_int4_w4a16, bool is_marlin,
     //   bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q,
@@ -298,6 +310,36 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();
+}
+
+template <typename T>
+Status MoeLayer<T>::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens) {
+  // 准备 GroupedTopkLayer 的输入和输出张量
+  std::vector<Tensor> grouped_topk_input_tensors;
+  std::vector<Tensor> grouped_topk_output_tensors;
+
+  // 输入: gating_output
+  grouped_topk_input_tensors.push_back(input_tensors[1]);
+
+  // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
+  if (input_tensors.size() > 5) {
+    grouped_topk_input_tensors.push_back(input_tensors[5]);
+  }
+
+  // 输出: topk_weights_ptr
+  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32,
+                             {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
+                             input_tensors[1].device_id, topk_weights_ptr_);
+  grouped_topk_output_tensors.push_back(topk_weights_tensor);
+
+  // 输出: topk_ids_ptr
+  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32,
+                         {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
+                         input_tensors[1].device_id, topk_ids_ptr_);
+  grouped_topk_output_tensors.push_back(topk_ids_tensor);
+
+  // 调用 GroupedTopkLayer
+  return grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
 }
 
 template class MoeLayer<float>;

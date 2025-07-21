@@ -1,8 +1,10 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#include <algorithm>
 #include <numeric>
 #include <random>
+#include <set>
 
 #include "3rdparty/half/include/half.hpp"
 #include "ksana_llm/layers/activation_layer.h"
@@ -27,6 +29,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/search_status.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
+#include "ksana_llm/layers/moe_layer.h"
 #include "test.h"
 
 #ifdef ENABLE_CUDA
@@ -1307,6 +1311,145 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
                              .permute({1, 0, 2});
   EXPECT_TRUE(torch::all(torch::eq(tensor[0], 10.984)).item<bool>());
   EXPECT_TRUE(torch::all(torch::eq(tensor[1], 14.1)).item<bool>());
+#endif
+}
+
+TEST_F(LayerTest, GroupedTopkLayerTest) {
+#ifdef ENABLE_CUDA
+  constexpr int kDeviceRank = 0;
+  using dtype = half_float::half;
+  using device_type = half;
+
+  // 测试参数
+  const int num_tokens = 4;
+  const int num_experts = 8;
+  const int topk = 2;
+  const bool renormalize = true;
+  const int num_expert_group = 4;
+  const int topk_group = 2;
+  const std::string scoring_func = "softmax";
+  const float routed_scaling_factor = 1.0f;
+  const bool use_e_score_correction_bias = false;
+
+  // 创建 GroupedTopkLayer
+  GroupedTopkLayer<device_type> grouped_topk_layer;
+
+  // 测试初始化
+  std::vector<std::any> parameters = {topk,         renormalize,           num_expert_group,           topk_group,
+                                      scoring_func, routed_scaling_factor, use_e_score_correction_bias};
+
+  EXPECT_TRUE(grouped_topk_layer.Init(parameters, context_, kDeviceRank).OK());
+
+  // 准备输入张量 - gating_output
+  Tensor gating_output;
+  gating_output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+                         {static_cast<size_t>(num_tokens), static_cast<size_t>(num_experts)}, kDeviceRank);
+
+  // 初始化 gating_output 数据 - 使用不同的值来测试 topk 选择
+  std::vector<dtype> gating_host(num_tokens * num_experts);
+  for (int token = 0; token < num_tokens; ++token) {
+    for (int expert = 0; expert < num_experts; ++expert) {
+      // 为每个 token 设置不同的专家权重，确保 topk 选择有意义
+      gating_host[token * num_experts + expert] = static_cast<dtype>((expert + token * 0.1f + 1.0f) / num_experts);
+    }
+  }
+  MemcpyAsync(gating_output.GetPtr<void>(), gating_host.data(), gating_output.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+              context_->GetMemoryManageStreams()[kDeviceRank]);
+
+  // 准备输出张量
+  Tensor topk_weights, topk_ids;
+  topk_weights = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32,
+                        {static_cast<size_t>(num_tokens), static_cast<size_t>(topk)}, kDeviceRank);
+  topk_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                    {static_cast<size_t>(num_tokens), static_cast<size_t>(topk)}, kDeviceRank);
+
+  std::vector<Tensor> input_tensors = {gating_output};
+  std::vector<Tensor> output_tensors = {topk_weights, topk_ids};
+
+  StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
+
+  // 测试前向传播
+  EXPECT_TRUE(grouped_topk_layer.Forward(input_tensors, output_tensors).OK());
+  StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+  // 验证输出
+  std::vector<float> weights_host(num_tokens * topk);
+  std::vector<int32_t> ids_host(num_tokens * topk);
+
+  Memcpy(weights_host.data(), topk_weights.GetPtr<void>(), topk_weights.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(ids_host.data(), topk_ids.GetPtr<void>(), topk_ids.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
+
+  // 验证 topk_ids 在有效范围内
+  for (int i = 0; i < num_tokens * topk; ++i) {
+    EXPECT_GE(ids_host[i], 0);
+    EXPECT_LT(ids_host[i], num_experts);
+  }
+
+  // 验证权重为正数（softmax 输出）
+  for (int i = 0; i < num_tokens * topk; ++i) {
+    EXPECT_GT(weights_host[i], 0.0f);
+    EXPECT_LE(weights_host[i], 1.0f);
+  }
+
+  // 验证每个 token 的权重和接近 1.0（如果 renormalize=true）
+  if (renormalize) {
+    for (int token = 0; token < num_tokens; ++token) {
+      float weight_sum = 0.0f;
+      for (int k = 0; k < topk; ++k) {
+        weight_sum += weights_host[token * topk + k];
+      }
+      EXPECT_NEAR(weight_sum, 1.0f, 0.01f);  // 允许小的数值误差
+    }
+  }
+
+  // 验证 topk 选择的正确性 - 检查选中的专家确实是权重最大的
+  for (int token = 0; token < num_tokens; ++token) {
+    std::vector<std::pair<float, int>> expert_weights;
+    for (int expert = 0; expert < num_experts; ++expert) {
+      expert_weights.push_back({static_cast<float>(gating_host[token * num_experts + expert]), expert});
+    }
+    std::sort(expert_weights.rbegin(), expert_weights.rend());  // 降序排列
+
+    // 检查选中的专家是否在前 topk 中
+    std::set<int> expected_experts;
+    for (int k = 0; k < topk; ++k) {
+      expected_experts.insert(expert_weights[k].second);
+    }
+
+    std::set<int> actual_experts;
+    for (int k = 0; k < topk; ++k) {
+      actual_experts.insert(ids_host[token * topk + k]);
+    }
+
+    EXPECT_EQ(expected_experts, actual_experts);
+  }
+
+  // 测试带 e_bias 的情况
+  GroupedTopkLayer<device_type> grouped_topk_layer_with_bias;
+  std::vector<std::any> parameters_with_bias = {
+      topk, renormalize, num_expert_group, topk_group, scoring_func, routed_scaling_factor,
+      true  // use_e_score_correction_bias = true
+  };
+
+  EXPECT_TRUE(grouped_topk_layer_with_bias.Init(parameters_with_bias, context_, kDeviceRank).OK());
+
+  // 准备 e_bias 张量
+  Tensor e_bias(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {static_cast<size_t>(num_experts)}, kDeviceRank);
+  std::vector<float> e_bias_host(num_experts);
+  for (int i = 0; i < num_experts; ++i) {
+    e_bias_host[i] = 0.1f * i;  // 简单的偏置值
+  }
+  MemcpyAsync(e_bias.GetPtr<void>(), e_bias_host.data(), e_bias.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+              context_->GetMemoryManageStreams()[kDeviceRank]);
+
+  std::vector<Tensor> input_tensors_with_bias = {gating_output, e_bias};
+  std::vector<Tensor> output_tensors_with_bias = {topk_weights, topk_ids};
+
+  StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
+
+  // 测试带偏置的前向传播
+  EXPECT_TRUE(grouped_topk_layer_with_bias.Forward(input_tensors_with_bias, output_tensors_with_bias).OK());
+  StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
 #endif
 }
 

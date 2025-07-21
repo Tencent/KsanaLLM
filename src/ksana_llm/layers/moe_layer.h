@@ -3,6 +3,7 @@
 #pragma once
 #include "csrc/utils/nvidia/workspace.h"
 #include "ksana_llm/layers/base_layer.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
 
@@ -30,6 +31,10 @@ class MoeLayer : public BaseLayer {
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+
+ private:
+  // 执行 GroupedTopk 计算的辅助函数
+  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens);
 
  protected:
   bool set_workspace_buffer_info_ = true;
@@ -98,6 +103,9 @@ class MoeLayer : public BaseLayer {
   // The vector of the best config index for every tokens number
   std::vector<size_t> config_map_;
   WorkspaceInfo workspace_info_;
+
+  // GroupedTopk layer for handling topk computation
+  std::shared_ptr<GroupedTopkLayer<T>> grouped_topk_layer_;
 };
 #endif
 }  // namespace ksana_llm
