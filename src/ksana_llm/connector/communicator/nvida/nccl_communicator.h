@@ -128,6 +128,16 @@ class NcclCommunicator : public Communicator {
   Status RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<void*>& buffers,
                    const std::vector<size_t>& counts, DataType dtype) override;
 
+  // Communicator 接口实现
+  Status Send(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream, const void* buf,
+              size_t count, DataType dtype);
+  Status Recv(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream, void* buf,
+              size_t count, DataType dtype);
+  Status SendGroup(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
+                   const std::vector<const void*>& buffers, const std::vector<size_t>& counts, DataType dtype);
+  Status RecvGroup(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
+                   const std::vector<void*>& buffers, const std::vector<size_t>& counts, DataType dtype);
+
   struct NcclRankInfo {
     int cur_rank;
     int peer_rank;

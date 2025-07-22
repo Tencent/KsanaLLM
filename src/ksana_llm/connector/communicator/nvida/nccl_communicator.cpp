@@ -217,59 +217,114 @@ bool NcclCommunicator::IsConnectionReady(const std::string& group_key, int dev_i
 // Communicator 接口实现 - 发送数据
 Status NcclCommunicator::Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
                               DataType dtype) {
-  KLLM_LOG_DEBUG << "[NCCL] Sending data to group_key=" << group_key << ", dev_id=" << dev_id << ", count=" << count
-                 << ", from node_rank=" << node_rank_;
-  auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
-  if (comm_group == nullptr || dev_id < 0 || dev_id >= device_count_) {
-    KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
-    return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
-  }
-
-  auto& resource = comm_group->device_resources_[dev_id];
-  if (!resource || !resource->send_comm) {
-    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send communicator not initialized");
-  }
-
-  // 执行NCCL发送操作 - 使用peer_rank作为目标
-  ncclDataType_t nccl_dtype;
-  GetNcclDataType(dtype, nccl_dtype);
-  NCCL_CHECK(ncclSend(buf, count, nccl_dtype, resource->recv_rank, resource->send_comm, resource->send_stream));
-  CUDA_CHECK(cudaStreamSynchronize(resource->send_stream));
-
-  return Status();
+  return Send(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
 }
 
 // Communicator 接口实现 - 接收数据
 Status NcclCommunicator::Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
                               DataType dtype) {
-  KLLM_LOG_DEBUG << "[NCCL] Receiving data from group_key=" << group_key << ", dev_id=" << dev_id << ", count=" << count
-                 << ", to node_rank=" << node_rank_;
-  auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
-  if (comm_group == nullptr || dev_id < 0 || dev_id >= device_count_) {
-    KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
-    return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
-  }
-
-  auto& resource = comm_group->device_resources_[dev_id];
-  if (!resource || !resource->recv_comm) {
-    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Recv communicator not initialized");
-  }
-
-  ncclDataType_t nccl_dtype;
-  GetNcclDataType(dtype, nccl_dtype);
-  NCCL_CHECK(ncclRecv(buf, count, nccl_dtype, resource->send_rank, resource->recv_comm, resource->recv_stream));
-
-  CUDA_CHECK(cudaStreamSynchronize(resource->recv_stream));
-
-  return Status();
+  return Recv(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
 }
 
 // Communicator 接口实现 - 批量发送数据
 Status NcclCommunicator::SendGroup(const std::string& group_key, int dev_id, uint64_t job_id,
                                    const std::vector<const void*>& buffers, const std::vector<size_t>& counts,
                                    DataType dtype) {
-  KLLM_LOG_DEBUG << "[NCCL] SendGroup starting for group_key=" << group_key << ", dev_id=" << dev_id
-                 << ", buffer_count=" << buffers.size() << ", from node_rank=" << node_rank_;
+  return SendGroup(group_key, dev_id, dev_id, nullptr, buffers, counts, dtype);
+}
+
+// Communicator 接口实现 - 批量接收数据
+Status NcclCommunicator::RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id,
+                                   const std::vector<void*>& buffers, const std::vector<size_t>& counts,
+                                   DataType dtype) {
+  return RecvGroup(group_key, dev_id, dev_id, nullptr, buffers, counts, dtype);
+}
+
+Status NcclCommunicator::Send(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
+                              const void* buf, size_t count, DataType dtype) {
+  KLLM_LOG_DEBUG << "[NCCL] Sending data to group_key=" << group_key << ", local_dev_id=" << local_dev_id
+                 << ", peer_dev_id=" << peer_dev_id << ", count=" << count << ", from node_rank=" << node_rank_;
+
+  auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
+  if (comm_group == nullptr || local_dev_id < 0 || local_dev_id >= device_count_ || peer_dev_id < 0 ||
+      peer_dev_id >= device_count_) {
+    KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
+    return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
+  }
+
+  auto& resource = comm_group->device_resources_[local_dev_id];
+  if (!resource || !resource->send_comm) {
+    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send communicator not initialized");
+  }
+
+  cudaStream_t cur_stream;
+  if (stream == nullptr) {
+    // 如果没有提供流，则使用默认的设备流
+    cur_stream = resource->send_stream;
+  } else {
+    cur_stream = stream;
+  }
+  int recv_rank;
+  if (local_dev_id == peer_dev_id) {
+    recv_rank = resource->recv_rank;
+  } else {
+    recv_rank = comm_group->device_resources_[peer_dev_id]->recv_rank;
+  }
+
+  // 执行NCCL发送操作 - 使用peer_rank作为目标
+  ncclDataType_t nccl_dtype;
+  GetNcclDataType(dtype, nccl_dtype);
+  NCCL_CHECK(ncclSend(buf, count, nccl_dtype, recv_rank, resource->send_comm, cur_stream));
+  if (!stream) CUDA_CHECK(cudaStreamSynchronize(cur_stream));
+
+  return Status();
+}
+
+Status NcclCommunicator::Recv(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
+                              void* buf, size_t count, DataType dtype) {
+  KLLM_LOG_DEBUG << "[NCCL] Receiving data from group_key=" << group_key << ", local_dev_id=" << local_dev_id
+                 << ", peer_dev_id=" << peer_dev_id << ", count=" << count << ", to node_rank=" << node_rank_;
+  auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
+  if (comm_group == nullptr || local_dev_id < 0 || local_dev_id >= device_count_ || peer_dev_id < 0 ||
+      peer_dev_id >= device_count_) {
+    KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
+    return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
+  }
+
+  auto& resource = comm_group->device_resources_[local_dev_id];
+  if (!resource || !resource->recv_comm) {
+    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Recv communicator not initialized");
+  }
+
+  cudaStream_t cur_stream;
+  if (stream == nullptr) {
+    // 如果没有提供流，则使用默认的设备流
+    cur_stream = resource->recv_stream;
+  } else {
+    cur_stream = stream;
+  }
+  int send_rank;
+  if (local_dev_id == peer_dev_id) {
+    send_rank = resource->send_rank;
+  } else {
+    send_rank = comm_group->device_resources_[peer_dev_id]->send_rank;
+  }
+
+  ncclDataType_t nccl_dtype;
+  GetNcclDataType(dtype, nccl_dtype);
+  NCCL_CHECK(ncclRecv(buf, count, nccl_dtype, send_rank, resource->recv_comm, cur_stream));
+
+  if (!stream) CUDA_CHECK(cudaStreamSynchronize(cur_stream));
+
+  return Status();
+}
+
+Status NcclCommunicator::SendGroup(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
+                                   const std::vector<const void*>& buffers, const std::vector<size_t>& counts,
+                                   DataType dtype) {
+  KLLM_LOG_DEBUG << "[NCCL] SendGroup starting for group_key=" << group_key << ", local_dev_id=" << local_dev_id
+                 << ", peer_dev_id=" << peer_dev_id << ", buffer_count=" << buffers.size()
+                 << ", from node_rank=" << node_rank_;
   if (buffers.empty()) {
     return Status();  // 无数据需要发送，直接返回成功
   }
@@ -282,28 +337,42 @@ Status NcclCommunicator::SendGroup(const std::string& group_key, int dev_id, uin
 
   // 获取通信组
   auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
-  if (comm_group == nullptr || dev_id < 0 || dev_id >= device_count_) {
+  if (comm_group == nullptr || local_dev_id < 0 || local_dev_id >= device_count_ || peer_dev_id < 0 ||
+      peer_dev_id >= device_count_) {
     KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
     return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
   }
 
-  auto& resource = comm_group->device_resources_[dev_id];
+  auto& resource = comm_group->device_resources_[local_dev_id];
   if (!resource || !resource->send_comm) {
     return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send communicator not initialized for SendGroup");
+  }
+
+  cudaStream_t cur_stream;
+  if (stream == nullptr) {
+    // 如果没有提供流，则使用默认的设备流
+    cur_stream = resource->send_stream;
+  } else {
+    cur_stream = stream;
+  }
+  int recv_rank;
+  if (local_dev_id == peer_dev_id) {
+    recv_rank = resource->recv_rank;
+  } else {
+    recv_rank = comm_group->device_resources_[peer_dev_id]->recv_rank;
   }
 
   ncclDataType_t nccl_dtype;
   GetNcclDataType(dtype, nccl_dtype);
 
   // 使用ncclGroupStart/End优化多次通信操作
-  KLLM_LOG_DEBUG << "[NCCL] Starting ncclGroupStart for SendGroup to peer_rank=" << resource->recv_rank;
+  KLLM_LOG_DEBUG << "[NCCL] Starting ncclGroupStart for SendGroup to peer_rank=" << recv_rank;
 
   NCCL_CHECK(ncclGroupStart());
   // 批量发送所有缓冲区
   size_t total_elements = 0;
   for (size_t i = 0; i < buffers.size(); ++i) {
-    NCCL_CHECK(
-        ncclSend(buffers[i], counts[i], nccl_dtype, resource->recv_rank, resource->send_comm, resource->send_stream));
+    NCCL_CHECK(ncclSend(buffers[i], counts[i], nccl_dtype, recv_rank, resource->send_comm, cur_stream));
     total_elements += counts[i];
   }
 
@@ -311,17 +380,17 @@ Status NcclCommunicator::SendGroup(const std::string& group_key, int dev_id, uin
   NCCL_CHECK(ncclGroupEnd());
   KLLM_LOG_DEBUG << "[NCCL] Completed ncclGroupEnd for SendGroup, waiting for stream synchronize";
 
-  CUDA_CHECK(cudaStreamSynchronize(resource->send_stream));
+  if (!stream) CUDA_CHECK(cudaStreamSynchronize(cur_stream));
 
   return Status();
 }
 
-// Communicator 接口实现 - 批量接收数据
-Status NcclCommunicator::RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id,
+Status NcclCommunicator::RecvGroup(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,
                                    const std::vector<void*>& buffers, const std::vector<size_t>& counts,
                                    DataType dtype) {
-  KLLM_LOG_DEBUG << "[NCCL] RecvGroup starting for group_key=" << group_key << ", dev_id=" << dev_id
-                 << ", buffer_count=" << buffers.size() << ", to node_rank=" << node_rank_;
+  KLLM_LOG_DEBUG << "[NCCL] RecvGroup starting for group_key=" << group_key << ", local_dev_id=" << local_dev_id
+                 << ", peer_dev_id=" << peer_dev_id << ", buffer_count=" << buffers.size()
+                 << ", to node_rank=" << node_rank_;
 
   // 检查输入参数
   if (buffers.size() != counts.size()) {
@@ -331,34 +400,48 @@ Status NcclCommunicator::RecvGroup(const std::string& group_key, int dev_id, uin
   }
 
   auto comm_group = NcclCommunicator::GetCommunicatorGroup(group_key);
-  if (comm_group == nullptr || dev_id < 0 || dev_id >= device_count_) {
+  if (comm_group == nullptr || local_dev_id < 0 || local_dev_id >= device_count_ || peer_dev_id < 0 ||
+      peer_dev_id >= device_count_) {
     KLLM_LOG_ERROR << "[NCCL] Communication group not found: " << group_key;
     return Status(RetCode::RET_INVALID_ARGUMENT, "Communication group not found: " + group_key);
   }
 
-  auto& resource = comm_group->device_resources_[dev_id];
+  auto& resource = comm_group->device_resources_[local_dev_id];
   if (!resource || !resource->recv_comm) {
     return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Recv communicator not initialized for RecvGroup");
+  }
+
+  cudaStream_t cur_stream;
+  if (stream == nullptr) {
+    // 如果没有提供流，则使用默认的设备流
+    cur_stream = resource->recv_stream;
+  } else {
+    cur_stream = stream;
+  }
+  int send_rank;
+  if (local_dev_id == peer_dev_id) {
+    send_rank = resource->send_rank;
+  } else {
+    send_rank = comm_group->device_resources_[peer_dev_id]->send_rank;
   }
 
   ncclDataType_t nccl_dtype;
   GetNcclDataType(dtype, nccl_dtype);
   // 使用ncclGroupStart/End优化多次通信操作
-  KLLM_LOG_DEBUG << "[NCCL] Starting ncclGroupStart for RecvGroup from peer_rank=" << resource->send_rank;
+  KLLM_LOG_DEBUG << "[NCCL] Starting ncclGroupStart for RecvGroup from peer_rank=" << send_rank;
 
   NCCL_CHECK(ncclGroupStart());
   // 批量接收所有缓冲区
   size_t total_elements = 0;
   for (size_t i = 0; i < buffers.size(); ++i) {
-    NCCL_CHECK(
-        ncclRecv(buffers[i], counts[i], nccl_dtype, resource->send_rank, resource->recv_comm, resource->recv_stream));
+    NCCL_CHECK(ncclRecv(buffers[i], counts[i], nccl_dtype, send_rank, resource->recv_comm, cur_stream));
     total_elements += counts[i];
   }
   NCCL_CHECK(ncclGroupEnd());
   KLLM_LOG_DEBUG << "[NCCL] Completed ncclGroupEnd for RecvGroup, waiting for stream synchronize";
 
   // 确保组通信操作完成
-  CUDA_CHECK(cudaStreamSynchronize(resource->recv_stream));
+  if (!stream) CUDA_CHECK(cudaStreamSynchronize(cur_stream));
 
   return Status();
 }

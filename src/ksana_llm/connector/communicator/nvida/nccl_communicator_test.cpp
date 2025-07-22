@@ -728,9 +728,25 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
   // Mock Send method to avoid real ncclSend calls
   Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
               DataType dtype) override {
+    return Send(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+  }
+
+  // Mock Recv method to avoid real ncclRecv calls
+  Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
+              DataType dtype) override {
+    // 默认用 dev_id 作为 local/peer，stream 传 nullptr
+    return Recv(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+  }
+
+  // Mock Send method (overloaded) - for testing purpose
+  Status Send(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream, const void* buf,
+              size_t count, DataType dtype) {
     // 记录调用参数用于验证
     last_send_group_key_ = group_key;
-    last_send_dev_id_ = dev_id;
+    last_send_local_dev_id_ = local_dev_id;
+    last_send_peer_dev_id_ = peer_dev_id;
+    last_send_stream_ = stream;
+    last_send_dev_id_ = local_dev_id;  // 保证 GetLastSendDevId() 正确
     last_send_buf_ = buf;
     last_send_count_ = count;
     last_send_dtype_ = dtype;
@@ -738,29 +754,34 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
 
     // 执行基本的参数验证（与真实实现相同）
     auto group = GetCommunicatorGroup(group_key);
-    if (!group || dev_id < 0 || static_cast<size_t>(dev_id) >= group->device_resources_.size()) {
+    if (!group || local_dev_id < 0 || static_cast<size_t>(local_dev_id) >= group->device_resources_.size()) {
       return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid group_key or dev_id for Send operation");
     }
-
-    auto& resource = group->device_resources_[dev_id];
+    NcclDeviceResource* resource = group->device_resources_[local_dev_id].get();
     if (!resource || !resource->send_comm) {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send communicator not initialized");
     }
-
-    // 模拟成功发送（或返回预设的错误）
     if (simulate_send_error_) {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Mocked send error");
     }
-
-    return Status();
+    if (local_dev_id == peer_dev_id) {
+      return Status();
+    } else {
+      NcclDeviceResource* recv_resource = group->device_resources_[peer_dev_id].get();
+      if (resource->send_rank == recv_resource->recv_rank) {
+        return Status();
+      }
+    }
+    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send operation failed due to mismatched ranks");
   }
-
-  // Mock Recv method to avoid real ncclRecv calls
-  Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
-              DataType dtype) override {
+  Status Recv(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream, void* buf,
+              size_t count, DataType dtype) {
     // 记录调用参数用于验证
     last_recv_group_key_ = group_key;
-    last_recv_dev_id_ = dev_id;
+    last_recv_local_dev_id_ = local_dev_id;
+    last_recv_peer_dev_id_ = peer_dev_id;
+    last_recv_stream_ = stream;
+    last_recv_dev_id_ = local_dev_id;  // 保证 GetLastRecvDevId() 正确
     last_recv_buf_ = buf;
     last_recv_count_ = count;
     last_recv_dtype_ = dtype;
@@ -768,29 +789,30 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
 
     // 执行基本的参数验证（与真实实现相同）
     auto group = GetCommunicatorGroup(group_key);
-    if (!group || dev_id < 0 || static_cast<size_t>(dev_id) >= group->device_resources_.size()) {
+    if (!group || local_dev_id < 0 || static_cast<size_t>(local_dev_id) >= group->device_resources_.size()) {
       return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid group_key or dev_id for Recv operation");
     }
-
-    auto& resource = group->device_resources_[dev_id];
+    NcclDeviceResource* resource = group->device_resources_[local_dev_id].get();
     if (!resource || !resource->recv_comm) {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Recv communicator not initialized");
     }
-
-    // 模拟成功接收（或返回预设的错误）
     if (simulate_recv_error_) {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Mocked recv error");
     }
-
-    // 模拟接收回调（如果设置了）
     if (receive_callback_) {
-      // 计算数据大小（模拟真实行为）
       ncclDataType_t nccl_dtype;
       GetNcclDataType(dtype, nccl_dtype);
       size_t element_size = GetMockElementSize(nccl_dtype);
       receive_callback_(reinterpret_cast<const char*>(buf), count * element_size, 0, recv_user_data_);
     }
-
+    if (local_dev_id == peer_dev_id) {
+      return Status();
+    } else {
+      NcclDeviceResource* send_resource = group->device_resources_[peer_dev_id].get();
+      if (resource->recv_rank == send_resource->send_rank) {
+        return Status();
+      }
+    }
     return Status();
   }
 
@@ -832,6 +854,9 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
   const void* last_send_buf_ = nullptr;
   size_t last_send_count_ = 0;
   DataType last_send_dtype_ = DataType::TYPE_BYTES;
+  int last_send_local_dev_id_ = -1;
+  int last_send_peer_dev_id_ = -1;
+  cudaStream_t last_send_stream_ = nullptr;
   int send_call_count_ = 0;
 
   std::string last_recv_group_key_;
@@ -839,6 +864,9 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
   void* last_recv_buf_ = nullptr;
   size_t last_recv_count_ = 0;
   DataType last_recv_dtype_ = DataType::TYPE_BYTES;
+  int last_recv_local_dev_id_ = -1;
+  int last_recv_peer_dev_id_ = -1;
+  cudaStream_t last_recv_stream_ = nullptr;
   int recv_call_count_ = 0;
 
   // Callback support
@@ -1302,6 +1330,67 @@ TEST(NcclCommunicatorTest, SendRecv_EdgeCases) {
 
   recv_status = communicator.Recv(group_key, 0, 0, nullptr, 0, DataType::TYPE_INT32);
   EXPECT_TRUE(recv_status.OK()) << "Recv should handle nullptr with zero count";
+}
+TEST(NcclCommunicatorTest, SendRecv_OverloadedMethod_IntegrationTest) {
+  ConnectorConfig config;
+  config.device_count = 2;
+  config.group_role = GroupRole::PREFILL;
+
+  // 使用 mock communicator，避免真实 NCCL 调用
+  MockNcclCommunicatorForSendRecv communicator(config);
+
+  std::string group_key = "test_group";
+  communicator.SetCommGroupForTest(group_key, ksana_llm::CreateTestCommGroup(2));
+
+  // 测试数据
+  float send_data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+  float recv_data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  cudaStream_t test_stream = reinterpret_cast<cudaStream_t>(0x1234);
+
+  // 调用重载的 Send/Recv 方法
+  Status send_status = communicator.Send(group_key, 0, 1, test_stream, send_data, 4, DataType::TYPE_FP32);
+  EXPECT_TRUE(send_status.OK()) << send_status.GetMessage();
+
+  Status recv_status = communicator.Recv(group_key, 1, 0, test_stream, recv_data, 4, DataType::TYPE_FP32);
+  EXPECT_TRUE(recv_status.OK()) << recv_status.GetMessage();
+
+  // 检查 mock 内部记录
+  EXPECT_EQ(communicator.last_send_local_dev_id_, 0);
+  EXPECT_EQ(communicator.last_send_peer_dev_id_, 1);
+  EXPECT_EQ(communicator.last_send_stream_, test_stream);
+  EXPECT_EQ(communicator.last_recv_local_dev_id_, 1);
+  EXPECT_EQ(communicator.last_recv_peer_dev_id_, 0);
+  EXPECT_EQ(communicator.last_recv_stream_, test_stream);
+}
+
+TEST(NcclCommunicatorTest, SendRecv_OverloadedMethod_DifferentDeviceIds) {
+  ConnectorConfig config;
+  config.device_count = 2;
+  config.group_role = GroupRole::PREFILL;
+
+  MockNcclCommunicatorForSendRecv communicator(config);
+  std::string group_key = "test_group";
+  communicator.SetCommGroupForTest(group_key, ksana_llm::CreateTestCommGroup(2));
+
+  float send_data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+  float recv_data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  cudaStream_t test_stream = reinterpret_cast<cudaStream_t>(0x1234);
+
+  // local_dev_id=0, peer_dev_id=1
+  Status send_status = communicator.Send(group_key, 0, 1, test_stream, send_data, 4, DataType::TYPE_FP32);
+  EXPECT_TRUE(send_status.OK()) << send_status.GetMessage();
+
+  // local_dev_id=1, peer_dev_id=0
+  Status recv_status = communicator.Recv(group_key, 1, 0, test_stream, recv_data, 4, DataType::TYPE_FP32);
+  EXPECT_TRUE(recv_status.OK()) << recv_status.GetMessage();
+
+  // 检查 mock 内部记录
+  EXPECT_EQ(communicator.last_send_local_dev_id_, 0);
+  EXPECT_EQ(communicator.last_send_peer_dev_id_, 1);
+  EXPECT_EQ(communicator.last_recv_local_dev_id_, 1);
+  EXPECT_EQ(communicator.last_recv_peer_dev_id_, 0);
+  EXPECT_EQ(communicator.last_send_stream_, test_stream);
+  EXPECT_EQ(communicator.last_recv_stream_, test_stream);
 }
 
 // 集成测试：发送-接收配对
@@ -1998,6 +2087,79 @@ TEST(NcclCommunicatorTest, CreateDeviceResources_ExceptionHandling) {
   // Try to create device resources for a group that doesn't exist
   Status status = communicator.CreateDeviceResources("non_existent_group");
   EXPECT_FALSE(status.OK()) << "Should fail for non-existent group";
+}
+
+TEST(NcclCommunicatorTest, Send_ZeroCount) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::PREFILL;
+  config.device_count = 2;  // Set device_count to match the test scenario
+  NcclCommunicator communicator(config);
+  char buf[1];
+  Status status = communicator.Send("group0", 0, 1, nullptr, buf, 0, DataType::TYPE_BYTES);
+  EXPECT_FALSE(status.OK());
+}
+
+TEST(NcclCommunicatorTest, Send_NullBuffer) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::PREFILL;
+  config.device_count = 2;  // Set device_count to match the test scenario
+  NcclCommunicator communicator(config);
+  // 初始化 communicator，略（可参考已有测试）
+  Status status = communicator.Send("group0", 0, 1, nullptr, 128, DataType::TYPE_BYTES);
+  EXPECT_FALSE(status.OK());
+}
+
+TEST(NcclCommunicatorTest, Recv_NullBuffer) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::DECODE;
+  config.device_count = 2;  // Set device_count to match the test scenario
+  NcclCommunicator communicator(config);
+  Status status = communicator.Recv("group0", 0, 1, nullptr, nullptr, 128, DataType::TYPE_BYTES);
+  EXPECT_FALSE(status.OK());
+}
+
+TEST(NcclCommunicatorTest, Recv_ZeroCount) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::DECODE;
+  config.device_count = 2;  // Set device_count to match the test scenario
+  NcclCommunicator communicator(config);
+  char buf[1];
+  Status status = communicator.Recv("group0", 0, 1, nullptr, buf, 0, DataType::TYPE_BYTES);
+  EXPECT_FALSE(status.OK());
+}
+
+TEST(NcclCommunicatorTest, Send_Success) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::PREFILL;
+  config.device_count = 2;
+  NcclCommunicator communicator(config);
+  // Register group0 before sending
+  auto comm_group = CreateTestCommGroup(config.device_count);
+  communicator.SetCommGroupForTest("group0", std::move(comm_group));
+  char buf[8] = {0};
+  // 这里 count > 0，buf 非空，模拟正常发送
+  Status status = communicator.Send("group0", 0, 1, nullptr, buf, 8, DataType::TYPE_BYTES);
+  EXPECT_TRUE(status.OK());
+}
+
+TEST(NcclCommunicatorTest, Recv_Success) {
+  testing_internal::EnableNcclMock(true);
+  ConnectorConfig config;
+  config.group_role = GroupRole::DECODE;
+  config.device_count = 2;
+  NcclCommunicator communicator(config);
+  // Register group0 before receiving
+  auto comm_group = CreateTestCommGroup(config.device_count);
+  communicator.SetCommGroupForTest("group0", std::move(comm_group));
+  char buf[8] = {0};
+  // count > 0，buf 非空，模拟正常接收
+  Status status = communicator.Recv("group0", 0, 1, nullptr, buf, 8, DataType::TYPE_BYTES);
+  EXPECT_TRUE(status.OK());
 }
 
 // Test Shutdown method coverage
