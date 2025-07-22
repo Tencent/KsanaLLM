@@ -15,6 +15,8 @@
 #include "csrc/kernels/nvidia/mixture_of_experts/moe_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "csrc/kernels/nvidia/split/split.h"
+#include "csrc/kernels/nvidia/cast/cast.h"
+#include "csrc/kernels/nvidia/identity/identity.h"
 #include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
 #include "csrc/utils/nvidia/scalar_type.hpp"
 #include "csrc/utils/quant_type.h"

@@ -365,10 +365,6 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
       std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
           std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
       // Early return for incompatible cases
-      if (new_deepseek_v3_config->is_quant && !(new_deepseek_v3_config->quant_config.method == QUANT_FP8_E4M3 ||
-                                                new_deepseek_v3_config->quant_config.method == QUANT_BLOCK_FP8_E4M3)) {
-        return false;
-      }
 
       return true;
     }

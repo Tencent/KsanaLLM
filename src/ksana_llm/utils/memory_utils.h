@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <queue>
+#include <type_traits>
 #include <vector>
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/status.h"
@@ -18,11 +19,27 @@ struct WorkspaceMeta {
   size_t space_size = 0ul;
 };
 
-__attribute__((unused)) static int64_t DivRoundUp(int64_t dividend, int64_t divisor) {
+
+template <typename T>
+__attribute__((unused)) static T DivRoundUp(T dividend, T divisor) {
+  static_assert(std::is_integral<T>::value, "DivRoundUp requires integral types");
   return (dividend + divisor - 1) / divisor;
 }
 
-__attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t divisor) { return dividend / divisor; }
+template <typename T>
+__attribute__((unused)) static T DivRoundDown(T dividend, T divisor) {
+  static_assert(std::is_integral<T>::value, "DivRoundDown requires integral types");
+  return dividend / divisor;
+}
+
+// 保持向后兼容性
+__attribute__((unused)) static int64_t DivRoundUp(int64_t dividend, int64_t divisor) {
+  return DivRoundUp<int64_t>(dividend, divisor);
+}
+
+__attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t divisor) {
+  return DivRoundDown<int64_t>(dividend, divisor);
+}
 
 /**
  * The AlignedMemoryQueue class is designed to facilitate the allocation and alignment of memory blocks

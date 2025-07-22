@@ -10,7 +10,6 @@
 #include "fmt/core.h"
 
 #ifdef ENABLE_CUDA
-#  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/cast/cast.h"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
@@ -103,8 +102,14 @@ Status BaseModelWeightLoader::PermuteDeviceTensor(const Tensor& input_tensor, co
   return Status();
 }
 
-// this function is under development
+// TODO(huicongyao): support tensor type cast for Ascend
 Status BaseModelWeightLoader::CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank) {
+// Temporarily not support cast for Ascend and tops device
+#ifdef ENABLE_ACL
+  KLLM_THROW(fmt::format("Unsupported tensor cast for Ascend device"));
+#elif ENABLE_TOPS
+  KLLM_THROW(fmt::format("Unsupported tensor cast for Tops device"));
+#endif
   if (input_tensor.dtype == new_dtype) {
     return Status();
   }
@@ -146,7 +151,7 @@ Status BaseModelWeightLoader::CastDeviceTensorType(Tensor& input_tensor, DataTyp
                                                               input_tensor.GetElementNumber(),
                                                               context_->GetMemoryManageStreams()[dev_rank].Get()));
   } else {
-    KLLM_THROW(fmt::format("Unsupported tensor conversion from type {} to {}", input_tensor.dtype, new_dtype));
+    KLLM_THROW(fmt::format("Unsupported tensor cast from type {} to {}", input_tensor.dtype, new_dtype));
   }
 #endif
   return Status();
