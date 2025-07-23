@@ -28,9 +28,6 @@ if("${FLASH_ATTN_PYTHON_SO}" STREQUAL "")
   message(FATAL_ERROR "FLASH_ATTN_PYTHON_SO is empty, please check your python environment WITH_VLLM_FLASH_ATTN=${WITH_VLLM_FLASH_ATTN}")
 endif()
 
-add_library(flash_attn_kernels UNKNOWN IMPORTED)
-set_property(TARGET flash_attn_kernels PROPERTY IMPORTED_LOCATION "${FLASH_ATTN_PYTHON_SO}")
-
 if(WITH_VLLM_FLASH_ATTN)
   add_definitions("-DENABLE_VLLM_FLASH_ATTN_2")
   set(ENABLE_VLLM_FLASH_ATTN_2 TRUE)

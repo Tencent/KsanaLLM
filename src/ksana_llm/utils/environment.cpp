@@ -28,6 +28,7 @@
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 
 DEFINE_string(config_file, "examples/ksana_llm.yaml", "The config file path");
 DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
@@ -35,7 +36,15 @@ DEFINE_int32(port, 8080, "HTTP service port, default is 8080");
 
 namespace ksana_llm {
 
-Environment::Environment() {}
+Environment::Environment() {
+  // Initialize attention backend manager using singleton pattern.
+  auto attention_manager = AttentionBackendManager::GetInstance();
+  if (attention_manager->Initialize()) {
+    KLLM_LOG_INFO << "Attention backend initialized.";
+  } else {
+    KLLM_LOG_ERROR << "Failed to initialize attention backend.";
+  }
+}
 
 void Environment::Reset() {
   model_config_initialized_ = false;

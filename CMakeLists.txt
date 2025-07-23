@@ -45,6 +45,7 @@ option(WITH_EVENT_RECORD "Enable event record" OFF)
 option(WITH_VLLM_FLASH_ATTN "Enable vllm-flash-attn" OFF)
 option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
 option(WITH_LIGHTLY_CI_TEST "Enable lightly ci test" ON)
+option(WITH_BOOST "Enable Boost" ON)
 
 if(WITH_CLEAR_CACHE)
   add_definitions("-DCLEAR_CACHE")
@@ -139,6 +140,10 @@ if(WITH_CUDA)
   endif()
 
   include(FlashAttention)
+endif()
+
+if(WITH_BOOST)
+  include(external/boost)
 endif()
 
 include(LLM_kernels)

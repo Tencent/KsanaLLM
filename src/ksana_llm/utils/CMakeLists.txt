@@ -39,7 +39,7 @@ add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS} ${utils_ascend_SRCS}
 add_dependencies(utils fmt gflags)
 target_link_libraries(utils PUBLIC
   -lpthread -ldl gflags loguru yaml-cpp profiler ${utils_nvidia_LIBS} ${utils_ascend_LIBS} ${utils_zixiao_LIBS}
-  absl::base absl::strings re2 ${TORCH_LIBRARIES} ${PYTHON_LIBRARY}
+  absl::base absl::strings re2 Boost::dll ${TORCH_LIBRARIES} ${PYTHON_LIBRARY}
 )
 
 # for test
