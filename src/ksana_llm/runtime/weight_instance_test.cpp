@@ -25,9 +25,9 @@ class WeightInstanceTest : public ::testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/deepseek_v3");
     env->GetModelConfig(model_config_);
-    env->GetRuntimeConfig(runtime_config_);
 
     AttnBackendConfig attn_backend_config;
+    env->GetAttnBackendConfig(attn_backend_config);
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
 
@@ -36,6 +36,8 @@ class WeightInstanceTest : public ::testing::Test {
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+
+    env->GetRuntimeConfig(runtime_config_);
   }
 
   void TearDown() override {

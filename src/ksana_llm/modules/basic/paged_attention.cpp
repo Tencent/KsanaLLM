@@ -11,9 +11,8 @@ namespace ksana_llm {
 template <typename T>
 PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext<T>& creation_context,
                                   const AttentionCreationConfig& attn_config) {
-  attn_dp_group_id_ = creation_context.rank / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
   paged_attention_layer_ =
-      CreateAttentionLayer<T, PagedAttentionLayer>(Singleton<Environment>::GetInstance()->GetKVCacheType());
+      CreateAttentionLayer<T, PagedAttentionLayer>(creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
   uint32_t zero = 0;
   std::vector<std::any> attention_param;
   attention_param.push_back(attn_config.model_config.quant_config.method);
@@ -57,7 +56,8 @@ PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext<T>& c
   // aligned with flash attention
   paged_attention_param.push_back(nullptr);
   paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
-  paged_attention_layer_->Init(paged_attention_param, creation_context.context, creation_context.rank);
+  paged_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
+                               creation_context.rank);
 }
 
 template <typename T>

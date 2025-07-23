@@ -10,8 +10,8 @@
 namespace ksana_llm {
 
 template <typename T>
-Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                        int rank) {
+Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                        std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -33,7 +33,7 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
   // 2, 3, and the attention data parallel size is 2, the root rank is 0. If the rank is 4, 5, 6, 7, and the attention
   // data parallel size is 2, the root rank is 4. The root rank is used to determine the group of ranks that will
   // perform the all-reduce operation. The root rank is the first rank of the attention data parallel group.
-  uint32_t attn_dp_para_size = context_->GetAttnDataParallelSize();
+  uint32_t attn_dp_para_size = runtime_config.parallel_basic_config.attn_data_parallel_size;
   if (attn_dp_para_size > 1 && is_group_custom_all_reduce_) {
     uint32_t tp_para_size = context_->GetTensorParallelSize();
     uint32_t world_size = tp_para_size / attn_dp_para_size;

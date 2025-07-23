@@ -13,16 +13,14 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
                                         const LayerCreationContext<T>& creation_context,
                                         const AttentionCreationConfig& attn_config)
     : context_(creation_context.context), rank_(creation_context.rank) {
-  attn_dp_group_id_ = rank_ / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
   uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
-  flash_mla_attention_layer_ =
-      CreateAttentionLayer<T, FlashMlaAttentionLayer>(Singleton<Environment>::GetInstance()->GetKVCacheType());
+  flash_mla_attention_layer_ = CreateAttentionLayer<T, FlashMlaAttentionLayer>(
+      creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
   // we use push back to make it work.
@@ -67,7 +65,7 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
   flash_attention_param.push_back(attn_config.mrope_section_ptr);
   flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
 
-  flash_mla_attention_layer_->Init(flash_attention_param, context_, rank_);
+  flash_mla_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
 
   flash_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.matmul_layer_factory->GetWorkspaceBuffer());
 

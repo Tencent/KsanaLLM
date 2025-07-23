@@ -10,8 +10,9 @@
 namespace ksana_llm {
 #ifdef ENABLE_CUDA
 template <typename T, typename WT>
-Status Fp8MoeLayer<T, WT>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  return MoeLayer<T>::Init(parameters, context, rank);
+Status Fp8MoeLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                std::shared_ptr<Context> context, int rank) {
+  return MoeLayer<T>::Init(parameters, runtime_config, context, rank);
 }
 
 template <typename T, typename WT>

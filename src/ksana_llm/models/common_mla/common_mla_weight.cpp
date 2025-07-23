@@ -27,7 +27,7 @@ Status CommonMlaWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
   size_t v_head_dim = model_config_.mla_config.v_head_dim;
   size_t head_num = model_config_.head_num;
 
-  int dp_tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+  int dp_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
   int dp_rank = rank_ % dp_tensor_para_size;
 
   KLLM_LOG_DEBUG << fmt::format("Loading weights from file: {}\nweight_name_list:{}\ncustom_name_list{}",

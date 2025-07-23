@@ -28,7 +28,9 @@ void TransferEngine::Initialize(GroupRole group_role) {
   // 从环境中获取配置
   env->GetPipelineConfig(pipeline_config_);
   env->GetBlockManagerConfig(block_manager_config_);
-  tensor_parallel_size_ = env->GetTensorParallelSize();
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
+  tensor_parallel_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
 
   // 获取连接器配置
   ConnectorConfig connector_config;

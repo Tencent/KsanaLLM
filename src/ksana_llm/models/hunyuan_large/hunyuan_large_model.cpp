@@ -143,10 +143,10 @@ Status HunyuanLarge<T>::CreateLayers(LayerCreationContext<T>& creation_context,
   cla_share_factor_ = model_config.cla_share_factor;
   DataType weight_type = model_config.weight_data_type;
 
-  CrossLayerAttention<T>::CreateBuffers(creation_context.buffer_mgr_, model_creation_config.runtime_config,
+  CrossLayerAttention<T>::CreateBuffers(creation_context.buffer_mgr_, creation_context.runtime_config,
                                         model_creation_config.attn_config, cla_buffers_);
 
-  size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
+  size_t max_token_num = creation_context.runtime_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_config.hidden_units;
 
   moe_buffer_ = creation_context.buffer_mgr_->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);

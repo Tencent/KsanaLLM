@@ -11,8 +11,9 @@ namespace ksana_llm {
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
+                                                                 const RuntimeConfig& runtime_config,
                                                                  std::shared_ptr<Context> context, int rank) {
-  return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+  return AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>

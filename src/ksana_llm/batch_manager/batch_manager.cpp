@@ -20,16 +20,9 @@
 
 namespace ksana_llm {
 
-BatchManager::BatchManager(std::shared_ptr<Context> context, size_t max_pp_batch_num) {
+BatchManager::BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context) {
   context_ = context;
-
-  // Check that max_pp_batch_num is not zero
-  if (max_pp_batch_num == 0) {
-    KLLM_LOG_WARNING << "max_pp_batch_num cannot be 0, setting to default value of 1";
-    max_pp_batch_num_ = 1;
-  } else {
-    max_pp_batch_num_ = max_pp_batch_num;
-  }
+  runtime_config_ = runtime_config;
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
@@ -77,8 +70,8 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   for (size_t i = 0; i < req->output_group.size(); i++) {
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
     infer_request_group.push_back(infer_req);
-    infer_req->kv_cache_blocks.resize(Singleton<Environment>::GetInstance()->GetAttentionTensorParallel());
-    infer_req->block_token_num = Singleton<Environment>::GetInstance()->GetBlockTokenNum();
+    infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
+    infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
     infer_req->model_instance = model_instance;
     infer_req->infer_stage = InferStage::STAGE_CONTEXT;
     infer_req->step = 0;
@@ -231,8 +224,8 @@ Status BatchManager::WorkerProcess() {
 Status BatchManager::Start() {
   // Start main threads for standalone or master node of distributed mode.
   if (context_->IsChief()) {
-    main_threads_.reserve(max_pp_batch_num_);
-    for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
+    main_threads_.reserve(runtime_config_.max_pp_batch_num);
+    for (size_t multi_batch_id = 0; multi_batch_id < runtime_config_.max_pp_batch_num; ++multi_batch_id) {
       main_threads_.push_back(
           std::unique_ptr<std::thread>(new std::thread(&BatchManager::MainProcess, this, multi_batch_id)));
     }

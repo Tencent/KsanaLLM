@@ -8,8 +8,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                               std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);

@@ -13,7 +13,7 @@ Linear<T>::Linear(const std::string& weight_name, const LayerCreationContext<T>&
       creation_context.base_weight, weight_name, creation_context.weight_type, creation_context.input_type,
       creation_context.output_type, group_quant_backend, {});
 #ifdef ENABLE_ACL
-  proj_layer_->Init({}, creation_context.context, creation_context.rank);
+  proj_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
 
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);

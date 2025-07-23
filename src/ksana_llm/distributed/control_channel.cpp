@@ -49,6 +49,9 @@ ControlChannel::ControlChannel(const std::string& master_host, uint16_t master_p
     heartbeat_thread_ = std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessHeartbeatLoop, this));
     send_packet_thread_ =
         std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessSendScheduleOutputLoop, this));
+    RuntimeConfig runtime_config;
+    env_->GetRuntimeConfig(runtime_config);
+    enable_mtp_module_ = runtime_config.enable_mtp_module;
   }
 }
 
@@ -602,7 +605,7 @@ Status ControlChannel::SynchronizeNodeLayers(size_t master_offload_layer_num) {
   pipeline_config.upper_layer_idx = layer_distribution[0].second;
 
   // only master node do nextn predict
-  if (model_config.num_nextn_predict_layers != 0 && env_->IsMTPEnabled()) {
+  if (model_config.num_nextn_predict_layers != 0 && enable_mtp_module_) {
     pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
     pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
   }

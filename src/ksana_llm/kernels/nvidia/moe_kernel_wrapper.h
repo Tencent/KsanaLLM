@@ -72,8 +72,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
                     std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
                     float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1,
                     void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
-                    int num_experts, int hidden_size, int inter_size, void* dequant_workspace, int rank,
-                    cudaStream_t stream);
+                    int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,
+                    void* dequant_workspace, int rank, cudaStream_t stream);
 
 size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int hidden_size, int num_experts, int topk,
                                             size_t data_type_size);

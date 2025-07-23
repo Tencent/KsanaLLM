@@ -41,6 +41,9 @@ class ModelLoaderTest : public testing::Test {
     // Initialize block manager.
     std::string config_file = GetTestTPConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
+    RuntimeConfig runtime_config;
+    Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+    parallel_basic_config_ = runtime_config.parallel_basic_config;
 
     // Initialize context, set tensor paralle to 2 and attn data parallel to 1.
     context_ = std::make_shared<Context>(2, 1, 1);
@@ -50,6 +53,7 @@ class ModelLoaderTest : public testing::Test {
 
  protected:
   std::shared_ptr<Context> context_ = nullptr;
+  ParallelismBasicConfig parallel_basic_config_;
 };
 
 TEST_F(ModelLoaderTest, TestModelFileLoader) {
@@ -144,7 +148,7 @@ TEST_F(ModelLoaderTest, TestModelConfigParser) {
     ModelConfigParser model_config_parser;
 
     std::shared_ptr<BaseModelConfig> model_config;
-    Status status = model_config_parser.ParseModelConfig(model_dir, model_config);
+    Status status = model_config_parser.ParseModelConfig(model_dir, parallel_basic_config_, model_config);
     EXPECT_TRUE(status.OK());
     EXPECT_TRUE(model_config);
 

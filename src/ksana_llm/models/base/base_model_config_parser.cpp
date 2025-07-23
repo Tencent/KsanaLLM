@@ -10,6 +10,7 @@ namespace ksana_llm {
 BaseModelConfigParser::~BaseModelConfigParser() {}
 
 Status BaseModelConfigParser::ParseModelConfig(const nlohmann::json& config_json,
+                                               const ParallelismBasicConfig& parallel_basic_config,
                                                std::shared_ptr<BaseModelConfig>& model_config) {
   KLLM_THROW("ParseModelConfig from json config not implemented.");
   return Status();

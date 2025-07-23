@@ -16,8 +16,8 @@ namespace ksana_llm {
 
 class BaseScheduleStrategy {
  public:
-  explicit BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config)
-      : batch_scheduler_config_(batch_scheduler_config) {}
+  explicit BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
+      : batch_scheduler_config_(batch_scheduler_config), runtime_config_(runtime_config) {}
 
   virtual void UpdateRunningRequests() = 0;
 
@@ -41,6 +41,8 @@ class BaseScheduleStrategy {
 
   // the config and context.
   BatchSchedulerConfig batch_scheduler_config_;
+
+  RuntimeConfig runtime_config_;
 
   std::shared_ptr<StopChecker> stop_checker_;
 };

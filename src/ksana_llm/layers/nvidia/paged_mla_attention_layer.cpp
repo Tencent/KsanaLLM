@@ -12,12 +12,14 @@ namespace ksana_llm {
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
+                                                                 const RuntimeConfig& runtime_config,
                                                                  std::shared_ptr<Context> context, int rank) {
-  AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+  AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
 
   // index 25 is max_batch_size in PagedMlaAttention, disgusting code, be careful.
   const size_t max_batch_size = std::any_cast<const size_t>(parameters[25]);
   SetMlaMetadataKernelAttribute(max_batch_size, context->GetComputeStreams()[rank].Get());
+  enable_flash_mla_ = runtime_config.enable_flash_mla;
 
   return Status();
 }
@@ -76,7 +78,7 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   void* const k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];  // block中每层layer的起始地址
   void* v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
   int32_t* const block_table_ptr =
-      block_table.GetPtr<int32_t>();                    // block id，加上layer_kv_cache_ptr后就是对应的cache block
+      block_table.GetPtr<int32_t>();  // block id，加上layer_kv_cache_ptr后就是对应的cache block
   const int max_blocks_per_seq = block_table.shape[1];  // shape: [bs, max_num_blocks_per_query]
   // for mla
   auto skipped_q_pe_ptr =
@@ -138,7 +140,7 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
         this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
         total_tokens, this->attn_scale_, this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(),
         num_splits_tensor.GetPtr<void>(), this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr,
-        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len, batch_tail_tokens);
+        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len, batch_tail_tokens, enable_flash_mla_);
     return Status();
   }
 

@@ -115,8 +115,7 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
     return Status();
   }
   // EmbedTokensUseCpu does not require slicing
-  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
-      tensor_name.find("embed_tokens") != std::string::npos) {
+  if (runtime_config_.embed_tokens_use_cpu && tensor_name.find("embed_tokens") != std::string::npos) {
     return Status();
   }
   // Layernorm, o_proj bias and down_proj bias do not require slicing
@@ -148,7 +147,7 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
   }
   if (transpose_first) {
     if (tensor_name.find("o_proj") != std::string::npos) {
-      int attn_group_tp_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+      int attn_group_tp_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       tensor_para_offset = rank_ % attn_group_tp_size;
       weight_shape[1] /= attn_group_tp_size;
     } else {
@@ -193,8 +192,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
     }
 
     if (context_->IsChief()) {
-      if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu() &&
-          tensor_name.find("embed_positions") != std::string::npos) {
+      if (runtime_config_.embed_tokens_use_cpu && tensor_name.find("embed_positions") != std::string::npos) {
         KLLM_THROW("CPU embedding lookup does not support learned absolute position encoding, please turn it off.");
       }
     }
@@ -368,7 +366,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
            * weights.
            */
           KLLM_LOG_DEBUG << "tie_word_embeddings = true, lm_head.weight = model.embed_tokens.weight";
-          if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+          if (runtime_config_.embed_tokens_use_cpu) {
             tensor_para_offset = rank_;
           } else {
             weight_shape[1] *= tensor_para_size_;
@@ -607,7 +605,7 @@ Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_n
                                           size_t& weight_size) {
   int tensor_para_size = tensor_para_size_;
   if (tensor_name.find("o_proj") != std::string::npos) {
-    tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+    tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
   }
 
   tensor_manager_->AddWeightTensor(tensor_name, weight_shape, weight_data_type);
@@ -880,7 +878,7 @@ void CommonWeight<T>::ProcessWeights() {
 
   // Load embed only for standalone or distributed master node.
   if (context_->IsChief()) {
-    if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+    if (runtime_config_.embed_tokens_use_cpu) {
       KLLM_LOG_INFO << "Enable EmbedTokensUseCpu";
       auto weight_name = "model.embed_tokens.weight";
       Tensor& tensor = weights_map_[weight_name];

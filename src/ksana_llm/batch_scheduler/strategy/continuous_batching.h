@@ -11,7 +11,8 @@ namespace ksana_llm {
 // The auto-prefix-caching continuous batching implementation.
 class ContinuousBatchingStrategy : public BaseScheduleStrategy {
  public:
-  explicit ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config);
+  explicit ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
+                                      const RuntimeConfig &runtime_config);
 
   virtual ~ContinuousBatchingStrategy() {}
 

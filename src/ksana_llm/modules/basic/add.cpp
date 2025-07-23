@@ -11,7 +11,7 @@ namespace ksana_llm {
 template <typename T>
 Add<T>::Add(const LayerCreationContext<T>& creation_context, const std::string& weight_name) {
   add_layer_ = std::make_shared<AddLayer<T>>();
-  add_layer_->Init({}, creation_context.context, creation_context.rank);
+  add_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
   if (weight_name != "") {
     weight_ = creation_context.base_weight->GetModelWeights(weight_name);
     with_weight_ = true;

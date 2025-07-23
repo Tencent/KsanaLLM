@@ -39,11 +39,11 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
                  void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
                  void* flexible_offset_uint64_ptr, int flexible_len, float layernorm_eps, bool use_qk_norm,
-                 void* q_norm_weight, void* k_norm_weight, bool use_cache, cudaStream_t stream,
-                 void* k_cache_ptr = nullptr, void* v_cache_ptr = nullptr, int32_t* block_table_ptr = nullptr,
-                 int64_t kv_cache_block_num = 0, int max_blocks_per_seq = 0, size_t* without_prefix_offsets = nullptr,
-                 int max_forwarding_tokens = 0, bool enable_qk_pre_norm_before_rotary_pos = false, bool no_rope = false,
-                 bool attn_temperature_tuning = false, float attn_scale = 0, size_t floor_scale = 0);
+                 void* q_norm_weight, void* k_norm_weight, bool use_cache, cudaStream_t stream, void* k_cache_ptr,
+                 void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
+                 size_t* without_prefix_offsets, int max_forwarding_tokens, bool enable_qk_pre_norm_before_rotary_pos,
+                 bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
+                 bool enable_blocked_multi_token_forwarding_kv);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void PagedAttentionOp(int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale,
@@ -65,10 +65,9 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
                           void* workspace, float layernorm_eps, bool use_qk_norm, void* q_norm_weight,
                           void* k_norm_weight, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
-                          void* qkv_workspace, void* k_cache_ptr = nullptr, void* v_cache_ptr = nullptr,
-                          int32_t* block_table_ptr = nullptr, int64_t kv_cache_block_num = 0,
-                          int max_blocks_per_seq = 0, bool enable_qk_pre_norm_before_rotary_pos = false,
-                          bool no_rope = false, bool attn_temperature_tuning = false, float attn_scale = 0,
-                          size_t floor_scale = 0);
+                          void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
+                          int64_t kv_cache_block_num, int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos,
+                          bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
+                          bool enable_blocked_multi_token_forwarding_kv);
 
 }  // namespace ksana_llm

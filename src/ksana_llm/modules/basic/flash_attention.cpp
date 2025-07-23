@@ -13,12 +13,12 @@ FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext<T>& c
                                   const AttentionCreationConfig& attn_config)
     : reuse_prefix_caching_(attn_config.reuse_prefix_caching),
       context_(creation_context.context),
-      rank_(creation_context.rank) {
-  attn_dp_group_id_ = rank_ / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-
+      rank_(creation_context.rank),
+      enable_blocked_multi_token_forwarding_kv_(
+          creation_context.runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
   uint32_t zero = 0;
   flash_attention_layer_ =
-      CreateAttentionLayer<T, FlashAttentionLayer>(Singleton<Environment>::GetInstance()->GetKVCacheType());
+      CreateAttentionLayer<T, FlashAttentionLayer>(creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
   std::vector<std::any> attention_param;
   attention_param.push_back(attn_config.model_config.quant_config.method);  // for quant method
   attention_param.push_back(attn_config.model_config.layernorm_eps);        // for q k layernorm
@@ -59,7 +59,7 @@ FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext<T>& c
   flash_attention_param.push_back(true);
   flash_attention_param.push_back(attn_config.mrope_section_ptr);
   flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
-  flash_attention_layer_->Init(flash_attention_param, context_, rank_);
+  flash_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
 
   if (attn_config.model_config.rope_scaling_factor_config.type == "mrope") {
     use_mrotary_ = true;
@@ -76,9 +76,7 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                   std::vector<Tensor>& shared_buffer_tensors,
                                   const AttentionForwardContext& forward_context, Tensor query_layernorm_weight,
                                   Tensor key_layernorm_weight) {
-  bool enable_blocked_multi_token_forwarding_kv =
-      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
-  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv) {
+  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv_) {
     AddAttentionPrefixCache(hidden_buffer_tensors_0, model_input, hidden_buffer_tensors_1, shared_buffer_tensors);
   }
 
@@ -116,7 +114,7 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 #endif
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
-  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv) {
+  if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv_) {
     RemoveAttentionPrefixCache(hidden_buffer_tensors_0, model_input, hidden_buffer_tensors_1, shared_buffer_tensors);
   }
 

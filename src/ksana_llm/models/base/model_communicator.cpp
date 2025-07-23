@@ -13,7 +13,8 @@
 namespace ksana_llm {
 
 template <typename T>
-ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context)
+ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
+                                        std::shared_ptr<Context> context)
     : rank_(rank), context_(context), buffer_(buffer), input_(input) {
   EventCreateWithFlags(&comm_finish_event_, EVENT_DISABLE_TIMING);
 
@@ -25,30 +26,30 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   }
 
   nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer<T>>();
-  nccl_all_reduce_sum_layer_->Init({}, context_, rank_);
+  nccl_all_reduce_sum_layer_->Init({}, runtime_config, context_, rank_);
 
   nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer<T>>();
-  nccl_all_gather_layer_->Init({}, context_, rank_);
+  nccl_all_gather_layer_->Init({}, runtime_config, context_, rank_);
 
   is_full_nvlink_ = context_->ext->IsFullNvLink();
 
   tp_size_ = context_->GetTensorParallelSize();
 
   // ReduceSumLayer for tensor parallelism
-  InitTensorParaCustomAllReduceSumLayer(input);
+  InitTensorParaCustomAllReduceSumLayer(input, runtime_config);
 
 #elif defined(ENABLE_ACL)
   hccl_all_reduce_sum_layer_ = std::make_shared<HcclAllReduceSumLayer<T>>();
-  hccl_all_reduce_sum_layer_->Init({}, context, rank);
+  hccl_all_reduce_sum_layer_->Init({}, runtime_config, context, rank);
 
   hccl_all_gather_layer_ = std::make_shared<HcclAllGatherLayer<T>>();
-  hccl_all_gather_layer_->Init({}, context, rank);
+  hccl_all_gather_layer_->Init({}, runtime_config, context, rank);
 #endif
 }
 
 #ifdef ENABLE_CUDA
 template <typename T>
-void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input) {
+void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input, const RuntimeConfig& runtime_config) {
   if (!context_->ext->IsSupportedP2PAccess()) {
     return;
   }
@@ -71,7 +72,7 @@ void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input) 
   tp_custom_all_reduce_sum_layer_->Init(
       {input->GetPtr<void>(), tp_signal_tensor_.GetPtr<void>(), signal_sz,
        tp_custom_all_reduce_rank_tensor_.GetPtr<void>(), rank_data_sz, /*is_group_custom_all_reduce*/ false},
-      context_, rank_);
+      runtime_config, context_, rank_);
 }
 #endif
 

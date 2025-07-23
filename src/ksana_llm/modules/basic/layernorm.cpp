@@ -12,7 +12,8 @@ template <typename T>
 Layernorm<T>::Layernorm(const std::string& weight_name, float layernorm_eps,
                         const LayerCreationContext<T>& creation_context, const std::string& weight_bias_name) {
   layernorm_layer_ = std::make_shared<LayernormLayer<T>>();
-  layernorm_layer_->Init({layernorm_eps}, creation_context.context, creation_context.rank);
+  layernorm_layer_->Init({layernorm_eps}, creation_context.runtime_config, creation_context.context,
+                         creation_context.rank);
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
   if (weight_bias_name != "") {
     weight_bias_ = creation_context.base_weight->GetModelWeights(weight_bias_name);

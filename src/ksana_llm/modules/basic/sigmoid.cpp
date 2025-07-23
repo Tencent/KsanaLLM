@@ -11,7 +11,7 @@ namespace ksana_llm {
 template <typename T>
 Sigmoid<T>::Sigmoid(const LayerCreationContext<T>& creation_context) {
   sigmoid_layer_ = std::make_shared<SigmoidLayer<T>>();
-  sigmoid_layer_->Init({}, creation_context.context, creation_context.rank);
+  sigmoid_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }
 
 template <typename T>

@@ -10,8 +10,9 @@ namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
 template <typename T>
-Status GroupedTopkLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status GroupedTopkLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                 std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
 
   int parameter_index = 0;
   topk_ = std::any_cast<int>(parameters[parameter_index++]);
@@ -21,6 +22,9 @@ Status GroupedTopkLayer<T>::Init(const std::vector<std::any>& parameters, std::s
   scoring_func_ = std::any_cast<std::string>(parameters[parameter_index++]);
   routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
   use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
+
+  expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size;
+  expert_world_size_ = runtime_config.parallel_basic_config.expert_world_size;
 
   return Status();
 }
@@ -50,10 +54,8 @@ Status GroupedTopkLayer<T>::Forward(const std::vector<Tensor>& input_tensors, st
   int num_experts = input_tensors[0].shape[1];
 
   // 计算 total_num_experts，考虑专家并行
-  size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize();
-  size_t expert_world_size = Singleton<Environment>::GetInstance()->GetExpertWorldSize();
   // TODO(zezhao): 使用 num_experts / expert_para_size 来替换 total_num_experts. 不再维护 ExpertParallelSize
-  int total_num_experts = num_experts * expert_para_size * expert_world_size;
+  int total_num_experts = num_experts * expert_para_size_ * expert_world_size_;
 
   InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk_,
                        renormalize_, num_expert_group_, topk_group_, scoring_func_, e_bias, routed_scaling_factor_,

@@ -12,8 +12,11 @@ namespace ksana_llm {
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
+                                                              const RuntimeConfig& runtime_config,
                                                               std::shared_ptr<Context> context, int rank) {
-  return AttentionLayer<SCALAR_T>::Init(parameters, context, rank);
+  enable_blocked_multi_token_forwarding_kv_ =
+      runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  return AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
@@ -55,9 +58,6 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   void** k_list = (input_tensors[2].GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;
 
-  bool enable_blocked_multi_token_forwarding_kv =
-      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
-
   int64_t kv_cache_block_num = 0;
   void** layer_kv_cache_ptr = nullptr;
   void* k_cache_ptr = nullptr;
@@ -68,7 +68,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
   int max_forwarding_tokens = 0;
 
   // blocked_prefill.
-  if (enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv_) {
     kv_cache_block_num = *(input_tensors[18].GetPtr<int64_t>());
     layer_kv_cache_ptr = input_tensors[18].GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];
@@ -92,7 +92,7 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
       use_cache, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table_ptr,
       kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset, max_forwarding_tokens,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
-      this->floor_scale_);
+      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_);
 
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(this->rank_, this->layer_index_,

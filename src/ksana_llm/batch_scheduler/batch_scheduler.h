@@ -24,7 +24,7 @@ namespace ksana_llm {
 
 class BatchScheduler : public BatchSchedulerInterface {
  public:
-  BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, int dp_num, int tp_num);
+  BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config);
   ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.

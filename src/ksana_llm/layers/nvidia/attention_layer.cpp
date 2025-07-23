@@ -8,8 +8,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                               std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   mm_quant_mode_ = std::any_cast<const QuantMode>(parameters[parameter_index++]);
   layernorm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
@@ -36,8 +37,8 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, std::sha
   PositionEncoding position_encoding = std::any_cast<const PositionEncoding>(parameters[parameter_index++]);
   void* cos_sin_cache_ptr = std::any_cast<void*>(parameters[parameter_index++]);
 
-  block_size_ = Singleton<Environment>::GetInstance()->GetBlockSize();
-  block_token_num_ = Singleton<Environment>::GetInstance()->GetBlockTokenNum();
+  block_size_ = runtime_config.attn_backend_config.block_size;
+  block_token_num_ = runtime_config.attn_backend_config.block_token_num;
   // +7 is because there are 6 more elements down:
   // attn_temperature_tuning_, attn_scale_, floor_scale_, RoPEScalingFactor, is_multi_token_forward, mrope_section_ptr
   enable_qk_pre_norm_before_rotary_pos_ = std::any_cast<const bool>(parameters[parameter_index + 7]);

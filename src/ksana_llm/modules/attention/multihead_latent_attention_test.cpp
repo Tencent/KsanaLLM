@@ -88,7 +88,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
 
   Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
-                                               model_creation_config.runtime_config, mla_buffers_);
+                                               creation_context.runtime_config, mla_buffers_);
     bool is_neox = true;
     int layer_idx = 0;
     mla_ = std::make_shared<MultiHeadLatentAttention<T>>(layer_idx, is_neox, creation_context, model_creation_config,
@@ -235,10 +235,6 @@ class MlaTest : public testing::Test {
     env->ParseConfig(config_path, std::filesystem::absolute(parent_path / "../../../../examples/deepseekv2/").string());
 
     env->GetModelConfig(model_config);
-    env->GetRuntimeConfig(runtime_config);
-    runtime_config.max_batch_size = 5;
-    runtime_config.max_seq_len = 20;
-    runtime_config.max_step_token_num = 40;
 
     BlockManagerConfig block_manager_config;
     if (test_name.find("ForwardNewAbsorbWithFlashMlaKvFP8Test") != std::string::npos) {
@@ -256,6 +252,11 @@ class MlaTest : public testing::Test {
     block_manager_config.device_allocator_config.blocks_num = 10;
     env->SetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+
+    env->GetRuntimeConfig(runtime_config);
+    runtime_config.max_batch_size = 5;
+    runtime_config.max_seq_len = 20;
+    runtime_config.max_step_token_num = 40;
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};

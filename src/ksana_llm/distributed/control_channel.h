@@ -115,6 +115,7 @@ class ControlChannel {
 
   // The environments.
   std::shared_ptr<Environment> env_ = nullptr;
+  bool enable_mtp_module_ = false;
 
   // The buffer pool.
   ScheduleOutputPool* schedule_output_pool_ = nullptr;

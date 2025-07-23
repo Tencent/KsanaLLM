@@ -246,7 +246,7 @@ template <typename T>
 Status InternlmxComposer2<T>::CreateLayers(LayerCreationContext<T>& creation_context,
                                            ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
-  size_t tensor_para_size = model_creation_config.runtime_config.parallel_basic_config.tensor_parallel_size;
+  size_t tensor_para_size = creation_context.runtime_config.parallel_basic_config.tensor_parallel_size;
   DataType weight_type = model_config.weight_data_type;
   size_t vocab_size_pad = DivRoundUp(model_config.vocab_size, tensor_para_size) * tensor_para_size;
   int head_num = model_config.head_num;
@@ -254,8 +254,8 @@ Status InternlmxComposer2<T>::CreateLayers(LayerCreationContext<T>& creation_con
   int hidden_units = size_per_head * head_num;
   int head_num_per_tp = head_num / tensor_para_size;
   int num_kv_heads_per_tp = model_config.num_key_value_heads / tensor_para_size;
-  size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
-  size_t max_batch_size = model_creation_config.runtime_config.max_batch_size;
+  size_t max_token_num = creation_context.runtime_config.max_step_token_num;
+  size_t max_batch_size = creation_context.runtime_config.max_batch_size;
   int inter_size_per_tp = model_config.inter_size / tensor_para_size;
   int max_dim =
       std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units), inter_size_per_tp);

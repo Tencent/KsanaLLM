@@ -27,11 +27,13 @@ class QuantWeightTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/hunyuan_large");
     env->GetModelConfig(model_config);
-    env->GetRuntimeConfig(runtime_config);
+
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
+
+    env->GetRuntimeConfig(runtime_config);
 
     CUDA_CHECK(cudaGetDevice(&device_rank));
     tensor_manager = std::make_shared<TensorManager>(device_rank, weights_map);

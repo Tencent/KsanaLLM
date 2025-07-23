@@ -41,8 +41,11 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
   Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 
   // init context
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
   constexpr int max_multi_batch_num = 1;
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(), max_multi_batch_num));
+  context_.reset(new Context(runtime_config.parallel_basic_config.tensor_parallel_size,
+                             runtime_config_.parallel_basic_config.attn_data_parallel_size, max_multi_batch_num));
   KLLM_CHECK_WITH_INFO(!context_->IsStandalone(), "Failed to get batch scheduler config error");
 
   // init model_config

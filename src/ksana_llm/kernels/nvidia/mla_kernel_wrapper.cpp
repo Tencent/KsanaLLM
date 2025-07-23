@@ -768,7 +768,7 @@ void InvokeAbsorbMlaPagedAttention(
     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
     void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,
     void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len,
-    int tail_offset_token) {
+    int tail_offset_token, bool enable_flash_mla) {
   // 修改stride_size 和 head_size
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
@@ -833,7 +833,6 @@ void InvokeAbsorbMlaPagedAttention(
     KLLM_LOG_DEBUG << "ConvertToScalar num:" << batch * max_blocks_per_seq;
   }
 
-  static bool enable_flash_mla = Singleton<Environment>::GetInstance()->IsFlashMlaEnable();
   if (enable_flash_mla) {
     // Absorb has two versions
     if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
@@ -894,7 +893,7 @@ void InvokeAbsorbMlaPagedAttention(
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,                       \
       void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,      \
       void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, \
-      int tail_offset_token)
+      int tail_offset_token, bool enable_flash_mla)
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -903,13 +902,13 @@ RUN_ABSORB_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::k
 RUN_ABSORB_MLA_PAGED_ATTENTION(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
 #if defined(ENABLE_FP8)
-RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
-RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+    RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+    RUN_ABSORB_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #endif
 #undef RUN_ABSORB_MLA_PAGED_ATTENTION
 
-void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {
-  llm_kernels::nvidia::SetFlashMlaAttribute(max_batch_size, stream);
-}
+    void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {
+      llm_kernels::nvidia::SetFlashMlaAttribute(max_batch_size, stream);
+    }
 
-}  // namespace ksana_llm
+    }  // namespace ksana_llm

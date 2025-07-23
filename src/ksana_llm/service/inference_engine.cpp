@@ -49,6 +49,12 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get batch manager config error:" + status.ToString());
   }
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
+  size_t tp_num = runtime_config.parallel_basic_config.tensor_parallel_size;
+  size_t attn_data_parallel_size =
+      runtime_config.parallel_basic_config.attn_data_parallel_size;
+
   // TODO(TJ): maybe cloud move IsChief and IsStandalone to env.
   PipelineConfig pipeline_config;
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
@@ -57,10 +63,10 @@ Status InferenceEngine::Initialize() {
     batch_scheduler_config.max_pp_batch_num = 1;
   }
   // Environment is must be initialized befroe context.
-  KLLM_LOG_INFO << "Get tensor parallel: " << env->GetTensorParallelSize()
-                << " attention data parallel: " << env->GetAttnDataParallelSize()
+  KLLM_LOG_INFO << "Get tensor parallel: " << tp_num
+                << " attention data parallel: " << attn_data_parallel_size
                 << " max_pp_batch_num: " << batch_scheduler_config.max_pp_batch_num;
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(),
+  context_.reset(new Context(tp_num, attn_data_parallel_size,
                              batch_scheduler_config.max_pp_batch_num));
 
   // Load model configs.
@@ -69,8 +75,6 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Get model config error:" + status.ToString());
   }
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
 
   // Initialize schedule output and hidden unit buffer pool.
   // Must be called after block manager is set.
@@ -78,7 +82,7 @@ Status InferenceEngine::Initialize() {
 
   // 初始化 LayerProgressTracker，为每个设备的每一层创建 CUDA event
   Singleton<LayerProgressTracker>::GetInstance()->Initialize(
-      env->GetTensorParallelSize(), model_config.num_layer + model_config.num_nextn_predict_layers);
+      tp_num, model_config.num_layer + model_config.num_nextn_predict_layers);
 
   Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback(
       [&](int device_id, int layer_index) { TransferEngine::GetInstance()->Send(device_id, layer_index); });
@@ -110,7 +114,7 @@ Status InferenceEngine::Initialize() {
     Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
     pipeline_config.lower_layer_idx = 0;
     pipeline_config.upper_layer_idx = model_config.num_layer - 1;
-    if (model_config.num_nextn_predict_layers != 0 && env->IsMTPEnabled()) {
+    if (model_config.num_nextn_predict_layers != 0 && runtime_config.enable_mtp_module) {
       pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
       pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
     }
@@ -141,6 +145,9 @@ Status InferenceEngine::Initialize() {
   if (!status.OK()) {
     return Status(RET_INVALID_ARGUMENT, "Initialize block manager config error:" + status.ToString());
   }
+
+  // members in RuntimeConfig are set in InitializeBlockManagerConfig, get runtime_config again.
+  env->GetRuntimeConfig(runtime_config);
 
   // Initialize global block manager.
   BlockManagerConfig block_manager_config;
@@ -181,7 +188,7 @@ Status InferenceEngine::Initialize() {
     multi_batch_controller_ = std::make_shared<MultiBatchController>(batch_scheduler_config.max_pp_batch_num);
   }
   InitHiddenUnitsMetaInfoMap(batch_scheduler_config.max_pp_batch_num);
-  batch_manager_ = std::make_unique<BatchManager>(context_, batch_scheduler_config.max_pp_batch_num);
+  batch_manager_ = std::make_unique<BatchManager>(runtime_config, context_);
 
   // Register model instance.
   {
@@ -222,17 +229,16 @@ Status InferenceEngine::Initialize() {
   }
 
   // Create cache manager.
-  int attn_dp_worker_num = env->GetAttnDataParallelSize();
   CacheManagerConfig cache_manager_config;
   status = env->GetCacheManagerConfig(cache_manager_config);
 
   BlockAllocatorManagerConfig block_allocator_manager_config;
-  for (int dp_id = 0; dp_id < attn_dp_worker_num; ++dp_id) {
+  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     BlockAllocatorGroupConfig dp_group_config;
     dp_group_config.devices = env->GetDataParaGroupDevices(dp_id);
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
     dp_group_config.host_block_num = env->GetTotalHostBlockNum();
-    dp_group_config.block_size = env->GetBlockSize();
+    dp_group_config.block_size = runtime_config.attn_backend_config.block_size;
     dp_group_config.convert_size = env->GetConvertSize();
 
     block_allocator_manager_config[dp_id] = dp_group_config;
@@ -240,7 +246,7 @@ Status InferenceEngine::Initialize() {
 
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
   BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
-  for (int dp_id = 0; dp_id < attn_dp_worker_num; ++dp_id) {
+  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
         block_allocator_manager.GetBlockAllocatorGroup(dp_id);
     cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group));
@@ -257,17 +263,16 @@ Status InferenceEngine::Initialize() {
   Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_instances_[0]->GetModelConfig().path);
 
   // Create batch scheduler.
-  batch_scheduler_ =
-      std::make_shared<BatchScheduler>(batch_scheduler_config, attn_dp_worker_num, context_->GetTensorParallelSize());
-  for (int dp_id = 0; dp_id < attn_dp_worker_num; ++dp_id) {
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config);
+  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }
 
   // Create llm runtime
-  llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, context_);
+  llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, runtime_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
   llm_runtime_->SetMultiBatchController(multi_batch_controller_);
-  llm_runtime_->SetMtpForward(env->IsMTPEnabled() && model_config.num_nextn_predict_layers > 0);
+  llm_runtime_->SetMtpForward(runtime_config.enable_mtp_module && model_config.num_nextn_predict_layers > 0);
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
   if (batch_scheduler_config.enable_speculative_decoding) {

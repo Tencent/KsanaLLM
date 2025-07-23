@@ -43,8 +43,11 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   env->ParseConfig(config_path);
 
   // init context
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
   constexpr int max_multi_batch_num = 1;
-  context_.reset(new Context(env->GetTensorParallelSize(), env->GetAttnDataParallelSize(), max_multi_batch_num));
+  context_.reset(new Context(runtime_config.parallel_basic_config.tensor_parallel_size,
+                             runtime_config_.parallel_basic_config.attn_data_parallel_size, max_multi_batch_num));
 
   // init model_config
   Status status = env->GetModelConfig(model_config_);
@@ -52,7 +55,6 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
     KLLM_LOG_ERROR << "GetModelConfig failed. status: " << status.ToString();
     return;
   }
-  env->GetRuntimeConfig(runtime_config_);
 
 #ifdef ENABLE_CUDA
   // load gemm_algo_map
@@ -80,8 +82,11 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   env->GetCacheManagerConfig(cache_manager_config);
   cache_manager_config.enable_prefix_caching = false;
 
+  // RuntimeConfig is set in InitializeBlockManagerConfig
+  env->GetRuntimeConfig(runtime_config_);
+
   BlockAllocatorManagerConfig block_allocator_manager_config;
-  attn_dp_worker_num_ = env->GetAttnDataParallelSize();
+  attn_dp_worker_num_ = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   // TODO(rockcao): support attn_dp_worker_num_ > 1
   KLLM_CHECK_WITH_INFO(attn_dp_worker_num_ == 1, "Currently only support attn_dp == 1");
   for (int dp_id = 0; dp_id < static_cast<uint32_t>(attn_dp_worker_num_); ++dp_id) {
@@ -89,7 +94,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
     dp_group_config.devices = env->GetDataParaGroupDevices(dp_id);
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
     dp_group_config.host_block_num = env->GetTotalHostBlockNum();
-    dp_group_config.block_size = env->GetBlockSize();
+    dp_group_config.block_size = runtime_config_.attn_backend_config.block_size;
     dp_group_config.convert_size = env->GetConvertSize();
     block_allocator_manager_config[dp_id] = dp_group_config;
     std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
@@ -117,7 +122,7 @@ void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& bloc
 }
 
 size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num) {
-  size_t tp_size = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
+  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   static constexpr size_t kExtraBlockNum = 10;
   size_t multi_token_request_block_num = (multi_token_request_token_num_ + block_token_num) / block_token_num;
   size_t single_token_request_block_num =
@@ -208,7 +213,7 @@ void ModelPerformanceRunner::InitRequests() {
   embedding_slice_.pos = input_refit_pos_;
   embedding_slice_.embeddings = input_refit_embedding_;
 
-  size_t tp_size = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
+  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   size_t req_id = 0;
   for (; req_id < total_req_num; req_id++) {
     ForwardRequest& req = forward_reqs_[req_id];

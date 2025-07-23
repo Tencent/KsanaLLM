@@ -8,6 +8,7 @@ namespace ksana_llm {
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
+                                                              const RuntimeConfig& runtime_config,
                                                               std::shared_ptr<Context> context, int rank) {
   return Status(RET_UNDEFINED_REFERENCE, "PagedAttentionLayer not supported.");
 }

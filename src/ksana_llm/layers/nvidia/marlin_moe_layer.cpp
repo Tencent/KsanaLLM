@@ -8,7 +8,8 @@
 namespace ksana_llm {
 #ifdef ENABLE_CUDA
 template <typename T>
-Status MarlinMoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+Status MarlinMoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                               std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 

@@ -58,8 +58,8 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
   std::string fused_lora_a_projs_weight_name = layer_prefix + ".self_attn.fused_lora_a_proj.weight";
   if (creation_context.base_weight->GetModelWeights(fused_lora_a_projs_weight_name).GetElementNumber() > 0) {
     use_fused_lora_a_ = true;
-    attn_fused_lora_a_projs_ = std::make_shared<Linear<T>>(fused_lora_a_projs_weight_name, creation_context,
-                                                           linear_group_quant_backend);
+    attn_fused_lora_a_projs_ =
+        std::make_shared<Linear<T>>(fused_lora_a_projs_weight_name, creation_context, linear_group_quant_backend);
     split_ = std::make_shared<Split<T>>(creation_context);
   } else {
     use_fused_lora_a_ = false;
@@ -95,7 +95,7 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer<T>>();
-  set_torch_stream_layers_->Init({}, creation_context.context, creation_context.rank);
+  set_torch_stream_layers_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
 }
 
@@ -108,7 +108,7 @@ Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, con
   const size_t max_decode_tokens = runtime_config.max_batch_size * attn_config.max_decode_tokens_per_req;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
-  head_num_per_tp_ = head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+  head_num_per_tp_ = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   qk_nope_head_dim_ = attn_config.model_config.mla_config.qk_nope_head_dim;
   qk_rope_head_dim_ = attn_config.model_config.mla_config.qk_rope_head_dim;
   kv_lora_rank_ = attn_config.model_config.mla_config.kv_lora_rank;
@@ -180,9 +180,6 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
 
   const int rank = forwarding_context.GetCurrentRank();
-  const int attn_dp_atp_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-  const int attn_dp_group_id = rank / attn_dp_atp_size;
-  const int attn_dp_rank_id = rank % attn_dp_atp_size;
 
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];

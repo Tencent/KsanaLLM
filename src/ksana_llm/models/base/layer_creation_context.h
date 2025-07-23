@@ -14,6 +14,7 @@ struct LayerCreationContext {
   std::shared_ptr<BaseWeight> base_weight;
   std::shared_ptr<MatMulLayerFactory<T>> matmul_layer_factory;
   std::shared_ptr<Context> context;
+  RuntimeConfig runtime_config;
 
   BufferManager* buffer_mgr_;
 
@@ -66,7 +67,6 @@ struct LayernormCreationConfig {
 struct ModelCreationConfig {
   AttentionCreationConfig attn_config;
   LayernormCreationConfig layernorm_config;
-  RuntimeConfig runtime_config;
 
   void Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config, Tensor cos_sin_cache_tensor_,
             PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node_,

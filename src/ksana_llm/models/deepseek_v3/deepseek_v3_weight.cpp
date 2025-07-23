@@ -62,7 +62,7 @@ void DeepSeekV3Weight<T>::ProcessWeights() {
   if ((GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) &&
       (model_config_.quant_config.method == QUANT_GPTQ)) {
     int head_num = model_config_.head_num;
-    size_t head_num_per_tp = head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+    size_t head_num_per_tp = head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
     size_t kv_lora_rank = model_config_.mla_config.kv_lora_rank;
     size_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
     size_t v_head_dim = model_config_.mla_config.v_head_dim;

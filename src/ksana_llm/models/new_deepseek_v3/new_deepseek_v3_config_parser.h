@@ -16,6 +16,7 @@ class NewDeepSeekV3ConfigParser : public BaseModelConfigParser {
 
   // Parse config from config.json
   virtual Status ParseModelConfig(const nlohmann::json& config_json,
+                                  const ParallelismBasicConfig& parallel_basic_config,
                                   std::shared_ptr<BaseModelConfig>& model_config) override;
 
  private:

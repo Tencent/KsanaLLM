@@ -15,16 +15,19 @@ NewDeepSeekV3ConfigParser::NewDeepSeekV3ConfigParser() {}
 NewDeepSeekV3ConfigParser::~NewDeepSeekV3ConfigParser() {}
 
 Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_json,
+                                                   const ParallelismBasicConfig &parallel_basic_config,
                                                    std::shared_ptr<BaseModelConfig> &model_config) {
   KLLM_LOG_INFO << "Parse config using new deepseek v3 config parser" << std::endl;
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config = std::make_shared<NewDeepSeekV3Config>();
   model_config = new_deepseek_v3_config;
 
   auto env = Singleton<Environment>::GetInstance();
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
   env->GetExpertParallelConfig(new_deepseek_v3_config->expert_parallel_config);
-  new_deepseek_v3_config->tensor_para_size = env->GetTensorParallelSize();
-  new_deepseek_v3_config->attn_data_para_size = env->GetAttnDataParallelSize();
-  size_t ep = env->GetExpertParallelSize();
+  new_deepseek_v3_config->tensor_para_size = parallel_basic_config.tensor_parallel_size;
+  new_deepseek_v3_config->attn_data_para_size = parallel_basic_config.attn_data_parallel_size;
+  size_t ep = parallel_basic_config.expert_parallel_size;
   new_deepseek_v3_config->expert_para_size = ep == 0 ? 1 : ep;
   new_deepseek_v3_config->moe_tensor_para_size =
       new_deepseek_v3_config->tensor_para_size / new_deepseek_v3_config->expert_para_size;

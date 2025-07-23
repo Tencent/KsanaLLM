@@ -12,15 +12,14 @@ template <typename T>
 PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
                                         const LayerCreationContext<T>& creation_context,
                                         const AttentionCreationConfig& attn_config) {
-  attn_dp_group_id_ = creation_context.rank / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
   uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
-  paged_mla_attention_layer_ =
-      CreateAttentionLayer<T, PagedMlaAttentionLayer>(Singleton<Environment>::GetInstance()->GetKVCacheType());
+  paged_mla_attention_layer_ = CreateAttentionLayer<T, PagedMlaAttentionLayer>(
+      creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
   // we use push back to make it work.
@@ -64,7 +63,8 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
   // aligned with flash attention
   paged_attention_param.push_back(nullptr);
   paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
-  paged_mla_attention_layer_->Init(paged_attention_param, creation_context.context, creation_context.rank);
+  paged_mla_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
+                                   creation_context.rank);
   paged_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.matmul_layer_factory->GetWorkspaceBuffer());
 
   kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(

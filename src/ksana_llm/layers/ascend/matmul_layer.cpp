@@ -10,7 +10,8 @@
 namespace ksana_llm {
 
 template <typename T>
-Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 

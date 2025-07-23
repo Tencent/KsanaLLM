@@ -123,7 +123,8 @@ void WeightInstance::Load() {
 
   ModelConfigParser model_config_parser;
   std::shared_ptr<BaseModelConfig> model_config;
-  Status status = model_config_parser.ParseModelConfig(model_config_.path, model_config);
+  Status status =
+      model_config_parser.ParseModelConfig(model_config_.path, runtime_config_.parallel_basic_config, model_config);
 
   if (status.OK() && IsCompatibleWithNewLoader(model_config) && !use_old_loader) {
     KLLM_LOG_INFO << "Using new loader to load model weights";

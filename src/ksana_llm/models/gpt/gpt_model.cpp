@@ -167,7 +167,7 @@ Status Gpt<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelCo
 template <typename T>
 Status Gpt<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
-  auto& runtime_config = model_creation_config.runtime_config;
+  auto& runtime_config = creation_context.runtime_config;
   int hidden_units = model_config.size_per_head * model_config.head_num;
   int inter_size_per_tp = model_config.inter_size / runtime_config.parallel_basic_config.tensor_parallel_size;
   size_t shared_buffer_size = runtime_config.max_step_token_num * std::max(inter_size_per_tp, hidden_units * 2);

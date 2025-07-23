@@ -18,10 +18,11 @@ template <int T>
 ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_parallel_size,
                       const size_t max_multi_batch_size)
     : tensor_parallel_size_(tensor_parallel_size), attn_data_parallel_size_(attn_data_parallel_size) {
-  GetDeviceCount(&device_num_);
-  KLLM_CHECK_WITH_INFO(device_num_ >= tensor_parallel_size_,
-                       fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
-                                   tensor_parallel_size_, device_num_));
+  int device_num;
+  GetDeviceCount(&device_num);
+  KLLM_CHECK_WITH_INFO(
+      device_num >= tensor_parallel_size_,
+      fmt::format("{} tensor_parallel_size should not bigger than devices num: {}", tensor_parallel_size_, device_num));
 
   memory_manage_streams_.reserve(tensor_parallel_size_);
 

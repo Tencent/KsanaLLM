@@ -23,7 +23,8 @@ namespace ksana_llm {
 template <typename T>
 class ModelCommunicator {
  public:
-  ModelCommunicator(Tensor* buffer, Tensor* input, int rank, std::shared_ptr<Context> context);
+  ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
+                    std::shared_ptr<Context> context);
   ~ModelCommunicator();
 
   // The all-gather reduce.
@@ -79,7 +80,7 @@ class ModelCommunicator {
   bool CheckIfUseCustomReduceSum(const std::vector<Tensor>& input_tensors, bool use_custom);
 
 #ifdef ENABLE_CUDA
-  void InitTensorParaCustomAllReduceSumLayer(Tensor* input);
+  void InitTensorParaCustomAllReduceSumLayer(Tensor* input, const RuntimeConfig& runtime_config);
 #endif
 };
 

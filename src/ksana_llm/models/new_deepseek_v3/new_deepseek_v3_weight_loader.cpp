@@ -34,7 +34,9 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
     : BaseModelWeightLoader(model_config, env, context) {
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
-  to_be_permuted_weights_.resize(env->GetTensorParallelSize());
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
+  to_be_permuted_weights_.resize(runtime_config.parallel_basic_config.tensor_parallel_size);
 
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);

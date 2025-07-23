@@ -7,9 +7,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status BatchedMatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                   int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status BatchedMatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                   std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
 

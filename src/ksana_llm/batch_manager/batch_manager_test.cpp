@@ -25,7 +25,9 @@ class BatchManagerTest : public testing::Test {
     std::string config_file = GetTestConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
     context_ = std::make_shared<Context>(1, 1, PP_BATCH_NUM);
-    batch_manager_ = std::make_unique<BatchManager>(context_, PP_BATCH_NUM);
+    Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config_);
+    runtime_config_.max_pp_batch_num = PP_BATCH_NUM;
+    batch_manager_ = std::make_unique<BatchManager>(runtime_config_, context_);
     if (context_->IsChief()) {
       multi_batch_controller_ = std::make_shared<MultiBatchController>(PP_BATCH_NUM);
     }
@@ -49,6 +51,7 @@ class BatchManagerTest : public testing::Test {
   BlockManagerConfig block_manager_config_;
   BatchSchedulerConfig batch_scheduler_config_;
   CacheManagerConfig cache_manager_config_;
+  RuntimeConfig runtime_config_;
 
  protected:
   void InitDefaultConfig(const size_t data_para_size, const size_t tensor_para_size) {
@@ -93,8 +96,8 @@ class BatchManagerTest : public testing::Test {
     BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
 
     block_allocator_group_ = block_allocator_manager.GetBlockAllocatorGroup(1);
-
-    batch_scheduler = std::make_shared<BatchScheduler>(batch_scheduler_config_, data_para_size, tensor_para_size);
+    runtime_config_.parallel_basic_config.attn_data_parallel_size = data_para_size;
+    batch_scheduler = std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_);
 
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config_, block_allocator_group_);
     cache_manager->InitializeCachedBlocks();
@@ -167,7 +170,7 @@ TEST_F(BatchManagerTest, StartAndStop) {
   std::shared_ptr<CacheManagerInterface> cache_manager;
   PrepareTestCaseMeterial(dp_num, tp_num, batch_scheduler, cache_manager);
 
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, context_);
+  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
   llm_runtime->SetMultiBatchController(multi_batch_controller_);
 
   batch_manager_->SetBatchScheduler(batch_scheduler);

@@ -30,14 +30,14 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer<T>>();
-  set_torch_stream_layer_->Init({}, creation_context.context, creation_context.rank);
+  set_torch_stream_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
 
   // Init variable for QKVClaBufferCopy
   if (cla_share_factor_) {
     auto& model_config = model_creation_config.attn_config.model_config;
     int size_per_head = model_config.size_per_head;
-    size_t tensor_para_size = model_creation_config.runtime_config.parallel_basic_config.tensor_parallel_size;
+    size_t tensor_para_size = creation_context.runtime_config.parallel_basic_config.tensor_parallel_size;
     int num_kv_heads_per_tp = model_config.num_key_value_heads / tensor_para_size;
     int head_num_per_tp = model_creation_config.attn_config.head_num_per_tp;
     qkv_pitch_ = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head * sizeof(T);

@@ -48,8 +48,8 @@ template <typename T>
 void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   SetDevice(rank_);
 
-  prefix_caching_enabled_ = Singleton<Environment>::GetInstance()->IsPrefixCachingEnabled();
-  speculative_decoding_enabled_ = Singleton<Environment>::GetInstance()->IsSpeculativeDecodingEnabled();
+  prefix_caching_enabled_ = runtime_config_.enable_prefix_caching;
+  speculative_decoding_enabled_ = runtime_config_.enable_speculative_decoding;
 
   size_t free_device_mem_before_init, free_device_mem_after_init, total_device_mem;
   MemGetInfo(&free_device_mem_before_init, &total_device_mem);
@@ -110,30 +110,30 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
     Tensor position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
-    emb_lookup_layer_->Init({static_cast<T>(model_run_config_.emb_scale), position_weight.GetPtr<void>()}, context_,
-                            rank_);
+    emb_lookup_layer_->Init({static_cast<T>(model_run_config_.emb_scale), position_weight.GetPtr<void>()},
+                            runtime_config_, context_, rank_);
   } else {
-    emb_lookup_layer_->Init({}, context_, rank_);
+    emb_lookup_layer_->Init({}, runtime_config_, context_, rank_);
   }
 
   cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer<T>>();
-  cpu_emb_lookup_layer_->Init({}, context_, rank_);
+  cpu_emb_lookup_layer_->Init({}, runtime_config_, context_, rank_);
 
   assemble_tokens_hidden_layer_ = std::make_shared<AssembleTokensHiddenLayer<T>>();
-  assemble_tokens_hidden_layer_->Init({}, context_, rank_);
+  assemble_tokens_hidden_layer_->Init({}, runtime_config_, context_, rank_);
 
   cast_layer_ = std::make_shared<CastLayer<T>>();
-  cast_layer_->Init({}, context_, rank_);
+  cast_layer_->Init({}, runtime_config_, context_, rank_);
 
   input_refit_layer_ = std::make_shared<InputRefitLayer<T>>();
-  input_refit_layer_->Init({}, context_, rank_);
+  input_refit_layer_->Init({}, runtime_config_, context_, rank_);
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer<T>>();
-  set_torch_stream_layer_->Init({}, context_, rank_);
+  set_torch_stream_layer_->Init({}, runtime_config_, context_, rank_);
 #endif
 
-  if (Singleton<Environment>::GetInstance()->EmbedTokensUseCpu()) {
+  if (runtime_config_.embed_tokens_use_cpu) {
     DataType input_data_type = TYPE_INT32;
     size_t max_token_num = runtime_config_.max_step_token_num;
     cpu_input_tokens_tensor_ = Tensor(MemoryLocation::LOCATION_HOST, input_data_type, {max_token_num}, rank_);

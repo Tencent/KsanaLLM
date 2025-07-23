@@ -53,6 +53,7 @@ class ExpertParallelNcclDataChannelTest : public testing::Test {
 
     Singleton<Environment>::GetInstance()->ParseConfig(config_path);
     env_ = Singleton<Environment>::GetInstance();
+    env_->GetModelConfig(model_config_);
 
     // Set block manager.
     BlockManagerConfig block_manager_config;
@@ -70,6 +71,8 @@ class ExpertParallelNcclDataChannelTest : public testing::Test {
     env_->GetBlockManagerConfig(block_manager_config);
     block_manager_config.reserved_device_memory_ratio = 0.8;
     env_->SetBlockManagerConfig(block_manager_config);
+
+    env_->GetRuntimeConfig(runtime_config_);
   }
 
   void TearDown() override {}
@@ -119,13 +122,10 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     expert_parallel_config_.nccl_unique_ids.resize(2);
     env_->SetExpertParallelConfig(expert_parallel_config_);
 
-    int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
-    uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
+    int tp_para = runtime_config_.parallel_basic_config.tensor_parallel_size;
+    uint32_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
     size_t multi_batch_num = 1;
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
-
-    env_->GetModelConfig(model_config_);
-    env_->GetRuntimeConfig(runtime_config_);
 
     // model_config, rank, context.
     model_input_ = std::make_shared<ModelInput>(model_config_, runtime_config_, 0, context_);
@@ -202,13 +202,11 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     expert_parallel_config_.nccl_unique_ids.resize(2);
     env_->SetExpertParallelConfig(expert_parallel_config_);
 
-    int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
-    uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
+    int tp_para = runtime_config_.parallel_basic_config.tensor_parallel_size;
+    uint32_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
     size_t multi_batch_num = 1;
     context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
-    env_->GetModelConfig(model_config_);
-    env_->GetRuntimeConfig(runtime_config_);
     // model_config, rank, context.
     model_input_ = std::make_shared<ModelInput>(model_config_, runtime_config_, 0, context_);
     model_input_->infer_stage == InferStage::STAGE_CONTEXT;

@@ -13,9 +13,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status BlockwiseMatMulLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                     int rank) {
-  STATUS_CHECK_FAILURE(BaseLayer::Init(parameters, context, rank));
+Status BlockwiseMatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                     std::shared_ptr<Context> context, int rank) {
+  STATUS_CHECK_FAILURE(BaseLayer::Init(parameters, runtime_config, context, rank));
   int parameter_index = 0;
   max_m_ = std::any_cast<size_t>(parameters[parameter_index++]);
   n_ = std::any_cast<size_t>(parameters[parameter_index++]);

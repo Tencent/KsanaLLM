@@ -23,7 +23,7 @@ namespace ksana_llm {
 
 class BatchManager {
  public:
-  explicit BatchManager(std::shared_ptr<Context> context, size_t max_pp_batch_num = 1);
+  explicit BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context);
 
   // Register a model instance to current batch manager.
   Status RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance);
@@ -65,6 +65,8 @@ class BatchManager {
   std::vector<size_t> GetHiddenUnitShape(ScheduleOutput *schedule_output);
 
  private:
+  RuntimeConfig runtime_config_;
+
   // The global context.
   std::shared_ptr<Context> context_;
 
@@ -73,9 +75,6 @@ class BatchManager {
 
   // The multi batch controllor.
   std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
-
-  // Maximum number of pipeline parallel batch threads
-  size_t max_pp_batch_num_;
 
   // The master and worker threads.
   std::vector<std::unique_ptr<std::thread>> main_threads_;

@@ -8,8 +8,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status EmbLookupLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status EmbLookupLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                               std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   size_t parameter_index = 0ul;
   if (parameter_index < parameters.size()) {
     emb_scale_ = std::any_cast<const T>(parameters[parameter_index++]);

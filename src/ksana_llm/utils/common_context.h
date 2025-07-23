@@ -26,7 +26,6 @@ class ContextT {
   ~ContextT();
 
   size_t GetTensorParallelSize() { return tensor_parallel_size_; }
-  size_t GetAttnDataParallelSize() { return attn_data_parallel_size_; }
   size_t GetAttentionTensorParallelSize() { return tensor_parallel_size_ / attn_data_parallel_size_; }
 
   inline bool IsRunContextDecodeAndDecodeSerially() { return is_contextdecode_and_decode_run_serially_; }
@@ -71,7 +70,6 @@ class ContextT {
   void InitStreams(const int worker_id);
 
  private:
-  int device_num_{0};
   const size_t tensor_parallel_size_{0};
   const size_t attn_data_parallel_size_{0};
   static constexpr int defalt_device_id_{0};

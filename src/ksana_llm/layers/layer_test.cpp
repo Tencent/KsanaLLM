@@ -79,6 +79,9 @@ class LayerTest : public testing::Test {
     KLLM_LOG_INFO << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.device = MEMORY_DEVICE;
 
+    runtime_config.attn_backend_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
+    runtime_config.attn_backend_config.block_size = block_manager_config.device_allocator_config.block_size;
+
     Singleton<Environment>::GetInstance()->SetBlockManagerConfig(block_manager_config);
     context_ = std::make_shared<Context>(1, 1, 1);
   }
@@ -167,7 +170,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                          true,
                          mrope_section_ptr,
                          enable_qk_pre_norm_before_rotary_pos},
-                        context, 0)
+                        runtime_config, context, 0)
                   .OK());
 
   Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flag_tensor, flexible_rotary_embedding_pos,
@@ -204,7 +207,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(output_tensor, input_shape, GetDataType<half>());
   std::vector<Tensor> output_tensors = {output_tensor};
 
-  int block_size = Singleton<Environment>::GetInstance()->GetBlockSize();
+  int block_size = runtime_config.attn_backend_config.block_size;
   std::vector<int> h_block_offsets = {0, 1};
   Tensor block_offsets;
   CreateHalfDataTypeTensor(block_offsets, {h_block_offsets.size()}, GetDataType<int>(), sizeof(int));
@@ -298,7 +301,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                          false,
                          nullptr,
                          enable_qk_pre_norm_before_rotary_pos},
-                        context, 0)
+                        runtime_config, context, 0)
                   .OK());
 #endif
 }
@@ -349,7 +352,7 @@ TEST_F(LayerTest, AddLayerTest) {
 
   // 测试相同shape
   AddLayer<device_type> add_layer = AddLayer<device_type>();
-  add_layer.Init({}, context_, kDeviceRank);
+  add_layer.Init({}, runtime_config, context_, kDeviceRank);
   add_layer.Forward({input, bias_a}, output);
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
   // 验证结果
@@ -422,7 +425,7 @@ TEST_F(LayerTest, AssembleAcceptedTokensHiddenTest) {
   StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
 
   AssembleTokensHiddenLayer<device_type> test_layer = AssembleTokensHiddenLayer<device_type>();
-  test_layer.Init({}, context_, kDeviceRank);
+  test_layer.Init({}, runtime_config, context_, kDeviceRank);
   test_layer.Forward({input, accepted_tokens_idx}, output);
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
 
@@ -487,8 +490,8 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
   // 创建MacheteMatMulLayer实例
   MacheteMatMulLayer<device_type, TYPE_I4_GROUP> machete_matmul_layer;
   machete_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, context_,
-      kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
+      context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = machete_matmul_layer.GetWorkSpaceSize();
@@ -644,8 +647,8 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
   // 创建CutlassMatMulLayer实例
   CutlassMatMulLayer<device_type, TYPE_I4_GROUP> cutlass_matmul_layer;
   cutlass_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, context_,
-      kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
+      context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = cutlass_matmul_layer.GetWorkSpaceSize();
@@ -741,8 +744,8 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   // 创建MarlinMatMulLayer实例
   MarlinMatMulLayer<device_type, TYPE_I4_GROUP> marlin_matmul_layer;
   marlin_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, context_,
-      kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
+      context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = marlin_matmul_layer.GetWorkSpaceSize();
@@ -870,7 +873,7 @@ TEST_F(LayerTest, BatchedMatMulLayerTest) {
   const int k = 128;
 
   BatchedMatMulLayer<device_type> batched_matmul_layer;
-  batched_matmul_layer.Init({}, context_, kDeviceRank);
+  batched_matmul_layer.Init({}, runtime_config, context_, kDeviceRank);
 
   Tensor input_a = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, m, k}, kDeviceRank);
   Tensor input_b = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, k, n}, kDeviceRank);
@@ -1177,7 +1180,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
 
   // run moe_layer
   Fp8MoeLayer<half, __nv_fp8_e4m3> moe_layer = Fp8MoeLayer<half, __nv_fp8_e4m3>();
-  moe_layer.Init(params, context_, kDeviceRank);
+  moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   size_t workspace_size = moe_layer.GetWorkSpaceSize();
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3, {workspace_size}, kDeviceRank);
   std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
@@ -1290,7 +1293,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
 
   // run moe_layer
   MarlinMoeLayer<half> moe_layer = MarlinMoeLayer<half>();
-  moe_layer.Init(params, context_, kDeviceRank);
+  moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   size_t workspace_size = moe_layer.GetWorkSpaceSize();
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
   std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
@@ -1338,7 +1341,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   std::vector<std::any> parameters = {topk,         renormalize,           num_expert_group,           topk_group,
                                       scoring_func, routed_scaling_factor, use_e_score_correction_bias};
 
-  EXPECT_TRUE(grouped_topk_layer.Init(parameters, context_, kDeviceRank).OK());
+  EXPECT_TRUE(grouped_topk_layer.Init(parameters, runtime_config, context_, kDeviceRank).OK());
 
   // 准备输入张量 - gating_output
   Tensor gating_output;
@@ -1431,7 +1434,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
       true  // use_e_score_correction_bias = true
   };
 
-  EXPECT_TRUE(grouped_topk_layer_with_bias.Init(parameters_with_bias, context_, kDeviceRank).OK());
+  EXPECT_TRUE(grouped_topk_layer_with_bias.Init(parameters_with_bias, runtime_config, context_, kDeviceRank).OK());
 
   // 准备 e_bias 张量
   Tensor e_bias(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {static_cast<size_t>(num_experts)}, kDeviceRank);

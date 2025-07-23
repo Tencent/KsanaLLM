@@ -38,12 +38,7 @@ class FlashAttention {
   bool reuse_prefix_caching_;
   std::shared_ptr<Context> context_;
   int rank_;
-  // NOTE(karlluo): for example: machine has 4 GPUs, Attention Data Parallelism is 2, Tensor Parallelism is 2.
-  // |----Attn DP Group id 0----|----Attn DP Group id 1----|
-  // |     TP 0   |     TP1     |     TP0    |     TP1     |
-  // |     attn   |     attn    |     attn   |     attn    |
-  // |     GPU0   |     GPU1    |     GPU2   |     GPU3    |
-  int attn_dp_group_id_ = 0;
   bool use_mrotary_ = false;
+  bool enable_blocked_multi_token_forwarding_kv_;
 };
 }  // namespace ksana_llm

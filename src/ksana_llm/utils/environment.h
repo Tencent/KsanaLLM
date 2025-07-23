@@ -84,18 +84,6 @@ class Environment {
 
   Status GetRuntimeConfig(RuntimeConfig &runtime_config);
 
-  // Whether the auto-prefix-caching is enabled.
-  bool IsPrefixCachingEnabled();
-
-  // Whether the flexible caching is enabled.
-  bool IsFlexibleCachingEnabled();
-
-  bool IsSpeculativeDecodingEnabled();
-
-  bool IsPrefillDecodeSeparation();
-
-  bool IsMTPEnabled();
-
   size_t GetTransferLayerChunkSize();
 
   // Get the config of block manager.
@@ -104,42 +92,21 @@ class Environment {
   // TODO(yancyliu): remove from here later.
   Status CalculateBlockNumber();
   Status ResetPipelineBlockNumber();
-  size_t GetBlockTokenNum();
   size_t GetConvertSize();
-  size_t GetBlockSize();
   size_t GetTotalDeviceBlockNum();
   size_t GetTotalHostBlockNum();
-  DataType GetKVCacheType();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
 
   // Get the config of profiler.
   Status GetProfilerConfig(ProfilerConfig &profiler_config);
 
-  size_t GetTensorParallelSize() const { return schedule_config_parser_.GetTensorParallelSize(); }
-
-  size_t GetAttnDataParallelSize() const { return schedule_config_parser_.GetAttnDataParallelSize(); }
-
-  // Get each atten data parallel group size.
-  // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the number of
-  // attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp = 2, then each
-  // attn dp group size is 2.
-  size_t GetAttentionTensorParallel();
-
-  size_t GetExpertParallelSize() { return schedule_config_parser_.GetExpertParallelSize(); }
-
-  size_t GetExpertWorldSize() { return schedule_config_parser_.GetExpertWorldSize(); }
-
   const std::string &GetYamlGptqBackend() const { return yaml_gptq_backend_; }
 
   const std::string &GetYamlWeightQuantMethod() const { return yaml_weight_quant_method_; }
 
-  bool EmbedTokensUseCpu() { return embed_tokens_use_cpu_; }
-
   bool IsReportVersion() { return is_version_report_; }
 
   size_t GetMaxBatchSize() const { return schedule_config_parser_.GetMaxBatchSize(); }
-
-  bool IsFlashMlaEnable() { return schedule_config_parser_.IsFlashMlaEnable(); }
 
   Status GetPipelineConfig(PipelineConfig &pipeline_config) const {
     return schedule_config_parser_.GetPipelineConfig(pipeline_config);
@@ -147,10 +114,6 @@ class Environment {
 
   Status GetExpertParallelConfig(ExpertParallelConfig &expert_parallel_config) const {
     return schedule_config_parser_.GetExpertParallelConfig(expert_parallel_config);
-  }
-
-  bool IsBlockedMultiTokenForwardingEnabled() const {
-    return schedule_config_parser_.IsBlockedMultiTokenForwardingEnabled();
   }
 
   Status GetConnectorConfigs(ConnectorConfig &connector_config) const {
@@ -184,6 +147,9 @@ class Environment {
     return schedule_config_parser_.SetExpertParallelConfig(expert_parallel_config);
   }
 
+  void GetAttnBackendConfig(AttnBackendConfig &attn_backend_config) {
+    schedule_config_parser_.GetAttnBackendConfig(attn_backend_config);
+  }
   void SetAttnBackendConfig(const AttnBackendConfig &attn_backend_config) {
     schedule_config_parser_.SetAttnBackendConfig(attn_backend_config);
   }
@@ -233,8 +199,6 @@ class Environment {
   // The config of profiler.
   ProfilerConfig profiler_config_;
 
-  // Embed_tokens gather operation is processed on the CPU.
-  bool embed_tokens_use_cpu_ = false;
   bool is_version_report_ = true;
 
   ScheduleConfigParser schedule_config_parser_;

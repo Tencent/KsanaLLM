@@ -139,7 +139,7 @@ Status Qwen2Moe<T>::CreateLayers(LayerCreationContext<T>& creation_context,
   auto& model_config = model_creation_config.attn_config.model_config;
   DataType weight_type = model_config.weight_data_type;
 
-  size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
+  size_t max_token_num = creation_context.runtime_config.max_step_token_num;
   share_gating_buffer_ =
       creation_context.buffer_mgr_->CreateBufferTensor("share_gating_buffer_", {max_token_num}, weight_type);
 

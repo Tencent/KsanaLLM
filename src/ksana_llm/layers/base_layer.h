@@ -14,12 +14,13 @@ namespace ksana_llm {
 
 class BaseLayer {
  public:
-  virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) {
     context_ = context;
     rank_ = rank;
     tp_size_ = context_->GetTensorParallelSize();
-    dp_size_ = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
-    attn_dp_atp_size_ = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+    dp_size_ = runtime_config.parallel_basic_config.attn_data_parallel_size;
+    attn_dp_atp_size_ = runtime_config.parallel_basic_config.attn_tensor_parallel_size;
     if (attn_dp_atp_size_ == 0) {
       attn_dp_atp_size_ = 1;
     }

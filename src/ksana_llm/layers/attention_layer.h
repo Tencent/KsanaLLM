@@ -39,7 +39,8 @@ std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
 template <typename T>
 class AttentionLayer : public BaseLayer {
  public:
-  virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 

@@ -98,7 +98,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* q_norm_weight, void* k_norm_weight, bool use_cache, cudaStream_t stream, void* k_cache_ptr,
                  void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
                  size_t* without_prefix_offsets, int max_forwarding_tokens, bool enable_qk_pre_norm_before_rotary_pos,
-                 bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale) {
+                 bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
+                 bool enable_blocked_multi_token_forwarding_kv) {
   // qk norm before rotary position embedding
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
     InvokeQKRmsNorm<SCALAR_T>(qkv_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
@@ -112,9 +113,6 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   auto int_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt64);
   torch::Tensor seqlen_tensor = torch::from_blob(seqlen, {batch + 1}, int_options);
 
-  // attn_backend config.
-  bool enable_blocked_multi_token_forwarding_kv =
-      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
   c10::optional<at::Tensor> null_tensor = c10::nullopt;
   c10::optional<const at::Tensor> const_null_tensor = c10::nullopt;
 
@@ -295,7 +293,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                     \
       int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens,                              \
       bool enable_qk_pre_norm_before_rotary_pos, bool no_rope, bool attn_temperature_tuning, float attn_scale,        \
-      size_t floor_scale)
+      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv)
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -346,7 +344,8 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           void* k_norm_weight, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
                           void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
                           int64_t kv_cache_block_num, int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos,
-                          bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale) {
+                          bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
+                          bool enable_blocked_multi_token_forwarding_kv) {
   // qk norm before rotary position embedding for paged attention
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
     InvokeQKRmsNorm<SCALAR_T>(query_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
@@ -365,9 +364,6 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* q_tensor_ptr = q_tensor.data_ptr();
   void* k_tensor_ptr = k_tensor.data_ptr();
   void* v_tensor_ptr = v_tensor.data_ptr();
-
-  bool enable_blocked_multi_token_forwarding_kv =
-      Singleton<Environment>::GetInstance()->IsBlockedMultiTokenForwardingEnabled();
 
   if (!no_rope && rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(
@@ -499,7 +495,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
       const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,           \
       int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,                                  \
       bool enable_qk_pre_norm_before_rotary_pos, bool no_rope, bool attn_temperature_tuning, float attn_scale,       \
-      size_t floor_scale)
+      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv)
 RUN_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);

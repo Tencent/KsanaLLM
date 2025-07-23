@@ -28,8 +28,9 @@
 
 namespace ksana_llm {
 
-BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, int dp_num, int tp_num)
-    : batch_scheduler_config_(batch_scheduler_config), dp_num_(dp_num) {
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
+    : batch_scheduler_config_(batch_scheduler_config),
+      dp_num_(runtime_config.parallel_basic_config.attn_data_parallel_size) {
   // Config validation.
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_token_num >= batch_scheduler_config_.max_token_len,
                        FormatStr("The max_step_token_num must larger or equal than max_token_len, %d vs %d.",
@@ -37,9 +38,9 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   pp_batch_num_ = batch_scheduler_config_.max_pp_batch_num > 0 ? batch_scheduler_config_.max_pp_batch_num : 1;
 
   // max_waiting_queue_len is for each strategy
-  waiting_reqs_.reserve(batch_scheduler_config_.max_waiting_queue_len * dp_num);
+  waiting_reqs_.reserve(batch_scheduler_config_.max_waiting_queue_len * dp_num_);
 
-  schedule_output_group_ = std::make_shared<ScheduleOutputGroup>(dp_num);
+  schedule_output_group_ = std::make_shared<ScheduleOutputGroup>(dp_num_);
   KLLM_LOG_DEBUG << "pp_batch_num_=" << pp_batch_num_ << ", batch_scheduler_config_.pp_multibatch_wb_strategy="
                  << batch_scheduler_config_.pp_multibatch_wb_strategy;
   if (batch_scheduler_config_.pp_multibatch_wb_strategy != PPMultibatchWBStrategy::NO_WB) {
@@ -47,15 +48,15 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
         std::make_unique<PPMultibatchWorkloadBalancer>(batch_scheduler_config_.pp_multibatch_wb_strategy);
   }
   balance_reqs_algo_ = std::make_unique<BalanceReqsAlgo>();
-  threadpool_ = std::make_unique<ThreadPool>(dp_num);
+  threadpool_ = std::make_unique<ThreadPool>(dp_num_);
   threadpool_->Start();
 
-  schedule_strategies_.resize(dp_num);
-  batch_states_.resize(dp_num);
-  dp_waiting_reqs_.resize(dp_num);
+  schedule_strategies_.resize(dp_num_);
+  batch_states_.resize(dp_num_);
+  dp_waiting_reqs_.resize(dp_num_);
 
-  for (int i = 0; i < dp_num; i++) {
-    schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_);
+  for (int i = 0; i < dp_num_; i++) {
+    schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, runtime_config);
     batch_states_[i].resize(pp_batch_num_);
     for (size_t j = 0; j < pp_batch_num_; j++) {
       batch_states_[i][j] = std::make_shared<BatchState>(j, batch_scheduler_config_);

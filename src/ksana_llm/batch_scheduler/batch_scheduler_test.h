@@ -23,16 +23,17 @@ class BatchSchedulerTest : public testing::Test {
   static void SetUpTestSuite() { InitLoguru(); }
 
   void CommonSetUp(int dp_num = 1, int tp_num = 4) {
-    dp_num_ = dp_num;
-    tp_num_ = tp_num;
+    runtime_config_.parallel_basic_config.tensor_parallel_size = tp_num;
+    runtime_config_.parallel_basic_config.attn_data_parallel_size = dp_num;
+
     // Init BatchSchedulerEnvironmentSimulator and BatchScheduler
     InitDefaultConfig();
     InitializeScheduleOutputPool();
 
-    block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, tp_num_);
+    block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, tp_num);
 
-    env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num_, block_allocator_group);
-    batch_scheduler_ = new BatchScheduler(batch_scheduler_config_, dp_num_, tp_num_);
+    env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num, block_allocator_group);
+    batch_scheduler_ = new BatchScheduler(batch_scheduler_config_, runtime_config_);
 
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
@@ -48,7 +49,8 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   void InitDefaultConfig() {
     int device_block_num = 100;
-    block_manager_config_.host_allocator_config.blocks_num = device_block_num * tp_num_ * 2;
+    block_manager_config_.host_allocator_config.blocks_num =
+        device_block_num * runtime_config_.parallel_basic_config.tensor_parallel_size * 2;
     block_manager_config_.device_allocator_config.blocks_num = device_block_num;
     block_manager_config_.device_allocator_config.block_token_num = 6;
 
@@ -64,7 +66,7 @@ class BatchSchedulerTest : public testing::Test {
     batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(0);
 
     cache_manager_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
-    cache_manager_config.tensor_para_size = tp_num_;
+    cache_manager_config.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
     cache_manager_config.swap_threadpool_size = 8;
     cache_manager_config.enable_prefix_caching = false;
   }
@@ -80,8 +82,7 @@ class BatchSchedulerTest : public testing::Test {
   BlockManagerConfig block_manager_config_;
   BatchSchedulerConfig batch_scheduler_config_;
   CacheManagerConfig cache_manager_config;
-  int tp_num_;
-  int dp_num_;
+  RuntimeConfig runtime_config_;
 };
 
 }  // namespace ksana_llm

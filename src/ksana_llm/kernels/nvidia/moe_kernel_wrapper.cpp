@@ -428,8 +428,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
                     std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
                     float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1,
                     void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
-                    int num_experts, int hidden_size, int inter_size, void* dequant_workspace, int rank,
-                    cudaStream_t stream) {
+                    int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,
+                    void* dequant_workspace, int rank, cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
   // w1 [num_experts, inter_size * 2, hidden_size]
   // w2 [num_experts, hidden_size, inter_size]
@@ -443,7 +443,6 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
   // expert_map [num_experts]
 
   // a1_q, a2_q: FP8  需要将 FP16 输入量化成 FP8 + FLOAT32,这两个是两个对应空间
-  size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize();
   // Expert parallel.
   // hidden_state[num_tokens][hidden_dim]
   // topk_ids_ptr[num_tokens][topk]
@@ -568,7 +567,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
       llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, UseExpertParallel>(
           reinterpret_cast<int32_t*>(curr_topk_ids), reinterpret_cast<int32_t*>(sorted_ids_ptr),
           reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), expert_map,
-          topk, num_experts, expert_para_size, block_size, numel, rank, stream);
+          topk, num_experts, world_expert_para_size, block_size, numel, rank, stream);
     }
 
     // invoke_fused_moe_kernel
@@ -608,7 +607,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
       std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor,          \
       void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,    \
       void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,                        \
-      void* dequant_workspace, int rank, cudaStream_t stream);                                                        \
+      size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream);                         \
   template void InvokeFusedMoe<T, false>(                                                                             \
       void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,                           \
       const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,      \
@@ -617,7 +616,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
       std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor,          \
       void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,    \
       void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,                        \
-      void* dequant_workspace, int rank, cudaStream_t stream)
+      size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream)
 FUSEDMOE(float);
 FUSEDMOE(half);
 FUSEDMOE(__nv_bfloat16);

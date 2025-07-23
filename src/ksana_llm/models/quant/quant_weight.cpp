@@ -48,7 +48,7 @@ namespace ksana_llm {
 #define NameReplace(ss, src, dst) std::regex_replace((ss), std::regex((src)), (dst))
 
 template <typename T>
-QuantWeight<T>::QuantWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+QuantWeight<T>::QuantWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config_, int rank,
                             std::shared_ptr<Context> context, std::unordered_map<std::string, Tensor>& weights_map,
                             std::unordered_map<std::string, DataType>& weights_data_type_map)
     : weights_map_(weights_map),
@@ -56,15 +56,15 @@ QuantWeight<T>::QuantWeight(const ModelConfig& model_config, const RuntimeConfig
       rank_(rank),
       context_(context),
       model_config_(model_config),
-      runtime_config_(runtime_config) {
+      runtime_config_(runtime_config_) {
   enable_ = CheckQuantModel();
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
-  tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
-  expert_world_size_ = runtime_config.parallel_basic_config.expert_world_size;
-  expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size;
+  tensor_para_size_ = runtime_config_.parallel_basic_config.tensor_parallel_size;
+  expert_world_size_ = runtime_config_.parallel_basic_config.expert_world_size;
+  expert_para_size_ = runtime_config_.parallel_basic_config.expert_parallel_size;
   global_expert_para_size_ = expert_world_size_ * expert_para_size_;
   weight_data_type_ = model_config.weight_data_type;
-  enable_full_shared_expert_ = runtime_config.enable_full_shared_expert;
+  enable_full_shared_expert_ = runtime_config_.enable_full_shared_expert;
 
   cutlass_helper_ = std::make_shared<CutlassUtils>(context_, rank, model_config_.quant_config.bits);
   marlin_helper_ = std::make_shared<MarlinUtils>(context_, rank, model_config_.quant_config.bits,
@@ -329,6 +329,7 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
 #ifdef ENABLE_CUDA
   int tp = tensor_para_size_;
   int slice_pos = rank_;
+  size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   if (model_config_.quant_config.desc_act == true && tensor_name.find(".scales") != std::string::npos) {
     tp = 1;
     slice_pos = 0;
@@ -353,12 +354,12 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
     } else if (tensor_name.find("o_proj") != std::string::npos || tensor_name.find("down_proj") != std::string::npos) {
       size_t single_size = tensor.size(0) / tensor_para_size_;
       int inner_group_rank = rank_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      if (attn_data_parallel_size > 1) {
         // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
         // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
         // = 2, then each attn dp group size is 2.
-        single_size = tensor.size(0) / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-        inner_group_rank = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+        single_size = tensor.size(0) / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       }
       tensor = TpSplitTensor(tensor, 0, inner_group_rank, single_size);
       AddWeightFromTorchTensor(tensor_name, tensor);
@@ -373,11 +374,12 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
       size_t kv_proj_size = model_config_.size_per_head * model_config_.num_key_value_heads;
 
       size_t inner_tensor_para_size = tensor_para_size_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
+      if (attn_data_parallel_size > 1) {
         // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
         // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
         // = 2, then each attn dp group size is 2.
-        inner_tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+        inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       }
 
       if (q_proj_size % inner_tensor_para_size != 0 || kv_proj_size % inner_tensor_para_size != 0) {
@@ -398,13 +400,13 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
           {static_cast<int64_t>(q_proj_size), static_cast<int64_t>(kv_proj_size), static_cast<int64_t>(kv_proj_size)},
           1);
       int inner_group_rank = rank_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      if (attn_data_parallel_size > 1) {
         // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
         // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
         // = 2, then each attn dp group size is 2.
-        q_proj_size /= Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-        q_proj_size /= Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-        inner_group_rank = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+        q_proj_size /= runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+        q_proj_size /= runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       } else {
         q_proj_size /= tensor_para_size_;
         kv_proj_size /= tensor_para_size_;
@@ -420,7 +422,7 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
     } else if (tensor_name.find("o_proj") != std::string::npos) {
       size_t inner_tensor_para_size = tensor_para_size_;
       int inner_group_rank = rank_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      if (attn_data_parallel_size > 1) {
         if (model_config_.quant_config.desc_act == true && tensor_name.find(".scales") != std::string::npos) {
           inner_tensor_para_size = 1;
           inner_group_rank = 0;
@@ -428,8 +430,8 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
           // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
           // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and
           // attn_dp = 2, then each attn dp group size is 2.
-          inner_tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-          inner_group_rank = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+          inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+          inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
         }
       }
 
@@ -510,12 +512,12 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
 
       size_t single_size = head_num / tensor_para_size_;
       int inner_group_rank = rank_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      if (attn_data_parallel_size > 1) {
         // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
         // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
         // = 2, then each attn dp group size is 2.
-        single_size = head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-        inner_group_rank = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+        single_size = head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       }
       kv_b_nope_tensor = TpSplitTensor(kv_b_nope_tensor, 1, inner_group_rank, single_size).flatten(1);
       v_head_tensor = TpSplitTensor(v_head_tensor, 1, inner_group_rank, single_size).flatten(1);
@@ -550,12 +552,12 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
 
       size_t single_size = head_num / tensor_para_size_;
       int inner_group_rank = rank_;
-      if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
+      if (attn_data_parallel_size > 1) {
         // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
         // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
         // = 2, then each attn dp group size is 2.
-        single_size = head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-        inner_group_rank = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+        single_size = head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       }
       q_b_nope_tensor = TpSplitTensor(q_b_nope_tensor, 1, inner_group_rank, single_size).flatten(1);
       q_b_rope_tensor = TpSplitTensor(q_b_rope_tensor, 1, inner_group_rank, single_size).flatten(1);
@@ -1026,13 +1028,14 @@ bool QuantWeight<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string& tensor_name
   if (weight_data_type != TYPE_FP32) {
     KLLM_THROW("Not support data type of scale:" + tensor_name);
   }
+  size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   // For q_b_proj scale
   if (tensor_name.find(".q_b_proj.weight_scale") != std::string::npos) {
     size_t tensor_para_offset = rank_;
     size_t inner_tensor_para_size = tensor_para_size_;
-    if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
-      tensor_para_offset = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-      inner_tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+    if (attn_data_parallel_size > 1) {
+      tensor_para_offset = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+      inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
     }
     size_t para_pitch =
         DivRoundUp(weight_shape[0], inner_tensor_para_size) * weight_shape[1] * GetTypeSize(weight_data_type);
@@ -1078,9 +1081,9 @@ bool QuantWeight<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string& tensor_name
   if (tensor_name.find(".kv_b_proj.weight_scale") != std::string::npos) {
     size_t tensor_para_offset = rank_;
     size_t inner_tensor_para_size = tensor_para_size_;
-    if (Singleton<Environment>::GetInstance()->GetAttnDataParallelSize() > 1) {
-      tensor_para_offset = rank_ % Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
-      inner_tensor_para_size = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+    if (attn_data_parallel_size > 1) {
+      tensor_para_offset = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+      inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
     }
     size_t para_pitch =
         DivRoundUp(weight_shape[0], inner_tensor_para_size) * weight_shape[1] * GetTypeSize(weight_data_type);

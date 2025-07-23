@@ -22,7 +22,8 @@ namespace ksana_llm {
 
 class LlmRuntime {
  public:
-  LlmRuntime(const BatchSchedulerConfig &batch_scheduler_config, std::shared_ptr<Context> context);
+  LlmRuntime(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config,
+             std::shared_ptr<Context> context);
   ~LlmRuntime() {
     if (threadpool_) {
       threadpool_->Stop();
@@ -108,6 +109,7 @@ class LlmRuntime {
 
  private:
   bool mtp_forward_ = false;
+  bool enable_flash_mla_ = false;
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;

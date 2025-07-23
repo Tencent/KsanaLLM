@@ -10,7 +10,8 @@ namespace ksana_llm {
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 class FlashMlaAttentionLayer : public AttentionLayer<SCALAR_T> {
  public:
-  virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
 #ifdef ENABLE_ACL

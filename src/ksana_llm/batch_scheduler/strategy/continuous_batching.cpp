@@ -22,8 +22,9 @@
 
 namespace ksana_llm {
 
-ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config)
-    : BaseScheduleStrategy(batch_scheduler_config) {
+ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
+                                                       const RuntimeConfig &runtime_config)
+    : BaseScheduleStrategy(batch_scheduler_config, runtime_config) {
   const auto env = Singleton<Environment>::GetInstance();
 
   env->GetConnectorConfigs(connector_config_);
@@ -31,18 +32,22 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
   }
 
-  if (env->IsFlashMlaEnable() && IsAbsorbWeightsEnabled()) {
+  if (runtime_config.enable_flash_mla && IsAbsorbWeightsEnabled()) {
     decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
   }
-
-  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num / env->GetAttnDataParallelSize();
-  dp_max_batch_size_ = batch_scheduler_config_.max_batch_size / env->GetAttnDataParallelSize();
+  size_t attn_data_parallel_size =
+      runtime_config_.parallel_basic_config.attn_data_parallel_size;
+  dp_max_step_token_num_ =
+      batch_scheduler_config_.max_step_token_num /
+     attn_data_parallel_size;
+  dp_max_batch_size_ =
+      batch_scheduler_config_.max_batch_size / attn_data_parallel_size;
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
   if (connector_config_.group_role == GroupRole::DECODE) {
     dp_max_decode_batch_size_ = dp_max_batch_size_;
     // 增加预参数的大小
     dp_max_batch_size_ = (batch_scheduler_config_.max_batch_size + batch_scheduler_config_.max_pretransfer_batch_size) /
-                         env->GetAttnDataParallelSize();
+                         attn_data_parallel_size;
     // Decode 无需限制 dp_max_step_token_num_
     dp_max_step_token_num_ *= dp_max_batch_size_;
     KLLM_LOG_INFO << "decode dp_max_batch_size_:" << dp_max_batch_size_
@@ -193,7 +198,7 @@ std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy:
 
   // Add request to the begining of waiting queue.
   req->kv_cache_blocks.clear();
-  req->kv_cache_blocks.resize(Singleton<Environment>::GetInstance()->GetAttentionTensorParallel());
+  req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
   req->infer_stage = InferStage::STAGE_CONTEXT;
   req->step = 0;
   req->kv_cached_token_num = 0;
@@ -539,7 +544,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
           // Note(TJ): maybe cloud use StopRequest
           cache_manager_->DestroyFinishedRequest(req->req_id);
           req->kv_cache_blocks.clear();
-          req->kv_cache_blocks.resize(Singleton<Environment>::GetInstance()->GetAttentionTensorParallel());
+          req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
           KLLM_LOG_WARNING << fmt::format("Split fuse disabled due to allocation failure for request ID {}",
                                           req->req_id);
         }

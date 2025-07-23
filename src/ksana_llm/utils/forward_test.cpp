@@ -55,7 +55,6 @@ class ForwardTest : public testing::Test {
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
-    env->GetRuntimeConfig(runtime_config);
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
@@ -63,6 +62,8 @@ class ForwardTest : public testing::Test {
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
     block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+
+    env->GetRuntimeConfig(runtime_config);
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};

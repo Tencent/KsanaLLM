@@ -35,8 +35,6 @@ class MockEnvironment : public Environment {
     return Status();
   }
 
-  size_t GetTensorParallelSize() const { return 2; }
-
   size_t GetTransferLayerChunkSize() { return batch_scheduler_config_.transfer_layer_chunk_size; }
 
   // 用于测试的配置设置方法
@@ -69,7 +67,7 @@ class MockTransferEngine : public TransferEngine {
     // 从环境中获取配置
     env->GetPipelineConfig(pipeline_config_);
     env->GetBlockManagerConfig(block_manager_config_);
-    tensor_parallel_size_ = env->GetTensorParallelSize();
+    tensor_parallel_size_ = 2;
 
     // 计算派生值
     layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;

@@ -22,7 +22,8 @@ struct WorkspaceInfo {
 template <typename T>
 class MoeLayer : public BaseLayer {
  public:
-  virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
 
   virtual size_t GetWorkSpaceSize() override;
 
@@ -46,6 +47,7 @@ class MoeLayer : public BaseLayer {
   size_t expert_hidden_size_;
   size_t expert_inter_size_;
   size_t expert_topk_;
+  size_t world_expert_para_size_;  // expert_para_size* expert_world_size
   int tp_size_;
   bool use_lora_ = false;
   bool use_vllm_moe_ = false;

@@ -12,9 +12,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status AssembleTokensHiddenLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                          int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status AssembleTokensHiddenLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                          std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   atb::infer::GatherParam gather_param;
   atb_op_executor_.Init(rank, gather_param);
   return Status();

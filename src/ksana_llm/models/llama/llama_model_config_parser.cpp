@@ -17,6 +17,7 @@ LlamaModelConfigParser::LlamaModelConfigParser() {}
 LlamaModelConfigParser::~LlamaModelConfigParser() {}
 
 Status LlamaModelConfigParser::ParseModelConfig(const nlohmann::json& config_json,
+                                                const ParallelismBasicConfig& parallel_basic_config,
                                                 std::shared_ptr<BaseModelConfig>& model_config) {
   std::shared_ptr<LlamaModelConfig> llama_model_config = std::make_shared<LlamaModelConfig>();
   model_config = llama_model_config;

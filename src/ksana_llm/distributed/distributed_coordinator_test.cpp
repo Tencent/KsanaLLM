@@ -77,8 +77,10 @@ class DistributedCoordinatorTest : public testing::Test {
     master_pipeline_config.node_rank = 0;
     master_env_->SetPipelineConfig(master_pipeline_config);
 
-    int master_tp_para = master_env_->GetTensorParallelSize();
-    int master_attn_data_parallel_size = master_env_->GetAttnDataParallelSize();
+    RuntimeConfig master_runtime_config;
+    master_env_->GetRuntimeConfig(master_runtime_config);
+    int master_tp_para = master_runtime_config.parallel_basic_config.tensor_parallel_size;
+    int master_attn_data_parallel_size = master_runtime_config.parallel_basic_config.attn_data_parallel_size;
     int max_multi_batch_num = 1;
     Singleton<Environment>::GetInstance()->SetPipelineConfig(master_pipeline_config);
     master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size, max_multi_batch_num);
@@ -92,8 +94,10 @@ class DistributedCoordinatorTest : public testing::Test {
     worker_pipeline_config.node_rank = 1;
     worker_env_->SetPipelineConfig(worker_pipeline_config);
 
-    int worker_tp_para = worker_env_->GetTensorParallelSize();
-    uint32_t worker_attn_data_parallel_size = worker_env_->GetAttnDataParallelSize();
+    RuntimeConfig worker_runtime_config;
+    worker_env_->GetRuntimeConfig(worker_runtime_config);
+    int worker_tp_para = worker_runtime_config.parallel_basic_config.tensor_parallel_size;
+    uint32_t worker_attn_data_parallel_size = worker_runtime_config.parallel_basic_config.attn_data_parallel_size;
     Singleton<Environment>::GetInstance()->SetPipelineConfig(worker_pipeline_config);
     worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size, max_multi_batch_num);
 
@@ -260,14 +264,18 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
 #endif
   worker_env_->SetExpertParallelConfig(worker_ep_config);
 
-  int master_tp_para = master_env_->GetTensorParallelSize();
-  int master_attn_data_parallel_size = master_env_->GetAttnDataParallelSize();
+  RuntimeConfig master_runtime_config;
+  master_env_->GetRuntimeConfig(master_runtime_config);
+  int master_tp_para = master_runtime_config.parallel_basic_config.tensor_parallel_size;
+  int master_attn_data_parallel_size = master_runtime_config.parallel_basic_config.attn_data_parallel_size;
   int max_multi_batch_num = 1;
   Singleton<Environment>::GetInstance()->SetExpertParallelConfig(master_ep_config);
   master_context_ = std::make_shared<Context>(master_tp_para, master_attn_data_parallel_size, max_multi_batch_num);
 
-  int worker_tp_para = worker_env_->GetTensorParallelSize();
-  uint32_t worker_attn_data_parallel_size = worker_env_->GetAttnDataParallelSize();
+  RuntimeConfig worker_runtime_config;
+  worker_env_->GetRuntimeConfig(worker_runtime_config);
+  int worker_tp_para = worker_runtime_config.parallel_basic_config.tensor_parallel_size;
+  uint32_t worker_attn_data_parallel_size = worker_runtime_config.parallel_basic_config.attn_data_parallel_size;
   Singleton<Environment>::GetInstance()->SetExpertParallelConfig(worker_ep_config);
   worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size, max_multi_batch_num);
 

@@ -19,8 +19,8 @@ static const std::unordered_map<vllm_dtype::ScalarType::Id, DataType> MacheteTyp
     {vllm_dtype::kHalf.id(), DataType::TYPE_FP16}, {vllm_dtype::kBFloat16.id(), DataType::TYPE_BF16}};
 
 template <typename T, DataType WT>
-Status MacheteMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                       int rank) {
+Status MacheteMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                       std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 

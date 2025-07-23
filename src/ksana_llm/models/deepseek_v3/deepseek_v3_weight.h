@@ -33,6 +33,7 @@ class DeepSeekV3Weight : public CommonMlaWeight<T>, public CommonMoeWeight<T> {
   using CommonWeight<T>::quant_weight_solver_;
 
   using CommonWeight<T>::model_config_;
+  using CommonWeight<T>::runtime_config_;
   using BaseWeight::required_layer_idx_;
 
   using CommonWeight<T>::tensor_manager_;

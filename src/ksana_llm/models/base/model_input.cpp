@@ -28,10 +28,11 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   auto env = Singleton<Environment>::GetInstance();
   PipelineConfig pipeline_config;
   env->GetPipelineConfig(pipeline_config);
-  enable_blocked_multi_token_forwarding_kv_ = env->IsBlockedMultiTokenForwardingEnabled();
-  enable_flash_mla_ = env->IsFlashMlaEnable();
+  enable_blocked_multi_token_forwarding_kv_ =
+      runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  enable_flash_mla_ = runtime_config.enable_flash_mla;
 
-  block_size_ = env->GetBlockSize();
+  block_size_ = runtime_config_.attn_backend_config.block_size;
   const size_t max_batch_size = runtime_config_.max_batch_size;
   const size_t max_token_num = runtime_config.max_step_token_num;  // max step token num
   layer_num_on_node_ = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
@@ -40,16 +41,16 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     KLLM_LOG_INFO << "ModelInput add next n, now layer: " << layer_num_on_node_;
   }
 
-  attn_dp_group_id_ = rank_ / env->GetAttentionTensorParallel();
-  attn_dp_rank_id_ = rank_ % env->GetAttentionTensorParallel();
-  attn_dp_group_size_ = env->GetAttnDataParallelSize();
+  attn_dp_group_id_ = rank_ / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+  attn_dp_rank_id_ = rank_ % runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+  attn_dp_group_size_ = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   attn_dp_group_offsets_.assign(attn_dp_group_size_ * 4, 0);
   KLLM_LOG_INFO << "rank:" << rank_ << ", attn_dp_group_id_: " << attn_dp_group_id_
                 << ", attn_dp_rank_id_: " << attn_dp_rank_id_ << ", attn_dp_group_size_: " << attn_dp_group_size_;
 
   const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
-  size_t max_block_num =
-      (max_seq_len * max_batch_size + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
+  size_t max_block_num = (max_seq_len * max_batch_size + runtime_config.attn_backend_config.block_token_num - 1) /
+                         runtime_config.attn_backend_config.block_token_num;
 
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
@@ -58,13 +59,14 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
   if (status.OK()) {
     size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
-    max_block_num = std::min(max_block_num, (device_free - reserved_memory_size) / env->GetBlockSize());
+    max_block_num =
+        std::min(max_block_num, (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size);
   }
   KLLM_LOG_INFO << "max_block_num " << max_block_num;
 
   // For prefix caching, the token will be used multiple times, reset it to max possible value.
-  if (env->IsPrefixCachingEnabled()) {
-    max_block_num = (max_token_num * max_batch_size) / env->GetBlockTokenNum();
+  if (runtime_config.enable_prefix_caching) {
+    max_block_num = (max_token_num * max_batch_size) / runtime_config_.attn_backend_config.block_token_num;
   }
 
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
@@ -85,7 +87,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num}, rank_);
 
   auto allocate_input_info = [&](input_info& info, const size_t q_len) {
-    const size_t head_num_per_tp = model_config.head_num / env->GetAttentionTensorParallel();
+    const size_t head_num_per_tp =
+        model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
 
     info.input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
     info.kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
@@ -177,12 +180,12 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
              {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_batch_size * max_block_num)}, rank);
   // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/developmentguide/acce/ascendtb/ascendtb_01_0070.html
   // k/v_cache_blocks_base only support float16
-  k_cache_blocks_base =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-             {1, runtime_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
-  v_cache_blocks_base =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-             {1, runtime_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
+  k_cache_blocks_base = Tensor(
+      MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+      {1, runtime_config.attn_backend_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
+  v_cache_blocks_base = Tensor(
+      MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+      {1, runtime_config.attn_backend_config.block_token_num, model_config.head_num, model_config.size_per_head}, rank);
   // 0: layers_slot_mapping_dim_1, 1: max_num_blocks_per_query
   atb_attention_attr = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {2}, rank);
   last_token_index_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_batch_size}, rank_);
@@ -557,16 +560,16 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
     void* cur_rank_block_base_ptr = device_allocator->GetBlocksBasePtr();
     void* k_cache_base_ptr = cur_rank_block_base_ptr;
     void* v_cache_base_ptr = cur_rank_block_base_ptr + (block_size_ / 2);
-    k_cache_blocks_base =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-               {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
-                runtime_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
-               rank_, k_cache_base_ptr);
-    v_cache_blocks_base =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-               {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
-                runtime_config_.block_token_num, model_config_.head_num, model_config_.size_per_head},
-               rank_, v_cache_base_ptr);
+    k_cache_blocks_base = Tensor(
+        MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+        {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
+         runtime_config_.attn_backend_config.block_token_num, model_config_.head_num, model_config_.size_per_head},
+        rank_, k_cache_base_ptr);
+    v_cache_blocks_base = Tensor(
+        MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+        {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
+         runtime_config_.attn_backend_config.block_token_num, model_config_.head_num, model_config_.size_per_head},
+        rank_, v_cache_base_ptr);
   }
 
   uint32_t batch_size = forward_reqs.size();
@@ -642,12 +645,13 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
       if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
           for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].forwarding_tokens->size(); ++token_idx) {
-            int32_t inner_block_offset = token_idx % runtime_config_.block_token_num;
+            int32_t inner_block_offset = token_idx % runtime_config_.attn_backend_config.block_token_num;
             layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
                 (forward_reqs[f_req_idx]
-                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][token_idx / runtime_config_.block_token_num] +
+                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_]
+                                               [token_idx / runtime_config_.attn_backend_config.block_token_num] +
                  layer_idx) *
-                    runtime_config_.block_token_num +
+                    runtime_config_.attn_backend_config.block_token_num +
                 inner_block_offset;
           }
         }
@@ -670,10 +674,10 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
           int32_t block_id =
               forward_reqs[f_req_idx]
                   .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
-                                                               runtime_config_.block_token_num];
+                                                               runtime_config_.attn_backend_config.block_token_num];
           layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
-              (block_id + layer_idx) * runtime_config_.block_token_num +
-              ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % runtime_config_.block_token_num);
+              (block_id + layer_idx) * runtime_config_.attn_backend_config.block_token_num +
+              ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % runtime_config_.attn_backend_config.block_token_num);
         }
       }
     }
@@ -697,8 +701,8 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 // If the batch of multi token requests all require the next token (`max_new_tokens = 1`),
 // and all the caching optimizations are disabled, then the kv cache is unnecessary.
 void ModelInput::CheckUseCache(const std::vector<ForwardRequest>& forward_reqs) {
-  const auto& env = Singleton<Environment>::GetInstance();
-  use_cache = env->IsPrefixCachingEnabled() || env->IsFlexibleCachingEnabled() || env->IsPrefillDecodeSeparation();
+  use_cache = runtime_config_.enable_prefix_caching || runtime_config_.enable_flexible_caching ||
+              runtime_config_.separate_prefill_decode;
 
   if (enable_blocked_multi_token_forwarding_kv_) use_cache = true;
 
@@ -953,8 +957,8 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
     }
   }
   KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
-  if (Singleton<Environment>::GetInstance()->GetKVCacheType() == DataType::TYPE_FP8_E5M2 ||
-      Singleton<Environment>::GetInstance()->GetKVCacheType() == DataType::TYPE_FP8_E4M3) {
+  if (runtime_config_.attn_backend_config.kv_cache_dtype == DataType::TYPE_FP8_E5M2 ||
+      runtime_config_.attn_backend_config.kv_cache_dtype == DataType::TYPE_FP8_E4M3) {
     const size_t block_table_host_size = block_table_host.size();
     block_table_host.resize(block_table_host.size() * 2);
     for (size_t i = 0; i < block_table_host_size; i++) {
@@ -981,7 +985,7 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   PROFILE_EVENT_SCOPE(PrepareFlashMla, "PrepareFlashMla", rank_);
   Stream stream = context_->GetH2DStreams()[rank_];
   static const int head_num_per_tp =
-      model_config_.head_num / Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+      model_config_.head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
   const int q_len = input.total_dp_input_ids_len / input.dp_reqs.size();
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
   GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, 1, rank_, stream.Get());

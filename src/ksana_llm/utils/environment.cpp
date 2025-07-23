@@ -51,7 +51,6 @@ void Environment::Reset() {
   model_config_ = {};
   yaml_gptq_backend_ = "";
   yaml_weight_quant_method_ = "";
-  embed_tokens_use_cpu_ = false;
   is_version_report_ = true;
   profiler_config_ = {};
   schedule_config_parser_.Reset();
@@ -179,38 +178,20 @@ Status Environment::CalculateBlockNumber() { return schedule_config_parser_.Calc
 
 Status Environment::ResetPipelineBlockNumber() { return schedule_config_parser_.ResetPipelineBlockNumber(); }
 
-size_t Environment::GetBlockTokenNum() { return schedule_config_parser_.GetBlockTokenNum(); }
-
 size_t Environment::GetConvertSize() { return schedule_config_parser_.GetConvertSize(); }
-
-size_t Environment::GetBlockSize() { return schedule_config_parser_.GetBlockSize(); }
 
 size_t Environment::GetTotalDeviceBlockNum() { return schedule_config_parser_.GetTotalDeviceBlockNum(); }
 
 size_t Environment::GetTotalHostBlockNum() { return schedule_config_parser_.GetTotalHostBlockNum(); }
 
-DataType Environment::GetKVCacheType() { return schedule_config_parser_.GetKVCacheType(); }
-
 std::vector<int> Environment::GetDataParaGroupDevices(int dp_id) {
   return schedule_config_parser_.GetDataParaGroupDevices(dp_id);
 }
-
-size_t Environment::GetAttentionTensorParallel() { return schedule_config_parser_.GetAttentionTensorParallel(); }
 
 Status Environment::GetProfilerConfig(ProfilerConfig &profiler_config) {
   profiler_config = profiler_config_;
   return Status();
 }
-
-bool Environment::IsPrefixCachingEnabled() { return schedule_config_parser_.IsPrefixCachingEnabled(); }
-
-bool Environment::IsFlexibleCachingEnabled() { return schedule_config_parser_.IsFlexibleCachingEnabled(); }
-
-bool Environment::IsSpeculativeDecodingEnabled() { return schedule_config_parser_.IsSpeculativeDecodingEnabled(); }
-
-bool Environment::IsPrefillDecodeSeparation() { return schedule_config_parser_.IsPrefillDecodeSeparation(); }
-
-bool Environment::IsMTPEnabled() { return schedule_config_parser_.IsMTPEnabled(); }
 
 size_t Environment::GetTransferLayerChunkSize() { return schedule_config_parser_.GetTransferLayerChunkSize(); }
 

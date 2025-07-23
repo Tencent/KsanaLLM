@@ -12,7 +12,8 @@
 namespace ksana_llm {
 #ifdef ENABLE_CUDA
 template <typename T>
-Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
+Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -38,6 +39,9 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
   DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   int group_size = std::any_cast<int>(parameters[parameter_index++]);
+
+  world_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
+                            runtime_config.parallel_basic_config.expert_world_size;
 
   // 权重&计算类型处理
   weight_dtype_ = GetDataType<T>();
@@ -65,7 +69,7 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_pt
       static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
       static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
       use_e_score_correction_bias_};
-  grouped_topk_layer_->Init(grouped_topk_params, context, rank);
+  grouped_topk_layer_->Init(grouped_topk_params, runtime_config, context, rank);
 
   return Status();
 }
@@ -188,9 +192,8 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
     // 使用 GroupedTopkLayer 计算 topk
     int num_tokens = input_tensors[0].shape[0];
     ExecuteGroupedTopk(input_tensors, num_tokens);
-    size_t expert_para_size = Singleton<Environment>::GetInstance()->GetExpertParallelSize() *
-                              Singleton<Environment>::GetInstance()->GetExpertWorldSize();
-    if (expert_para_size == 1) {
+
+    if (world_expert_para_size_ == 1) {
       InvokeFusedMoe<T, false>(input_tensors[0].GetPtr<void>(),              // hidden_states
                                input_tensors[2].GetPtr<void>(),              // w1
                                input_tensors[3].GetPtr<void>(),              // w2
@@ -228,6 +231,7 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
                                expert_num_,                                  // num_experts
                                expert_hidden_size_,                          // hidden_size
                                expert_inter_size_,                           // inter_size
+                               world_expert_para_size_,                      // expert_para_size* expert_world_size
                                dequant_workspace_,                           // dequant_workspace
                                rank_,                                        // rank
                                context_->GetComputeStreams()[rank_].Get());  // stream
@@ -269,6 +273,7 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
                               expert_num_,                                  // num_experts
                               expert_hidden_size_,                          // hidden_size
                               expert_inter_size_,                           // inter_size
+                              world_expert_para_size_,                      // expert_para_size* expert_world_size
                               dequant_workspace_,                           // dequant_workspace
                               rank_,                                        // rank
                               context_->GetComputeStreams()[rank_].Get());  // stream

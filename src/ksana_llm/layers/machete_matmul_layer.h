@@ -22,7 +22,8 @@ namespace ksana_llm {
 template <typename T, DataType WT>
 class MacheteMatMulLayer : public BaseLayer {
  public:
-  virtual Status Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) override;
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
 
   virtual size_t GetWorkSpaceSize() override;
 

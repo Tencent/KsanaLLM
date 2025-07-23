@@ -264,6 +264,10 @@ struct ExpertParallelConfig {
 // The config of attention backend.
 struct AttnBackendConfig {
   bool enable_blocked_multi_token_forwarding_kv = false;
+  DataType kv_cache_dtype;  // kv_cache storage type
+  size_t block_token_num{0};  // The max token number of one block.
+  size_t block_size{0};       // The block size, in bytes.
+
   // std::vector<float> k_scales;  // to be removed
   // std::vector<float> v_scales;  // to be removed
 };
@@ -271,6 +275,7 @@ struct AttnBackendConfig {
 struct ParallelismBasicConfig {
   size_t tensor_parallel_size{1};
   size_t attn_data_parallel_size{1};
+  size_t attn_tensor_parallel_size{1};  // Determined by tp/dp
   size_t expert_parallel_size{1};
   size_t expert_world_size{1};
   size_t moe_tensor_para_size{1};
@@ -287,19 +292,26 @@ struct RuntimeConfig {
   AttnBackendConfig attn_backend_config;
   bool enable_flash_mla = false;
   bool enable_full_shared_expert = false;
-  // Whether enable prefix caching.
-  bool enable_prefix_caching = false;
+  bool separate_prefill_decode = false;
+
+  bool enable_prefix_caching = false;  // Whether enable prefix caching.
+  bool enable_flexible_caching = false;
+
   // Whether to normalize q and k before rotary position embedding in attention.
   // bool enable_qk_pre_norm_before_rotary_pos = false;
 
   // Schedule related. determined by schedule configs and cache related configs.
   size_t max_pp_batch_num{1};  // max number of batchs in pipeline parallel.
-  size_t block_token_num;
   int max_batch_size;
   size_t max_seq_len;         // The max token number of a sequence
   size_t max_step_token_num;  //  The max token number of step
 
+  bool enable_mtp_module = false;
+  bool enable_speculative_decoding = false;
   // DataType kv_cache_dtype;
+
+  // TODO(robertyuan): No body set it?
+  bool embed_tokens_use_cpu{false};  // Embed_tokens gather operation is processed on the CPU.
 };
 
 class ScheduleConfigParser {
@@ -331,15 +343,6 @@ class ScheduleConfigParser {
   // Whether the auto-prefix-caching is enabled.
   bool IsPrefixCachingEnabled();
 
-  // Whether the flexible caching is enabled.
-  bool IsFlexibleCachingEnabled();
-
-  bool IsSpeculativeDecodingEnabled();
-
-  bool IsPrefillDecodeSeparation();
-
-  bool IsMTPEnabled();
-
   size_t GetTransferLayerChunkSize();
 
   // Get the config of block manager.
@@ -349,39 +352,22 @@ class ScheduleConfigParser {
   void SetBlockManagerConfig(const BlockManagerConfig &block_manager_config);
   Status CalculateBlockNumber();
   Status ResetPipelineBlockNumber();
-  size_t GetBlockTokenNum();
   size_t GetConvertSize();
-  size_t GetBlockSize();
   size_t GetTotalDeviceBlockNum();
   size_t GetTotalHostBlockNum();
-  DataType GetKVCacheType();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
-
-  size_t GetTensorParallelSize() const { return runtime_config_.parallel_basic_config.tensor_parallel_size; }
 
   void SetTensorParallelSize(size_t tensor_parallel_size) {
     runtime_config_.parallel_basic_config.tensor_parallel_size = tensor_parallel_size;
   }
 
-  size_t GetAttnDataParallelSize() const { return runtime_config_.parallel_basic_config.attn_data_parallel_size; }
-
-  // Get each atten data parallel group size.
-  // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the number of
-  // attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp = 2, then each
-  // attn dp group size is 2.
-  size_t GetAttentionTensorParallel();
-
   void SetAttnDataParallelSize(size_t attn_data_parallel_size) {
     runtime_config_.parallel_basic_config.attn_data_parallel_size = attn_data_parallel_size;
   }
 
-  size_t GetExpertParallelSize() { return runtime_config_.parallel_basic_config.expert_parallel_size; }
-
   void SetExpertParallelSize(size_t expert_parallel_size) {
     runtime_config_.parallel_basic_config.expert_parallel_size = expert_parallel_size;
   }
-
-  size_t GetExpertWorldSize() { return runtime_config_.parallel_basic_config.expert_world_size; }
 
   size_t GetMaxBatchSize() const { return batch_scheduler_config_.max_batch_size; }
 
@@ -396,8 +382,8 @@ class ScheduleConfigParser {
     return Status();
   }
 
-  bool IsBlockedMultiTokenForwardingEnabled() const {
-    return runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  void GetAttnBackendConfig(AttnBackendConfig &attn_backend_config) {
+    attn_backend_config = runtime_config_.attn_backend_config;
   }
 
   void SetAttnBackendConfig(const AttnBackendConfig &attn_backend_config) {
@@ -427,8 +413,6 @@ class ScheduleConfigParser {
     return;
   }
 
-  bool IsFlashMlaEnable() { return runtime_config_.enable_flash_mla; }
-
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
 
@@ -443,6 +427,8 @@ class ScheduleConfigParser {
                                                const BlockManagerConfig &block_manager_config);
 
  private:
+  bool IsFlashMlaEnable() { return runtime_config_.enable_flash_mla; }
+
   size_t GetCommonBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
                             const BlockManagerConfig &block_manager_config);
 

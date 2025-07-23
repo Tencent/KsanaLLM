@@ -43,6 +43,9 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../examples/ksana_llm_deepseekv2.yaml";
     // Initialize block manager.
     Singleton<Environment>::GetInstance()->ParseConfig(config_path_relate);
+    RuntimeConfig runtime_config;
+    Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+    parallel_basic_config_ = runtime_config.parallel_basic_config;
 
     // Initialize context, set tensor paralle to 2 and attn data parallel to 1.
     context_ = std::make_shared<Context>(2, 1, 1);
@@ -53,6 +56,7 @@ class NewDeepSeekV3LoaderTest : public testing::Test {
 
  protected:
   std::shared_ptr<Context> context_ = nullptr;
+  ParallelismBasicConfig parallel_basic_config_;
 };
 
 TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
@@ -79,7 +83,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3ConfigParser) {
     ModelConfigParser model_config_parser;
 
     std::shared_ptr<BaseModelConfig> model_config;
-    Status status = model_config_parser.ParseModelConfig(model_dir, model_config);
+    Status status = model_config_parser.ParseModelConfig(model_dir, parallel_basic_config_, model_config);
     EXPECT_TRUE(status.OK());
     EXPECT_TRUE(model_config);
 
@@ -125,7 +129,7 @@ TEST_F(NewDeepSeekV3LoaderTest, TestNewDeepSeekV3WeightLoader) {
     ModelConfigParser model_config_parser;
 
     std::shared_ptr<BaseModelConfig> model_config;
-    Status status = model_config_parser.ParseModelConfig(model_dir, model_config);
+    Status status = model_config_parser.ParseModelConfig(model_dir, parallel_basic_config_, model_config);
     EXPECT_TRUE(status.OK());
     EXPECT_TRUE(model_config);
 

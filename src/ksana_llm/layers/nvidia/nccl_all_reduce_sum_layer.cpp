@@ -8,9 +8,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status NcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context,
-                                      int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status NcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                      std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
 
   // When using cudaMalloc and reduce operations with P2P enabled, the system may hang. This issue may be a bug in NCCL
   // or CUDA. Resolving it requires switching PyTorch's memory allocator to asynchronous mode. Alternatively, adding a

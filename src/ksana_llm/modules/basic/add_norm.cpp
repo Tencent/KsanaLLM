@@ -11,7 +11,7 @@ namespace ksana_llm {
 template <typename T>
 AddNorm<T>::AddNorm(const std::string& weight_name, float norm_eps, const LayerCreationContext<T>& creation_context) {
   add_norm_layer_ = std::make_shared<AddNormLayer<T>>();
-  add_norm_layer_->Init({norm_eps}, creation_context.context, creation_context.rank);
+  add_norm_layer_->Init({norm_eps}, creation_context.runtime_config, creation_context.context, creation_context.rank);
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
 }
 

@@ -33,11 +33,5 @@ class FlashMlaAttention {
   Tensor kv_b_nope_proj_weight_;
   Tensor v_head_proj_weight_;
   Tensor attn_o_proj_weight_;
-  // NOTE(karlluo): for example: machine has 4 GPUs, Attention Data Parallelism is 2, Tensor Parallelism is 2.
-  // |----Attn DP Group id 0----|----Attn DP Group id 1----|
-  // |     TP 0   |     TP1     |     TP0    |     TP1     |
-  // |     attn   |     attn    |     attn   |     attn    |
-  // |     GPU0   |     GPU1    |     GPU2   |     GPU3    |
-  int attn_dp_group_id_ = 0;
 };
 }  // namespace ksana_llm

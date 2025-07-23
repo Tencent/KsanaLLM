@@ -24,7 +24,7 @@ DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, La
   bool is_neox = false;
   layer_idx_ = layer_idx;
   rank_ = creation_context.rank;
-  enable_full_shared_expert_ = model_creation_config.runtime_config.enable_full_shared_expert;
+  enable_full_shared_expert_ = creation_context.runtime_config.enable_full_shared_expert;
 
   MoeScaleNormMode moe_scale_norm_mode;
   if (model_creation_config.attn_config.model_config.mla_config.q_lora_rank != 0) {
@@ -302,13 +302,13 @@ DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationCont
                                      model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
 
   concat_layer_ = std::make_shared<ConcatLayer<T>>();
-  concat_layer_->Init({size_t{1}}, creation_context.context, creation_context.rank);
+  concat_layer_->Init({size_t{1}}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
   gather_layer_ = std::make_shared<AssembleTokensHiddenLayer<T>>();
-  gather_layer_->Init({}, creation_context.context, creation_context.rank);
+  gather_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
-  emb_lookup_layer_->Init({}, creation_context.context, creation_context.rank);
+  emb_lookup_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
   eh_proj_ = std::make_shared<Linear<T>>(fmt::format("model.layers.{}.eh_proj.weight", layer_idx), creation_context,
                                          model_creation_config.attn_config.model_config.quant_config.backend);
@@ -375,14 +375,14 @@ template <typename T>
 Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_context,
                                         ModelCreationConfig& model_creation_config) {
   MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
-                                             model_creation_config.runtime_config, mla_buffers_);
+                                             creation_context.runtime_config, mla_buffers_);
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
-  const size_t max_token_num = model_creation_config.runtime_config.max_step_token_num;
+  const size_t max_token_num = creation_context.runtime_config.max_step_token_num;
   size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
   // Used for TwoLayeredFFN
   moe_buffer_size = std::max(
       moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size * 2);
-  if (model_creation_config.runtime_config.enable_full_shared_expert) {
+  if (creation_context.runtime_config.enable_full_shared_expert) {
     moe_buffer_size = std::max(
         moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size *
                              model_creation_config.attn_config.model_config.moe_config.num_shared_experts);

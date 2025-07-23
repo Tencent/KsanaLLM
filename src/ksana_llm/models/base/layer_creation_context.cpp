@@ -17,7 +17,7 @@ void LayerCreationContext<T>::Init(std::shared_ptr<BaseWeight> base_weight_,
   base_weight = base_weight_;
   matmul_layer_factory = std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_,
                                                                  runtime_config, rank_, context_);
-
+  this->runtime_config = runtime_config;
   context = context_;
   rank = rank_;
   weight_type = model_config_.weight_data_type;
@@ -36,12 +36,11 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeCo
                                bool reuse_prefix_caching, int layer_num_on_node_, const int* mrope_section_ptr) {
   auto env = Singleton<Environment>::GetInstance();
   const int size_per_head = model_config_.size_per_head;
-  const int head_num_per_tp = model_config_.head_num / env->GetAttentionTensorParallel();
-  const int num_kv_heads_per_tp = model_config_.num_key_value_heads / env->GetAttentionTensorParallel();
+  const int head_num_per_tp = model_config_.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+  const int num_kv_heads_per_tp =
+      model_config_.num_key_value_heads / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
-
-  this->runtime_config = runtime_config;
 
   layernorm_config.layernorm_eps = model_config_.layernorm_eps;
 
@@ -52,7 +51,7 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeCo
   attn_config.num_kv_heads_per_tp = num_kv_heads_per_tp;
   attn_config.size_per_head = size_per_head;
   attn_config.stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
-  attn_config.tensor_para_size = env->GetAttentionTensorParallel();
+  attn_config.tensor_para_size = runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   attn_config.data_para_size = runtime_config.parallel_basic_config.attn_data_parallel_size;
   attn_config.data_type = model_config_.weight_data_type;
   attn_config.rotary_embedding = model_config_.rotary_embedding;

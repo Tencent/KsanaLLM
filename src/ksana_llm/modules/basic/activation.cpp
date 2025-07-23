@@ -21,7 +21,7 @@ Activation<T>::Activation(const std::string& activation_type, const LayerCreatio
   } else {
     KLLM_THROW(fmt::format("Unsupport activation function: {}", activation_type));
   }
-  activation_layer_->Init({}, creation_context.context, creation_context.rank);
+  activation_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }
 
 template <typename T>

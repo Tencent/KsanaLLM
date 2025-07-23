@@ -55,7 +55,9 @@ class ContinuousBatchingTest : public testing::Test {
       block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP16;
       env->SetBlockManagerConfig(block_manager_config);
     }
-    continuous_batching_strategy_ = std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config);
+    RuntimeConfig runtime_config;
+    continuous_batching_strategy_ =
+        std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config, runtime_config);
     size_t multi_batch_id = 0;
     continuous_batching_strategy_->SetBatchState(std::make_shared<BatchState>(multi_batch_id, batch_scheduler_config));
 

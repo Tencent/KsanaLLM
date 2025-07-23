@@ -55,10 +55,10 @@ class DeepSeekV3Test : public testing::Test {
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
-    env->GetRuntimeConfig(runtime_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
+    env->GetAttnBackendConfig(attn_backend_config);
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
     BlockManagerConfig block_manager_config;
@@ -68,6 +68,8 @@ class DeepSeekV3Test : public testing::Test {
 
     block_manager_config.device_allocator_config.blocks_num = 32;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+
+    env->GetRuntimeConfig(runtime_config);
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};
@@ -164,7 +166,8 @@ class DeepSeekV3Test : public testing::Test {
     forward.input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
-    int use_block_num = (input_ids.size() + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
+    int use_block_num = (input_ids.size() + runtime_config.attn_backend_config.block_token_num - 1) /
+                        runtime_config.attn_backend_config.block_token_num;
     block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
     forward.kv_cache_ptrs.resize(1);  // rank num = 1
     block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
@@ -172,10 +175,10 @@ class DeepSeekV3Test : public testing::Test {
     LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer + model_config.num_nextn_predict_layers, {block_ids},
                                        forward.atb_kv_cache_base_blk_ids, cache_manager);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
-      Memset(forward.kv_cache_ptrs[0][block_idx], 0, Singleton<Environment>::GetInstance()->GetBlockSize());
+      Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
       KLLM_LOG_DEBUG << fmt::format(
           "kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][block_idx],
-          forward.kv_cache_ptrs[0][block_idx] + (Singleton<Environment>::GetInstance()->GetBlockSize()));
+          forward.kv_cache_ptrs[0][block_idx] + (runtime_config.attn_backend_config.block_size));
     }
 
     ForwardRequest decode_forward = forward;
@@ -186,7 +189,7 @@ class DeepSeekV3Test : public testing::Test {
     decode_forward.kv_cached_token_num = decode_forward.forwarding_tokens->size() - 1;
     std::vector<ForwardRequest> forward_reqs = {forward, decode_forward};
     Singleton<LayerProgressTracker>::GetInstance()->Initialize(
-        Singleton<Environment>::GetInstance()->GetTensorParallelSize(),
+        runtime_config.parallel_basic_config.tensor_parallel_size,
         model_config.num_layer + model_config.num_nextn_predict_layers);
     Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
       KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;

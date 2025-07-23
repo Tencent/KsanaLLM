@@ -136,7 +136,7 @@ class MatMulLayerFactory {
     if (model_config_.is_quant &&
         (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
       size_t tp = runtime_config_.parallel_basic_config.tensor_parallel_size;
-      size_t attn_tp = Singleton<Environment>::GetInstance()->GetAttentionTensorParallel();
+      size_t attn_tp = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
       size_t hidden_size = model_config_.hidden_units;
       size_t inter_size = model_config_.inter_size;
       size_t shared_expert_inter_size_per_rank = runtime_config_.enable_full_shared_expert
@@ -343,7 +343,7 @@ class MatMulLayerFactory {
     auto it = builder_map_.find({weight_type, input_type, output_type, quant_mode, backend});
     if (it != builder_map_.end()) {
       std::shared_ptr<BaseLayer> layer = (this->*(it->second))();
-      layer->Init(init_params, context_, rank_);
+      layer->Init(init_params, runtime_config_, context_, rank_);
       size_t workspace_size = layer->GetWorkSpaceSize();
       if (workspace_buffer_ == nullptr) {
         if (workspace_size > 0) {

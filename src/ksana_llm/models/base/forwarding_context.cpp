@@ -15,8 +15,9 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   const size_t head_num = model_config.head_num;
   const size_t size_per_head = model_config.size_per_head;
   const size_t hidden_units = size_per_head * head_num;
-  const size_t head_num_per_tp = head_num / env->GetAttentionTensorParallel();
-  const size_t num_kv_heads_per_tp = model_config.num_key_value_heads / env->GetAttentionTensorParallel();
+  const size_t head_num_per_tp = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+  const size_t num_kv_heads_per_tp =
+      model_config.num_key_value_heads / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   size_t vocab_size_pad = DivRoundUp(model_config.vocab_size, tensor_para_size) * tensor_para_size;
 
   BatchSchedulerConfig batch_scheduler_config;
@@ -215,7 +216,7 @@ void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, cons
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, buffers_->shared_buffer);
     model_communicator_ = std::make_shared<ModelCommunicator<T>>(
         /* buffer */ &(hidden_buffer_tensors_0[0]),
-        /* input */ &(reduce_buffer_tensors[0]), rank_, context_);
+        /* input */ &(reduce_buffer_tensors[0]), rank_, runtime_config, context_);
   } else {
     model_communicator_ = nullptr;
   }

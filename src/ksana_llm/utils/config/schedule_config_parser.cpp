@@ -188,7 +188,6 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
     GetDeviceCount(&device_size);
     runtime_config_.parallel_basic_config.tensor_parallel_size = static_cast<size_t>(device_size);
   }
-
   if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1 &&
       std::getenv("PYTORCH_CUDA_ALLOC_CONF") != nullptr) {
     KLLM_THROW(
@@ -218,6 +217,26 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
         fmt::format("Huawei Ascend does not support data parallelism, please set attn_data_parallel_size to 1."));
   }
 #endif
+  if (!(runtime_config_.parallel_basic_config.tensor_parallel_size > 0 &&
+        runtime_config_.parallel_basic_config.attn_data_parallel_size > 0)) {
+    KLLM_THROW(fmt::format("Tensor Para Size {}, Data Para Size {} should > 0",
+                           runtime_config_.parallel_basic_config.tensor_parallel_size,
+                           runtime_config_.parallel_basic_config.attn_data_parallel_size));
+  }
+
+  int device_num;
+  GetDeviceCount(&device_num);
+  KLLM_CHECK_WITH_INFO(device_num >= runtime_config_.parallel_basic_config.tensor_parallel_size,
+                       fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
+                                   runtime_config_.parallel_basic_config.tensor_parallel_size, device_num));
+
+  // Get each atten data parallel group size.
+  // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the number of
+  // attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp = 2, then each
+  // attn dp group size is 2.
+  runtime_config_.parallel_basic_config.attn_tensor_parallel_size =
+      runtime_config_.parallel_basic_config.tensor_parallel_size /
+      runtime_config_.parallel_basic_config.attn_data_parallel_size;
 
   // NOTE(karlluo): When using PP parallelism (pipeline parallelism), the communication mode is selected, with the
   // default value being "default". The "default" mode is the send-receive mode. When node0 completes the inference of
@@ -228,13 +247,6 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
       yaml_reader.GetRootNode(), "setting.global.pipeline_para_comm_type", "default");
   if (pp_comm_type_str == "scatter") {
     pipeline_config_.pipeline_para_comm_type = DistributedCommunicationType::SCATTER;
-  }
-
-  if (!(runtime_config_.parallel_basic_config.tensor_parallel_size > 0 &&
-        runtime_config_.parallel_basic_config.attn_data_parallel_size > 0)) {
-    KLLM_THROW(fmt::format("Tensor Para Size {}, Data Para Size {} should > 0",
-                           runtime_config_.parallel_basic_config.tensor_parallel_size,
-                           runtime_config_.parallel_basic_config.attn_data_parallel_size));
   }
 
   // Read batch scheduler config.
@@ -272,6 +284,8 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
   batch_scheduler_config_.enable_mtp_module =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_mtp_module", false);
+
+  KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
   // When MTP is enabled, each request requires calculating 2 tokens while decoding.
   batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.enable_mtp_module ? 2 : 1;
@@ -379,6 +393,7 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
 
   block_manager_config_.host_allocator_config.kv_cache_dtype = kv_cache_dtype;
   block_manager_config_.device_allocator_config.kv_cache_dtype = kv_cache_dtype;
+  runtime_config_.attn_backend_config.kv_cache_dtype = block_manager_config_.device_allocator_config.kv_cache_dtype;
 }
 
 void ScheduleConfigParser::InitConnectorConfig(
@@ -521,16 +536,23 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     batch_scheduler_config_.max_step_token_num = batch_scheduler_config_.max_token_len;
   }
 
-  // TODO(robertyuan): These members should be moved to other configs
   runtime_config_.parallel_basic_config.moe_tensor_para_size =
       runtime_config_.parallel_basic_config.tensor_parallel_size /
       runtime_config_.parallel_basic_config.expert_parallel_size;
 
-  runtime_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+  // TODO(robertyuan): These members should be removed from other configs
   runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
   runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
+  runtime_config_.enable_mtp_module = batch_scheduler_config_.enable_mtp_module;
+  runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
+
+  runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
   runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
+  runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
+
+  runtime_config_.attn_backend_config.kv_cache_dtype = block_manager_config_.device_allocator_config.kv_cache_dtype;
+  runtime_config_.attn_backend_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
 
   return Status();
 }
@@ -560,6 +582,7 @@ Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &mod
   block_manager_config_.host_allocator_config.blocks_num = 512 * 10;
   block_manager_config_.device_allocator_config.blocks_num = 512;
 
+  runtime_config_.attn_backend_config.block_size = block_manager_config_.device_allocator_config.block_size;
   return CheckEnvironment();
 }
 
@@ -703,21 +726,13 @@ Status ScheduleConfigParser::ResetPipelineBlockNumber() {
   return Status();
 }
 
-size_t ScheduleConfigParser::GetBlockTokenNum() {
-  return block_manager_config_.device_allocator_config.block_token_num;
-}
-
 size_t ScheduleConfigParser::GetConvertSize() { return block_manager_config_.device_allocator_config.convert_size; }
-
-size_t ScheduleConfigParser::GetBlockSize() { return block_manager_config_.device_allocator_config.block_size; }
 
 size_t ScheduleConfigParser::GetTotalDeviceBlockNum() {
   return block_manager_config_.device_allocator_config.blocks_num;
 }
 
 size_t ScheduleConfigParser::GetTotalHostBlockNum() { return block_manager_config_.host_allocator_config.blocks_num; }
-
-DataType ScheduleConfigParser::GetKVCacheType() { return block_manager_config_.device_allocator_config.kv_cache_dtype; }
 
 std::vector<int> ScheduleConfigParser::GetDataParaGroupDevices(int dp_id) {
   size_t device_count = runtime_config_.parallel_basic_config.tensor_parallel_size;
@@ -731,22 +746,7 @@ std::vector<int> ScheduleConfigParser::GetDataParaGroupDevices(int dp_id) {
   return group_devices;
 }
 
-size_t ScheduleConfigParser::GetAttentionTensorParallel() {
-  return runtime_config_.parallel_basic_config.tensor_parallel_size /
-         runtime_config_.parallel_basic_config.attn_data_parallel_size;
-}
-
 bool ScheduleConfigParser::IsPrefixCachingEnabled() { return cache_manager_config_.enable_prefix_caching; }
-
-bool ScheduleConfigParser::IsFlexibleCachingEnabled() { return cache_manager_config_.min_flexible_cache_num > 0; }
-
-bool ScheduleConfigParser::IsSpeculativeDecodingEnabled() {
-  return batch_scheduler_config_.enable_speculative_decoding;
-}
-
-bool ScheduleConfigParser::IsPrefillDecodeSeparation() { return connector_config_.group_role != GroupRole::NONE; }
-
-bool ScheduleConfigParser::IsMTPEnabled() { return batch_scheduler_config_.enable_mtp_module; }
 
 size_t ScheduleConfigParser::GetTransferLayerChunkSize() { return batch_scheduler_config_.transfer_layer_chunk_size; }
 

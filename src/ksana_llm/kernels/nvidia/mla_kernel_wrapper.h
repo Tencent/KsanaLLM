@@ -71,7 +71,7 @@ void InvokeAbsorbMlaPagedAttention(
     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
     void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,
     void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len,
-    int tail_offset_token);
+    int tail_offset_token, bool enable_flash_mla);
 
 void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream);
 

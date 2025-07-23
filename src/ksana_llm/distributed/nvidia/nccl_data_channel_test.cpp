@@ -53,6 +53,7 @@ class NcclDataChannelTest : public testing::Test {
     Singleton<Environment>::GetInstance()->InitializeBlockManagerConfig();
     Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config);
 
+    env_->GetRuntimeConfig(runtime_config_);
     // Must initialized before create data channel instance.
     master_hidden_unit_buffer_pool_ = new HiddenUnitBufferPool();
     worker_hidden_unit_buffer_pool_ = new HiddenUnitBufferPool();
@@ -70,6 +71,7 @@ class NcclDataChannelTest : public testing::Test {
   std::shared_ptr<NcclDataChannel> master_nccl_data_channel_ = nullptr;
   std::shared_ptr<NcclDataChannel> worker_nccl_data_channel_ = nullptr;
   PipelineConfig pipeline_config_;
+  RuntimeConfig runtime_config_;
 };
 
 TEST_F(NcclDataChannelTest, TestDataChannel) {
@@ -105,8 +107,8 @@ TEST_F(NcclDataChannelTest, TestDataChannel) {
     pipeline_config_.node_rank = 0;
     env_->SetPipelineConfig(pipeline_config_);
 
-    int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
-    uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
+    int tp_para = runtime_config_.parallel_basic_config.tensor_parallel_size;
+    uint32_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
     master_context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     master_nccl_data_channel_ =
@@ -186,8 +188,8 @@ TEST_F(NcclDataChannelTest, TestDataChannel) {
     pipeline_config_.node_rank = 1;
     env_->SetPipelineConfig(pipeline_config_);
 
-    int tp_para = Singleton<Environment>::GetInstance()->GetTensorParallelSize();
-    uint32_t attn_data_parallel_size = Singleton<Environment>::GetInstance()->GetAttnDataParallelSize();
+    int tp_para = runtime_config_.parallel_basic_config.tensor_parallel_size;
+    uint32_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
     worker_context_ = std::make_shared<Context>(tp_para, attn_data_parallel_size, multi_batch_num);
 
     worker_nccl_data_channel_ =

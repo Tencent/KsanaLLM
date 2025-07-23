@@ -114,7 +114,6 @@ class FakeTinyWeightTest : public testing::Test {
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_config_path_relate, model_config_filename_);
     STATUS_CHECK_FAILURE(env->GetModelConfig(model_config));
-    STATUS_CHECK_FAILURE(env->GetRuntimeConfig(runtime_config));
 
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
@@ -126,6 +125,7 @@ class FakeTinyWeightTest : public testing::Test {
 
     // Pipeline config is set by InitializeBlockManagerConfig()
     env->GetPipelineConfig(pipeline_config_);
+    STATUS_CHECK_FAILURE(env->GetRuntimeConfig(runtime_config));
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};

@@ -31,6 +31,7 @@ class CommonMlaWeight : virtual public CommonWeight<T> {
   using BaseWeight::weights_map_;
 
   using BaseWeight::model_config_;
+  using BaseWeight::runtime_config_;
 
   using CommonWeight<T>::tensor_manager_;
 

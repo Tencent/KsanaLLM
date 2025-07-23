@@ -7,8 +7,9 @@
 namespace ksana_llm {
 
 template <typename T>
-Status ConcatLayer<T>::Init(const std::vector<std::any>& parameters, std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, context, rank);
+Status ConcatLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
+  BaseLayer::Init(parameters, runtime_config, context, rank);
   concat_dim = std::any_cast<const size_t>(parameters[0]);
   return Status();
 }

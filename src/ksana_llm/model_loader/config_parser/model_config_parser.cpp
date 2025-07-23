@@ -14,6 +14,7 @@
 namespace ksana_llm {
 
 Status ModelConfigParser::ParseModelConfig(const std::string& model_dir,
+                                           const ParallelismBasicConfig& parallel_basic_config,
                                            std::shared_ptr<BaseModelConfig>& model_config) {
   // Get model file format.
   ModelFormat model_format;
@@ -51,7 +52,7 @@ Status ModelConfigParser::ParseModelConfig(const std::string& model_dir,
   }
 
   if (model_format == ModelFormat::PYTORCH_BIN || model_format == ModelFormat::PYTORCH_SAFETENSOR) {
-    status = model_config_parser->ParseModelConfig(config_json, model_config);
+    status = model_config_parser->ParseModelConfig(config_json, parallel_basic_config, model_config);
   } else if (model_format == ModelFormat::GGUF) {
     status = model_config_parser->ParseModelConfig(gguf_meta, model_config);
   }

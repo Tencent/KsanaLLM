@@ -66,7 +66,7 @@ class FakeModel {
     model_->CreateLayers(layer_creation_context_, model_creation_config);
 
     cast_layer_ = std::make_shared<CastLayer<T>>();
-    cast_layer_->Init({}, context_, rank_);
+    cast_layer_->Init({}, runtime_config, context_, rank_);
   }
 
   ~FakeModel() {}
@@ -164,7 +164,7 @@ class ForwardRequestBuilderForTest {
   explicit ForwardRequestBuilderForTest(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                         std::shared_ptr<CacheManagerInterface> cache_manager)
       : layer_num_(model_config.num_layer),
-        block_token_num_(runtime_config.block_token_num),
+        block_token_num_(runtime_config.attn_backend_config.block_token_num),
         tensor_para_size_(runtime_config.parallel_basic_config.tensor_parallel_size) {
     cache_manager_ = cache_manager;
   }

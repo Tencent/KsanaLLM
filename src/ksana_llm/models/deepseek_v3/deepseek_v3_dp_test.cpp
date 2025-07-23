@@ -48,10 +48,10 @@ class DeepSeekV3DPTest : public testing::Test {
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
-    env->GetRuntimeConfig(runtime_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
+    env->GetAttnBackendConfig(attn_backend_config);
     attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     env->SetAttnBackendConfig(attn_backend_config);
     BlockManagerConfig block_manager_config;
@@ -61,6 +61,8 @@ class DeepSeekV3DPTest : public testing::Test {
 
     block_manager_config.device_allocator_config.blocks_num = 32;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+
+    env->GetRuntimeConfig(runtime_config);
 
     // Initialize cache manager for every dp group.
     BlockAllocatorManagerConfig block_allocator_manager_configs;
@@ -140,7 +142,8 @@ class DeepSeekV3DPTest : public testing::Test {
     forward.input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
-    int use_block_num = (input_ids.size() + runtime_config.block_token_num - 1) / runtime_config.block_token_num;
+    int use_block_num = (input_ids.size() + runtime_config.attn_backend_config.block_token_num - 1) /
+                        runtime_config.attn_backend_config.block_token_num;
     block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
     forward.kv_cache_ptrs.resize(1);  // device num in dp group.
     block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
@@ -148,7 +151,7 @@ class DeepSeekV3DPTest : public testing::Test {
     LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer + model_config.num_nextn_predict_layers, {block_ids},
                                        forward.atb_kv_cache_base_blk_ids, cache_managers[dp_group_id]);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
-      Memset(forward.kv_cache_ptrs[0][block_idx], 0, Singleton<Environment>::GetInstance()->GetBlockSize());
+      Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
     }
 
     return forward;
