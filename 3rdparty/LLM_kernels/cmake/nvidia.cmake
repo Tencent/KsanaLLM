@@ -128,7 +128,7 @@ if(GIT_FOUND)
       message(FATAL_ERROR "git submodule update --init --recursive 3rdparty/DeepGEMM failed with ${GIT_SUBMOD_RESULT}, please checkout DeepGEMM submodule")
     endif()
 
-    execute_process(COMMAND python3 -m pip install --upgrade --force-reinstall --ignore-installed -e .
+    execute_process(COMMAND python3 -m pip install --upgrade --force-reinstall --ignore-installed .
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/DeepGEMM
       RESULT_VARIABLE DEEPGEMM_INSTALL_RESULT)
 
