@@ -76,7 +76,7 @@ Status PagedAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
       {hidden_buffer_tensors_0[0], input_info.input_length, input_info.kv_list, input_info.kv_cache_offset,
-       input_info.rotary_embedding_pos, input_info.rotary_embedding_mask, input_info.kv_cache_buffer,
+       input_info.rotary_embedding_pos, input_info.rotary_embedding_mask, kv_cache_buffer_tensor,
        forward_context.forward_shape, paged_buffer_tensors[0], /* workspace */
        query_layernorm_weight,                                 /* for use_qk_norm */
        key_layernorm_weight,                                   /* for use_qk_norm */

@@ -96,9 +96,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     info.kv_cache_offset = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
     info.rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
     info.rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-    info.kv_cache_buffer =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32,
-               {max_batch_size, (max_seq_len + 511) / 512, head_num_per_tp, model_config.size_per_head + 2}, rank_);
     info.layer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
     info.metadata = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {4}, rank);

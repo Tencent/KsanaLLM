@@ -225,7 +225,6 @@ class ModelInput {
     Tensor kv_cache_offset;
     Tensor rotary_embedding_pos;
     Tensor rotary_embedding_mask;
-    Tensor kv_cache_buffer;
     Tensor layer_kv_cache_ptr;  // host
     Tensor block_table;
     Tensor tile_scheduler_metadata;
