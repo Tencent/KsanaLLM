@@ -1,7 +1,6 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
-from typing import List, Dict
 import asyncio
 import json
 import random
@@ -10,9 +9,12 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
-
 from config import settings
 from db import db
+from .database_nodes import get_available_nodes_from_db
+
+if settings.router_rule == "polaris":
+    from .polaris_nodes import get_available_nodes_with_polaris, update_polaris_service_call_result
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,36 +31,6 @@ def pick(l):
     if not l:
         raise HTTPException(status_code=503, detail="No available nodes for processing")
     return random.choice(l)
-
-
-def get_available_nodes() -> Dict[str, List[str]]:
-    """Get available prefill and decode nodes with node_rank=0 from the cluster"""
-    nodes = {"prefill": [], "decode": []}
-
-    try:
-        cluster = db.storage.get_cluster(settings.cluster_name)
-
-        for group_name, group in cluster.prefill_groups.items():
-            if not group.is_ready:
-                continue
-
-            for _, node in group.nodes.items():
-                if node.is_online and node.node_rank == 0:
-                    nodes["prefill"].append((group_name, f"{node.inference_addr}"))
-
-        # Find decode nodes with node_rank=0
-        for group_name, group in cluster.decode_groups.items():
-            if not group.is_ready:
-                continue
-
-            for _, node in group.nodes.items():
-                if node.is_online and node.node_rank == 0:
-                    nodes["decode"].append((group_name, f"{node.inference_addr}"))
-
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(f"Error getting available nodes: {str(e)}")
-
-    return nodes
 
 
 # Constants for stream processing
@@ -104,18 +76,14 @@ async def generate(req: Request):
     prefill_url = ""
     decode_url = ""
 
-    if settings.router_rule == "auto":
-        # Get available nodes
-        available_nodes = get_available_nodes()
-
-        # Select random prefill and decode nodes
+    def select_nodes_with_fallback(available_nodes, prefill_nodes, decode_nodes):
         if available_nodes["prefill"]:
             prefill = pick(available_nodes["prefill"])
             prefill_name = prefill[0]
             prefill_url = f"http://{prefill[1]}/generate"
         else:
             logger.warning("No available prefill nodes found, using fallback")
-            prefill = pick(PREFILL_NODES)
+            prefill = pick(prefill_nodes)
             prefill_name = prefill[0]
             prefill_url = f"http://{prefill[1]}/generate"
 
@@ -125,9 +93,27 @@ async def generate(req: Request):
             decode_url = f"http://{decode[1]}/generate"
         else:
             logger.warning("No available decode nodes found, using fallback")
-            decode = pick(DECODE_NODES)
+            decode = pick(decode_nodes)
             decode_name = decode[0]
             decode_url = f"http://{decode[1]}/generate"
+        return prefill, prefill_name, prefill_url, decode, decode_name, decode_url
+
+    prefill_instance = None
+    decode_instance = None
+
+    if settings.router_rule == "auto":
+        # 先尝试数据库，再尝试 polaris
+        available_nodes = get_available_nodes_from_db(db.storage, settings.cluster_name)
+        prefill, prefill_name, prefill_url, decode, decode_name, decode_url = select_nodes_with_fallback(
+            available_nodes, PREFILL_NODES, DECODE_NODES
+        )
+    elif settings.router_rule == "polaris":
+        available_nodes, prefill_instance, decode_instance = get_available_nodes_with_polaris(
+            settings.polaris_namespace, settings.polaris_prefill_service, settings.polaris_decode_service
+        )
+        prefill, prefill_name, prefill_url, decode, decode_name, decode_url = select_nodes_with_fallback(
+            available_nodes, PREFILL_NODES, DECODE_NODES
+        )
     else:
         # Use fixed configuration
         prefill = pick(PREFILL_NODES)
@@ -137,7 +123,6 @@ async def generate(req: Request):
         decode_name = decode[0]
         decode_url = f"http://{decode[1]}/generate"
 
-
     # 全局自增 communication id
     if not hasattr(generate, "_comm_id"):
         generate._comm_id = 110
@@ -146,7 +131,9 @@ async def generate(req: Request):
         "kv-comm-group-key": f"{prefill_name}__{decode_name}",
         "kv-comm-request-id": str(comm_id),
     }
-    logger.info(f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}")
+    logger.info(
+        f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}"
+    )
     generate._comm_id += 1
 
     async def merged_stream():
@@ -161,6 +148,17 @@ async def generate(req: Request):
                 prod_ctx.__aenter__(),
                 cons_ctx.__aenter__(),
             )
+            if settings.router_rule == "polaris":
+                # 更新 Polaris 服务调用结果
+                update_polaris_service_call_result(
+                    settings.polaris_namespace,
+                    settings.polaris_prefill_service,
+                    settings.polaris_decode_service,
+                    prefill_instance,
+                    decode_instance,
+                    prod_resp.status_code < 400,
+                    cons_resp.status_code < 400
+                )
 
             # ------- 并发读取 -------
             prod_task = asyncio.create_task(

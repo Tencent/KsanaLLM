@@ -57,8 +57,16 @@ class Settings(BaseSettings):
     etcd_user: str = ""  # If etcd requires authentication
     etcd_password: str = ""  # If etcd requires authentication
 
-    # Router rule: fixed or auto
-    router_rule: Literal["fixed", "auto"] = "auto"
+    # polaris namespace and service
+    polaris_namespace: str = "default"
+    polaris_prefill_service: str = "ksana-prefill-service"
+    polaris_decode_service: str = "ksana-decode-service"
+
+    # Router rule: 
+    # fixed: use fixed routing rules for generate.py for testing or examples
+    # auto: automatically obtain routing rules from memory, etcd or mysql storage
+    # polaris: use Tencent Polaris for routing
+    router_rule: Literal["fixed", "auto", "polaris"] = "auto"
 
     class Config:
         """Pydantic configuration."""
