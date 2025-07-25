@@ -161,6 +161,13 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         
         # 如果提供了 delta_message，直接使用它
         if delta_message is not None:
+            # filter out empty strings from delta_message
+            delta_dict = delta_message.model_dump(exclude_unset=True, exclude_none=True)
+            delta_dict = {k: v for k, v in delta_dict.items() if v != ""}
+            
+            if not delta_dict and not finish_reason and not usage and not logprobs:
+                return ""
+            
             chunk_data = {
                 "id": request_id,
                 "object": "chat.completion.chunk",
@@ -168,7 +175,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 "model": model_name,
                 "choices": [{
                     "index": choice_index,
-                    "delta": delta_message.model_dump(exclude_unset=True),
+                    "delta": delta_dict,
                     "finish_reason": finish_reason,
                     "logprobs": logprobs
                 }]
@@ -592,13 +599,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         logprobs = getattr(ksana_python_output, 'logprobs', None) if request_logprobs else None
                         
                         if processed_delta or (delta_message and delta_message != DeltaMessage(content="")):
-                            yield await self._generate_stream_chunk(
+                            chunk = await self._generate_stream_chunk(
                                 request_id, model_name, tokenizer,
                                 content=processed_delta,
                                 logprobs=logprobs,
                                 delta_message=delta_message,
                                 choice_index=i
                             )
+                            if chunk:
+                                yield chunk
                         
                         # 如果检测到该 choice 已结束，发送 finish_reason
                         if is_finished and not finish_reason_sent[i]:
@@ -619,13 +628,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     "total_tokens": num_prompt_tokens + completion_tokens
                                 }
                             
-                            # 发送 finish_reason
-                            yield await self._generate_stream_chunk(
+                            # send finish_reason
+                            chunk = await self._generate_stream_chunk(
                                 request_id, model_name, tokenizer,
                                 finish_reason=finish_reason,
                                 usage=usage_info,
                                 choice_index=i
                             )
+                            if chunk:
+                                yield chunk
                             finish_reason_sent[i] = True
                         if all_previous_token_ids is not None:
                             previous_token_ids = current_token_ids
@@ -652,12 +663,14 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             "total_tokens": num_prompt_tokens + completion_tokens
                         }
                     
-                    yield await self._generate_stream_chunk(
+                    chunk = await self._generate_stream_chunk(
                         request_id, model_name, tokenizer,
                         finish_reason=finish_reason,
                         usage=usage_info,
                         choice_index=i
                     )
+                    if chunk:
+                        yield chunk
                     finish_reason_sent[i] = True
                         
         except asyncio.CancelledError:
@@ -738,7 +751,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 ksana_request = self._convert_to_ksana_request(request)
                 ksana_request["input_tokens"] = prompt_token_ids
                 max_new_tokens = request.max_tokens or request.max_completion_tokens or 8192
-                max_new_tokens = max_new_tokens - len(prompt_token_ids)
+                max_new_tokens = max_new_tokens
                 ksana_request["sampling_config"]["max_new_tokens"] = max_new_tokens if max_new_tokens > 0 else 0
                 #multi_modal_data & mm_processor_kwargs
                 if "multi_modal_data" in engine_prompt:
@@ -912,7 +925,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     message = ChatMessage(
                         role=role,
                         reasoning_content=reasoning_content,
-                        content="",
                         tool_calls=[
                             tool_call_class(
                                 id=f"call_{uuid.uuid4().hex[:8]}",
@@ -934,7 +946,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         list[FunctionDefinition]).validate_json(content)
                     message = ChatMessage(
                         role=role,
-                        content="",
                         tool_calls=[
                             tool_call_class(function=FunctionCall(
                                 name=tool_call.name,
@@ -954,7 +965,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 
                 elif request.tools and (request.tool_choice == "auto" or request.tool_choice is None) \
                      and self.config.enable_auto_tool_choice and self.tool_parser:
-                    # 自动工具选择
+                    # auto tool choice enabled
                     try:
                         tool_parser = self.tool_parser(tokenizer)
                     except RuntimeError as e:

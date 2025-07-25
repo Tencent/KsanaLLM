@@ -111,7 +111,8 @@ class Qwen3ReasoningParser(ReasoningParser):
             else:
                 # <think> in delta, no </think> in delta,
                 # reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
+                processed_text = delta_text.replace(self.think_start_token, "")
+                return DeltaMessage(reasoning_content=processed_text)
         else:
             # thinking is disabled, just content
             return DeltaMessage(content=delta_text)

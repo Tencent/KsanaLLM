@@ -119,7 +119,8 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
             else:
                 # <think> in delta, no </think> in delta,
                 # reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
+                processed_text = delta_text.replace(self.start_token, "")
+                return DeltaMessage(reasoning_content=processed_text)
         else:
             # No <think> in previous or delta, also need to check for </think>.
             # Because the model may have generated </think> without <think>
@@ -139,7 +140,9 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 return DeltaMessage(content=delta_text)
             else:
                 # no </think> in previous or delta, reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
+                # it means in delta_text, there is no <think> or </think>
+                # meanwhile, in previous_text, there is no <think> or </think>
+                return DeltaMessage(content=delta_text)
 
     def extract_reasoning_content(
             self, model_output: str, request: ChatCompletionRequest
@@ -154,7 +157,6 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
         Returns:
             tuple[Optional[str], Optional[str]]: reasoning content and content
         """
-
         # Check if the start token is present in the model output, remove it
         # if it is present.
         model_output_parts = model_output.partition(self.start_token)
