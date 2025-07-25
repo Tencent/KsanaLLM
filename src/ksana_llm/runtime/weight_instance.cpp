@@ -98,7 +98,7 @@ void WeightInstance::CreateWeightInstances() {
   } else if (unified_model_type.find("internvl_chat") != std::string::npos ||
              unified_model_type.find("internlm2") != std::string::npos ||
              unified_model_type.find("internlmxcomposer2") != std::string::npos) {
-    CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, context_, weights_);
+    CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
     CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("deepseek_v3") != std::string::npos ||
