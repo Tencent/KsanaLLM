@@ -188,13 +188,6 @@ Status ScheduleConfigParser::ParseConfig(YamlReader &yaml_reader) {
     GetDeviceCount(&device_size);
     runtime_config_.parallel_basic_config.tensor_parallel_size = static_cast<size_t>(device_size);
   }
-  if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1 &&
-      std::getenv("PYTORCH_CUDA_ALLOC_CONF") != nullptr) {
-    KLLM_THROW(
-        fmt::format("Set env PYTORCH_CUDA_ALLOC_CONF to backend:cudaMallocAsync while "
-                    "runtime_config_.parallel_basic_config.attn_data_parallel_size > 1 may "
-                    "cause libtorch blocked, please unset it."));
-  }
 
   KLLM_CHECK_WITH_INFO(
       runtime_config_.parallel_basic_config.tensor_parallel_size >=

@@ -141,7 +141,7 @@ void HiddenUnitBufferPool::InitializeBufferSize() {
   weight_type_ = model_config.weight_data_type;
   tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
   max_token_num_ = runtime_config.max_step_token_num;
-  hidden_unit_size_ = model_config.size_per_head * model_config.head_num;
+  hidden_unit_size_ = model_config.hidden_units;
 
   KLLM_LOG_INFO << "HiddenUnitBufferPool::InitializeBufferSize weight_type:" << weight_type_
                 << ", tensor_para_size:" << tensor_para_size_ << ", max_token_num:" << max_token_num_
