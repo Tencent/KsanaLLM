@@ -120,6 +120,7 @@ void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req
   forward_req.req_ctx = req_ptr->req_ctx;
   forward_req.cache_manager = req_ptr->cache_manager;
   forward_req.attn_dp_group_id = req_ptr->attn_dp_group_id;
+
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
   forward_req.accepted_hidden_states_ptr = &(req_ptr->accepted_hidden_states);
   BuildFlatKVCacheBlkIds(layer_num, req_ptr->kv_cache_blocks, forward_req.atb_kv_cache_base_blk_ids,

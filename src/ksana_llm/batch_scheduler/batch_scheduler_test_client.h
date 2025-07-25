@@ -213,6 +213,7 @@ class ParallelTester {
 
     // Check request results
     for (auto hook : hooks) {
+      KLLM_LOG_INFO << "CheckRequestsAfterExecution";
       hook->CheckRequestsAfterExecution(reqs);
     }
     KLLM_LOG_INFO << "DoParallelRequestAndCheck finished";

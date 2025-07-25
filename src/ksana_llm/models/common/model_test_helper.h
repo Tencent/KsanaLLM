@@ -117,6 +117,7 @@ class FakeModel {
     std::vector<float> residual_buffer_vector;
     Tensor& input_ids = forwarding_context_.model_input_->input_ids;
     size_t input_ids_num = input_ids.GetElementNumber();
+    KLLM_LOG_INFO << "input_ids_num " << input_ids_num;
 
     // Fetch input ids from device
     input_ids_cpu.resize(input_ids_num);

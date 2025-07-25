@@ -10,8 +10,8 @@
 
 #include "ksana_llm/cache_manager/direct_cache_manager.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
-
 #include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/helpers/environment_test_helper.h"
 
 #include "test.h"
 
@@ -22,9 +22,10 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   static void SetUpTestSuite() { InitLoguru(); }
 
-  void CommonSetUp(int dp_num = 1, int tp_num = 4) {
+  void CommonSetUp(int dp_num = 1, int tp_num = 4, int ep_world_size = 1) {
     runtime_config_.parallel_basic_config.tensor_parallel_size = tp_num;
     runtime_config_.parallel_basic_config.attn_data_parallel_size = dp_num;
+    ep_world_size_ = ep_world_size;
 
     // Init BatchSchedulerEnvironmentSimulator and BatchScheduler
     InitDefaultConfig();
@@ -33,7 +34,34 @@ class BatchSchedulerTest : public testing::Test {
     block_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(block_manager_config_, tp_num);
 
     env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num, block_allocator_group);
-    batch_scheduler_ = new BatchScheduler(batch_scheduler_config_, runtime_config_);
+
+    // Create Context
+    int pp_batch_num = 1;
+    std::string config_file = GetTestConfigFile();
+    Singleton<Environment>::GetInstance()->ParseConfig(config_file);
+    std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, pp_batch_num);
+
+    // Create ModelInstance
+    ModelConfig model_config;
+    model_config.name = "test_model";
+    model_config.end_ids = {1, 2};
+    model_config.pad_id = 0;
+    RuntimeConfig runtime_config;
+    std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
+    std::shared_ptr<ModelInstance> model_instance =
+        std::make_shared<ModelInstance>(model_config, runtime_config, context, weight_instance);
+    model_instance->name = "test_model";
+
+    std::vector<std::shared_ptr<ModelInstance>> model_instances;
+    model_instances.push_back(model_instance);
+
+    // Init expert parallel config.
+    ExpertParallelConfig ep_config;
+    Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
+    ep_config.expert_world_size = ep_world_size_;
+    Singleton<Environment>::GetInstance()->SetExpertParallelConfig(ep_config);
+
+    batch_scheduler_ = new BatchScheduler(batch_scheduler_config_, runtime_config_, model_instances);
 
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
@@ -83,6 +111,7 @@ class BatchSchedulerTest : public testing::Test {
   BatchSchedulerConfig batch_scheduler_config_;
   CacheManagerConfig cache_manager_config;
   RuntimeConfig runtime_config_;
+  int ep_world_size_;
 };
 
 }  // namespace ksana_llm

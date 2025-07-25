@@ -161,3 +161,20 @@ TEST_F(BatchSchedulerTest, CheckRequestTimeoutTest) {
 
   EXPECT_EQ(req_list[0].req->finish_status.GetCode(), RET_REQUEST_TIMEOUT);
 }
+
+TEST_F(BatchSchedulerTest, CreateMockRequest) {
+  KLLM_LOG_INFO << "BatchSchedulerTest: CreateMockRequest";
+
+  int dp_num = 1;
+  int tp_num = 1;
+  int ep_world_size = 2;
+  CommonSetUp(dp_num, tp_num, ep_world_size);
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+  EXPECT_EQ(batch_scheduler->GetMockRequest().size(), 1);
+
+  std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler->Schedule(0);
+  EXPECT_EQ(schedule_output_group->RunningSize(), 0);
+
+  schedule_output_group = batch_scheduler->Schedule(0);
+  EXPECT_EQ(schedule_output_group->RunningSize(), 1);
+}

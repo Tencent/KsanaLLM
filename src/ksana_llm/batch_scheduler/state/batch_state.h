@@ -117,6 +117,9 @@ struct BatchState {
   // The waiting queue, double end queue.
   std::deque<std::shared_ptr<InferRequest>> waiting_queue;
 
+  // The mocked req queue， used to make sure attn has one req at least.
+  std::vector<std::shared_ptr<InferRequest>> mock_queue;
+
   // The kv transfer queue, vector.
   std::vector<std::shared_ptr<InferRequest>> transfer_queue;
 

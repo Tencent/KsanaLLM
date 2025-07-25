@@ -131,6 +131,9 @@ class InferRequest {
   // whether the request is aborted.
   bool &aborted;
 
+  // Whether the req is mock.
+  bool is_mock_req = 0;
+
   // The final status of this request.
   Status &finish_status;
 

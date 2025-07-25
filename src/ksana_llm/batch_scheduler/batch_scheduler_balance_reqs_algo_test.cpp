@@ -17,8 +17,9 @@ namespace ksana_llm {
 // 创建一个派生类，方便编辑测试
 class TestBatchScheduler : public BatchScheduler {
  public:
-  TestBatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
-      : BatchScheduler(batch_scheduler_config, runtime_config) {}
+  TestBatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
+                     std::vector<std::shared_ptr<ModelInstance>> req_group)
+      : BatchScheduler(batch_scheduler_config, runtime_config, req_group) {}
 
   void AddToWaitingReqs(std::vector<std::shared_ptr<InferRequest>>& requests) {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
@@ -38,7 +39,8 @@ class BalanceReqsTest : public BatchSchedulerTest {
  protected:
   void CommonSetUp(int dp_num) {
     BatchSchedulerTest::CommonSetUp(dp_num);
-    test_batch_scheduler_ = new TestBatchScheduler(batch_scheduler_config_, runtime_config_);
+    std::vector<std::shared_ptr<ModelInstance>> model_instance;
+    test_batch_scheduler_ = new TestBatchScheduler(batch_scheduler_config_, runtime_config_, model_instance);
   }
 
   void TearDown() override {

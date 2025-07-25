@@ -28,9 +28,11 @@
 
 namespace ksana_llm {
 
-BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
+BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
+                               std::vector<std::shared_ptr<ModelInstance>>& model_instances)
     : batch_scheduler_config_(batch_scheduler_config),
-      dp_num_(runtime_config.parallel_basic_config.attn_data_parallel_size) {
+      dp_num_(runtime_config.parallel_basic_config.attn_data_parallel_size),
+      model_instances_(model_instances) {
   // Config validation.
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_token_num >= batch_scheduler_config_.max_token_len,
                        FormatStr("The max_step_token_num must larger or equal than max_token_len, %d vs %d.",
@@ -62,6 +64,25 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
       batch_states_[i][j] = std::make_shared<BatchState>(j, batch_scheduler_config_);
     }
     dp_waiting_reqs_[i].reserve(batch_scheduler_config_.max_waiting_queue_len);
+  }
+  // Need different req for every batch?
+  std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
+  ExpertParallelConfig ep_config;
+  env->GetExpertParallelConfig(ep_config);
+
+  if (ep_config.expert_world_size > 1) {
+    CreateMockReq(mock_request_group_);
+    if (mock_request_group_.size() >= 1) {
+      for (int i = 0; i < pp_batch_num_; i++) {
+        batch_states_[0][i]->mock_queue.push_back(mock_request_group_[0]);
+        std::shared_ptr<InferRequest> req = *batch_states_[0][i]->mock_queue.begin();
+
+        KLLM_LOG_DEBUG << "req_id " << req->req_id << ", input_tokens_num " << req->input_tokens.size()
+                       << ", output_tokens_num " << req->output_tokens.size() << ", InferRequest addr " << req
+                       << ", output_tokens addr" << req->output_tokens.data() << ", input_tokens addr "
+                       << req->input_tokens.data();
+      }
+    }
   }
 }
 
@@ -289,6 +310,25 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
     total_waiting_size_in_batch_states += batch_state->waiting_queue.size();
     total_dp_waiting_queue_size += dp_waiting_reqs_[i].size();
   }
+
+  // Add mock req when total_running_size == 0, and only assign req to dp_num == 0.
+  ExpertParallelConfig ep_config;
+  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
+  KLLM_LOG_DEBUG << "expert_world_size: " << ep_config.expert_world_size
+                 << ", total_running_size: " << total_running_size;
+  if (ep_config.expert_world_size > 1 && total_running_size == 0) {
+    // Assign mock task to dp_num == 0.
+    auto& batch_state = batch_states_[0][multi_batch_id];
+    if (!batch_state->mock_queue.empty()) {
+      auto it = batch_state->mock_queue.begin();
+      batch_state->waiting_queue.push_back(*it);
+      batch_state->mock_queue.erase(it);
+    } else {
+      KLLM_LOG_WARNING << "mock_queue is empty()";
+    }
+  }
+  // TODO(xingjinglu): remove potential mock request when running_size > 1.
+
   schedule_output_group_->schedule_id++;
 
   KLLM_LOG_DEBUG << "Finish schedule. multi_batch_id=" << multi_batch_id
@@ -297,6 +337,54 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
                  << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states
                  << ", total_dp_waiting_queue_size=" << total_dp_waiting_queue_size;
   return schedule_output_group_;
+}
+
+Status BatchScheduler::CreateMockReq(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  size_t mock_req_length = 1;
+  auto mock_req_input = std::make_shared<KsanaPythonInput>();
+  alias_python_input_ = mock_req_input;
+  std::vector<int> input_tokens(mock_req_length, 0);
+  for (int i = 0; i < mock_req_length; ++i) {
+    input_tokens[i] = (i + 1) % 100;  // Fill with some dummy tokens.
+  }
+
+  mock_req_input->input_tokens = input_tokens;
+  // Only do one token prefill.
+  mock_req_input->sampling_config.max_new_tokens = 1;
+  mock_req_input->sampling_config.ignore_eos = true;
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto mock_req = std::make_shared<Request>(mock_req_input, req_ctx);
+  alias_mock_request_ = mock_req;
+
+  mock_req->waiter = std::make_shared<Waiter>(1);
+  KLLM_LOG_DEBUG << "mock_req req_id " << mock_req->req_id << ", input_tokens_num " << mock_req->input_tokens.size()
+                 << ", output_tokens addr " << mock_req->output_tokens.data();
+
+  // mock_req->output_group.size() == 1.
+  for (size_t i = 0; i < mock_req->output_group.size(); i++) {
+    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(mock_req, i);
+    infer_request_group.push_back(infer_req);
+    RuntimeConfig runtime_config;
+    Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+    infer_req->kv_cache_blocks.resize(runtime_config.parallel_basic_config.attn_tensor_parallel_size);
+    CacheManagerConfig cache_manager_config;
+    Singleton<Environment>::GetInstance()->GetCacheManagerConfig(cache_manager_config);
+    infer_req->block_token_num = cache_manager_config.block_token_num;
+    infer_req->model_instance = model_instances_[0];
+    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->step = 0;
+    infer_req->kv_cached_token_num = 0;
+    infer_req->req_id = mock_req->req_id;
+    infer_req->is_mock_req = true;
+  }
+
+  for (auto& infer_req : infer_request_group) {
+    infer_req->SetReqGroup(infer_request_group);
+    KLLM_LOG_DEBUG << "InferRequest output_tokens_num " << infer_req->output_tokens.size() << ", Addr " << infer_req
+                   << ", output_tokens addr " << infer_req->output_tokens.data();
+  }
+
+  return Status();
 }
 
 }  // namespace ksana_llm

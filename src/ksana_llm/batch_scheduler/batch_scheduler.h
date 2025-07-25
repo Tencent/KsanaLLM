@@ -12,6 +12,7 @@
 #include "ksana_llm/batch_scheduler/state/batch_state.h"
 #include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
 #include "ksana_llm/batch_scheduler/workload_balance/pp_multibatch_balancer.h"
+#include "ksana_llm/runtime/infer_request.h"
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 
@@ -24,7 +25,8 @@ namespace ksana_llm {
 
 class BatchScheduler : public BatchSchedulerInterface {
  public:
-  BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config);
+  BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config,
+                 std::vector<std::shared_ptr<ModelInstance>> &model_instances);
   ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.
@@ -45,6 +47,8 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void Stop() override;
 
+  std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
+
  private:
   // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
   Status EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
@@ -59,6 +63,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   void BalancePPMultiBatchReqs(size_t multi_batch_id);
 
   void ReportBatchState(std::shared_ptr<BatchState> batch_state);
+  Status CreateMockReq(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
  private:
   // The config of batch scheduler.
@@ -97,6 +102,14 @@ class BatchScheduler : public BatchSchedulerInterface {
   std::mutex schedule_mutex_;
 
   bool terminating_ = false;
+  std::vector<std::shared_ptr<InferRequest>> mock_request_group_;
+
+  // The model name to model instance.
+  std::vector<std::shared_ptr<ModelInstance>> model_instances_;
+
+  // To avoid variables destruction， while mock req will reference KsanaPythonInput and Request.
+  std::shared_ptr<Request> alias_mock_request_;
+  std::shared_ptr<KsanaPythonInput> alias_python_input_;
 };
 
 }  // namespace ksana_llm

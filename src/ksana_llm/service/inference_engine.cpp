@@ -14,6 +14,7 @@
 #include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/draft_generator/trie_generator.h"
+#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/transfer/transfer_engine.h"
@@ -52,8 +53,7 @@ Status InferenceEngine::Initialize() {
   RuntimeConfig runtime_config;
   env->GetRuntimeConfig(runtime_config);
   size_t tp_num = runtime_config.parallel_basic_config.tensor_parallel_size;
-  size_t attn_data_parallel_size =
-      runtime_config.parallel_basic_config.attn_data_parallel_size;
+  size_t attn_data_parallel_size = runtime_config.parallel_basic_config.attn_data_parallel_size;
 
   // TODO(TJ): maybe cloud move IsChief and IsStandalone to env.
   PipelineConfig pipeline_config;
@@ -63,11 +63,9 @@ Status InferenceEngine::Initialize() {
     batch_scheduler_config.max_pp_batch_num = 1;
   }
   // Environment is must be initialized befroe context.
-  KLLM_LOG_INFO << "Get tensor parallel: " << tp_num
-                << " attention data parallel: " << attn_data_parallel_size
+  KLLM_LOG_INFO << "Get tensor parallel: " << tp_num << " attention data parallel: " << attn_data_parallel_size
                 << " max_pp_batch_num: " << batch_scheduler_config.max_pp_batch_num;
-  context_.reset(new Context(tp_num, attn_data_parallel_size,
-                             batch_scheduler_config.max_pp_batch_num));
+  context_.reset(new Context(tp_num, attn_data_parallel_size, batch_scheduler_config.max_pp_batch_num));
 
   // Load model configs.
   ModelConfig model_config;
@@ -263,7 +261,8 @@ Status InferenceEngine::Initialize() {
   Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_instances_[0]->GetModelConfig().path);
 
   // Create batch scheduler.
-  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config);
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
+
   for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }

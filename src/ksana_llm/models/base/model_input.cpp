@@ -257,7 +257,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
     if (req.attn_dp_group_id == attn_dp_group_id_) {
       target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
     }
-
     total_sampling_token_num_ += req.sampling_token_num;
   }
 
@@ -268,12 +267,14 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 
   KLLM_LOG_DEBUG << "run mode: " << (run_mode == RunMode::kMain ? "main" : "next")
-                 << ", flash_input: " << flash_input.reqs.size()
-                 << ", page_single_input: " << page_single_input.reqs.size()
-                 << ", page_dual_input: " << page_dual_input.reqs.size()
-                 << ", flash_dp_input: " << flash_input.dp_reqs.size()
-                 << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
-                 << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
+                << ", multi_token_request_num: " << multi_token_request_num
+                << ", dp_multi_token_request_num: " << dp_multi_token_request_num
+                << ", flash_input: " << flash_input.reqs.size()
+                << ", page_single_input: " << page_single_input.reqs.size()
+                << ", page_dual_input: " << page_dual_input.reqs.size()
+                << ", flash_dp_input: " << flash_input.dp_reqs.size()
+                << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
+                << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
 
   PrepareFlexibleCache(flash_input);
   CheckUseCache(forward_reqs);
@@ -1115,7 +1116,13 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     // Skip prefix token(include flexible cache token)
     const size_t skip_token_num = std::max(req.kv_cached_token_num, req.prefix_cache_len);
     const size_t input_ids_len = input_length - skip_token_num;
+    KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num "
+                  << forwarding_tokens.size() << ", skip_token_num " << skip_token_num << ",kv_cached_token_num "
+                  << req.kv_cached_token_num << ", prefix_cache_len" << req.prefix_cache_len << ", input_length "
+                  << input_length;
+
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
+
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
     if (enable_blocked_multi_token_forwarding_kv_ && in_dp_group) {
       dp_input_without_prefix_list_uint64.emplace_back(dp_input_without_prefix_list_uint64.back() + input_ids_len);

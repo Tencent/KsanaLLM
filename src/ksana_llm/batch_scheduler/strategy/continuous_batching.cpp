@@ -35,13 +35,9 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
   if (runtime_config.enable_flash_mla && IsAbsorbWeightsEnabled()) {
     decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
   }
-  size_t attn_data_parallel_size =
-      runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  dp_max_step_token_num_ =
-      batch_scheduler_config_.max_step_token_num /
-     attn_data_parallel_size;
-  dp_max_batch_size_ =
-      batch_scheduler_config_.max_batch_size / attn_data_parallel_size;
+  size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
+  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num / attn_data_parallel_size;
+  dp_max_batch_size_ = batch_scheduler_config_.max_batch_size / attn_data_parallel_size;
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
   if (connector_config_.group_role == GroupRole::DECODE) {
     dp_max_decode_batch_size_ = dp_max_batch_size_;
@@ -50,13 +46,32 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
                          attn_data_parallel_size;
     // Decode 无需限制 dp_max_step_token_num_
     dp_max_step_token_num_ *= dp_max_batch_size_;
-    KLLM_LOG_INFO << "decode dp_max_batch_size_:" << dp_max_batch_size_
-                  << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
+    KLLM_LOG_DEBUG << "decode dp_max_batch_size_:" << dp_max_batch_size_
+                   << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
   }
 }
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
   return batch_state_->schedule_time_in_ms >= req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms;
+}
+
+Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferRequest> &req, bool is_swap_req) {
+  KLLM_LOG_DEBUG << "RecomputeMockRequest " << req;
+
+  // Add request to the beginning of waiting queue.
+  req->kv_cache_blocks.clear();
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+  req->kv_cache_blocks.resize(runtime_config.parallel_basic_config.attn_tensor_parallel_size);
+  req->infer_stage = InferStage::STAGE_CONTEXT;
+  req->step = 0;
+  req->kv_cached_token_num = 0;
+  req->suggested_draft_num = 0;
+  req->prefix_cache_len = 0;
+
+  batch_state_->mock_queue.push_back(req);
+
+  return Status();
 }
 
 bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
@@ -77,6 +92,7 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
       req->output_tokens.size() >= batch_scheduler_config_.max_token_len ||
       (req->req_fsm != nullptr && req->req_fsm->IsStopState(req->fsm_state_id))) {
     stop_checker_->CheckCompleteStopStrings(req);
+
     return true;
   }
 
@@ -363,6 +379,12 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       if (connector_config_.group_role == GroupRole::PREFILL) {
         batch_state_->transfer_queue.emplace_back(req);
       }
+
+      // Put mock request back to mock_queue.
+      if (req->is_mock_req) {
+        RecomputeMockRequest(req, 0);
+      }
+
       it = batch_state_->schedule_output->running_reqs.erase(it);
 
       continue;

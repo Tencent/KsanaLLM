@@ -55,6 +55,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   std::vector<std::shared_ptr<InferRequest>>::iterator RecomputeRequest(
       std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req = false);
 
+  Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req, bool is_swap_req);
+
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
 

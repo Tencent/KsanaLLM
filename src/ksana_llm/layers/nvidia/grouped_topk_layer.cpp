@@ -55,7 +55,7 @@ Status GroupedTopkLayer<T>::Forward(const std::vector<Tensor>& input_tensors, st
 
   // 计算 total_num_experts，考虑专家并行
   // TODO(zezhao): 使用 num_experts / expert_para_size 来替换 total_num_experts. 不再维护 ExpertParallelSize
-  int total_num_experts = num_experts * expert_para_size_ * expert_world_size_;
+  int total_num_experts = num_experts;
 
   InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk_,
                        renormalize_, num_expert_group_, topk_group_, scoring_func_, e_bias, routed_scaling_factor_,
