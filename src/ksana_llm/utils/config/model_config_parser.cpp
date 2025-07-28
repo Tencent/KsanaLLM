@@ -212,6 +212,12 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     model_config.rope_scaling_factor_config.type =
         rope_scaling_setting.value("rope_type", model_config.rope_scaling_factor_config.type);
     model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
+    // adjust the rope_scaling type based on the mrope_section
+    if (rope_scaling_setting.contains("mrope_section") && model_config.rope_scaling_factor_config.type != "mrope") {
+      KLLM_LOG_DEBUG << fmt::format("Replace rope_scaling type {} with mrope",
+                                    model_config.rope_scaling_factor_config.type);
+      model_config.rope_scaling_factor_config.type = "mrope";
+    }
     KLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
                                   model_config.rope_scaling_factor_config.factor);
 

@@ -94,6 +94,125 @@ TEST_F(EnvironmentTest, GetModelConfig) {
   EXPECT_GT(config.num_layer, 0);
   EXPECT_GT(config.head_num, 0);
   EXPECT_GT(config.size_per_head, 0);
+
+  // Test rope scaling factor
+  EXPECT_EQ(config.rope_scaling_factor_config.type, "default");
+  EXPECT_TRUE(config.rope_scaling_factor_config.mrope_section.empty());
+
+  // 创建一个包含自定义模型配置的临时YAML文件
+  auto create_model_config_yaml = [](const std::string& rope_type,
+                                     const std::vector<int>& mrope_section) -> std::string {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "ksana_model_config_test.yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+
+    std::filesystem::path model_dir = temp_dir / "ksana_test_model_dir";
+    try {
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+      std::filesystem::create_directory(model_dir);
+
+      std::ofstream file(temp_file_path);
+      if (!file.is_open()) {
+        return "";
+      }
+
+      // 添加包含模型配置的YAML内容
+      file << "setting:\n";
+      file << "  global:\n";
+      file << "    tensor_para_size: 1\n";
+      file << "    pipeline_para_size: 1\n";
+      file << "  batch_scheduler:\n";
+      file << "    max_waiting_queue_len: 100\n";
+      file << "    max_token_len: 4096\n";
+      file << "    max_step_tokens: 4096\n";
+      file << "    max_batch_size: 32\n";
+      file << "  block_manager:\n";
+      file << "    block_token_num: 16\n";
+      file << "    reserved_device_memory_ratio: 0.01\n";
+      file << "model_spec:\n";
+      file << "  base_model:\n";
+      file << "    model_dir: \"" << model_dir.string() << "\"\n";
+
+      file.close();
+
+      // 创建模型配置文件
+      std::ofstream config_json(model_dir / "config.json");
+      if (config_json.is_open()) {
+        config_json << "{\n";
+        config_json << "  \"architectures\": [\"LlamaForCausalLM\"],\n";
+        config_json << "  \"model_type\": \"llama\",\n";
+        config_json << "  \"torch_dtype\": \"float16\",\n";
+        config_json << "  \"vocab_size\": 32000,\n";
+        config_json << "  \"hidden_size\": 4096,\n";
+        config_json << "  \"intermediate_size\": 11008,\n";
+        config_json << "  \"num_attention_heads\": 32,\n";
+        config_json << "  \"num_key_value_heads\": 32,\n";
+        config_json << "  \"num_hidden_layers\": 32,\n";
+        config_json << "  \"max_position_embeddings\": 4096,\n";
+        config_json << "  \"bos_token_id\": 1,\n";
+        config_json << "  \"eos_token_id\": 2,\n";
+        config_json << "  \"pad_token_id\": 0,\n";
+        // 自定义rope_scaling
+        config_json << "  \"rope_scaling\": {\n";
+        config_json << "    \"type\": \"" << rope_type << '"';
+        if (!mrope_section.empty()) {
+          EXPECT_EQ(mrope_section.size(), 3);
+          config_json << ",\n";
+          config_json << "    \"mrope_section\": [\n";
+          for (int i = 0; i < 3; i++) {
+            config_json << "      " << mrope_section[i];
+            if (i < 2) {
+              config_json << ',';
+            }
+            config_json << '\n';
+          }
+          config_json << "    ]\n";
+        } else {
+          config_json << '\n';
+        }
+        config_json << "  }\n";
+        config_json << "}\n";
+        config_json.close();
+      }
+
+      return temp_file_path.string();
+    } catch (const std::exception& e) {
+      return "";
+    }
+  };
+
+  // Case 1: type = "default", mropse_section != None
+  {
+    std::string yaml_path = create_model_config_yaml("default", {16, 24, 24});
+    ASSERT_FALSE(yaml_path.empty());
+
+    Environment test_env;
+    EXPECT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+    ksana_llm::ModelConfig config;
+    EXPECT_TRUE(test_env.GetModelConfig(config).OK());
+
+    EXPECT_EQ(config.rope_scaling_factor_config.type, "mrope");
+    EXPECT_EQ(config.rope_scaling_factor_config.mrope_section.size(), 3);
+
+    // 清理临时文件
+    try {
+      std::filesystem::path yaml_file_path(yaml_path);
+      std::filesystem::path temp_dir = yaml_file_path.parent_path();
+      std::filesystem::path model_dir = temp_dir / "ksana_test_model_dir";
+
+      if (std::filesystem::exists(yaml_path)) {
+        std::filesystem::remove(yaml_path);
+      }
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Exception during cleanup: " << e.what() << std::endl;
+    }
+  }
 }
 
 // 测试获取ProfilerConfig
