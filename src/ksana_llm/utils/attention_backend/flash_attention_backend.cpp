@@ -178,28 +178,32 @@ FlashAttentionBackend::LibraryInfo FlashAttentionBackend::DetermineLibrary(int c
     }
   }
 
-  if (compute_capability >= 90) {
-    // FlashAttention 2 优先使用 vllm 版本，要求 2.6 版本
-    lib_info = GetVllmFlashAttentionLibInfo();
-    if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.6.0")) {
-      KLLM_LOG_INFO << "Using VLLM FlashAttention 2 library: " << lib_info.path
-                    << ", version: " << lib_info.version;
-      return lib_info;
-    } else if (!lib_info.path.empty()) {
-      KLLM_LOG_DEBUG << "VLLM FlashAttention version " << lib_info.version
-                     << " does not meet requirement (>= 2.6.0)";
-    }
-  } else if (compute_capability >= 80) {
-    // 尝试标准 flash-attn，要求 2.5 或更高版本
-    lib_info = GetFlashAttention2LibInfo();
-    if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.5.0")) {
-      KLLM_LOG_INFO << "Using FlashAttention 2 library: " << lib_info.path
-                    << ", version: " << lib_info.version;
-      return lib_info;
-    } else if (!lib_info.path.empty()) {
-      KLLM_LOG_DEBUG << "FlashAttention version " << lib_info.version
-                     << " does not meet requirement (>= 2.5.0)";
-    }
+  if (compute_capability >= 80) {
+    #ifdef ENABLE_VLLM_FLASH_ATTN_2
+      // FlashAttention 2 根据宏使用 vllm 版本，要求 2.6 版本
+      lib_info = GetVllmFlashAttentionLibInfo();
+      if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.6.0")) {
+        KLLM_LOG_INFO << "Using VLLM FlashAttention 2 library: " << lib_info.path
+                      << ", version: " << lib_info.version;
+        return lib_info;
+      } else if (!lib_info.path.empty()) {
+        KLLM_LOG_ERROR << "VLLM FlashAttention version " << lib_info.version << " doesn't meet requirement (>= 2.6.0)";
+      }
+    #elif defined(ENABLE_FLASH_ATTN_2)
+      // 尝试标准 flash-attn，要求 2.5 或更高版本
+      lib_info = GetFlashAttention2LibInfo();
+      if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.5.0")) {
+        KLLM_LOG_INFO << "Using FlashAttention 2 library: " << lib_info.path
+                      << ", version: " << lib_info.version;
+        return lib_info;
+      } else if (!lib_info.path.empty()) {
+        KLLM_LOG_ERROR << "FlashAttention version " << lib_info.version << " doesn't meet requirement (>= 2.5.0)";
+      }
+    #else
+      // 如果没有启用任何宏，提示报错
+      KLLM_LOG_ERROR << "No FlashAttention library enabled. "
+                        "Please define ENABLE_VLLM_FLASH_ATTN_2 or ENABLE_FLASH_ATTN_2.";
+    #endif
   }
 
   KLLM_LOG_INFO << "No compatible FlashAttention library found";
