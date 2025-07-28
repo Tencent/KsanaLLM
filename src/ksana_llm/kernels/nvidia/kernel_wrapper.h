@@ -5,5 +5,4 @@
 
 #include "ksana_llm/kernels/nvidia/attention_kernel_wrapper.h"
 #include "ksana_llm/kernels/nvidia/basic_kernel_wrapper.h"
-#include "ksana_llm/kernels/nvidia/mla_kernel_wrapper.h"
 #include "ksana_llm/kernels/nvidia/moe_kernel_wrapper.h"

@@ -4,7 +4,6 @@
 
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
-#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
