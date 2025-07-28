@@ -375,9 +375,8 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
                                                       {"top_k", ConvertToString(top_k)},
                                                       {"compute_type", GetComputeType<T>()},
                                                       {"use_fp8_w8a8", ConvertToString(use_fp8_w8a8)},
-                                                      {"use_int8_w8a16", ConvertToString(use_int8_w8a16)},
-                                                      {"even_Ks", (k % config["block_size_k"] == 0) ? "True" : "False"}
-                                                    };
+                                                      {"use_int8_w8a16", ConvertToString(use_int8_w8a16)}};
+  map["even_Ks"] = (k % config["block_size_k"] == 0) ? "True" : "False";
   size_t grid_x = CeilDiv(max_num_tokens_padded, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
   InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
 }
