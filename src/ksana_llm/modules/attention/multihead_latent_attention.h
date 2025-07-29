@@ -29,7 +29,6 @@ struct MlaBuffers {
   TensorBuffer* k_rope_buffer;
 
   // The tensor buffer used for flash attn, used to store qkv data with prefix part.
-  TensorBuffer* prefix_o_buffer;
   TensorBuffer* prefix_k_up_buffer;
   TensorBuffer* prefix_v_up_buffer;
 
@@ -96,9 +95,6 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Linear<T>> attn_kv_a_ropes_;
   std::shared_ptr<Linear<T>> attn_q_b_lora_projs_;
   std::shared_ptr<Linear<T>> attn_q_b_rope_projs_;
-  std::shared_ptr<Linear<T>> attn_kv_b_nope_projs_;
-  std::shared_ptr<Linear<T>> attn_v_head_projs_;
-  std::shared_ptr<Linear<T>> attn_w_q_uks_;
   std::shared_ptr<Linear<T>> attn_o_proj_;
   std::shared_ptr<Split<T>> split_;
   std::shared_ptr<Bmm<T>> attn_w_uk_t_bmm_;

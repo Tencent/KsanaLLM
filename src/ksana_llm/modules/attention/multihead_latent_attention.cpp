@@ -44,7 +44,7 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
   paged_mla_attention_layers_ =
       std::make_shared<PagedMlaAttention<T>>(layer_idx, is_neox, absorb_type_, creation_context, attn_config);
 
-  std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+  const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   kv_a_layernorms_ =
       std::make_shared<Layernorm<T>>(layer_prefix + ".self_attn.kv_a_layernorm.weight",
                                      model_creation_config.layernorm_config.layernorm_eps, creation_context);
@@ -52,10 +52,10 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
       std::make_shared<Layernorm<T>>(layer_prefix + ".self_attn.q_a_layernorm.weight",
                                      model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
-  GroupQuantBackend linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
+  const auto& linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
 
   // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
-  std::string fused_lora_a_projs_weight_name = layer_prefix + ".self_attn.fused_lora_a_proj.weight";
+  const std::string fused_lora_a_projs_weight_name = layer_prefix + ".self_attn.fused_lora_a_proj.weight";
   if (creation_context.base_weight->GetModelWeights(fused_lora_a_projs_weight_name).GetElementNumber() > 0) {
     use_fused_lora_a_ = true;
     attn_fused_lora_a_projs_ =
@@ -75,10 +75,6 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
                                                      linear_group_quant_backend);
   attn_q_b_rope_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_b_rope_proj.weight", creation_context,
                                                      linear_group_quant_backend);
-  attn_v_head_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.v_head_proj.weight", creation_context,
-                                                   linear_group_quant_backend);
-  attn_w_q_uks_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.w_q_uk.weight", creation_context,
-                                              linear_group_quant_backend);
 
   if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
     attn_o_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
@@ -150,8 +146,6 @@ Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, con
   }
 
   // 非共享buffer
-  mla_buffers.prefix_o_buffer =
-      buffer_mgr->CreateBufferTensor("mla_buffers.prefix_o_buffer", {prefix_o_buffer_size}, weight_type);
   mla_buffers.prefix_k_up_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.prefix_k_up_buffer", {prefix_k_up_buffer_size}, weight_type);
   mla_buffers.prefix_v_up_buffer =
@@ -725,7 +719,6 @@ Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& h
                                                           ForwardingContext<T>& forwarding_context) {
   PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
   {
-    CREATE_BUFFER_SCOPE(prefix_o_buffer_tensors, mla_buffers_.prefix_o_buffer);
     CREATE_BUFFER_SCOPE(prefix_k_up_buffer_tensors, mla_buffers_.prefix_k_up_buffer);
     CREATE_BUFFER_SCOPE(prefix_v_up_buffer_tensors, mla_buffers_.prefix_v_up_buffer);
 
@@ -741,8 +734,8 @@ Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& h
     STATUS_CHECK_RETURN(flash_mla_attention_layers_->Forward(
         hidden_buffer_tensors_0, forwarding_context.GetModelInput(), hidden_buffer_tensors_1,
         forwarding_context.GetAttentionForwardContext(), prefill_q_buffer_tensor, q_rope_buffer_tensor,
-        kv_buffer_tensor, k_rope_buffer_tensor, prefix_k_buffer, prefix_v_buffer, prefix_o_buffer_tensors[0],
-        prefix_kv_buffer_tensors[0], prefix_k_up_buffer_tensors[0], prefix_v_up_buffer_tensors[0], output_tensors));
+        kv_buffer_tensor, k_rope_buffer_tensor, prefix_k_buffer, prefix_v_buffer, prefix_kv_buffer_tensors[0],
+        prefix_k_up_buffer_tensors[0], prefix_v_up_buffer_tensors[0], output_tensors));
   }
   return Status();
 }
