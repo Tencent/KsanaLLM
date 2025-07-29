@@ -1,4 +1,4 @@
-# Copyright 2024 Tencent Inc.  All rights reserved.
+# Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -6,7 +6,7 @@
 
 This module provides an abstract interface for storage backends and a factory
 for creating concrete storage backend instances. It includes implementations for
-memory-based and etcd-based storage.
+memory-based and db-based storage.
 """
 
 from abc import ABC, abstractmethod
@@ -123,6 +123,36 @@ class StorageBackend(ABC):
         """
         pass
 
+    @abstractmethod
+    def cleanup_inactive_nodes(
+        self, timeout_seconds: int, delete_physically: bool = False
+    ) -> List[str]:
+        """Clean up nodes that haven't sent heartbeat for specified timeout.
+
+        Args:
+            timeout_seconds: Timeout in seconds to consider a node inactive
+            delete_physically: If True, physically delete node data; if False, just mark as offline
+
+        Returns:
+            List of node IDs that were cleaned up
+        """
+        pass
+
+    @abstractmethod
+    def cleanup_inactive_groups(
+        self, timeout_seconds: int, delete_physically: bool = False
+    ) -> Dict[str, List[str]]:
+        """Clean up entire groups that have timed-out nodes.
+
+        Args:
+            timeout_seconds: Timeout in seconds to consider a node inactive
+            delete_physically: If True, physically delete group data; if False, just mark as offline
+
+        Returns:
+            Dict with cluster_name as key and list of affected group names as value
+        """
+        pass
+
 
 class StorageFactory:
     """Storage backend factory class."""
@@ -158,18 +188,33 @@ class StorageFactory:
             )
             mode = "memory"
 
-        backend = cls._backends[mode]()
+        # Create backend instance with configuration
+        if mode == "mysql" :
+            backend = cls._backends[mode](
+                host=settings.mysql_host,
+                port=settings.mysql_port,
+                user=settings.mysql_user,
+                password=settings.mysql_password,
+                database=settings.mysql_database,
+                charset=settings.mysql_charset,
+                autocommit=settings.mysql_autocommit,
+            )
+        else:
+            backend = cls._backends[mode]()
+
         backend.init()
         return backend
 
 
 # Import concrete storage backend implementations
 from .memory_storage import MemoryStorage
-from .etcd_storage import EtcdStorage
+
+# Try to import MySQL storage if pymysql is available
+from .mysql_storage import MySQLStorage
 
 # Register storage backends
 StorageFactory.register("memory", MemoryStorage)
-StorageFactory.register("etcd", EtcdStorage)
+StorageFactory.register("mysql", MySQLStorage)
 
 # Create default storage backend instance
 default_storage = StorageFactory.create()

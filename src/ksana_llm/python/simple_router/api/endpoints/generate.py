@@ -1,4 +1,4 @@
-# Copyright 2024 Tencent Inc.  All rights reserved.
+# Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 import asyncio

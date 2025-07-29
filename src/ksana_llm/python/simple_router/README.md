@@ -136,7 +136,7 @@ The system uses a hierarchical data model:
 The system supports multiple storage backends through an abstraction layer:
 
 - **Memory Storage**: In-memory storage for development and testing
-- **Etcd Storage**: Distributed key-value storage for production environments
+- **Db Storage**: Distributed key-value storage for production environments
 
 The storage layer is responsible for:
 - Persisting cluster, group, and node information
@@ -163,7 +163,7 @@ The storage layer is responsible for:
  ┌────────┴───────┐
  │                │
 ┌┴────────────┐  ┌┴────────────┐
-│MemoryStorage│  │ EtcdStorage │
+│MemoryStorage│  │ DBStorage │
 └─────────────┘  └─────────────┘
 ```
 

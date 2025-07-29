@@ -1,4 +1,4 @@
-# Copyright 2024 Tencent Inc.  All rights reserved.
+# Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -222,10 +222,20 @@ class CoordinatorDB:
                 logger.info(
                     f"Getting Communication ID from prefill group '{node.group_name}' master node: {node.comm_id}"
                 )
+                logger.debug(
+                    f"Current decode groups in cluster: {list(cluster.decode_groups.keys())}"
+                )
 
                 # Iterate through all decode groups to update or create comm groups
+                decode_group_count = len(cluster.decode_groups)
+                if decode_group_count == 0:
+                    logger.warning(
+                        f"No decode groups found when registering prefill master node {node.node_id}."
+                        "Communication groups will be created later when decode groups are registered."
+                    )
+
                 for decode_group_name, _ in cluster.decode_groups.items():
-                    comm_key = f"{node.group_name}_{decode_group_name}"
+                    comm_key = f"{node.group_name}__{decode_group_name}"  # 使用双下划线格式保持一致
                     # Check if comm group already exists
                     if comm_key in cluster.comm_groups:
                         # Update existing comm group Communication ID
@@ -242,6 +252,41 @@ class CoordinatorDB:
                         )
                         logger.info(
                             f"Created comm group {comm_key} and set Communication ID"
+                        )
+
+            # If this is a decode group being created, create comm groups with existing prefill groups
+            elif node.group_role == "decode":
+                logger.debug(
+                    f"Decode node registered, current prefill groups: {list(cluster.prefill_groups.keys())}"
+                )
+
+                # Check all existing prefill groups and create comm groups
+                for prefill_group_name, prefill_group in cluster.prefill_groups.items():
+                    # Find prefill master node (rank 0) to get comm_id
+                    master_node = None
+                    for prefill_node in prefill_group.nodes.values():
+                        if prefill_node.node_rank == 0:
+                            master_node = prefill_node
+                            break
+
+                    if master_node and master_node.comm_id:
+                        comm_key = f"{prefill_group_name}__{node.group_name}"
+                        if comm_key not in cluster.comm_groups:
+                            # Create new comm group
+                            cluster.comm_groups[comm_key] = CommGroupPair(
+                                prefill_group=prefill_group_name,
+                                decode_group=node.group_name,
+                                comm_id=master_node.comm_id,
+                            )
+                            logger.info(
+                                f"Created comm group {comm_key} for existing prefill group"
+                                f"with decode group {node.group_name}"
+                            )
+                        else:
+                            logger.debug(f"Comm group {comm_key} already exists")
+                    else:
+                        logger.debug(
+                            f"No master node with comm_id found in prefill group {prefill_group_name}"
                         )
         else:
             # Update existing node
@@ -350,7 +395,7 @@ class CoordinatorDB:
 
             return node
         except Exception as e:  # pylint: disable=broad-except
-            logger.error(f"Error getting node: {str(e)}")
+            logger.exception(f"Error getting node: {str(e)}")
             return None
 
     def get_group(
@@ -396,7 +441,11 @@ class CoordinatorDB:
             for node in group.nodes.values():
                 if node.is_online:
                     addresses.extend(
-                        (node.node_rank, d.device_id, f"{d.device_ip}:{node.coordinator_port}")
+                        (
+                            node.node_rank,
+                            d.device_id,
+                            f"{d.device_ip}:{node.coordinator_port}",
+                        )
                         for d in node.devices
                     )
             return addresses
@@ -496,9 +545,7 @@ class CoordinatorDB:
         # Get cluster
         cluster = self.storage.get_cluster(cluster_name)
         if not cluster:
-            logger.warning(
-                f"Attempted to delete non-existent cluster: {cluster_name}"
-            )
+            logger.warning(f"Attempted to delete non-existent cluster: {cluster_name}")
             return False
 
         # Delete cluster, storage layer will also clean up related node mappings
@@ -635,28 +682,55 @@ class CoordinatorDB:
 
     def _cleanup_routine(self):
         """Background thread for periodically cleaning up timed-out nodes."""
-        logger.info("Starting node timeout cleanup thread")
+        logger.info(
+            f"Starting node timeout cleanup thread (interval: {self.cleanup_interval}s, "
+            f"timeout: {self.heartbeat_timeout}s)"
+        )
 
+        cleanup_count = 0
         while True:
             try:
+                cleanup_count += 1
+                logger.debug(
+                    f"Running cleanup check #{cleanup_count} (interval: {self.cleanup_interval}s)"
+                )
                 self._check_all_nodes_timeout()
+                logger.info(
+                        f"Cleanup thread is running normally (completed {cleanup_count} checks)"
+                    )
+
                 time.sleep(self.cleanup_interval)
             except Exception as e:  # pylint: disable=broad-except
-                logger.error(f"Node cleanup thread exception: {str(e)}")
+                logger.exception(f"Error in cleanup thread: {str(e)}. ")
 
     def _check_all_nodes_timeout(self):
         """Check heartbeat status of all nodes."""
         total_timeouts = 0
 
-        for cluster in self.storage.list_clusters():
-            # Check node heartbeats
-            timeout_nodes = cluster.check_nodes_heartbeat(self.heartbeat_timeout)
+        try:
+            clusters = self.storage.list_clusters()
+            total_nodes = 0
 
-            if timeout_nodes:
-                total_timeouts += len(timeout_nodes)
-                logger.warning(
-                    f"Cluster '{cluster.cluster_name}' has {len(timeout_nodes)} timed-out nodes"
-                )
+            logger.debug(f"Checking {len(clusters)} clusters for node timeouts")
+
+            for cluster in clusters:
+                # Count total nodes in this cluster
+                cluster_nodes = 0
+                for group in cluster.prefill_groups.values():
+                    cluster_nodes += len(group.nodes)
+                for group in cluster.decode_groups.values():
+                    cluster_nodes += len(group.nodes)
+                total_nodes += cluster_nodes
+
+                # Check node heartbeats
+                timeout_nodes = cluster.check_nodes_heartbeat(self.heartbeat_timeout)
+
+                if timeout_nodes:
+                    total_timeouts += len(timeout_nodes)
+                    logger.warning(
+                        f"Cluster '{cluster.cluster_name}' has {len(timeout_nodes)} timed-out "
+                        f"nodes (out of {cluster_nodes} total)"
+                    )
 
                 # Update state of all affected groups
                 for group_name, group in list(cluster.prefill_groups.items()):
@@ -690,87 +764,27 @@ class CoordinatorDB:
                 # Save cluster state
                 self.storage.save_cluster(cluster)
 
-        if total_timeouts > 0:
-            logger.info(f"Cleanup complete, total {total_timeouts} nodes timed out")
+            # Cleanup inactive nodes in storage backend if there were timeouts
+            if total_timeouts > 0:
+                # Cleanup individual timed-out nodes (delete physically)
+                deleted_nodes = self.storage.cleanup_inactive_nodes(
+                    self.heartbeat_timeout,
+                    delete_physically=True,  # Always delete physically when timeout occurs
+                )
+                if deleted_nodes:
+                    logger.info(
+                        f"Storage backend cleaned up {len(deleted_nodes)} nodes: {', '.join(deleted_nodes)}"
+                    )
 
-    # def get_comm_id(
-    #     self, cluster_name: str, prefill_group_name: str, decode_group_name: str
-    # ) -> Optional[str]:
-    #     """Get Communication ID between prefill and decode groups.
+                logger.info(f"Cleanup complete, total {total_timeouts} nodes timed out")
+            else:
+                # 定期输出状态，即使没有超时节点
+                logger.debug(
+                    f"Heartbeat check completed: {total_nodes} total nodes, no timeouts detected"
+                )
 
-    #     Args:
-    #         cluster_name: Cluster name.
-    #         prefill_group_name: Prefill group name.
-    #         decode_group_name: Decode group name.
-
-    #     Returns:
-    #         Communication ID or None (if doesn't exist).
-    #     """
-    #     # Check if cluster exists
-    #     cluster = self.storage.get_cluster(cluster_name)
-    #     if not cluster:
-    #         return None
-
-    #     # Build comm group key
-    #     comm_key = f"{prefill_group_name}__{decode_group_name}"
-
-    #     # Check if comm group exists
-    #     comm_group = cluster.comm_groups.get(comm_key)
-    #     if not comm_group:
-    #         # If it doesn't exist, try to register a new comm group
-    #         return self.register_uuid_for_comm_group(
-    #             prefill_group_name, decode_group_name, cluster_name
-    #         )
-
-    #     # Return existing Communication ID
-    #     return comm_group.comm_id
-
-    # def register_uuid_for_comm_group(
-    #     self, prefill_group: str, decode_group: str, cluster_name: str
-    # ) -> Optional[str]:
-    #     """Register a unique Communication ID for a prefill-decode group pair.
-
-    #     Args:
-    #         prefill_group: The name of the prefill group.
-    #         decode_group: The name of the decode group.
-    #         cluster_name: The name of the cluster.
-
-    #     Returns:
-    #         The registered Communication ID, or None if registration failed.
-    #     """
-    #     cluster = self.storage.get_cluster(cluster_name)
-    #     if not cluster:
-    #         return None
-
-    #     comm_key = f"{prefill_group}_{decode_group}"
-
-    #     # Check if comm group already exists
-    #     if comm_key in cluster.comm_groups:
-    #         return cluster.comm_groups[comm_key].comm_id
-
-    #     # Check if prefill and decode groups exist
-    #     prefill = cluster.prefill_groups.get(prefill_group)
-    #     decode = cluster.decode_groups.get(decode_group)
-
-    #     if not prefill or not decode:
-    #         return None
-
-    #     # Create new comm group pair
-    #     comm_pair = CommGroupPair(
-    #         prefill_group=prefill_group, decode_group=decode_group
-    #     )
-
-    #     # Add to cluster
-    #     cluster.comm_groups[comm_key] = comm_pair
-
-    #     # Save cluster
-    #     self.storage.save_cluster(cluster)
-
-    #     logger.info(
-    #         f"Communication ID for prefill group '{prefill_group}' decode group '{decode_group}'"
-    #     )
-
-    #     return comm_pair.comm_id
+        except Exception as e:  # pylint: disable=broad-except
+            logger.exception(f"Error during timeout check: {str(e)}. ")
 
     def register_comm_id(self, comm_key: str, comm_id: str) -> bool:
         """Update Communication ID for a comm group.
@@ -812,7 +826,7 @@ class CoordinatorDB:
             return False
 
         except Exception as e:  # pylint: disable=broad-except
-            logger.error(f"Error updating comm group Communication ID: {str(e)}")
+            logger.exception(f"Error updating comm group Communication ID: {str(e)}")
             return False
 
     def _notify_prefill_change(self, action: str, cluster_name: str, group_name: str):
@@ -827,7 +841,7 @@ class CoordinatorDB:
             try:
                 callback(action, cluster_name, group_name)
             except Exception as e:  # pylint: disable=broad-except
-                logger.error(f"Error calling prefill group change callback: {str(e)}")
+                logger.exception(f"Error calling prefill group change callback: {str(e)}")
 
     def _notify_decode_change(self, action: str, cluster_name: str, group_name: str):
         """Notify decode group change.
@@ -841,7 +855,7 @@ class CoordinatorDB:
             try:
                 callback(action, cluster_name, group_name)
             except Exception as e:  # pylint: disable=broad-except
-                logger.error(f"Error calling decode group change callback: {str(e)}")
+                logger.exception(f"Error calling decode group change callback: {str(e)}")
 
     def _get_or_create_cluster(self, cluster_name: str) -> Optional[ClusterInfo]:
         """Get an existing cluster or create a new one if it doesn't exist.

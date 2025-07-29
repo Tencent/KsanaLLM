@@ -1,4 +1,4 @@
-# Copyright 2024 Tencent Inc.  All rights reserved.
+# Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
 
@@ -8,71 +8,36 @@ This module defines the configuration settings for the KsanaLLM Router service,
 including heartbeat timeouts, log levels, API endpoints, and storage options.
 """
 
-from typing import Literal
-from pydantic_settings import BaseSettings
+
+import configparser
+import os
 
 
-class Settings(BaseSettings):
-    """Service Configuration for KsanaLLM Router.
+class Settings:
+    """Service Configuration for KsanaLLM Router (from config.ini)."""
+    def __init__(self, ini_path=None):
+        if ini_path is None:
+            ini_path = os.path.join(os.path.dirname(__file__), 'config.ini')
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding='utf-8')
 
-    Attributes:
-        node_heartbeat_timeout: Time in seconds after which a node is considered offline.
-        cleanup_interval: Time in seconds between cleanup tasks.
-        log_level: Logging level for the application.
-        api_prefix: Prefix for all API endpoints.
-        cluster_name: Default cluster name to use.
-        storage_mode: Storage backend mode ('memory' or 'etcd').
-        etcd_host: Hostname for etcd connection.
-        etcd_port: Port for etcd connection.
-        etcd_prefix: Key prefix for etcd storage.
-        etcd_timeout: Connection timeout in seconds for etcd.
-        etcd_user: Username for etcd authentication.
-        etcd_password: Password for etcd authentication.
-        router_rule: The rule to use when routing requests ('fixed' or 'auto').
-    """
+        g = config["general"]
+        m = config["mysql"]
 
-    # Heartbeat timeout (seconds)
-    node_heartbeat_timeout: int = 30
+        self.node_heartbeat_timeout = int(g.get("node_heartbeat_timeout", 30))
+        self.cleanup_interval = int(g.get("cleanup_interval", 60))
+        self.log_level = g.get("log_level", "INFO")
+        self.api_prefix = g.get("api_prefix", "/api/v1")
+        self.cluster_name = g.get("cluster_name", "default-cluster")
+        self.storage_mode = g.get("storage_mode", "memory")
+        self.router_rule = g.get("router_rule", "auto")
 
-    # Cleanup task interval (seconds)
-    cleanup_interval: int = 60
-
-    # Log level
-    log_level: str = "INFO"
-
-    # API prefix
-    api_prefix: str = "/api/v1"
-
-    # Default cluster name
-    cluster_name: str = "default-cluster"
-
-    # Storage mode: memory or etcd
-    storage_mode: Literal["memory", "etcd"] = "memory"
-
-    # ETCD configuration
-    etcd_host: str = "localhost"
-    etcd_port: int = 2379
-    etcd_prefix: str = "/ksana_llm/router/"
-    etcd_timeout: int = 5  # Connection timeout (seconds)
-    etcd_user: str = ""  # If etcd requires authentication
-    etcd_password: str = ""  # If etcd requires authentication
-
-    # polaris namespace and service
-    polaris_namespace: str = "default"
-    polaris_prefill_service: str = "ksana-prefill-service"
-    polaris_decode_service: str = "ksana-decode-service"
-
-    # Router rule: 
-    # fixed: use fixed routing rules for generate.py for testing or examples
-    # auto: automatically obtain routing rules from memory, etcd or mysql storage
-    # polaris: use Tencent Polaris for routing
-    router_rule: Literal["fixed", "auto", "polaris"] = "auto"
-
-    class Config:
-        """Pydantic configuration."""
-
-        env_file = ".env"
-        case_sensitive = False
-
+        self.mysql_host = m.get("host", "localhost")
+        self.mysql_port = int(m.get("port", 3306))
+        self.mysql_user = m.get("user", "root")
+        self.mysql_password = m.get("password", "")
+        self.mysql_database = m.get("database", "ksana_llm_router")
+        self.mysql_charset = m.get("charset", "utf8mb4")
+        self.mysql_autocommit = m.getboolean("autocommit", True)
 
 settings = Settings()
