@@ -12,6 +12,8 @@ namespace ksana_llm {
 struct NewDeepSeekV3Config : public BaseModelConfig {
   virtual ~NewDeepSeekV3Config() {}
 
+  bool ContainGptqWeights() const;
+
   std::string type;
 
   // Type of weight

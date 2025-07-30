@@ -25,6 +25,11 @@ class NewDeepSeekV3WeightImplBase {
  public:
   virtual ~NewDeepSeekV3WeightImplBase() = default;
 
+  // Reuse temporary created tensor while processing weights
+  // these tensors should not be inserted into device_model_weights
+  // Careful with this function cause it may cause memory issue
+  virtual Tensor& GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) = 0;
+
   // Permutation with buffer
   virtual Status PermuteWeight(Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank) = 0;
 
@@ -81,7 +86,8 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
   explicit NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context);
   virtual ~NewDeepSeekV3WeightImpl() = default;
 
-  // TODO(huicongyao): reuse all temp allocated memory as buffers
+  Tensor& GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) override;
+
   Status PermuteWeight(Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank) override;
   Status TransSplitOptTrans(const Tensor& host_weight_tensor, Tensor& output_tensor, int dev_rank,
                             std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config, size_t para_size,
@@ -143,7 +149,8 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 
  private:
   std::shared_ptr<Context> context_;
-  std::vector<std::unordered_map<std::string, Tensor>> permute_buffers_;
+  std::vector<std::unordered_map<size_t, Tensor>> permute_buffers_;
+  std::vector<std::unordered_map<size_t, Tensor>> tensor_buffers_;
 };
 
 }  // namespace ksana_llm

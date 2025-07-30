@@ -108,7 +108,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
           post_processed_weights.insert(weight_scale_name);
           post_processed_weights.insert(weight_name);
         } else {
-          KLLM_LOG_WARNING << fmt::format("weight scale not found: {}", weight_scale_name);
+          KLLM_THROW(fmt::format("weight scale inv not found: {}", weight_scale_name));
         }
       }
     }
@@ -132,7 +132,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
       DataType target_dtype = new_deepseek_v3_config->weight_data_type;
       if (weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
         // NOTE: For compatible with old model loader, may remove this in the future
-        if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+        if (new_deepseek_v3_config->ContainGptqWeights()) {
           CastDeviceTensorType(weight_tensor, TYPE_BF16, dev_rank);
           CastDeviceTensorType(weight_tensor, TYPE_FP32, dev_rank);
         } else {
@@ -148,7 +148,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
     }
   }
 
-  if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+  if (new_deepseek_v3_config->ContainGptqWeights()) {
     KLLM_LOG_DEBUG << "Implements gptq post process here";
     weight_impl_->PostProcessInt4QuantWeights(dev_weights_map, dev_rank, new_deepseek_v3_config);
   }
@@ -216,7 +216,8 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   // Record the weights that need to dequant
   std::unordered_set<std::string> dequant_weights;
   for (auto& [file_weight_name, host_weight_tensor] : host_model_weights) {
-    if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ &&
+    // for GPTQ weight or moe-int4(mixed with fp8) weight, save to host_gptq_weights and load later
+    if (new_deepseek_v3_config->ContainGptqWeights() &&
         (file_weight_name.find("qweight") != std::string::npos ||
          file_weight_name.find("scales") != std::string::npos || file_weight_name.find("qzeros") != std::string::npos ||
          file_weight_name.find("g_idx") != std::string::npos)) {
@@ -227,79 +228,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
     KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, processing weight: {}, shape: {}", dev_rank, file_weight_name,
                                   Vector2Str(std::vector<size_t>(host_weight_tensor.shape)));
 
-    StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
-    // 1. model.embed_tokens.weight;
-    // ::FilterWeightNames() filtered this for non master nodes
-    // Embedding TP needs to be transposed first, then split, and then transposed back.
-    if (CheckWeightNameMatched(file_weight_name, {"model.embed_tokens.weight"}, true)) {
-      Tensor dev_tensor;
-      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                                       context_->GetTensorParallelSize(), true);
-
-      device_model_weights[file_weight_name] = dev_tensor;
-      continue;
-    }
-
-    // lm_head.weight
-    // lm_head need to split along axis = 0, and then transpose
-    if (CheckWeightNameMatched(file_weight_name, {"lm_head.weight"}, true)) {
-      Tensor permute_dev_tensor;
-      weight_impl_->SplitOptTrans(host_weight_tensor, permute_dev_tensor, dev_rank, new_deepseek_v3_config,
-                                  context_->GetTensorParallelSize(), true);
-      device_model_weights[file_weight_name] = permute_dev_tensor;
-      continue;
-    }
-
-    // 2. dense MLP layer and shared expert layer
-    // The parameters of both the mlp (dense) layer and the shared expert layer need to be transposed.
-    if (CheckWeightNameMatched(
-            file_weight_name,
-            {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.shared_experts.gate_proj", ".mlp.shared_experts.up_proj"},
-            false)) {
-      // "up && gate proj(bf16/fp16): First split along axis = 0, then transpose."
-      // "up && gate proj(fp8 weight/fp32 weight_scale_inv): split along axis = 0."
-      Tensor dev_tensor;
-      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                                  context_->GetTensorParallelSize(), !new_deepseek_v3_config->is_quant);
-      std::string file_weight_name_replace;
-      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
-      } else {
-        file_weight_name_replace = file_weight_name;
-      }
-      if (new_deepseek_v3_config->type == "deepseek_v3") {
-        // deepseek v3 need to combine gate & up proj
-        weight_impl_->ProcessGateUpProjWeight(file_weight_name_replace, dev_tensor, device_model_weights, dev_rank,
-                                              new_deepseek_v3_config->is_quant);
-      } else {
-        device_model_weights[file_weight_name_replace] = dev_tensor;
-      }
-      continue;
-    }
-
-    if (CheckWeightNameMatched(file_weight_name,
-                               {
-                                   ".mlp.down_proj.",
-                                   ".mlp.shared_experts.down_proj",
-                               },
-                               false)) {
-      // down proj(bf16/fp16): transpose first, then split along axis = 0
-      // down proj(fp8/fp32): transpose first, then split along axis = 0, and then transpose back.
-      Tensor dev_tensor;
-      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                                       context_->GetTensorParallelSize(), new_deepseek_v3_config->is_quant);
-
-      std::string file_weight_name_replace;
-      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
-      } else {
-        file_weight_name_replace = file_weight_name;
-      }
-      device_model_weights[file_weight_name_replace] = dev_tensor;
-      continue;
-    }
-
-    // 3. MOE layer
+    // 1. MOE layer
     // Instructions for loading MoE model weights:
     // For each layer of the model, the experts at the same positions
     // of up and gate need to be concatenated and named as up_gate.weight.
@@ -377,11 +306,11 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
         Memcpy2DAsync(down_expert_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx_) * expert_pitch, dst_pitch,
                       host_weight_tensor.GetPtr<void>() + src_down_offset, src_pitch, dst_pitch, hidden_units,
                       MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+        continue;
       }
-      continue;
     }
 
-    // 4. MLA layer
+    // 2. MLA layer
     const std::string fused_lora_a_weight_name = ".fused_lora_a_proj.weight";
     if (file_weight_name.find("self_attn") != std::string::npos &&
         file_weight_name.find("norm.") == std::string::npos) {
@@ -581,14 +510,10 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
             device_model_weights[w_uk_t_name] = w_uk_t_tensor;
 
             // Permute vhead_weight_name to w_uv
-            Tensor w_uv_tensor =
-                Tensor(MemoryLocation::LOCATION_DEVICE, w_uk_t_tensor.dtype, {head_num_tp, v_head_shape[1], v_head_dim},
-                       dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
             v_head_tensor.shape = {head_num_tp, v_head_dim, v_head_shape[1]};
-            PermuteDeviceTensor(v_head_tensor, {0, 2, 1}, dev_rank, w_uv_tensor);
+            weight_impl_->PermuteWeight(v_head_tensor, {0, 2, 1}, dev_rank);
             std::string w_uv_name = v_head_name.substr(0, v_head_name.find_first_of('_')) + "_attn.w_uv.weight";
-            v_head_tensor.shape = v_head_shape;
-            device_model_weights[w_uv_name] = w_uv_tensor;
+            device_model_weights[w_uv_name] = v_head_tensor;
           }
         } else {
           // For fp8 blockwise quant, do not split the weights initially, split them after dequantization later.
@@ -618,6 +543,56 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
         device_model_weights[file_weight_name] = dev_tensor;
         continue;
       }
+    }
+
+    // 2. dense MLP layer and shared expert layer
+    // The parameters of both the mlp (dense) layer and the shared expert layer need to be transposed.
+    if (CheckWeightNameMatched(
+            file_weight_name,
+            {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.shared_experts.gate_proj", ".mlp.shared_experts.up_proj"},
+            false)) {
+      // "up && gate proj(bf16/fp16): First split along axis = 0, then transpose."
+      // "up && gate proj(fp8 weight/fp32 weight_scale_inv): split along axis = 0."
+      Tensor dev_tensor;
+      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
+                                  context_->GetTensorParallelSize(), !new_deepseek_v3_config->is_quant);
+      std::string file_weight_name_replace;
+      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
+        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
+      } else {
+        file_weight_name_replace = file_weight_name;
+      }
+      // TODO(huicongyao): Refactor to eliminate string-based type checking
+      if (new_deepseek_v3_config->type == "deepseek_v3") {
+        // deepseek v3 need to combine gate & up proj
+        weight_impl_->ProcessGateUpProjWeight(file_weight_name_replace, dev_tensor, device_model_weights, dev_rank,
+                                              new_deepseek_v3_config->is_quant);
+      } else {
+        device_model_weights[file_weight_name_replace] = dev_tensor;
+      }
+      continue;
+    }
+
+    if (CheckWeightNameMatched(file_weight_name,
+                               {
+                                   ".mlp.down_proj.",
+                                   ".mlp.shared_experts.down_proj",
+                               },
+                               false)) {
+      // down proj(bf16/fp16): transpose first, then split along axis = 0
+      // down proj(fp8/fp32): transpose first, then split along axis = 0, and then transpose back.
+      Tensor dev_tensor;
+      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
+                                       context_->GetTensorParallelSize(), new_deepseek_v3_config->is_quant);
+
+      std::string file_weight_name_replace;
+      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
+        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
+      } else {
+        file_weight_name_replace = file_weight_name;
+      }
+      device_model_weights[file_weight_name_replace] = dev_tensor;
+      continue;
     }
 
     // 5. norm layer or `gate.e_score_correction_bias`
@@ -653,6 +628,29 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
                                   context_->GetTensorParallelSize(), true);
       device_model_weights[file_weight_name] = dev_tensor;
+      continue;
+    }
+
+    // 3. model.embed_tokens.weight;
+    // ::FilterWeightNames() filtered this for non master nodes
+    // Embedding TP needs to be transposed first, then split, and then transposed back.
+    if (CheckWeightNameMatched(file_weight_name, {"model.embed_tokens.weight"}, true)) {
+      Tensor dev_tensor;
+      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
+                                       context_->GetTensorParallelSize(), true);
+
+      device_model_weights[file_weight_name] = dev_tensor;
+      continue;
+    }
+
+    // lm_head.weight
+    // lm_head need to split along axis = 0, and then transpose
+    if (CheckWeightNameMatched(file_weight_name, {"lm_head.weight"}, true)) {
+      Tensor permute_dev_tensor;
+      weight_impl_->SplitOptTrans(host_weight_tensor, permute_dev_tensor, dev_rank, new_deepseek_v3_config,
+                                  context_->GetTensorParallelSize(), true);
+      device_model_weights[file_weight_name] = permute_dev_tensor;
+      continue;
     }
   }
 #ifdef ENABLE_FP8
@@ -663,7 +661,8 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 #  endif
 #endif
 
-  if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+  // Load gptq weights here
+  if (new_deepseek_v3_config->ContainGptqWeights()) {
     weight_impl_->LoadInt4QuantWeight(host_gptq_weights, dev_rank, device_model_weights, new_deepseek_v3_config);
   }
 

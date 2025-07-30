@@ -38,6 +38,14 @@ class DeepSeekV3Test : public testing::Test {
 
     if (test_name.find("ForwardGPTQInt4Test") != std::string::npos) {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
+    } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
+      model_path = "/model/DeepSeek-R1-0528-moe-int4";
+      static const char *env_var = std::getenv("ENABLE_DS_MOE_INT4_TEST");
+      if (env_var == nullptr || std::string(env_var) != "1") {
+        std::cout << "Skipping setup ForwardMoeInt4Test. "
+                  << "Set ENABLE_DS_MOE_INT4_TEST=1 to enable this test." << std::endl;
+        return;
+      }
     }
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
@@ -339,6 +347,25 @@ TEST_F(DeepSeekV3Test, ForwardGPTQInt4Test) {
   model_config.weight_data_type = TYPE_BF16;
   model_config.quant_config.method = QUANT_GPTQ;
   std::cout << "Test GPTQ-Quant TYPE_BF16 weight_data_type forward." << std::endl;
+  TestDeepSeekV3Forward<bfloat16>();
+#endif
+}
+
+TEST_F(DeepSeekV3Test, ForwardMoeInt4Test) {
+#ifdef ENABLE_CUDA
+  // Check environment variable, only run this test when ENABLE_DS_MOE_INT4_TEST is set to 1
+  // TODO(huicongyao): remove this check to keep moe int4 test always enabled
+  static const char *env_var = std::getenv("ENABLE_DS_MOE_INT4_TEST");
+  if (env_var == nullptr || std::string(env_var) != "1") {
+    std::cout << "Skipping ForwardMoeInt4Test. Set ENABLE_DS_MOE_INT4_TEST=1 to enable this test." << std::endl;
+    return;
+  }
+
+  model_config.is_quant = true;
+  model_config.weight_data_type = TYPE_BF16;
+  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
+  model_config.quant_config.enable_moe_int4 = true;
+  std::cout << "Test MoeInt4 TYPE_BF16 weight_data_type forward." << std::endl;
   TestDeepSeekV3Forward<bfloat16>();
 #endif
 }

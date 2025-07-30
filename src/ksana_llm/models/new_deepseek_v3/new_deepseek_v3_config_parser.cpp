@@ -214,14 +214,10 @@ Status NewDeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_
     }
   }
 
-  if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ &&
-      new_deepseek_v3_config->quant_config.desc_act == true) {
-    new_deepseek_v3_config->quant_config.backend = MARLIN_BACKEND;
-    KLLM_LOG_INFO << "Using MARLIN Quant Backend, only support MARLIN backend in desc_act mode";
-  } else if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ ||
-             new_deepseek_v3_config->quant_config.method == QUANT_AWQ) {
+  // Deepseek only support machete backend
+  if (new_deepseek_v3_config->is_quant && (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ ||
+                                           new_deepseek_v3_config->quant_config.enable_moe_int4)) {
     new_deepseek_v3_config->quant_config.backend = MACHETE_BACKEND;
-    KLLM_LOG_INFO << "Using MACHETE Quant Backend, DeepSeek only support MACHETE backend at present";
   } else {
     KLLM_LOG_INFO << "Not using any Quant Backend";
   }

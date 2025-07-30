@@ -3,30 +3,45 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_impl.h"
+#include <numeric>
 #include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 template <typename T>
 NewDeepSeekV3WeightImpl<T>::NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context) : context_(context) {
   permute_buffers_.resize(context_->GetTensorParallelSize());
+  tensor_buffers_.resize(context_->GetTensorParallelSize());
+}
+
+template <typename T>
+Tensor& NewDeepSeekV3WeightImpl<T>::GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) {
+  const size_t key = std::accumulate(shape.begin(), shape.end(), GetTypeSize(data_type), std::multiplies<size_t>());
+  if (tensor_buffers_[dev_rank].find(key) == tensor_buffers_[dev_rank].end()) {
+    tensor_buffers_[dev_rank][key] = Tensor(MemoryLocation::LOCATION_DEVICE, data_type, shape, dev_rank, nullptr,
+                                            &(context_->GetMemoryManageStreams()[dev_rank]));
+  }
+  Tensor& temp_tensor = tensor_buffers_[dev_rank].at(key);
+  temp_tensor.dtype = data_type;
+  temp_tensor.shape = shape;
+  return temp_tensor;
 }
 
 template <typename T>
 Status NewDeepSeekV3WeightImpl<T>::PermuteWeight(Tensor& input_tensor, const std::vector<size_t>& permutation,
                                                  int dev_rank) {
-  std::string key = std::to_string(input_tensor.GetTotalBytes()) + "_" + std::to_string(dev_rank);
+  const size_t key = input_tensor.GetTotalBytes();
   if (permute_buffers_[dev_rank].find(key) == permute_buffers_[dev_rank].end()) {
     permute_buffers_[dev_rank][key] = Tensor(MemoryLocation::LOCATION_DEVICE, input_tensor.dtype, input_tensor.shape,
                                              dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
   }
-  Tensor& buffer_tensor = permute_buffers_[dev_rank].at(key);
-  buffer_tensor.dtype = input_tensor.dtype;
-  buffer_tensor.shape = input_tensor.shape;
-  Permute(input_tensor, buffer_tensor, permutation, context_->GetMemoryManageStreams()[dev_rank]);
+  Tensor& permute_tensor = permute_buffers_[dev_rank].at(key);
+  permute_tensor.dtype = input_tensor.dtype;
+  permute_tensor.shape = input_tensor.shape;
+  Permute(input_tensor, permute_tensor, permutation, context_->GetMemoryManageStreams()[dev_rank]);
   for (size_t i = 0; i < permutation.size(); i++) {
-    buffer_tensor.shape[i] = input_tensor.shape[permutation[i]];
+    permute_tensor.shape[i] = input_tensor.shape[permutation[i]];
   }
-  std::swap(input_tensor, buffer_tensor);
+  std::swap(input_tensor, permute_tensor);
   return Status();
 }
 
@@ -36,8 +51,7 @@ Status NewDeepSeekV3WeightImpl<T>::TransSplitOptTrans(const Tensor& host_weight_
                                                       int dev_rank,
                                                       std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
                                                       size_t para_size, bool transpose) {
-  Tensor full_dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
-                                  dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+  Tensor& full_dev_tensor = GetTempTensor(host_weight_tensor.shape, host_weight_tensor.dtype, dev_rank);
 
   MemcpyAsync(full_dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
               MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
@@ -207,9 +221,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       Tensor& quant_weight = device_model_weights.at(weight_name);
       Tensor& quant_weight_scale = device_model_weights.at(weight_scale_name);
       // Dequant q_b_proj (set dequant dtype tp bf16 for compatible)
-      Tensor dequant_q_b_proj =
-          Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type, quant_weight.shape,
-                 dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      Tensor& dequant_q_b_proj = GetTempTensor(quant_weight.shape, new_deepseek_v3_config->weight_data_type, dev_rank);
       DequantFp8E4m3BlockWise<T>(quant_weight.GetPtr<void>(), quant_weight_scale.GetPtr<void>(),
                                  dequant_q_b_proj.GetPtr<void>(), quant_weight.shape[0], quant_weight.shape[1],
                                  new_deepseek_v3_config->quant_config.weight_block_size[1],
@@ -218,9 +230,8 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       if (dequant_q_b_proj.shape[0] != (head_num_tp * (qk_nope_head_dim + qk_rope_head_dim))) {
         KLLM_THROW(fmt::format("Not support shape of dequant weight: {}", weight_name));
       }
-      Tensor dequant_q_b_nope_proj = Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type,
-                                            {head_num_tp * qk_nope_head_dim, dequant_q_b_proj.shape[1]}, dev_rank,
-                                            nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      Tensor& dequant_q_b_nope_proj = GetTempTensor({head_num_tp * qk_nope_head_dim, dequant_q_b_proj.shape[1]},
+                                                    new_deepseek_v3_config->weight_data_type, dev_rank);
       size_t nope_dst_pitch =
           qk_nope_head_dim * dequant_q_b_proj.shape[1] * GetTypeSize(new_deepseek_v3_config->weight_data_type);
       size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * dequant_q_b_proj.shape[1] *
@@ -228,9 +239,8 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       Memcpy2DAsync(dequant_q_b_nope_proj.GetPtr<void>(), nope_dst_pitch, dequant_q_b_proj.GetPtr<void>(), src_pitch,
                     nope_dst_pitch, head_num_tp, MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
-      Tensor dequant_q_b_rope_proj = Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type,
-                                            {head_num_tp * qk_rope_head_dim, dequant_q_b_proj.shape[1]}, dev_rank,
-                                            nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      Tensor& dequant_q_b_rope_proj = GetTempTensor({head_num_tp * qk_rope_head_dim, dequant_q_b_proj.shape[1]},
+                                                    new_deepseek_v3_config->weight_data_type, dev_rank);
       size_t rope_dst_pitch =
           qk_rope_head_dim * dequant_q_b_rope_proj.shape[1] * GetTypeSize(new_deepseek_v3_config->weight_data_type);
       Memcpy2DAsync(dequant_q_b_rope_proj.GetPtr<void>(), rope_dst_pitch,
@@ -295,9 +305,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       Tensor& quant_weight = device_model_weights.at(weight_name);
       Tensor& quant_weight_scale = device_model_weights.at(weight_scale_name);
       // Dequant kv_b_proj
-      Tensor dequant_kv_b_proj =
-          Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type, quant_weight.shape,
-                 dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+      Tensor& dequant_kv_b_proj = GetTempTensor(quant_weight.shape, new_deepseek_v3_config->weight_data_type, dev_rank);
       DequantFp8E4m3BlockWise<T>(quant_weight.GetPtr<void>(), quant_weight_scale.GetPtr<void>(),
                                  dequant_kv_b_proj.GetPtr<void>(), quant_weight.shape[0], quant_weight.shape[1],
                                  new_deepseek_v3_config->quant_config.weight_block_size[1],
@@ -317,9 +325,8 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       Memcpy2DAsync(dequant_kv_b_nope_proj.GetPtr<void>(), nope_dst_pitch, dequant_kv_b_proj.GetPtr<void>(), src_pitch,
                     nope_dst_pitch, head_num_tp, MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
-      Tensor dequant_v_head_proj = Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type,
-                                          {head_num_tp * v_head_dim, dequant_kv_b_proj.shape[1]}, dev_rank, nullptr,
-                                          &(context_->GetMemoryManageStreams()[dev_rank]));
+      Tensor& dequant_v_head_proj = GetTempTensor({head_num_tp * v_head_dim, dequant_kv_b_proj.shape[1]},
+                                                  new_deepseek_v3_config->weight_data_type, dev_rank);
       size_t v_head_dst_pitch =
           v_head_dim * dequant_kv_b_proj.shape[1] * GetTypeSize(new_deepseek_v3_config->weight_data_type);
       Memcpy2DAsync(dequant_v_head_proj.GetPtr<void>(), v_head_dst_pitch,
@@ -630,7 +637,6 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   // Prapare params that need to use
   int32_t layer_idx = -1, expert_idx = -1;
   size_t num_experts = new_deepseek_v3_config->moe_config.num_experts;
-  bool use_vllm_moe = new_deepseek_v3_config->moe_config.use_vllm_moe;
   // moe combines tensor parallel and moe parallel
   ExpertParallelConfig& expert_parallel_config = new_deepseek_v3_config->expert_parallel_config;
   size_t expert_node_rank = expert_parallel_config.expert_node_rank;
@@ -655,13 +661,13 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   size_t hidden_units = new_deepseek_v3_config->hidden_units;
 
   size_t attn_tp_size = context_->GetAttentionTensorParallelSize();
-  size_t attn_dev_rank = dev_rank % attn_tp_size;
+  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
   size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
   size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
   size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
   size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
   size_t head_num = new_deepseek_v3_config->head_num;
-  size_t head_num_tp = DivRoundUp(new_deepseek_v3_config->head_num, attn_tp_size);
+  size_t head_num_tp = DivRoundUp(head_num, attn_tp_size);
 
   for (const auto& [host_weight_name, host_weight_tensor] : host_gptq_weights) {
     // Skip qzeros and g_idx
@@ -773,13 +779,13 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
       }
     }
 
-    // TODO(huicongyao): add fuse lora for gptq int4
-    const std::string fused_lora_a_weight_name = ".fused_lora_a_proj.weight";
+    // TODO(huicongyao): add fuse lora for gptq int4 and pad fuse weight to a multiple of 128
+    const std::string fused_lora_a_weight_name = ".fused_lora_a_proj.";
     // 3. quant MLA layers
     if (host_weight_name.find(".self_attn.") != std::string::npos) {
       if (host_weight_name.find(".self_attn.q_a_proj.") != std::string::npos) {
-        Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
-                                   dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+        Tensor dev_tensor =
+            Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape, dev_rank);
 
         MemcpyAsync(dev_tensor.template GetPtr<void>(), host_weight_tensor.template GetPtr<void>(),
                     host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
@@ -833,8 +839,7 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
 
         std::string kv_a_lora_name = GetReplacedName(host_weight_name, ".kv_a_proj_with_mqa.", ".kv_a_lora_proj.");
         Tensor kv_a_lora_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
-                                         {host_weight_tensor.shape[0], kv_lora_rank}, dev_rank, nullptr,
-                                         &(context_->GetMemoryManageStreams()[dev_rank]));
+                                         {host_weight_tensor.shape[0], kv_lora_rank}, dev_rank);
         size_t host_tensor_pitch = host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
         size_t kv_a_lora_pitch = kv_lora_rank * GetTypeSize(host_weight_tensor.dtype);
         Memcpy2DAsync(kv_a_lora_tensor.GetPtr<void>(), kv_a_lora_pitch, host_weight_tensor.template GetPtr<void>(),
@@ -844,8 +849,7 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
 
         std::string kv_a_rope_name = GetReplacedName(host_weight_name, ".kv_a_proj_with_mqa.", ".kv_a_rope_proj.");
         Tensor kv_a_rope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
-                                         {host_weight_tensor.shape[0], qk_rope_head_dim}, dev_rank, nullptr,
-                                         &(context_->GetMemoryManageStreams()[dev_rank]));
+                                         {host_weight_tensor.shape[0], qk_rope_head_dim}, dev_rank);
         size_t kv_a_rope_pitch = qk_rope_head_dim * GetTypeSize(host_weight_tensor.dtype);
         Memcpy2DAsync(kv_a_rope_tensor.GetPtr<void>(), kv_a_rope_pitch,
                       host_weight_tensor.template GetPtr<void>() + kv_a_lora_pitch, host_tensor_pitch, kv_a_rope_pitch,
@@ -904,9 +908,13 @@ template <typename T>
 Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
     std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
     std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
-  if (new_deepseek_v3_config->quant_config.method != QUANT_GPTQ) {
+  if (!new_deepseek_v3_config->ContainGptqWeights()) {
     return Status();
   }
+
+  QuantConfig& quant_config = new_deepseek_v3_config->quant_config.enable_moe_int4
+                                  ? new_deepseek_v3_config->sub_quant_configs[0]
+                                  : new_deepseek_v3_config->quant_config;
   std::vector<std::string> experts_weight_names;
   std::vector<std::string> qweight_names;
   qweight_names.reserve(device_model_weights.size());
@@ -934,32 +942,33 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
     const std::string scales_name = GetReplacedName(qweight_name, "qweight", "scales");
     std::string weight_name_replaced = GetReplacedName(qweight_name, "qweight", "weight");
 
-    KLLM_LOG_DEBUG << fmt::format("Pack and bind int4 quant weight: {}, on dev_rank: {}", qweight_name, dev_rank);
+    KLLM_LOG_DEBUG << fmt::format(
+        "Pack and bind int4 quant weight: {}, on dev_rank: {}, "
+        "shape: {}",
+        qweight_name, dev_rank, Vector2Str(std::vector<size_t>(device_model_weights.at(qweight_name).shape)));
 #ifdef ENABLE_CUDA
     // pack for non experts weights
     Tensor& qweight_tensor = device_model_weights.at(qweight_name);
 
-    // tmp fix for kv_a_rope_proj
-    if (qweight_tensor.shape[1] < 128) {
+    // tmp fix for fused_lora_a_proj
+    if (qweight_tensor.shape[1] % 128) {
       const std::string perm_name = GetReplacedName(qweight_name, "qweight", "perm");
       Tensor perm_tensor = device_model_weights.find(perm_name) == device_model_weights.end()
                                ? Tensor()
                                : device_model_weights.at(perm_name);
       Tensor packed_tensor =
-          MarlinPackGptqWeight(qweight_tensor, perm_tensor, dev_rank, new_deepseek_v3_config->quant_config.bits,
-                               32 / new_deepseek_v3_config->quant_config.bits);
+          MarlinPackGptqWeight(qweight_tensor, perm_tensor, dev_rank, quant_config.bits, 32 / quant_config.bits);
 
       device_model_weights[weight_name_replaced] = packed_tensor;
       device_model_weights.erase(qweight_name);
 
       Tensor scales_tensor = device_model_weights.at(scales_name);
-      int k = new_deepseek_v3_config->quant_config.group_size * scales_tensor.shape[scales_tensor.shape.size() - 2];
+      int k = quant_config.group_size * scales_tensor.shape[scales_tensor.shape.size() - 2];
       int n = scales_tensor.shape[scales_tensor.shape.size() - 1];
-      Tensor scales_permute =
-          MarlinPermuteScales(scales_tensor, dev_rank, k, n, new_deepseek_v3_config->quant_config.group_size);
+      Tensor scales_permute = MarlinPermuteScales(scales_tensor, dev_rank, k, n, quant_config.group_size);
       device_model_weights[scales_name] = scales_permute;
     } else {
-      Tensor packed_tensor = MachetePackWeight(qweight_tensor, dev_rank, new_deepseek_v3_config->quant_config.method);
+      Tensor packed_tensor = MachetePackWeight(qweight_tensor, dev_rank, quant_config.method);
       device_model_weights[weight_name_replaced] = packed_tensor;
       // remove previous qweight
       device_model_weights.erase(qweight_name);
@@ -978,12 +987,10 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
   // Absorb V2 for GPTQ
   if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM &&
       new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
-    size_t head_num = new_deepseek_v3_config->head_num;
     size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
     size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
     size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
     size_t attn_tp_size = context_->GetAttentionTensorParallelSize();
-    size_t attn_dev_rank = dev_rank % attn_tp_size;
     size_t head_num_tp = DivRoundUp(new_deepseek_v3_config->head_num, attn_tp_size);
     std::vector<std::string> kv_b_nope_weights;
     for (const auto& [weight_name, weight_tensor] : device_model_weights) {
@@ -1082,11 +1089,14 @@ Tensor NewDeepSeekV3WeightImpl<T>::MarlinPermuteScales(Tensor& s, int dev_rank, 
 template <typename T>
 Tensor NewDeepSeekV3WeightImpl<T>::DequantGptqWeight(Tensor& qweight, int dev_rank,
                                                      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
+  QuantConfig& quant_config = new_deepseek_v3_config->quant_config.enable_moe_int4
+                                  ? new_deepseek_v3_config->sub_quant_configs[0]
+                                  : new_deepseek_v3_config->quant_config;
   size_t input_size_per_tp = qweight.shape[0];
-  size_t pack_factor = 32 / new_deepseek_v3_config->quant_config.bits;
+  size_t pack_factor = 32 / quant_config.bits;
   Tensor eye_matrix;
   Tensor dequant_weight;
-  if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+  if (new_deepseek_v3_config->ContainGptqWeights()) {
     eye_matrix = Tensor(MemoryLocation::LOCATION_DEVICE, new_deepseek_v3_config->weight_data_type,
                         {input_size_per_tp * pack_factor, input_size_per_tp * pack_factor}, dev_rank, nullptr,
                         &(context_->GetMemoryManageStreams()[dev_rank]));
@@ -1097,8 +1107,7 @@ Tensor NewDeepSeekV3WeightImpl<T>::DequantGptqWeight(Tensor& qweight, int dev_ra
                             {input_size_per_tp * pack_factor, qweight.shape[1]}, dev_rank, nullptr,
                             &(context_->GetMemoryManageStreams()[dev_rank]));
   }
-  if (new_deepseek_v3_config->quant_config.backend == MACHETE_BACKEND &&
-      new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+  if (new_deepseek_v3_config->quant_config.backend == MACHETE_BACKEND && new_deepseek_v3_config->ContainGptqWeights()) {
     size_t m = input_size_per_tp * pack_factor;
     size_t n = qweight.shape[1];
     // 获取 workspace
@@ -1107,17 +1116,16 @@ Tensor NewDeepSeekV3WeightImpl<T>::DequantGptqWeight(Tensor& qweight, int dev_ra
                       eye_matrix.GetPtr<void>(), qweight.GetPtr<void>(), dequant_weight.GetPtr<void>(),
                       GetMacheteDataType<T>(), llm_kernels::nvidia::vllm_dtype::kU4B8, qweight.scales->GetPtr<void>(),
                       qweight.scales->shape, GetMacheteDataType<T>(), std::nullopt, std::nullopt, std::nullopt,
-                      new_deepseek_v3_config->quant_config.group_size, std::nullopt);
+                      quant_config.group_size, std::nullopt);
     if (current_workspace_size > -1) {
       Tensor workspace =
           Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT8, {static_cast<size_t>(current_workspace_size)},
                  dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-      InvokeMacheteGemm(current_workspace_size, workspace.GetPtr<void>(),
-                        context_->GetMemoryManageStreams()[dev_rank].Get(), m, n, m, eye_matrix.GetPtr<void>(),
-                        qweight.GetPtr<void>(), dequant_weight.GetPtr<void>(), GetMacheteDataType<T>(),
-                        llm_kernels::nvidia::vllm_dtype::kU4B8, qweight.scales->GetPtr<void>(), qweight.scales->shape,
-                        GetMacheteDataType<T>(), std::nullopt, std::nullopt, std::nullopt,
-                        new_deepseek_v3_config->quant_config.group_size, std::nullopt);
+      InvokeMacheteGemm(
+          current_workspace_size, workspace.GetPtr<void>(), context_->GetMemoryManageStreams()[dev_rank].Get(), m, n, m,
+          eye_matrix.GetPtr<void>(), qweight.GetPtr<void>(), dequant_weight.GetPtr<void>(), GetMacheteDataType<T>(),
+          llm_kernels::nvidia::vllm_dtype::kU4B8, qweight.scales->GetPtr<void>(), qweight.scales->shape,
+          GetMacheteDataType<T>(), std::nullopt, std::nullopt, std::nullopt, quant_config.group_size, std::nullopt);
     } else {
       KLLM_THROW("Machete GEMM failed for Dequant");
     }
