@@ -672,5 +672,96 @@ INVOKE_DEEPSEEK_V3_GROUPED_TOPK(half);
 INVOKE_DEEPSEEK_V3_GROUPED_TOPK(__nv_bfloat16);
 #undef INVOKE_DEEPSEEK_V3_GROUPED_TOPK
 
+// Basic softmax + topk kernel for simple cases without grouping
+template <typename T>
+__global__ void BasicSoftmaxTopkKernel(T* gating_output, float* topk_weights, int32_t* topk_ids, int num_rows,
+                                       int num_experts, int topk, float routed_scaling_factor) {
+  int row_idx = blockIdx.x;
+  if (row_idx >= num_rows) return;
+
+  extern __shared__ float shared_mem[];
+  float* scores = shared_mem;  // 每个block处理一行，shared memory存储该行的softmax结果
+
+  T* output_row = gating_output + row_idx * num_experts;
+
+  // Step 1: 在专家维度上计算softmax
+  // 每个线程负责一个专家，并行加载数据到shared memory
+  if (threadIdx.x < num_experts) {
+    scores[threadIdx.x] = static_cast<float>(output_row[threadIdx.x]);
+  }
+  __syncthreads();
+
+  // 找到最大值以保证数值稳定性 - 让thread 0来做串行计算确保正确性
+  if (threadIdx.x == 0) {
+    float max_val = scores[0];
+    for (int i = 1; i < num_experts; i++) {
+      max_val = fmaxf(max_val, scores[i]);
+    }
+
+    // 计算 exp(x - max) 并求和
+    float sum = 0.0f;
+    for (int i = 0; i < num_experts; i++) {
+      scores[i] = expf(scores[i] - max_val);
+      sum += scores[i];
+    }
+
+    // 归一化得到softmax概率
+    for (int i = 0; i < num_experts; i++) {
+      scores[i] = scores[i] / sum;
+    }
+  }
+  __syncthreads();
+
+  // 将softmax结果写回到gating_output，保留注释方便debug
+  // if (threadIdx.x < num_experts) {
+  //   output_row[threadIdx.x] = static_cast<T>(scores[threadIdx.x]);
+  // }
+
+  // Step 2: 使用现有的GetTopKIndices函数进行top-k选择
+  if (threadIdx.x == 0) {
+    int* temp_indices = reinterpret_cast<int*>(scores + num_experts);  // 复用shared memory
+    GetTopKIndices<32>(scores, temp_indices, num_experts, topk, 0);
+
+    // 将结果写入输出数组，并应用scaling factor
+    for (int i = 0; i < topk; i++) {
+      topk_ids[row_idx * topk + i] = temp_indices[i];
+      topk_weights[row_idx * topk + i] = scores[temp_indices[i]] * routed_scaling_factor;
+    }
+  }
+}
+
+// Wrapper function for basic softmax + topk
+template <typename T>
+void InvokeBasicSoftmaxTopk(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows,
+                            int num_experts, int topk, float routed_scaling_factor, cudaStream_t stream) {
+  // 验证参数
+  if (num_experts >= 1024 || topk > num_experts || topk > 32) {
+    // 参数不合法，直接返回
+    return;
+  }
+
+  dim3 grid_size(num_rows);
+  // 由于 num_experts < 1024，可以直接使用 num_experts 作为 block_size
+  // 但为了更好的性能，使用 warp 对齐的大小
+  int block_size = ((num_experts + 31) / 32) * 32;  // 向上对齐到 32 的倍数（warp size）
+
+  // Shared memory: num_experts * sizeof(float) for scores + 32 * sizeof(int) for temp indices
+  size_t shared_mem_size = num_experts * sizeof(float) + 32 * sizeof(int);
+
+  BasicSoftmaxTopkKernel<T><<<grid_size, block_size, shared_mem_size, stream>>>(
+      static_cast<T*>(gating_output), static_cast<float*>(topk_weights_ptr), static_cast<int32_t*>(topk_ids_ptr),
+      num_rows, num_experts, topk, routed_scaling_factor);
+}
+
+#define INVOKE_BASIC_SOFTMAX_TOPK(T)                                                                            \
+  template void InvokeBasicSoftmaxTopk<T>(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr,      \
+                                          int num_rows, int num_experts, int topk, float routed_scaling_factor, \
+                                          cudaStream_t stream)
+
+INVOKE_BASIC_SOFTMAX_TOPK(float);
+INVOKE_BASIC_SOFTMAX_TOPK(half);
+INVOKE_BASIC_SOFTMAX_TOPK(__nv_bfloat16);
+#undef INVOKE_BASIC_SOFTMAX_TOPK
+
 }  // namespace nvidia
 }  // namespace llm_kernels

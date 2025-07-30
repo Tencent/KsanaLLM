@@ -269,6 +269,16 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                                                         topk_group, stream);
     return;
   }
+
+  // Special case for basic softmax + topk without grouping
+  bool is_enable_basic_softmax_topk =
+      (scoring_func == "softmax" && e_bias == nullptr && !renormalize && num_expert_group == 1);
+  if (is_enable_basic_softmax_topk) {
+    llm_kernels::nvidia::InvokeBasicSoftmaxTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows, num_experts,
+                                                   topk, routed_scaling_factor, stream);
+
+    return;
+  }
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
 #endif

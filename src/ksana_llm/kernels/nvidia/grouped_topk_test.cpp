@@ -205,6 +205,84 @@ class InvokeGroupedTopkTestSuit : public testing::Test {
     FreeHostMemory(h_topk_weights);
     FreeHostMemory(h_topk_ids);
   }
+
+  template <typename T>
+  void TestBasicSoftmaxTopk() {
+    // Test configuration for basic softmax + topk (no grouping)
+    const int tokens_num = 2048;
+    const int num_experts = 128;
+    const int topk = 6;
+    const int num_expert_group = 1;  // No grouping
+    const int topk_group = 1;
+    const float routed_scaling_factor = 1.0f;
+    const int rank = 0;
+
+    // Create test input data
+    void* d_gating_output = AllocateDeviceMemory(tokens_num * num_experts * sizeof(T));
+    std::vector<float> h_gating_output(tokens_num * num_experts, 0.0f);
+
+    // Create deterministic test data
+    std::mt19937 generator(12345);
+    std::uniform_real_distribution<float> distribution(-2.0, 2.0);
+    for (size_t i = 0; i < h_gating_output.size(); ++i) {
+      h_gating_output[i] = distribution(generator);
+    }
+    CopyToDevice<T>(h_gating_output, d_gating_output, tokens_num * num_experts);
+
+    // Create output buffers
+    void* topk_weights_ptr = AllocateDeviceMemory(tokens_num * topk * sizeof(float));
+    void* topk_ids_ptr = AllocateDeviceMemory(tokens_num * topk * sizeof(int32_t));
+
+    // Test our basic softmax + topk implementation
+    InvokeGroupedTopk<T>(d_gating_output, topk_weights_ptr, topk_ids_ptr, tokens_num, num_experts, topk,
+                         false,  // renormalize = false
+                         num_expert_group, topk_group, "softmax",
+                         nullptr,  // e_bias = nullptr
+                         routed_scaling_factor, rank, stream);
+
+    // Synchronize stream
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    // Copy results back to host
+    float* h_topk_weights = reinterpret_cast<float*>(AllocateHostMemory(tokens_num * topk * sizeof(float)));
+    int32_t* h_topk_ids = reinterpret_cast<int32_t*>(AllocateHostMemory(tokens_num * topk * sizeof(int32_t)));
+
+    CUDA_CHECK(cudaMemcpy(h_topk_weights, topk_weights_ptr, tokens_num * topk * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_topk_ids, topk_ids_ptr, tokens_num * topk * sizeof(int32_t), cudaMemcpyDeviceToHost));
+
+    // Verify results
+    for (int token = 0; token < tokens_num; ++token) {
+      // Check that topk_ids are valid
+      for (int k = 0; k < topk; ++k) {
+        int idx = token * topk + k;
+        EXPECT_GE(h_topk_ids[idx], 0);
+        EXPECT_LT(h_topk_ids[idx], num_experts);
+        EXPECT_GT(h_topk_weights[idx], 0.0f);  // Top-k weights should be positive
+      }
+
+      // Check that topk weights are reasonable (just verify they are positive)
+      for (int k = 0; k < topk; ++k) {
+        EXPECT_GT(h_topk_weights[token * topk + k], 0.0f) << "Top-k weight should be positive";
+      }
+    }
+
+    // Performance test
+    constexpr size_t warmup_times = 10;
+    constexpr size_t test_times = 100;
+    auto cuda_run = [&]() {
+      InvokeGroupedTopk<T>(d_gating_output, topk_weights_ptr, topk_ids_ptr, tokens_num, num_experts, topk, false,
+                           num_expert_group, topk_group, "softmax", nullptr, routed_scaling_factor, rank, stream);
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, test_times);
+    KLLM_LOG_INFO << "BasicSoftmaxTopk time elapsed: " << time_elapsed_ms << " ms";
+
+    // Clean up
+    FreeDeviceMemory(d_gating_output);
+    FreeDeviceMemory(topk_weights_ptr);
+    FreeDeviceMemory(topk_ids_ptr);
+    FreeHostMemory(h_topk_weights);
+    FreeHostMemory(h_topk_ids);
+  }
 };
 
 // Test with expert bias using sigmoid activation function
@@ -221,3 +299,10 @@ TEST_F(InvokeGroupedTopkTestSuit, TestHalfWithExpertBiasSigmoid) {
 TEST_F(InvokeGroupedTopkTestSuit, TestBF16WithExpertBiasSigmoid) {
   TestGroupedTopk<__nv_bfloat16>("sigmoid", /*renormalize*/ true, /*has_bias*/ true);
 }
+
+// Test for basic softmax + topk without grouping
+TEST_F(InvokeGroupedTopkTestSuit, TestBasicSoftmaxTopkFloat) { TestBasicSoftmaxTopk<float>(); }
+
+TEST_F(InvokeGroupedTopkTestSuit, TestBasicSoftmaxTopkHalf) { TestBasicSoftmaxTopk<half>(); }
+
+TEST_F(InvokeGroupedTopkTestSuit, TestBasicSoftmaxTopkBF16) { TestBasicSoftmaxTopk<__nv_bfloat16>(); }

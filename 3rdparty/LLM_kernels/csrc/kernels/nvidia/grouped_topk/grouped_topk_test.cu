@@ -189,11 +189,83 @@ class LlamaNvidiaGroupedTopkTestSuit : public NvidiaTestSuitBase {
     FreeDeviceMemory(d_topk_weights);
     FreeDeviceMemory(d_topk_ids);
   }
+
+  template <typename T>
+  void TestBasicSoftmaxTopk() {
+    // Test configuration for basic softmax + topk (no grouping)
+    const int tokens_num = 4;
+    const int num_experts = 8;
+    const int topk = 3;
+    const float routed_scaling_factor = 1.0f;
+
+    // Create test input data
+    std::vector<float> h_gating_output(tokens_num * num_experts, 0.0f);
+
+    // Create deterministic test data
+    std::mt19937 generator(12345);
+    std::uniform_real_distribution<float> distribution(-2.0, 2.0);
+    for (size_t i = 0; i < h_gating_output.size(); ++i) {
+      h_gating_output[i] = distribution(generator);
+    }
+
+    // Allocate device memory
+    void* d_gating_output = AllocateDeviceMemory(tokens_num * num_experts * sizeof(T));
+    void* d_topk_weights = AllocateDeviceMemory(tokens_num * topk * sizeof(float));
+    void* d_topk_ids = AllocateDeviceMemory(tokens_num * topk * sizeof(int32_t));
+
+    // Copy data to device
+    CopyToDevice<T>(h_gating_output, d_gating_output, tokens_num * num_experts);
+
+    // Call the function under test
+    InvokeBasicSoftmaxTopk<T>(d_gating_output, d_topk_weights, d_topk_ids, tokens_num, num_experts, topk,
+                              routed_scaling_factor, stream);
+
+    // Synchronize stream
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+    // Copy results back to host
+    std::vector<float> h_topk_weights(tokens_num * topk);
+    std::vector<int32_t> h_topk_ids(tokens_num * topk);
+
+    CopyFromDevice(d_topk_weights, h_topk_weights, tokens_num * topk);
+    CopyFromDeviceInt(d_topk_ids, h_topk_ids, tokens_num * topk);
+
+    // Verify results
+    for (int token = 0; token < tokens_num; ++token) {
+      // Check that topk_ids are valid
+      for (int k = 0; k < topk; ++k) {
+        int idx = token * topk + k;
+        EXPECT_GE(h_topk_ids[idx], 0);
+        EXPECT_LT(h_topk_ids[idx], num_experts);
+        EXPECT_GT(h_topk_weights[idx], 0.0f);  // Top-k weights should be positive
+      }
+    }
+
+    // Performance test
+    size_t warmup_times = 10;
+    size_t test_times = 100;
+    auto cuda_run = [&]() {
+      InvokeBasicSoftmaxTopk<T>(d_gating_output, d_topk_weights, d_topk_ids, tokens_num, num_experts, topk,
+                                routed_scaling_factor, stream);
+    };
+    float time_elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmup_times, test_times);
+    std::cout << "InvokeBasicSoftmaxTopk time elapsed: " << time_elapsed_ms << " ms" << std::endl;
+
+    // Free device memory
+    FreeDeviceMemory(d_gating_output);
+    FreeDeviceMemory(d_topk_weights);
+    FreeDeviceMemory(d_topk_ids);
+  }
 };
 
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonFloatTest) { TestDeepSeekV3GroupedTopk<float>(); }
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonHalfTest) { TestDeepSeekV3GroupedTopk<half>(); }
 TEST_F(LlamaNvidiaGroupedTopkTestSuit, CommonBFloat16Test) { TestDeepSeekV3GroupedTopk<__nv_bfloat16>(); }
+
+// Tests for InvokeBasicSoftmaxTopk
+TEST_F(LlamaNvidiaGroupedTopkTestSuit, BasicSoftmaxTopkFloatTest) { TestBasicSoftmaxTopk<float>(); }
+TEST_F(LlamaNvidiaGroupedTopkTestSuit, BasicSoftmaxTopkHalfTest) { TestBasicSoftmaxTopk<half>(); }
+TEST_F(LlamaNvidiaGroupedTopkTestSuit, BasicSoftmaxTopkBFloat16Test) { TestBasicSoftmaxTopk<__nv_bfloat16>(); }
 
 }  // namespace test
 }  // namespace nvidia
