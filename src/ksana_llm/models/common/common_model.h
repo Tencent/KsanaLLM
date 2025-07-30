@@ -178,8 +178,6 @@ class CommonModel : public BaseModel {
   Tensor cpu_input_tokens_tensor_;
   Tensor cpu_tokens_emb_tensor_;
 
-  std::shared_ptr<Tensor> shared_matmul_workspace_buffer_ = nullptr;
-
   // Only used for QWenVL
   Tensor mrotary_section_tensor_;
 

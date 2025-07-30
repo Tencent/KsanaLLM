@@ -4,7 +4,9 @@
 #pragma once
 
 #include "ksana_llm/layers/attention_layer.h"  // Only for PositionEncoding, try to remove later
+#include "ksana_llm/layers/layer_workspace_manager.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"
+#include "ksana_llm/layers/moe_layer_factory.h"
 #include "ksana_llm/models/base/model_input.h"
 
 namespace ksana_llm {
@@ -13,7 +15,11 @@ template <typename T>
 struct LayerCreationContext {
   std::shared_ptr<BaseWeight> base_weight;
   std::shared_ptr<MatMulLayerFactory<T>> matmul_layer_factory;
+  std::shared_ptr<MoeLayerFactory<T>> moe_layer_factory;
+  std::shared_ptr<LayerWorkspaceManager<T>> workspace_mgr;
+
   std::shared_ptr<Context> context;
+  ModelConfig model_config;
   RuntimeConfig runtime_config;
 
   BufferManager* buffer_mgr_;
@@ -25,9 +31,9 @@ struct LayerCreationContext {
   DataType input_type;
   DataType output_type;
 
-  void Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Tensor>& shared_matmul_workspace_buffer_,
-            std::shared_ptr<Context> context_, int rank_, PipelineConfig& pipeline_config_, ModelConfig& model_config,
-            const RuntimeConfig& runtime_config, BufferManager* buffer_mgr);
+  void Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_, int rank_,
+            PipelineConfig& pipeline_config_, ModelConfig& model_config, const RuntimeConfig& runtime_config,
+            BufferManager* buffer_mgr);
 };
 
 // TODO(robertyuan): clear useless params

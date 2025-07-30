@@ -25,9 +25,12 @@ MoE<T>::MoE(const std::string& up_gate_proj_weight_name, const std::string& down
 template <typename T>
 void MoE<T>::Init(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
                   const LayerCreationContext<T>& creation_context, MoeScaleNormMode moe_scale_norm_mode) {
-  moe_layer_ = creation_context.matmul_layer_factory->AutoCreateMoeLayer(
+  moe_layer_ = creation_context.moe_layer_factory->AutoCreateMoeLayer(
       creation_context.base_weight, std::vector<std::string>{up_gate_proj_weight_name, down_proj_weight_name},
       creation_context.weight_type, creation_context.input_type, creation_context.output_type, {moe_scale_norm_mode});
+
+  moe_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspace(moe_layer_->GetWorkSpaceSize()));
+  moe_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);
 
   up_gate_proj_weight_ = creation_context.base_weight->GetModelWeights(up_gate_proj_weight_name);
   down_proj_weight_ = creation_context.base_weight->GetModelWeights(down_proj_weight_name);

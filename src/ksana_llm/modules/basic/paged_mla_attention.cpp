@@ -65,7 +65,7 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
   paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
   paged_mla_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
                                    creation_context.rank);
-  paged_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.matmul_layer_factory->GetWorkspaceBuffer());
+  paged_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
 
   kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));

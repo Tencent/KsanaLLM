@@ -15,12 +15,14 @@
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
 #include "ksana_llm/layers/marlin_matmul_layer.h"
 #include "ksana_llm/layers/marlin_moe_layer.h"
 #include "ksana_llm/layers/matmul_layer.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"
+#include "ksana_llm/layers/moe_layer.h"
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
@@ -29,8 +31,7 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/search_status.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/layers/grouped_topk_layer.h"
-#include "ksana_llm/layers/moe_layer.h"
+#include "ksana_llm/layers/layer_workspace_manager.h"
 #include "test.h"
 
 #ifdef ENABLE_CUDA
@@ -958,17 +959,19 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
   const bool is_gptq_desc = false;
   const bool is_k_full = false;
   const bool cutlass_use_gemv_cuda_core = false;
-
+  std::shared_ptr<LayerWorkspaceManager<half>> workspace_mgr =
+      std::make_shared<LayerWorkspaceManager<half>>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
-        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
       std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
           TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
           {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
           QUANT_GPTQ, MACHETE_BACKEND);
+      layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+      layer->Preprocess(model_config, runtime_config);
     }
   }
 
@@ -977,9 +980,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
 
   auto t2 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
-        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
@@ -988,6 +990,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
               TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
               {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
               QUANT_GPTQ, MACHETE_BACKEND);
+          layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+          layer->Preprocess(model_config, runtime_config);
         }
       }
     };
@@ -1025,17 +1029,19 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
   const bool is_gptq_desc = false;
   const bool is_k_full = false;
   const bool cutlass_use_gemv_cuda_core = true;
-
+  std::shared_ptr<LayerWorkspaceManager<half>> workspace_mgr =
+      std::make_shared<LayerWorkspaceManager<half>>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
-        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
       std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
           TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
           {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
           QUANT_GPTQ, CUTLASS_BACKEND);
+      layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+      layer->Preprocess(model_config, runtime_config);
     }
   }
 
@@ -1044,9 +1050,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
 
   auto t2 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<Tensor> shared_matmul_workspace_buffer;
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory = std::make_shared<MatMulLayerFactory<half>>(
-        shared_matmul_workspace_buffer, model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
@@ -1055,6 +1060,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
               TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
               {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
               QUANT_GPTQ, CUTLASS_BACKEND);
+          layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+          layer->Preprocess(model_config, runtime_config);
         }
       }
     };

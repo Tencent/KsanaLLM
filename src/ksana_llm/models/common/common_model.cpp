@@ -104,8 +104,8 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   STATUS_CHECK_FAILURE(Singleton<Environment>::GetInstance()->GetBlockManagerConfig(block_manager_config));
 
   // Initialize instances for each layer.
-  layer_creation_context_.Init(base_weight, shared_matmul_workspace_buffer_, context_, rank_, pipeline_config_,
-                               model_config_, runtime_config_, GetBufferManager());
+  layer_creation_context_.Init(base_weight, context_, rank_, pipeline_config_, model_config_, runtime_config_,
+                               GetBufferManager());
 
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {

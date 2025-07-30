@@ -9,14 +9,17 @@
 namespace ksana_llm {
 
 template <typename T>
-void LayerCreationContext<T>::Init(std::shared_ptr<BaseWeight> base_weight_,
-                                   std::shared_ptr<Tensor>& shared_matmul_workspace_buffer_,
-                                   std::shared_ptr<Context> context_, int rank_, PipelineConfig& pipeline_config_,
-                                   ModelConfig& model_config_, const RuntimeConfig& runtime_config,
-                                   BufferManager* buffer_mgr) {
+void LayerCreationContext<T>::Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_,
+                                   int rank_, PipelineConfig& pipeline_config_, ModelConfig& model_config_,
+                                   const RuntimeConfig& runtime_config, BufferManager* buffer_mgr) {
   base_weight = base_weight_;
-  matmul_layer_factory = std::make_shared<MatMulLayerFactory<T>>(shared_matmul_workspace_buffer_, model_config_,
-                                                                 runtime_config, rank_, context_);
+  matmul_layer_factory = std::make_shared<MatMulLayerFactory<T>>(model_config_, runtime_config, rank_, context_);
+  if (model_config_.is_moe) {
+    moe_layer_factory = std::make_shared<MoeLayerFactory<T>>(model_config_, runtime_config, rank_, context_);
+  }
+  workspace_mgr = std::make_shared<LayerWorkspaceManager<T>>(rank_);
+
+  this->model_config = model_config_;
   this->runtime_config = runtime_config;
   context = context_;
   rank = rank_;

@@ -67,7 +67,7 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
 
   flash_mla_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
 
-  flash_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.matmul_layer_factory->GetWorkspaceBuffer());
+  flash_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
 
   kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));

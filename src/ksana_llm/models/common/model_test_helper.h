@@ -36,8 +36,8 @@ class FakeModel {
                              &buffer_mgr_,
                              /*multi_batch_id*/ 0);
     // Initialize instances for each layer.
-    layer_creation_context_.Init(base_weight, shared_matmul_workspace_buffer_, context, rank, pipeline_config,
-                                 model_config, runtime_config, &buffer_mgr_);
+    layer_creation_context_.Init(base_weight, context, rank, pipeline_config, model_config, runtime_config,
+                                 &buffer_mgr_);
 
     Tensor& residual_buffer_tensor = buffers_.local_residual_buffer_tensors_[0];
     host_residual_buffer_tensor_ =
@@ -145,7 +145,6 @@ class FakeModel {
 
   ModelBuffers buffers_;
   ForwardingContext<T> forwarding_context_;
-  std::shared_ptr<Tensor> shared_matmul_workspace_buffer_ = nullptr;
 
   size_t head_num_;
   uint32_t size_per_head_;

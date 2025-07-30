@@ -16,6 +16,9 @@ Bmm<T>::Bmm(const std::string& weight_name, const LayerCreationContext<T>& creat
       creation_context.base_weight, "", TYPE_VOID, creation_context.input_type, creation_context.output_type,
       group_quant_backend, {});
 
+  bmm_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspace(bmm_layer_->GetWorkSpaceSize()));
+  bmm_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);
+
   context_ = creation_context.context;
   rank_ = creation_context.rank;
 
