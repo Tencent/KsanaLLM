@@ -57,20 +57,29 @@ async def _drain_stream(
                 return
 
 
-@raw_router.post("/generate")
-async def generate(req: Request):
+async def forward_request(req: Request, endpoint_path: str):
     """
-    Generate text by routing the request to both prefill and decode nodes
-    and merging the responses into a single stream
+    Generic function to forward requests to both prefill and decode nodes
+    and merge the responses into a single stream
 
-    The prefill handles the initial token generation (prefill phase)
-    while the decode handles the subsequent tokens (decode phase)
+    Args:
+        req: The incoming request
+        endpoint_path: The endpoint path to forward to (e.g., "/generate", "/v1/chat/completions")
     """
+    # Get request method and body
+    method = req.method
     body = await req.body()
-    try:
-        body_json = json.loads(body)
-    except json.JSONDecodeError:
-        body_json = {}
+    
+    # Parse body for POST requests
+    body_json = {}
+    if method in ["POST", "PUT", "PATCH"] and body:
+        try:
+            body_json = json.loads(body)
+        except json.JSONDecodeError:
+            body_json = {}
+
+    # Get query parameters for GET requests
+    query_params = dict(req.query_params)
 
     # Select prefill and decode nodes based on router_rule
     prefill_url = ""
@@ -80,17 +89,17 @@ async def generate(req: Request):
         if available_nodes["prefill"]:
             prefill = pick(available_nodes["prefill"])
             prefill_name = prefill[0]
-            prefill_url = f"http://{prefill[1]}/generate"
+            prefill_url = f"http://{prefill[1]}{endpoint_path}"
         else:
             logger.warning("No available prefill nodes found, using fallback")
             prefill = pick(prefill_nodes)
             prefill_name = prefill[0]
-            prefill_url = f"http://{prefill[1]}/generate"
+            prefill_url = f"http://{prefill[1]}{endpoint_path}"
 
         if available_nodes["decode"]:
             decode = pick(available_nodes["decode"])
             decode_name = decode[0]
-            decode_url = f"http://{decode[1]}/generate"
+            decode_url = f"http://{decode[1]}{endpoint_path}"
         else:
             logger.warning("No available decode nodes found, using fallback")
             decode = pick(decode_nodes)
@@ -118,32 +127,46 @@ async def generate(req: Request):
         # Use fixed configuration
         prefill = pick(PREFILL_NODES)
         prefill_name = prefill[0]
-        prefill_url = f"http://{prefill[1]}/generate"
+        prefill_url = f"http://{prefill[1]}{endpoint_path}"
         decode = pick(DECODE_NODES)
         decode_name = decode[0]
-        decode_url = f"http://{decode[1]}/generate"
+        decode_url = f"http://{decode[1]}{endpoint_path}"
 
     # 全局自增 communication id
-    if not hasattr(generate, "_comm_id"):
-        generate._comm_id = 110
-    comm_id = generate._comm_id
+    if not hasattr(forward_request, "_comm_id"):
+        forward_request._comm_id = 110
+    comm_id = forward_request._comm_id
     headers = {
         "kv-comm-group-key": f"{prefill_name}__{decode_name}",
         "kv-comm-request-id": str(comm_id),
     }
-    logger.info(
-        f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}"
-    )
-    generate._comm_id += 1
+    logger.info(f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}")
+    forward_request._comm_id += 1
 
     async def merged_stream():
         q: asyncio.Queue[bytes] = asyncio.Queue()
 
         async with httpx.AsyncClient(timeout=None) as cli:
-            # ------- 并发建立两个流 -------
-            prod_ctx = cli.stream("POST", prefill_url, json=body_json, headers=headers)
-            cons_ctx = cli.stream("POST", decode_url, json=body_json, headers=headers)
+            # Prepare request parameters based on method
+            request_kwargs = {
+                "headers": headers,
+            }
+            
+            if method in ["POST", "PUT", "PATCH"]:
+                request_kwargs["json"] = body_json
+            elif method == "GET" and query_params:
+                request_kwargs["params"] = query_params
 
+            # ------- 并发建立两个流 -------
+            try:
+                prod_ctx = cli.stream(method, prefill_url, **request_kwargs)
+                cons_ctx = cli.stream(method, decode_url, **request_kwargs)
+            except httpx.RequestError as e:
+                logger.error(f"HTTP stream request failed: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to connect to nodes: {e}"
+                )
             prod_resp, cons_resp = await asyncio.gather(
                 prod_ctx.__aenter__(),
                 cons_ctx.__aenter__(),
@@ -193,3 +216,29 @@ async def generate(req: Request):
             yield EOS + DELIM
 
     return StreamingResponse(merged_stream(), media_type="application/octet-stream")
+
+
+# Universal proxy routes using path wildcards
+@raw_router.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+async def proxy_v1_endpoints(req: Request, path: str):
+    """Handle all /v1/* endpoints with any HTTP method"""
+    return await forward_request(req, f"/v1/{path}")
+
+
+@raw_router.post("/generate")
+async def generate(req: Request):
+    """Handle /generate endpoint (keep for backward compatibility)"""
+    return await forward_request(req, "/generate")
+
+
+# Optional: Add more specific wildcards if needed
+@raw_router.api_route("/v2/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+async def proxy_v2_endpoints(req: Request, path: str):
+    """Handle all /v2/* endpoints with any HTTP method"""
+    return await forward_request(req, f"/v2/{path}")
+
+
+@raw_router.api_route("/api/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+async def proxy_api_endpoints(req: Request, path: str):
+    """Handle all /api/* endpoints with any HTTP method"""
+    return await forward_request(req, f"/api/{path}")
