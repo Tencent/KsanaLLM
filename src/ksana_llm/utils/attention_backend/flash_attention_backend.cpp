@@ -346,27 +346,13 @@ FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetFlashAttention2LibI
   return GetPythonLibInfo("flash_attn_2_cuda", "flash_attn");
 }
 
-// 辅助函数：查找函数符号
-std::string FlashAttentionBackend::FindFunctionSymbol(const std::string& function_name) {
-  auto symbols = runtime_dll_manager_->FindSymbolsContaining(function_name);
-  if (symbols.empty()) {
-    KLLM_LOG_ERROR << "No symbols found containing: " << function_name;
-    return "";
-  }
-
-  // 简单选择第一个找到的符号
-  std::string symbol = symbols[0];
-  KLLM_LOG_DEBUG << "Found symbol for " << function_name << ": " << symbol;
-  return symbol;
-}
-
 // 辅助函数：加载单个函数指针
 template<typename FuncPtrType>
 bool FlashAttentionBackend::LoadSingleFunction(
     const std::string& function_name,
     FuncPtrType& func_ptr,
     const std::string& func_description) {
-  std::string symbol = FindFunctionSymbol(function_name);
+  std::string symbol = runtime_dll_manager_->FindMangledFunctionSymbol(function_name, func_ptr);
   if (symbol.empty()) {
     return false;
   }

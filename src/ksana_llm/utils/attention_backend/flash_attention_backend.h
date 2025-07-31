@@ -90,9 +90,6 @@ class FlashAttentionBackend {
   // 加载函数
   bool LoadFunctions();
 
-  // 辅助函数：查找函数符号
-  std::string FindFunctionSymbol(const std::string& function_name);
-
   // 辅助函数：加载单个函数指针
   template<typename FuncPtrType>
   bool LoadSingleFunction(const std::string& function_name, FuncPtrType& func_ptr, const std::string& func_description);
