@@ -153,6 +153,12 @@ cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 ```
 
+#### 3.3 Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
+
+```bash
+cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
+```
+
 ### 4. Run
 
 #### 4.1 Single

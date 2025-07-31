@@ -8,12 +8,15 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+
+#include <nlohmann/json.hpp>
+
 #include "ksana_llm/connector/config.h"
 #include "ksana_llm/connector/node_info.h"
-#include "ksana_llm/connector/router_client/router_client.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
-#include <nlohmann/json.hpp>
+#include "ksana_llm/connector/router_client/router_client.h"
+#include "ksana_llm/connector/router_client/resolved_endpoint.h"
 
 namespace ksana_llm {
 
@@ -27,7 +30,8 @@ class HTTPRouterClient : public RouterClient {
    * @brief Construct a new RouterClient object
    * @param endpoint The URL endpoint of the router service
    */
-  explicit HTTPRouterClient(const std::string& endpoint) : RouterClient(endpoint), endpoint_(endpoint) {}
+  explicit HTTPRouterClient(const std::string& endpoint) : RouterClient(endpoint), endpoint_(endpoint) {
+  }
 
   /**
    * @brief Check if the router service is reachable and responding
@@ -83,6 +87,7 @@ class HTTPRouterClient : public RouterClient {
 
   // 生成唯一任务ID（内部工具函数）
   std::string GenerateTaskID();
+
 
  private:
   /** @brief Endpoint URL for the router service */

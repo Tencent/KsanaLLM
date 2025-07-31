@@ -17,6 +17,8 @@
 #include <sstream>
 #include <string>
 #include "ksana_llm/utils/socket_util.h"
+#include "ksana_llm/connector/router_client/resolved_endpoint.h"
+
 
 namespace ksana_llm {
 
@@ -51,7 +53,7 @@ std::string HTTPRouterClient::MakeHttpRequest(const std::string& path, const std
   CURL* curl = curl_easy_init();
   std::string response;
   if (curl) {
-    std::string url = endpoint_ + path;
+    std::string url = ResolvedEndpoint::GetResolvedEndpoint(endpoint_) + path;
     KLLM_LOG_INFO << "Making " << method << " request to: " << url;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -387,5 +389,4 @@ Status HTTPRouterClient::SendCommId(const std::string& node_id, const std::strin
     return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Failed to register Communication ID: " + std::string(e.what()));
   }
 }
-
 }  // namespace ksana_llm

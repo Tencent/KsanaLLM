@@ -47,22 +47,16 @@ target_include_directories(connector
         ${CPPZMQ_INCLUDE_DIR}
 )
 
-target_link_libraries(connector PRIVATE
-    utils
-    cppzmq
-    libzmq
-    TBB::tbb
-)
+target_link_libraries(connector PRIVATE utils cppzmq libzmq TBB::tbb ${CURL_LIBRARIES})
 
 if(WITH_CUDA)
     target_link_libraries(connector PRIVATE ${NCCL_LIBRARIES})
 endif()
 
-target_link_libraries(connector PRIVATE ${CURL_LIBRARIES})
-
-get_target_property(_inc_dirs connector INCLUDE_DIRECTORIES)
-message(STATUS "connector include dirs: ${_inc_dirs}")
-
+if(WITH_INTERNAL_LIBRARIES)
+    target_link_libraries(connector PRIVATE  polaris-cpp::polaris_api polaris-cpp::polaris_cl5_api)
+    target_include_directories(connector PUBLIC ${POLARIS_CPP_SOURCE_DIR}/include)
+endif()
 
 # Add testing if enabled
 if(WITH_TESTING)
@@ -72,32 +66,15 @@ if(WITH_TESTING)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
     target_compile_options(connector_test PRIVATE -fno-access-control -g -O0)
-    
-    # Note: No dependencies on mock libraries needed as tests use internal mock control
-    
+
+    target_link_libraries(connector_test PRIVATE connector gtest runtime gtest_main gmock ${CURL_LIBRARIES} TBB::tbb)
+
     if(WITH_CUDA)
-        target_link_libraries(connector_test
-            PRIVATE
-            connector
-            gtest
-            runtime
-            gtest_main
-            gmock
-            ${CURL_LIBRARIES}
-            cuda
-            TBB::tbb
-        )
-    else()
-        target_link_libraries(connector_test
-            PRIVATE
-            connector
-            gtest
-            gtest_main
-            gmock
-            runtime
-            ${CURL_LIBRARIES}
-            TBB::tbb
-        )
+        target_link_libraries(connector_test PRIVATE cuda )
+    endif()
+
+    if(WITH_INTERNAL_LIBRARIES)
+        target_link_libraries(connector_test PRIVATE polaris-cpp::polaris_api polaris-cpp::polaris_cl5_api)
     endif()
     add_test(NAME connector_test COMMAND connector_test)
 endif()

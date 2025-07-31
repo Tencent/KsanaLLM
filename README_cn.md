@@ -154,6 +154,12 @@ cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 ```
 
+#### 3.3 如果需要使用腾讯内部的依赖库，例如北极星名字服务，需要开启以下选项:
+
+```bash
+cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
+```
+
 ### 4. 执行
 
 #### 4.1 单机执行

@@ -39,6 +39,7 @@ message(STATUS "Protobuf binary directory: ${protobuf_BINARY_DIR}")
 
 # 手动设置 Protobuf 的路径
 set(Protobuf_INCLUDE_DIR ${protobuf_SOURCE_DIR}/src)
+set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)
 set(Protobuf_IMPORT_DIRS ${Protobuf_INCLUDE_DIR})
 set(PROTOBUF_PROTOC_EXECUTABLE protobuf::protoc)
 

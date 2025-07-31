@@ -1,24 +1,21 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/connector/router_client/http_router_client.h"
-
 #include <curl/curl.h>
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <cstdlib>
+#include <chrono>
 #include <memory>
-#include <string>
 #include <vector>
-
-#include <nlohmann/json.hpp>
-
+#include <string>
 #include "ksana_llm/connector/node_info.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/socket_util.h"
 #include "ksana_llm/utils/status.h"
 #include "test.h"
+#include "ksana_llm/connector/router_client/http_router_client.h"
+#include "ksana_llm/connector/router_client/resolved_endpoint.h"
 
 using namespace ksana_llm;
 
@@ -929,4 +926,67 @@ TEST_F(RouterClientTest, TestMakeHttpRequestRealNetworkErrors) {
   // Test real 500 error (with fast timeout)
   std::string server_error_response = client.MakeHttpRequest("/status/500", "GET", test_data);
   EXPECT_TRUE(true);  // Should handle 500 gracefully or timeout quickly
+}
+
+// Test suite for ResolvedEndpoint class
+class ResolvedEndpointTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    // Setup for tests
+  }
+
+  void TearDown() override {
+    // Cleanup for tests
+  }
+};
+
+// Test basic functionality of GetResolvedEndpoint
+TEST_F(ResolvedEndpointTest, TestGetResolvedEndpointBasic) {
+  // Test with a simple endpoint
+  std::string test_endpoint = "test.example.com:8080";
+  std::string result = ResolvedEndpoint::GetResolvedEndpoint(test_endpoint);
+
+  // The behavior depends on whether WITH_INTERNAL_LIBRARIES is enabled
+  // In the simple implementation, it should return the original endpoint
+  // In the internal implementation, it might try to resolve via Polaris
+  EXPECT_FALSE(result.empty()) << "Result should not be empty";
+
+  // The input endpoint should remain unchanged
+  EXPECT_EQ(test_endpoint, "test.example.com:8080") << "Input endpoint should not be modified";
+}
+
+// Test GetResolvedEndpoint with various endpoint formats
+TEST_F(ResolvedEndpointTest, TestGetResolvedEndpointVariousFormats) {
+  // Test with IP address
+  std::string ip_endpoint = "192.168.1.100:9090";
+  std::string ip_result = ResolvedEndpoint::GetResolvedEndpoint(ip_endpoint);
+  EXPECT_FALSE(ip_result.empty()) << "Result for IP endpoint should not be empty";
+
+  // Test with localhost
+  std::string localhost_endpoint = "localhost:3000";
+  std::string localhost_result = ResolvedEndpoint::GetResolvedEndpoint(localhost_endpoint);
+  EXPECT_FALSE(localhost_result.empty()) << "Result for localhost endpoint should not be empty";
+
+  // Test with domain without port
+  std::string domain_endpoint = "api.example.com";
+  std::string domain_result = ResolvedEndpoint::GetResolvedEndpoint(domain_endpoint);
+  EXPECT_FALSE(domain_result.empty()) << "Result for domain endpoint should not be empty";
+
+  // Test with empty string
+  std::string empty_endpoint = "";
+  std::string empty_result = ResolvedEndpoint::GetResolvedEndpoint(empty_endpoint);
+  // Should handle empty string gracefully (behavior may vary by implementation)
+  // Don't assert specific behavior for empty string as it's edge case
+}
+
+// Test GetAddrWithPolaris functionality
+TEST_F(ResolvedEndpointTest, TestGetAddrWithPolaris) {
+  std::string test_endpoint = "production/ksana-test-service";
+  std::string result = ResolvedEndpoint::GetAddrWithPolaris(test_endpoint);
+
+  // In the simple implementation, this should return empty string
+  // In the internal implementation, this might return a resolved address or empty if polaris fails
+  // We don't assert specific behavior as it depends on the implementation and environment
+  // Just ensure it doesn't crash
+  EXPECT_TRUE(true) << "GetAddrWithPolaris should execute without crashing";
 }

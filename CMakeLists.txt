@@ -47,6 +47,16 @@ option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
 option(WITH_LIGHTLY_CI_TEST "Enable lightly ci test" ON)
 option(WITH_BOOST "Enable Boost" ON)
 
+# Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
+option(WITH_INTERNAL_LIBRARIES "Enable use of Tencent internal libraries" OFF)
+if(WITH_INTERNAL_LIBRARIES)
+  add_compile_definitions(WITH_INTERNAL_LIBRARIES)
+  message(STATUS "WITH_INTERNAL_LIBRARIES is ON: Tencent internal libraries (e.g. Polaris) will be used.")
+else()
+  message(STATUS "WITH_INTERNAL_LIBRARIES is OFF: Tencent internal libraries (e.g. Polaris) will NOT be used.")
+endif()
+
+
 if(WITH_CLEAR_CACHE)
   add_definitions("-DCLEAR_CACHE")
 endif()
