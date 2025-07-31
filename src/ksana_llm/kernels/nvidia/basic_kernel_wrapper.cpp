@@ -360,14 +360,14 @@ INVOKE_LAYER_NORM(half);
 INVOKE_LAYER_NORM(__nv_bfloat16);
 #undef INVOKE_LAYER_NORM
 
-#define INVOKE_MATMUL(T, CUDA_TYPE)                                                                                    \
-  template <>                                                                                                          \
-  void InvokeMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,            \
-                       const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr,   \
-                       cublasLtMatmulAlgo_t* cublaslt_algo) {                                                          \
-    CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m,   \
-                                                     k, b_ptr, n, CUDA_TYPE, a_ptr, k, CUDA_TYPE, c_ptr, n, CUDA_TYPE, \
-                                                     CUDA_R_32F, stream, workspace_ptr, 0, cublaslt_algo));            \
+#define INVOKE_MATMUL(T, CUDA_TYPE)                                                                                  \
+  template <>                                                                                                        \
+  void InvokeMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,          \
+                       const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr, \
+                       cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size) {                                 \
+    CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                                \
+        cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_ptr, n, CUDA_TYPE, a_ptr, k, CUDA_TYPE, \
+        c_ptr, n, CUDA_TYPE, CUDA_R_32F, stream, workspace_ptr, workspace_size, cublaslt_algo));                     \
   }
 INVOKE_MATMUL(float, CUDA_R_32F);
 INVOKE_MATMUL(half, CUDA_R_16F);
@@ -761,11 +761,12 @@ INSTANTIATE_FP8_E4M3_QUANTIZE(__nv_bfloat16);
     template <>                                                                                                        \
     void Fp8QuantizedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,    \
                                const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale,         \
-                               T* c_ptr, cudaStream_t& stream, cublasLtMatmulAlgo_t* cublaslt_algo, void* workspace) { \
+                               T* c_ptr, cudaStream_t& stream, cublasLtMatmulAlgo_t* cublaslt_algo, void* workspace,   \
+                               size_t workspace_size) {                                                                \
       CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(cublas_handle, cublaslt_handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, \
                                                        k, b_ptr, k, CUDA_R_8F_E4M3, a_ptr, k, CUDA_R_8F_E4M3, c_ptr,   \
-                                                       n, CUDA_TYPE, 1, 1.0f, 0.f, CUDA_R_32F, stream, workspace, 0,   \
-                                                       nullptr, a_scale, b_scale));                                    \
+                                                       n, CUDA_TYPE, 1, 1.0f, 0.f, CUDA_R_32F, stream, workspace,      \
+                                                       workspace_size, nullptr, a_scale, b_scale));                    \
     }
 
 INVOKE_FP8_QUANTIZED_MATMUL(float, CUDA_R_32F);
@@ -976,4 +977,7 @@ INVOKE_SPLIT(half);
 INVOKE_SPLIT(__nv_bfloat16);
 #undef INVOKE_SPLIT
 
+void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ProcessKvList(kv_list, layer_num, block_num, block_size, stream));
+}
 }  // namespace ksana_llm

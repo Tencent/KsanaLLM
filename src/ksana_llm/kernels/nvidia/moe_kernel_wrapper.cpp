@@ -155,15 +155,16 @@ INVOKE_MOE_WNA16_GEMM(__nv_bfloat16);
 
 template <typename T, typename WT, typename OT>
 void GetMoeGemmWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
-                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes) {
+                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes,
+                             std::vector<size_t>& workspace_sizes) {
   auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T, WT, OT>();
   moe_gemm.GetWorkspaceSize(token_num, expert_num, expert_hidden_size, expert_inter_size, expert_topk, tp_size, rank,
-                            use_lora, ws_bytes);
+                            use_lora, ws_bytes, workspace_sizes);
 }
-#define GET_MOE_GEMM_WORKSPACE_SIZE(T, WT, OT)                                                                     \
-  template void GetMoeGemmWorkspaceSize<T, WT, OT>(size_t token_num, size_t expert_num, size_t expert_hidden_size, \
-                                                   size_t expert_inter_size, size_t expert_topk, int tp_size,      \
-                                                   int rank, bool use_lora, size_t& ws_bytes)
+#define GET_MOE_GEMM_WORKSPACE_SIZE(T, WT, OT)                                                                      \
+  template void GetMoeGemmWorkspaceSize<T, WT, OT>(                                                                 \
+      size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size, size_t expert_topk, \
+      int tp_size, int rank, bool use_lora, size_t& ws_bytes, std::vector<size_t>& workspace_sizes)
 GET_MOE_GEMM_WORKSPACE_SIZE(float, float, float);
 GET_MOE_GEMM_WORKSPACE_SIZE(half, half, half);
 #ifdef ENABLE_FP8
@@ -174,11 +175,14 @@ GET_MOE_GEMM_WORKSPACE_SIZE(__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16);
 #undef GET_MOE_GEMM_WORKSPACE_SIZE
 
 template <typename T, typename WT, typename OT>
-size_t InvokeMoeGemmConfigProfile(bool is_fp8) {
+size_t InvokeMoeGemmConfigProfile(std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& tactics,
+                                  bool is_fp8) {
   auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T, WT, OT>();
-  return moe_gemm.GetBestConfigIndex(is_fp8);
+  return moe_gemm.GetBestConfigIndex(tactics, is_fp8);
 }
-#define INVOKE_MOE_GEMM_CONFIG_PROFILE(T, WT, OT) template size_t InvokeMoeGemmConfigProfile<T, WT, OT>(bool is_fp8)
+#define INVOKE_MOE_GEMM_CONFIG_PROFILE(T, WT, OT)        \
+  template size_t InvokeMoeGemmConfigProfile<T, WT, OT>( \
+      std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> & tactics, bool is_fp8)
 INVOKE_MOE_GEMM_CONFIG_PROFILE(float, float, float);
 INVOKE_MOE_GEMM_CONFIG_PROFILE(half, half, half);
 #ifdef ENABLE_FP8
@@ -192,13 +196,14 @@ template <typename T, typename WT, typename OT, llm_kernels::nvidia::MOEExpertSc
 void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, void const* fc1_expert_weights,
                           void const* fc2_expert_weights, void* e_score_correction_bias, int64_t const num_rows,
                           int64_t const hidden_size, int64_t const inter_size, int const num_experts, int const topk,
-                          char* workspace_ptr, void* final_output, void* token_topk_final_scales,
-                          int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, int tp_size,
-                          int rank, bool use_lora, size_t best_config_index, bool use_vllm_moe_,
-                          uint32_t num_expert_group_, uint32_t expert_groups_topk_, const std::string& scoring_func_,
-                          const std::string& topk_method_, bool norm_topk_prob_, float routed_scaling_factor_,
-                          bool use_e_score_correction_bias_, cudaStream_t stream, bool is_fp8, void const* scale1,
-                          void const* scale2, void const* scale3, bool apply_weight) {
+                          std::vector<size_t>& workspace_sizes, char* workspace_ptr, void* final_output,
+                          void* token_topk_final_scales, int* expanded_source_row_to_expanded_dest_row,
+                          int* expert_for_source_row, int tp_size, int rank, bool use_lora, size_t best_config_index,
+                          std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& tactics,
+                          bool use_vllm_moe_, uint32_t num_expert_group_, uint32_t expert_groups_topk_,
+                          const std::string& scoring_func_, const std::string& topk_method_, bool norm_topk_prob_,
+                          float routed_scaling_factor_, bool use_e_score_correction_bias_, cudaStream_t stream,
+                          bool is_fp8, void const* scale1, void const* scale2, void const* scale3, bool apply_weight) {
   auto origin_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<OT>());
   torch::Tensor gating_tensor = torch::from_blob(
       gating_output, {static_cast<int64_t>(num_rows), static_cast<int64_t>(num_experts)}, origin_options);
@@ -215,19 +220,21 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
 
   auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T, WT, OT>();
   moe_gemm.Gemm(input_activations, gating_tensor.data_ptr(), fc1_expert_weights, fc2_expert_weights, num_rows,
-                hidden_size, inter_size, num_experts, topk, workspace_ptr, final_output, token_topk_final_scales,
-                expanded_source_row_to_expanded_dest_row, expert_for_source_row, tp_size, rank, use_lora,
-                best_config_index, NT, stream, is_fp8, scale1, scale2, scale3, custom_routing_function, apply_weight);
+                hidden_size, inter_size, num_experts, topk, workspace_sizes, workspace_ptr, final_output,
+                token_topk_final_scales, expanded_source_row_to_expanded_dest_row, expert_for_source_row, tp_size, rank,
+                use_lora, best_config_index, tactics, NT, stream, is_fp8, scale1, scale2, scale3,
+                custom_routing_function, apply_weight);
 }
 
 #define INVOKE_MOE_CUTLASS_GEMM(T, WT, OT, NT)                                                                         \
   template void InvokeMoeCutlassGemm<T, WT, OT, NT>(                                                                   \
       void const* input_activations, void* gating_output, void const* fc1_expert_weights,                              \
       void const* fc2_expert_weights, void* e_score_correction_bias, int64_t const num_rows,                           \
-      int64_t const hidden_size, int64_t const inter_size, int const num_experts, int const topk, char* workspace_ptr, \
-      void* final_output, void* token_topk_final_scales, int* expanded_source_row_to_expanded_dest_row,                \
-      int* expert_for_source_row, int tp_size, int rank, bool use_lora, size_t best_config_index, bool use_vllm_moe_,  \
-      uint32_t num_expert_group_, uint32_t expert_groups_topk_, const std::string& scoring_func_,                      \
+      int64_t const hidden_size, int64_t const inter_size, int const num_experts, int const topk,                      \
+      std::vector<size_t>& workspace_sizes, char* workspace_ptr, void* final_output, void* token_topk_final_scales,    \
+      int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, int tp_size, int rank, bool use_lora, \
+      size_t best_config_index, std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& tactics,      \
+      bool use_vllm_moe_, uint32_t num_expert_group_, uint32_t expert_groups_topk_, const std::string& scoring_func_,  \
       const std::string& topk_method_, bool norm_topk_prob_, float routed_scaling_factor_,                             \
       bool use_e_score_correction_bias_, cudaStream_t stream, bool is_fp8, void const* scale1, void const* scale2,     \
       void const* scale3, bool apply_weight)

@@ -16,6 +16,7 @@ Status Fp8MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   int parameter_index = 0;
   max_m_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   max_k_ = std::any_cast<const size_t>(parameters[parameter_index++]);
+  cublas_workspace_size_ = InvokeGetCublasWorkspaceSize();
   return Status();
 }
 
@@ -23,8 +24,7 @@ template <typename T>
 size_t Fp8MatMulLayer<T>::GetWorkSpaceSize(const int m, const int k) {
   size_t input_size = m * k * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = GetTypeSize(TYPE_FP32);
-  size_t cublas_size = InvokeGetCublasWorkspaceSize();
-  size_t workspace_size = input_size + scale_size + cublas_size;
+  size_t workspace_size = input_size + scale_size + cublas_workspace_size_;
   return workspace_size;
 }
 
@@ -46,7 +46,7 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
   }
   void* cublas_workspace = workspace_buffer_->GetPtr<void>();
-  void* input_quant = cublas_workspace + InvokeGetCublasWorkspaceSize();
+  void* input_quant = cublas_workspace + cublas_workspace_size_;
   const void* weight_quant = input_tensors[1].GetPtr<const void>();
   const void* weight_scale = input_tensors[1].weight_scales->GetPtr<const void>();
   if (weight_scale == nullptr) {
@@ -88,7 +88,8 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
 
   Fp8QuantizedMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_], m, n, k,
                         input_quant, input_scale, weight_quant, weight_scale, output,
-                        context_->GetComputeStreams()[rank_].Get(), cublaslt_algo_ptr_, cublas_workspace);
+                        context_->GetComputeStreams()[rank_].Get(), cublaslt_algo_ptr_, cublas_workspace,
+                        cublas_workspace_size_);
   cublaslt_algo_ptr_ = nullptr;
   return Status();
 }

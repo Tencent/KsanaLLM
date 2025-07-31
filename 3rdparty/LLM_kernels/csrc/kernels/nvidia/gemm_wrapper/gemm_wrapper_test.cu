@@ -187,7 +187,7 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
     cudaDataType_t compute_type;
     PrepareComputeType<INPUT_DTYPE, OUTPUT_DTYPE>(atype, btype, ctype, compute_type);
     int batch_size = 1;
-    size_t default_ws_size = 0;
+    size_t default_ws_size = GetCublasWorkspaceSize();
 
     // test correctness
     float miss_match_rate = 0.01f;
@@ -224,7 +224,7 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k,
                                                b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                               stream, nullptr, default_ws_size, nullptr));
+                                               stream, nullptr, 0, nullptr));
       CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
       CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
       EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_2", expected_buffer, c_buffer, 1e-4f, 1e-5f,
@@ -277,7 +277,7 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
         CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m,
                                                  k, b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
                                                  c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
-                                                 stream, nullptr, default_ws_size, nullptr));
+                                                 stream, nullptr, 0, nullptr));
       };
       float InvokeCublasGemm_2_time_elapsed_ms =
           MeasureCudaExecutionTime(InvokeCublasGemm_2_cuda_run, stream, warmup_rounds, tested_rounds);
@@ -389,7 +389,7 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       float alpha = 1.0f;
       float beta = 0.0f;
       int batch_size = 1;
-      size_t default_ws_size = 0;
+      size_t default_ws_size = GetCublasWorkspaceSize();
 
       // original cublas
       auto original_cublas_run = [&]() {

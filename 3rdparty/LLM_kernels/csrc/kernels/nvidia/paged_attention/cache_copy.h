@@ -47,5 +47,7 @@ void FlexibleReverseCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_s
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size, float scale, cudaStream_t stream);
 
+void ProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream);
+
 }  // namespace nvidia
 }  // namespace llm_kernels

@@ -79,13 +79,14 @@ float GetCublasGPUElapsedTime(const int warmup_rounds, const int tested_rounds, 
                               cudaDataType_t b_data_type, void* a_buffer, int32_t lda, cudaDataType_t a_data_type,
                               void* c_buffer, int32_t ldc, cudaDataType_t c_data_type, float alpha, float beta,
                               cudaDataType_t compute_type, cudaStream_t& stream, cudaEvent_t& start, cudaEvent_t& stop,
-                              void* workspace_ptr = nullptr, cublasLtMatmulAlgo_t* cublaslt_algo = nullptr) {
+                              void* workspace_ptr = nullptr, size_t workspace_size = 0,
+                              cublasLtMatmulAlgo_t* cublaslt_algo = nullptr) {
   constexpr int batch_count = 1;
   auto cuda_run = [&]() {
     CHECK_NVIDIA_CUDA_ERROR(llm_kernels::nvidia::InvokeCublasGemm(
         cublas_handle, cublaslt_handle, trans_b, trans_a, n_val, m_val, k_val, b_buffer, ldb, b_data_type, a_buffer,
-        lda, a_data_type, c_buffer, ldc, c_data_type, batch_count, alpha, beta, compute_type, stream, workspace_ptr, 0,
-        cublaslt_algo));
+        lda, a_data_type, c_buffer, ldc, c_data_type, batch_count, alpha, beta, compute_type, stream, workspace_ptr,
+        workspace_size, cublaslt_algo));
   };
   return MeasureCudaExecutionTime(cuda_run, stream, warmup_rounds, tested_rounds);
 }
@@ -147,7 +148,8 @@ int main(int argc, char* argv[]) {
   cudaStream_t stream;
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamCreate(&stream));
   void* cublas_workspace_buffer_ptr;
-  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&cublas_workspace_buffer_ptr, llm_kernels::nvidia::GetCublasWorkspaceSize()));
+  size_t workspace_size = llm_kernels::nvidia::GetCublasWorkspaceSize();
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&cublas_workspace_buffer_ptr, workspace_size));
 
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -202,10 +204,11 @@ int main(int argc, char* argv[]) {
           // Loop all GEMM algo candidates and get the lowest latency one as the best algo
           size_t best_algo_idx = 0;
           for (size_t algo_idx = 0; algo_idx < cublas_algos.size(); ++algo_idx) {
-            candidate_algo_time_elapsed_ms = GetCublasGPUElapsedTime(
-                warmup_rounds, tested_rounds, cublas_handle, cublaslt_handle, trans_b, trans_a, n_val, m_val, k_val,
-                b_buffer, ldb, b_data_type, a_buffer, lda, a_data_type, c_buffer, ldc, c_data_type, alpha, beta,
-                compute_type, stream, start, stop, cublas_workspace_buffer_ptr, &(cublas_algos[algo_idx].algo));
+            candidate_algo_time_elapsed_ms =
+                GetCublasGPUElapsedTime(warmup_rounds, tested_rounds, cublas_handle, cublaslt_handle, trans_b, trans_a,
+                                        n_val, m_val, k_val, b_buffer, ldb, b_data_type, a_buffer, lda, a_data_type,
+                                        c_buffer, ldc, c_data_type, alpha, beta, compute_type, stream, start, stop,
+                                        cublas_workspace_buffer_ptr, workspace_size, &(cublas_algos[algo_idx].algo));
 
             if (candidate_algo_time_elapsed_ms < min_cublas_h_search_elapsed_ms) {
               min_cublas_h_search_elapsed_ms = candidate_algo_time_elapsed_ms;

@@ -107,11 +107,7 @@ inline std::optional<bool> IsCudaLaunchBlocking() {
 
 inline void SyncAndCheck(char const* const file, int const line) {
   auto const cuda_launch_blocking = IsCudaLaunchBlocking();
-#ifndef NDEBUG
-  bool const check_error = cuda_launch_blocking.value_or(true);
-#else
   bool const check_error = cuda_launch_blocking.value_or(false);
-#endif
 
   if (check_error) {
     cudaError_t result = cudaDeviceSynchronize();

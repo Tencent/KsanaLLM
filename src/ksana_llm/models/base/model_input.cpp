@@ -11,6 +11,7 @@
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
+#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 
 #include "ksana_llm/profiler/profile_event.h"
@@ -777,10 +778,19 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
               context_->GetD2HStreams()[rank_]);
 
   const int total_block_num = kv_cache_offset_host.back();
+#ifdef ENABLE_CUDA
+  std::vector<void*> kv_list_host(total_block_num * 2);
+#else
   std::vector<void*> kv_list_host(layer_num_on_node_ * total_block_num * 2);
+#endif
   const int k_offset_in_block_layer = GetKoffsetInBlockLayer();
   const int v_offset_in_block_layer = GetVoffsetInBlockLayer();
+#ifdef ENABLE_CUDA
+  // layer_i = [0, 1)
+  for (size_t layer_i = 0; layer_i < 1; ++layer_i) {
+#else
   for (size_t layer_i = 0; layer_i < layer_num_on_node_; ++layer_i) {
+#endif
     const size_t cache_block_offset = layer_i * block_size_ / layer_num_on_node_;
     void** k_ptr = kv_list_host.data() + layer_i * total_block_num * 2;
     void** v_ptr = kv_list_host.data() + layer_i * total_block_num * 2 + total_block_num;
@@ -797,6 +807,15 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
   MemcpyAsync(info.kv_list.GetPtr<void>(), kv_list_host.data(),
               kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
+
+#ifdef ENABLE_CUDA
+  // layer_i = [1, layer_num_on_node_)
+  if (total_block_num > 0 && layer_num_on_node_ > 1) {
+    InvokeProcessKvList(static_cast<void**>(info.kv_list.GetPtr<void>()), layer_num_on_node_, total_block_num * 2,
+                        block_size_, context_->GetD2HStreams()[rank_].Get());
+  }
+#endif
+
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif

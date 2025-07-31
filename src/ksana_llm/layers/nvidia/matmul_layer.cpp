@@ -16,14 +16,22 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const Runti
   rank_ = rank;
   cublas_workspace_ptr_ = nullptr;
   cublaslt_algo_ptr_ = nullptr;
-  if (context_->ext->GetGPUGemmAlgoHelper().IsInit()) {
-    Malloc(&cublas_workspace_ptr_, llm_kernels::nvidia::GetCublasWorkspaceSize());
-  }
   return Status();
 }
 
 template <typename T>
+size_t MatMulLayer<T>::GetWorkSpaceSize() {
+  if (context_->ext->GetGPUGemmAlgoHelper().IsInit() || std::getenv("MATMUL_LAYER_USE_WORKSPACE")) {
+    cublas_workspace_size_ = llm_kernels::nvidia::GetCublasWorkspaceSize();
+  }
+  return cublas_workspace_size_;
+}
+
+template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (cublas_workspace_size_ > 0) {
+    cublas_workspace_ptr_ = workspace_buffer_->GetPtr<void>();
+  }
   if (context_->ext->GetGPUGemmAlgoHelper().IsInit()) {
     uint32_t sm = context_->ext->GetComputeCapacity();
     uint32_t cuda_ver = context_->ext->GetCudaVersion();
@@ -46,12 +54,12 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
     }
   }
 
-  InvokeMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
-                  static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
-                  static_cast<int>(input_tensors[0].shape[1]),
-                  reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                  reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-                  context_->GetComputeStreams()[rank_].Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_);
+  InvokeMatMul<T>(
+      context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
+      static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
+      static_cast<int>(input_tensors[0].shape[1]), reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
+      reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
+      context_->GetComputeStreams()[rank_].Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
 
   output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
   output_tensors[0].dtype = input_tensors[0].dtype;

@@ -55,7 +55,7 @@ class TypeWithCheck {
   // NOCC:runtime/explicit(Desinged like this for elegant)
   TypeWithCheck(T val);
 
-  void SetChecker(std::function<void()> checker);
+  void SetChecker(std::shared_ptr<std::function<void()>> checker);
 
   TypeWithCheck<T>& operator=(T val);
   TypeWithCheck<T>& operator+=(T val);
@@ -67,7 +67,7 @@ class TypeWithCheck {
 
  private:
   T value_;
-  std::function<void()> checker_ = nullptr;
+  std::shared_ptr<std::function<void()>> checker_ = nullptr;
 };
 
 // Wrapper of shape type, trigger if the shape of any dim of shape is assigned.
@@ -81,7 +81,7 @@ class ShapeTypeWithCheck {
 
   ~ShapeTypeWithCheck();
 
-  void SetChecker(std::function<void()> checker);
+  void SetChecker(std::shared_ptr<std::function<void()>> checker);
 
   ShapeTypeWithCheck& operator=(std::vector<size_t> val);
 
@@ -119,7 +119,7 @@ class ShapeTypeWithCheck {
 
  private:
   std::vector<TypeWithCheck<size_t>> val_;
-  std::function<void()> checker_ = nullptr;
+  std::shared_ptr<std::function<void()>> checker_ = nullptr;
 };
 
 // The tensor define, only support contigous memory layout.
@@ -220,7 +220,7 @@ class Tensor {
   std::shared_ptr<int> reference_ = nullptr;
 
   // Check tensor memory size.
-  std::function<void()> checker_ = nullptr;
+  std::shared_ptr<std::function<void()>> checker_ = nullptr;
 
   // The max buffer size, used to check tensor validation.
   size_t max_buffer_size_ = 0;

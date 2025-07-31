@@ -80,7 +80,7 @@ inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 template <typename T>
 size_t MoeLayer<T>::GetWorkSpaceSize() {
   GetMoeGemmWorkspaceSize<T, T, T>(max_token_num_, expert_num_, expert_hidden_size_, expert_inter_size_, expert_topk_,
-                                   tp_size_, rank_, use_lora_, max_ws_bytes_);
+                                   tp_size_, rank_, use_lora_, max_ws_bytes_, workspace_info_.workspace_sizes);
   if (use_vllm_moe_) {
     size_t m = std::min(VLLM_FUSED_MOE_CHUNK_SIZE, max_token_num_);
     topk_weights_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(float));
@@ -128,7 +128,7 @@ template <typename T>
 Status MoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   config_map_.resize(runtime_config.max_batch_size + 1);
   for (size_t m = 1; m <= static_cast<size_t>(runtime_config.max_batch_size); m++) {
-    size_t best_config_index = InvokeMoeGemmConfigProfile<T, T, T>();
+    size_t best_config_index = InvokeMoeGemmConfigProfile<T, T, T>(tactics_);
     config_map_[m] = best_config_index;
   }
   return Status();
@@ -293,22 +293,24 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
           input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
           input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_, expert_topk_, static_cast<char*>(workspace_info_.workspace),
-          output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
+          expert_inter_size_, expert_num_, expert_topk_, workspace_info_.workspace_sizes,
+          static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
-          tp_size_, rank_, use_lora_, best_config_index, use_vllm_moe_, num_expert_group_, expert_groups_topk_,
-          scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_, use_e_score_correction_bias_,
-          context_->GetComputeStreams()[rank_].Get(), false, nullptr, nullptr, nullptr, apply_weight_);
+          tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
+          expert_groups_topk_, scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_,
+          use_e_score_correction_bias_, context_->GetComputeStreams()[rank_].Get(), false, nullptr, nullptr, nullptr,
+          apply_weight_);
     } else if (moe_scale_norm_mode_ == MoeScaleNormMode::NO_NORM) {
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
           input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
           input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_, expert_topk_, static_cast<char*>(workspace_info_.workspace),
-          output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
+          expert_inter_size_, expert_num_, expert_topk_, workspace_info_.workspace_sizes,
+          static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
-          tp_size_, rank_, use_lora_, best_config_index, use_vllm_moe_, num_expert_group_, expert_groups_topk_,
-          scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_, use_e_score_correction_bias_,
-          context_->GetComputeStreams()[rank_].Get(), false, nullptr, nullptr, nullptr, apply_weight_);
+          tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
+          expert_groups_topk_, scoring_func_, topk_method_, norm_topk_prob_, routed_scaling_factor_,
+          use_e_score_correction_bias_, context_->GetComputeStreams()[rank_].Get(), false, nullptr, nullptr, nullptr,
+          apply_weight_);
     }
   }
   output_tensors[0].shape = input_tensors[0].shape;

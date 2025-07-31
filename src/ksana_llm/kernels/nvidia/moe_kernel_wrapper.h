@@ -40,23 +40,26 @@ void InvokeMoeWna16Gemm(cudaStream_t stream, void* output, const void* input, co
 
 template <typename T, typename WT, typename OT>
 void GetMoeGemmWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
-                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes);
+                             size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes,
+                             std::vector<size_t>& workspace_sizes);
 
 template <typename T, typename WT, typename OT>
-size_t InvokeMoeGemmConfigProfile(bool is_fp8 = false);
+size_t InvokeMoeGemmConfigProfile(std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& tactics,
+                                  bool is_fp8 = false);
 
 template <typename T, typename WT, typename OT, llm_kernels::nvidia::MOEExpertScaleNormalizationMode NT>
 void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, void const* fc1_expert_weights,
                           void const* fc2_expert_weights, void* e_score_correction_bias, int64_t const num_rows,
                           int64_t const hidden_size, int64_t const inter_size, int const num_experts, int const topk,
-                          char* workspace_ptr, void* final_output, void* token_topk_final_scales,
-                          int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, int tp_size,
-                          int rank, bool use_lora, size_t best_config_index, bool use_vllm_moe_,
-                          uint32_t num_expert_group_, uint32_t expert_groups_topk_, const std::string& scoring_func_,
-                          const std::string& topk_method_, bool norm_topk_prob_, float routed_scaling_factor_,
-                          bool use_e_score_correction_bias_, cudaStream_t stream, bool is_fp8 = false,
-                          void const* scale1 = nullptr, void const* scale2 = nullptr, void const* scale3 = nullptr,
-                          bool apply_weight = false);
+                          std::vector<size_t>& workspace_sizes, char* workspace_ptr, void* final_output,
+                          void* token_topk_final_scales, int* expanded_source_row_to_expanded_dest_row,
+                          int* expert_for_source_row, int tp_size, int rank, bool use_lora, size_t best_config_index,
+                          std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig>& tactics,
+                          bool use_vllm_moe_, uint32_t num_expert_group_, uint32_t expert_groups_topk_,
+                          const std::string& scoring_func_, const std::string& topk_method_, bool norm_topk_prob_,
+                          float routed_scaling_factor_, bool use_e_score_correction_bias_, cudaStream_t stream,
+                          bool is_fp8 = false, void const* scale1 = nullptr, void const* scale2 = nullptr,
+                          void const* scale3 = nullptr, bool apply_weight = false);
 
 template <typename T>
 void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows, int num_experts,

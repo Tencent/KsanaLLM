@@ -315,5 +315,22 @@ CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCa
 CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #undef CACHE_COPY_FUNCTION_DECLARATION
 
+__global__ void ProcessKvListKernel(void** kv_list, size_t layer_num, size_t block_num, size_t block_size) {
+  size_t layer_idx = blockIdx.y + 1;
+  size_t block_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (layer_idx < layer_num && block_idx < block_num) {
+    kv_list[layer_idx * block_num + block_idx] = kv_list[block_idx] + layer_idx * block_size / layer_num;
+  }
+}
+
+void ProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream) {
+  // for (size_t layer_idx = 1; layer_idx < layer_num; ++layer_idx)
+  //   for (size_t block_idx = 0; block_idx < block_num; ++block_idx)
+  //     kv_list[layer_idx * block_num + block_idx] = kv_list[block_idx] + layer_idx * block_size / layer_num
+  dim3 grid_shape((block_num + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK, layer_num - 1);
+  dim3 block_shape(MAX_THREADS_PER_BLOCK);
+  ProcessKvListKernel<<<grid_shape, block_shape, 0, stream>>>(kv_list, layer_num, block_num, block_size);
+}
+
 }  // namespace nvidia
 }  // namespace llm_kernels

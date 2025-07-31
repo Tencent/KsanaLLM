@@ -1352,8 +1352,9 @@ void CutlassMoeFCRunner<T, WeightType, OutputType, ScaleBiasType, Enable>::confi
     int const num_experts_per_node, int const k, ActivationType activation_type, bool use_lora)
 
 {
-  auto ws_sizes = getWorkspaceBufferSizes(num_rows, hidden_size, inter_size, num_experts, num_experts_per_node, k,
-                                          activation_type, use_lora);
+  auto ws_sizes = workspace_sizes_.empty() ? getWorkspaceBufferSizes(num_rows, hidden_size, inter_size, num_experts,
+                                                                     num_experts_per_node, k, activation_type, use_lora)
+                                           : workspace_sizes_;
 
   std::vector<int8_t*> ws_sliced{(int8_t*)ws_ptr};
   for (auto size : ws_sizes) {
@@ -1456,6 +1457,21 @@ void applyWeightAfterGemm(bool using_hopper, void* const gemm_output, OutputType
         expanded_source_row_to_expanded_dest_row, expert_for_source_row, num_rows, row_size, k, num_valid_tokens_ptr,
         parallelism_config, MOEExpertScaleNormalizationMode::NONE, stream);
   }
+}
+
+template <typename T>
+__global__ void setValueKernel(T* data, T val, size_t num) {
+  size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx < num) {
+    data[idx] = val;
+  }
+}
+
+template <typename T>
+void setValueKernelLauncher(T* data, T val, size_t num, cudaStream_t stream) {
+  int const NUM_THREADS = 1024;
+  int const blocks = (num + NUM_THREADS - 1) / NUM_THREADS;
+  setValueKernel<<<blocks, NUM_THREADS, 0, stream>>>(data, val, num);
 }
 
 template <class T, class WeightType, class OutputType, class ScaleBiasType, class Enable>
@@ -1792,8 +1808,7 @@ void CutlassMoeFCRunner<T, WeightType, OutputType, ScaleBiasType, Enable>::runMo
   }
 
   if (apply_weight) {
-    std::vector<float> ones(expanded_num_rows, 1);
-    cudaMemcpyAsync(permuted_scales_, ones.data(), ones.size() * sizeof(float), cudaMemcpyHostToDevice, stream);
+    setValueKernelLauncher(permuted_scales_, 1.0f, expanded_num_rows, stream);
   }
 
   Self::gemm2(moe_gemm_runner_, fc1_result_, fc2_result_, final_output, expert_first_token_offset_,

@@ -13,6 +13,11 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const Runti
 }
 
 template <typename T>
+size_t MatMulLayer<T>::GetWorkSpaceSize() {
+  return 0;
+}
+
+template <typename T>
 Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   return Status(RET_UNDEFINED_REFERENCE, "MatMulLayer not supported.");
 }

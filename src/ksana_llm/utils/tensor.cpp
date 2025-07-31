@@ -71,15 +71,15 @@ TypeWithCheck<T>::TypeWithCheck(T val) {
 }
 
 template <typename T>
-void TypeWithCheck<T>::SetChecker(std::function<void()> checker) {
+void TypeWithCheck<T>::SetChecker(std::shared_ptr<std::function<void()>> checker) {
   checker_ = checker;
 }
 
 template <typename T>
 TypeWithCheck<T>& TypeWithCheck<T>::operator=(T val) {
   value_ = val;
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
   return *this;
 }
@@ -88,8 +88,8 @@ template <typename T>
 TypeWithCheck<T>& TypeWithCheck<T>::operator+=(T val) {
   if (std::is_integral<T>::value) {
     value_ += val;
-    if (checker_) {
-      checker_();
+    if (checker_ && *checker_) {
+      (*checker_)();
     }
   }
   return *this;
@@ -104,8 +104,8 @@ template <typename T>
 TypeWithCheck<T>& TypeWithCheck<T>::operator-=(T val) {
   if (std::is_integral<T>::value) {
     value_ -= val;
-    if (checker_) {
-      checker_();
+    if (checker_ && *checker_) {
+      (*checker_)();
     }
   }
   return *this;
@@ -119,8 +119,8 @@ TypeWithCheck<DataType>& TypeWithCheck<DataType>::operator-=(DataType val) {
 template <typename T>
 TypeWithCheck<T>::TypeWithCheck(const TypeWithCheck<T>& other) {
   value_ = other.value_;
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
 }
 
@@ -141,14 +141,14 @@ ShapeTypeWithCheck::ShapeTypeWithCheck(const std::vector<size_t> val) {
 
 ShapeTypeWithCheck::~ShapeTypeWithCheck() {}
 
-void ShapeTypeWithCheck::SetChecker(std::function<void()> checker) { checker_ = checker; }
+void ShapeTypeWithCheck::SetChecker(std::shared_ptr<std::function<void()>> checker) { checker_ = checker; }
 
 ShapeTypeWithCheck& ShapeTypeWithCheck::operator=(std::vector<size_t> val) {
   val_.resize(val.size());
   std::transform(val.begin(), val.end(), val_.begin(),
                  [](size_t v) -> TypeWithCheck<size_t> { return TypeWithCheck<size_t>(v); });
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
   return *this;
 }
@@ -182,15 +182,15 @@ bool ShapeTypeWithCheck::empty() const { return val_.empty(); }
 
 void ShapeTypeWithCheck::resize(std::vector<size_t>::size_type count) {
   val_.resize(count);
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
 }
 
 void ShapeTypeWithCheck::resize(std::vector<size_t>::size_type count, const std::vector<size_t>::value_type& value) {
   val_.resize(count, value);
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
 }
 
@@ -205,8 +205,8 @@ const TypeWithCheck<size_t>& ShapeTypeWithCheck::front() const { return val_.fro
 std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::erase(
     std::vector<TypeWithCheck<size_t>>::iterator pos) {
   auto result = val_.erase(pos);
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
   return result;
 }
@@ -214,8 +214,8 @@ std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::erase(
 std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::insert(
     std::vector<TypeWithCheck<size_t>>::const_iterator pos, const TypeWithCheck<size_t>& value) {
   auto result = val_.insert(pos, value);
-  if (checker_) {
-    checker_();
+  if (checker_ && *checker_) {
+    (*checker_)();
   }
   return result;
 }
@@ -338,7 +338,7 @@ void Tensor::AssignMembers(const Tensor& other) {
 void Tensor::InitializeChecker() {
   location.SetErrorMessage("The location could not be modified.");
 
-  checker_ = [this]() -> void {
+  checker_ = std::make_shared<std::function<void()>>([this]() -> void {
     DataType dtype_impl = DataType(this->dtype);
     if (dtype_impl == DataType::TYPE_INVALID) {
       return;
@@ -354,7 +354,7 @@ void Tensor::InitializeChecker() {
       KLLM_THROW(fmt::format("The tensor dtype {} and shape {} with offset {} exceed max memory size {}.", dtype_impl,
                              Vector2Str(dims), this->offset, this->max_buffer_size_));
     }
-  };
+  });
   dtype.SetChecker(checker_);
   shape.SetChecker(checker_);
   offset.SetChecker(checker_);

@@ -2,6 +2,9 @@
 ==============================================================================*/
 #pragma once
 #include "csrc/utils/nvidia/workspace.h"
+#ifdef ENABLE_CUDA
+#  include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
+#endif
 #include "ksana_llm/layers/base_layer.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/models/base/base_weight.h"
@@ -17,6 +20,7 @@ struct WorkspaceInfo {
   void* selected_experts{};
   void* lora_workspace{};
   size_t size{};
+  std::vector<size_t> workspace_sizes;
 };
 #ifdef ENABLE_CUDA
 template <typename T>
@@ -108,6 +112,7 @@ class MoeLayer : public BaseLayer {
 
   // GroupedTopk layer for handling topk computation
   std::shared_ptr<GroupedTopkLayer<T>> grouped_topk_layer_;
+  std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 };
 #endif
 }  // namespace ksana_llm

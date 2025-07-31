@@ -129,7 +129,7 @@ void InvokeLayerNorm(const void* input, const void* weight, const void* bias, co
 template <typename T>
 void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                   const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr,
-                  cublasLtMatmulAlgo_t* cublaslt_algo);
+                  cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0);
 
 template <typename T>
 void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m, int n,
@@ -209,7 +209,8 @@ void Fp8E4m3Quantize(int num_channels, int channel_size, const T* input_ptr, voi
 template <typename T>
 void Fp8QuantizedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                         const void* a_ptr, const void* a_scale, const void* b_ptr, const void* b_scale, T* c_ptr,
-                        cudaStream_t& stream, cublasLtMatmulAlgo_t* cublaslt_algo, void* workspace);
+                        cudaStream_t& stream, cublasLtMatmulAlgo_t* cublaslt_algo, void* workspace,
+                        size_t workspace_size = 0);
 
 void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
                     cudaStream_t& stream);
@@ -242,5 +243,7 @@ void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps
 template <typename T>
 void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs, std::vector<int>& col_offsets,
                  int rows, int cols, int num_outputs, cudaStream_t& stream);
+
+void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream);
 
 }  // namespace ksana_llm

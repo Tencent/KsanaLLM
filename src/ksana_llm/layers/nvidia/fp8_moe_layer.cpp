@@ -19,7 +19,7 @@ template <typename T, typename WT>
 size_t Fp8MoeLayer<T, WT>::GetWorkSpaceSize() {
   GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_, this->expert_hidden_size_,
                                      this->expert_inter_size_, this->expert_topk_, this->tp_size_, this->rank_,
-                                     this->use_lora_, this->max_ws_bytes_);
+                                     this->use_lora_, this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
   quant_buffer_size_ = this->max_token_num_ * this->expert_hidden_size_ * GetTypeSize(TYPE_FP8_E4M3);
   this->max_ws_bytes_ += quant_buffer_size_;
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for Fp8MoeLayer", this->rank_, this->max_ws_bytes_);
@@ -41,7 +41,7 @@ Status Fp8MoeLayer<T, WT>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& wor
 template <typename T, typename WT>
 Status Fp8MoeLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   bool is_fp8 = true;
-  best_config_index_ = InvokeMoeGemmConfigProfile<WT, WT, T>(is_fp8);
+  best_config_index_ = InvokeMoeGemmConfigProfile<WT, WT, T>(this->tactics_, is_fp8);
   return Status();
 }
 
@@ -91,11 +91,11 @@ Status Fp8MoeLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
         input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
         input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_, this->expert_topk_,
+        this->expert_inter_size_, this->expert_num_, this->expert_topk_, this->workspace_info_.workspace_sizes,
         static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
         this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
-        best_config_index_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
+        best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
         this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
         this->use_e_score_correction_bias_, this->context_->GetComputeStreams()[this->rank_].Get(), is_fp8,
         fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);
@@ -103,11 +103,11 @@ Status Fp8MoeLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
         input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
         input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_, this->expert_topk_,
+        this->expert_inter_size_, this->expert_num_, this->expert_topk_, this->workspace_info_.workspace_sizes,
         static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
         this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
-        best_config_index_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
+        best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
         this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
         this->use_e_score_correction_bias_, this->context_->GetComputeStreams()[this->rank_].Get(), is_fp8,
         fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);

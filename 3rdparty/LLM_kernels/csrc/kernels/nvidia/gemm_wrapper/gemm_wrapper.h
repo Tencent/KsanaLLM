@@ -17,28 +17,43 @@
 namespace llm_kernels {
 namespace nvidia {
 
-// NOTE(karlluo): default cublas workspace is 32MB
-#define DEFAULT_CUBLAS_WORKSPACE_SIZE 33554432
 #define DEFAULT_CUBLAS_BATCH_GEMM_SIZE 3
 
 inline size_t GetCublasWorkspaceSize() {
+  int device;
+  cudaDeviceProp prop;
+  cudaGetDevice(&device);                  // 获取当前设备
+  cudaGetDeviceProperties(&prop, device);  // 获取设备属性
+  size_t default_workspace_size = 1024ul;
+  // 根据SM版本确定工作空间大小 (2025年已知架构)
+  // 参考：https://docs.nvidia.com/cuda/cublas/#cublassetworkspace
+  if (prop.major == 9 && prop.minor == 0) {  // Hopper (sm90)
+    default_workspace_size *= 32 * 1024ul;   // 32 MiB
+  } else if (prop.major == 10) {             // Blackwell sm10x
+    default_workspace_size *= 32 * 1024ul;   // 32 MiB
+  } else if (prop.major == 12) {             // Blackwell sm12x
+    default_workspace_size *= 12 * 1024ul;   // 12 MiB
+  } else {                                   // 其他架构
+    default_workspace_size *= 4 * 1024ul;    // 4 MiB
+  }
+  // 根据环境变量确定工作空间大小
   const char* val = std::getenv("CUBLASLT_WORKSPACE_SIZE");
   size_t workspace_size = 32 * 1024ul;
   if (val) {
     try {
       workspace_size = std::stoi(val);
     } catch (std::invalid_argument const& e) {
-      std::cerr << "invalid CUBLASLT_WORKSPACE_SIZE, using default workspace size of " << DEFAULT_CUBLAS_WORKSPACE_SIZE
+      std::cerr << "invalid CUBLASLT_WORKSPACE_SIZE, using default workspace size of " << default_workspace_size
                 << " bytes.";
-      return DEFAULT_CUBLAS_WORKSPACE_SIZE;
+      return default_workspace_size;
     } catch (std::out_of_range const& e) {
-      std::cerr << "CUBLASLT_WORKSPACE_SIZE out of range, using default workspace size of "
-                << DEFAULT_CUBLAS_WORKSPACE_SIZE << " bytes.";
-      return DEFAULT_CUBLAS_WORKSPACE_SIZE;
+      std::cerr << "CUBLASLT_WORKSPACE_SIZE out of range, using default workspace size of " << default_workspace_size
+                << " bytes.";
+      return default_workspace_size;
     }
     return workspace_size * 1024ul;
   } else {
-    return DEFAULT_CUBLAS_WORKSPACE_SIZE;
+    return default_workspace_size;
   }
 }
 

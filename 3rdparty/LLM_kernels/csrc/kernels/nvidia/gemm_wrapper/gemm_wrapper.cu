@@ -76,11 +76,11 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
-                                cudaStream_t& stream, void* workspace_ptr,size_t workspace_size) {
+                                cudaStream_t& stream, void* workspace_ptr, size_t workspace_size) {
   cublasLtMatmulAlgo_t* cublaslt_algo = nullptr;
   return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
                           b_type, c_ptr, ldc, c_type, /*batch_size */ 1, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f,
-                          compute_type, stream, workspace_ptr, workspace_size,cublaslt_algo);
+                          compute_type, stream, workspace_ptr, workspace_size, cublaslt_algo);
 }
 
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
@@ -88,22 +88,23 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
-                                cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,cublasLtMatmulAlgo_t* cublaslt_algo) {
-  return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
-                          b_type, c_ptr, ldc, c_type, /*batch_size */ 1, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f,
-                          compute_type, stream, workspace_ptr,workspace_size, cublaslt_algo);
-}
-
-cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
-                                cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
-                                const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
-                                const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
-                                const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
-                                const int32_t batch_count, cudaStream_t& stream, void* workspace_ptr,size_t workspace_size,
+                                cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,
                                 cublasLtMatmulAlgo_t* cublaslt_algo) {
   return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
+                          b_type, c_ptr, ldc, c_type, /*batch_size */ 1, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f,
+                          compute_type, stream, workspace_ptr, workspace_size, cublaslt_algo);
+}
+
+cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
+                                cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
+                                const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
+                                const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
+                                const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
+                                const int32_t batch_count, cudaStream_t& stream, void* workspace_ptr,
+                                size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo) {
+  return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
                           b_type, c_ptr, ldc, c_type, batch_count, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f, compute_type,
-                          stream, workspace_ptr,workspace_size, cublaslt_algo);
+                          stream, workspace_ptr, workspace_size, cublaslt_algo);
 }
 
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
@@ -111,8 +112,9 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, const int32_t batch_count, float f_alpha,
-                                float f_beta, cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,
-                                cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale, const void* b_scale) {
+                                float f_beta, cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
+                                size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale,
+                                const void* b_scale) {
   // NOTE(karlluo): half no static cast in regular c_ptr++
   half h_alpha = (half)(f_alpha);
   half h_beta = (half)(f_beta);
@@ -173,8 +175,7 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
     RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
                                                               &b_scale, sizeof(b_scale)));
   }
-  workspace_size =
-      (workspace_ptr == nullptr) ? 0ul : (workspace_size > 0 ? workspace_size : DEFAULT_CUBLAS_WORKSPACE_SIZE);
+  workspace_size = (workspace_ptr == nullptr ? 0ul : workspace_size);
   bool is_use_cublaslt_algo = (cublaslt_algo != nullptr) && (workspace_size > 0);
 
   RETURN_NVIDIA_CUBLAS_ERROR(

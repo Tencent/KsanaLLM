@@ -182,6 +182,7 @@ class CutlassMoeFCRunnerInterface {
                      cutlass_extensions::CutlassGemmConfig config, bool apply_weight = false) = 0;
 
   virtual size_t getGemmWorkspaceSize(int num_experts) const = 0;
+  virtual void setGemmWorkspaceSizes(std::vector<size_t>& workspace_sizes) = 0;
 
   bool is_profiler = false;
   bool use_deterministic_hopper_reduce_ = false;
@@ -332,16 +333,22 @@ class CutlassMoeFCRunner : public CutlassMoeFCRunnerInterface {
     return moe_gemm_runner_.getMaxWorkspaceSize(num_experts);
   }
 
+
+  virtual void setGemmWorkspaceSizes(std::vector<size_t>& workspace_sizes) override {
+    workspace_sizes_ = workspace_sizes;
+  }
+
+  std::vector<size_t> getWorkspaceBufferSizes(int64_t const num_rows, int64_t const hidden_size,
+                                              int64_t const inter_size, int const num_experts,
+                                              int const num_experts_per_node, int const k,
+                                              ActivationType activation_type, bool use_lora) const;
+
  private:
   static HopperGroupedGemmInput computeStridesHopper(int64_t const* expert_first_token_offset,
                                                      HopperGroupedGemmInput layout_info, int64_t gemm_n, int64_t gemm_k,
                                                      int const num_experts, T const* in, WeightType const* weights,
                                                      float const* fp8_dequant, T const* bias,
                                                      UnfusedGemmOutputType* output, cudaStream_t stream);
-  std::vector<size_t> getWorkspaceBufferSizes(int64_t const num_rows, int64_t const hidden_size,
-                                              int64_t const inter_size, int const num_experts,
-                                              int const num_experts_per_node, int const k,
-                                              ActivationType activation_type, bool use_lora) const;
   void configureWsPtrs(char* ws_ptr, int64_t const num_rows, int64_t const hidden_size, int64_t const inter_size,
                        int const num_experts, int const num_experts_per_node, int const k,
                        ActivationType activation_type, bool use_lora);
@@ -406,6 +413,7 @@ class CutlassMoeFCRunner : public CutlassMoeFCRunnerInterface {
 
   HostLoraWorkspace host_lora_workspace_;
   RoutingFunctionType custom_routing_function_;
+  std::vector<size_t> workspace_sizes_;
 };
 
 void topkGatingSoftmaxKernelLauncher(float const* input, bool const* finished, float* output,

@@ -15,12 +15,15 @@ namespace nvidia {
 template <typename T, typename WT, typename OT>
 void MoeGemmWrapper<T, WT, OT>::GetWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size,
                                                  size_t expert_inter_size, size_t expert_topk, int tp_size, int rank,
-                                                 bool use_lora, size_t& ws_bytes) {
+                                                 bool use_lora, size_t& ws_bytes,
+                                                 std::vector<size_t>& workspace_sizes) {
   llm_kernels::nvidia::MOEParallelismConfig parallelism_config(tp_size, rank, 1, 0);
   auto moe_gemm = std::make_shared<llm_kernels::nvidia::CutlassMoeFCRunner<T, WT, OT>>();
+  workspace_sizes = moe_gemm->getWorkspaceBufferSizes(token_num, expert_hidden_size, expert_inter_size, expert_num,
+                                                      expert_num / parallelism_config.ep_size, expert_topk,
+                                                      llm_kernels::nvidia::ActivationType::Swiglu, use_lora);
   size_t moe_workspace_size =
-      moe_gemm->getWorkspaceSize(token_num, expert_hidden_size, expert_inter_size, expert_num, expert_topk,
-                                 llm_kernels::nvidia::ActivationType::Swiglu, parallelism_config, use_lora);
+      llm_kernels::utils::calculateTotalWorkspaceSize(workspace_sizes.data(), workspace_sizes.size());
   // Output of post-softmax routing probabilities
   size_t scale_probabilities_size = token_num * expert_num * sizeof(float);
   // Permutation map
@@ -36,13 +39,14 @@ void MoeGemmWrapper<T, WT, OT>::GetWorkspaceSize(size_t token_num, size_t expert
 }
 
 template <typename T, typename WT, typename OT>
-size_t MoeGemmWrapper<T, WT, OT>::GetBestConfigIndex(bool is_fp8) {
+size_t MoeGemmWrapper<T, WT, OT>::GetBestConfigIndex(std::vector<cutlass_extensions::CutlassGemmConfig>& tactics,
+                                                     bool is_fp8) {
   size_t best_config_index = 0;
   auto moe_gemm = std::make_shared<llm_kernels::nvidia::CutlassMoeFCRunner<T, WT, OT>>();
   std::vector<cutlass_extensions::CutlassGemmConfig> configs;
 
   int sm = GetSMVersion();
-  auto tactics = moe_gemm->getFilteredTactics(sm, is_fp8);
+  tactics = moe_gemm->getFilteredTactics(sm, is_fp8);
   bool is_sm90 = sm >= 90;
   // TODO(winminkong): profile and select best config index
   auto it = std::find_if(tactics.begin(), tactics.end(), [is_sm90](auto& c) { return c.is_sm90 == is_sm90; });
@@ -57,10 +61,11 @@ template <typename T, typename WT, typename OT>
 void MoeGemmWrapper<T, WT, OT>::Gemm(void const* input_activations_void, void const* gating_output,
                                      void const* fc1_expert_weights_void, void const* fc2_expert_weights_void,
                                      int64_t const num_rows, int64_t const hidden_size, int64_t const inter_size,
-                                     int const num_experts, int const topk, char* workspace_ptr,
-                                     void* final_output_void, void* token_topk_final_scales_void,
+                                     int const num_experts, int const topk, std::vector<size_t>& workspace_sizes,
+                                     char* workspace_ptr, void* final_output_void, void* token_topk_final_scales_void,
                                      int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row,
                                      int tp_size, int rank, bool use_lora, size_t best_config_index,
+                                     std::vector<cutlass_extensions::CutlassGemmConfig>& tactics,
                                      MOEExpertScaleNormalizationMode moe_norm_mode, cudaStream_t stream, bool is_fp8,
                                      void const* scale1_void, void const* scale2_void, void const* scale3_void,
                                      RoutingFunctionType custom_routing_function, bool apply_weight) {
@@ -75,8 +80,8 @@ void MoeGemmWrapper<T, WT, OT>::Gemm(void const* input_activations_void, void co
   LoraParams lora_params{};
 
   auto moe_gemm = std::make_shared<llm_kernels::nvidia::CutlassMoeFCRunner<T, WT, OT>>();
-  std::vector<cutlass_extensions::CutlassGemmConfig> configs = moe_gemm->getFilteredTactics(GetSMVersion(), is_fp8);
-  moe_gemm->setTactic(configs[best_config_index], configs[best_config_index]);
+  moe_gemm->setTactic(tactics[best_config_index], tactics[best_config_index]);
+  moe_gemm->setGemmWorkspaceSizes(workspace_sizes);
 
   // mixtral : MOEExpertScaleNormalizationMode::RENORMALIZE
   // qwen2_moe : MOEExpertScaleNormalizationMode::NONE

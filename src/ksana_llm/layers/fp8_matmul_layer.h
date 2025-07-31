@@ -26,6 +26,7 @@ class Fp8MatMulLayer : public BaseLayer {
 
 #  ifdef ENABLE_CUDA
   void* cublas_workspace_ptr_{nullptr};
+  size_t cublas_workspace_size_{0};
   int cublas_workspace_block_id_{-1};
   cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
 #  endif

@@ -19,8 +19,11 @@ class MatMulLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
+  virtual size_t GetWorkSpaceSize() override;
+
  private:
 #ifdef ENABLE_CUDA
+  size_t cublas_workspace_size_{0};
   void* cublas_workspace_ptr_{nullptr};
   cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
 #endif

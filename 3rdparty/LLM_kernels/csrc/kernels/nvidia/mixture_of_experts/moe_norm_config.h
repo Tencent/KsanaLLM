@@ -14,7 +14,7 @@ enum class MOEExpertScaleNormalizationMode : int {
 
 enum class RoutingFunctionType : int {
   GREEDY_TOPK_SOFTMAX_SCORE = 1,  // fused topk with softmax
-  FAST_TOPK_SIGMOID_SCORE         // fast topk with sigmoid
+  FAST_TOPK_SIGMOID_SCORE = 2     // fast topk with sigmoid
 };
 
 }  // namespace nvidia
