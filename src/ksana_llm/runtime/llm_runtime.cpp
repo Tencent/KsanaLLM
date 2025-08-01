@@ -530,9 +530,9 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
   // Inference forward.
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   if (epilogue && !context_->IsStandalone()) {
-    multi_batch_controller_->NotifyOtherBatchCanRun();
+    auto next_multi_batch_id = multi_batch_controller_->NotifyOtherBatchCanRun();
     KLLM_LOG_DEBUG << "unlock multi_batch_id=" << schedule_output->multi_batch_id << ", start to recv hiddens";
-    multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id);
+    multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id, next_multi_batch_id);
     SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
     RecvHiddenUnits(schedule_output->multi_batch_id);
 

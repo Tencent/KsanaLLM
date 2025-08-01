@@ -18,24 +18,25 @@ MultiBatchController::MultiBatchController(int max_pp_batch_size) {
 void MultiBatchController::WaitUtilCurrentBatchCanRun(int multi_batch_id) {
   PROFILE_EVENT_SCOPE(WaitUtilCurrentBatchCanRun_, fmt::format("WaitUtilCurrentBatchCanRun_", multi_batch_id));
   std::unique_lock<std::mutex> lock(multi_batch_running_mtx_);
-  KLLM_LOG_DEBUG << "wait to run multi_batch_id=" << multi_batch_id
-                 << ", current_running_id=" << current_running_multi_batch_id_;
+  KLLM_LOG_COMMUNICATION << "wait to run multi_batch_id=" << multi_batch_id
+                         << ", current_running_id=" << current_running_multi_batch_id_;
   if (current_running_multi_batch_id_ == kInvalidMultiBatchId) {
     constexpr bool force_change = true;
     current_running_multi_batch_id_ = GetNextRunningBatchId(current_running_multi_batch_id_, force_change);
   }
   multi_batch_keep_order_cv_.wait(
       lock, [this, multi_batch_id]() { return multi_batch_id == current_running_multi_batch_id_; });
-  KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id << " running.";
+  KLLM_LOG_COMMUNICATION << "multi_batch_id=" << multi_batch_id << " running.";
 }
 
-void MultiBatchController::NotifyOtherBatchCanRun(bool force_change) {
+int MultiBatchController::NotifyOtherBatchCanRun(bool force_change) {
   std::unique_lock<std::mutex> lock(multi_batch_running_mtx_);
   auto last_id = current_running_multi_batch_id_;
   current_running_multi_batch_id_ = GetNextRunningBatchId(current_running_multi_batch_id_, force_change);
-  KLLM_LOG_DEBUG << "unlocked current multi_batch_id=" << last_id
-                 << ", and multi_batch_id=" << current_running_multi_batch_id_ << " can be run.";
+  KLLM_LOG_COMMUNICATION << "unlocked current multi_batch_id=" << last_id
+                         << ", and multi_batch_id=" << current_running_multi_batch_id_ << " can be run.";
   multi_batch_keep_order_cv_.notify_all();
+  return current_running_multi_batch_id_;
 }
 
 int MultiBatchController::GetNextRunningBatchId(int cur_multi_batch_id, bool force_change) {
@@ -56,7 +57,8 @@ int MultiBatchController::GetNextRunningBatchId(int cur_multi_batch_id, bool for
     KLLM_LOG_WARNING << "No more multi_batch task threads ready.";
     return kInvalidMultiBatchId;
   } else {
-    KLLM_LOG_DEBUG << "all other batch threads are not ready, next keep using current batch id " << cur_multi_batch_id;
+    KLLM_LOG_COMMUNICATION << "all other batch threads are not ready, next keep using current batch id "
+                           << cur_multi_batch_id;
     return cur_multi_batch_id;
   }
 }
@@ -72,29 +74,32 @@ int MultiBatchController::GetRunningTasksNum() {
   return cnt;
 }
 
-void MultiBatchController::WaitUtilCanRecvCurrentHiddenUnits(int multi_batch_id) {
-  PROFILE_EVENT_SCOPE(WaitUtilCanRecv_, fmt::format("WaitUtilCanRecv_", multi_batch_id));
-  KLLM_LOG_DEBUG << "start waiting to recv multi_batch_id=" << multi_batch_id
-                 << ", current running:" << current_running_multi_batch_id_;
+void MultiBatchController::WaitUtilCanRecvCurrentHiddenUnits(int cur_multi_batch_id, int next_multi_batch_id) {
+  PROFILE_EVENT_SCOPE(WaitUtilCanRecv_, fmt::format("WaitUtilCanRecvCurrentHiddenUnits", cur_multi_batch_id));
+  KLLM_LOG_COMMUNICATION << "start waiting to recv multi_batch_id=" << cur_multi_batch_id
+                         << ", current running:" << current_running_multi_batch_id_;
   std::unique_lock<std::mutex> lock(multi_batch_need_recv_mtx_);
-  multi_batch_can_recv_hiddens_cv_.wait(lock, [this, multi_batch_id] {
+  multi_batch_can_recv_hiddens_cv_.wait(lock, [this, cur_multi_batch_id, next_multi_batch_id] {
+    if (cur_multi_batch_id == next_multi_batch_id) {
+      return true;
+    }
     if (need_recv_hiddens_multi_batch_ids_.size() > 1) {
       int last_id = need_recv_hiddens_multi_batch_ids_.front();
-      return last_id == multi_batch_id;
+      return last_id == cur_multi_batch_id;
     } else {
       return GetRunningTasksNum() <= 1;
     }
   });
   need_recv_hiddens_multi_batch_ids_.pop();
-  KLLM_LOG_DEBUG << "now can recv multi_batch_id=" << multi_batch_id
-                 << ", current running_id:" << current_running_multi_batch_id_;
+  KLLM_LOG_COMMUNICATION << "now can recv multi_batch_id=" << cur_multi_batch_id
+                         << ", current running_id:" << current_running_multi_batch_id_;
 }
 
 void MultiBatchController::NotifyLastBatchHiddenUnitCanRecv(int cur_muilt_batch_id) {
   std::unique_lock<std::mutex> lock(multi_batch_need_recv_mtx_);
   need_recv_hiddens_multi_batch_ids_.push(cur_muilt_batch_id);
   multi_batch_can_recv_hiddens_cv_.notify_all();
-  KLLM_LOG_DEBUG << "set can recv last multi_batch_id=" << need_recv_hiddens_multi_batch_ids_.front();
+  KLLM_LOG_COMMUNICATION << "set can recv last multi_batch_id=" << need_recv_hiddens_multi_batch_ids_.front();
 }
 
 void MultiBatchController::MultiBatchThreadIsReady(int multi_batch_id) {
@@ -108,7 +113,7 @@ void MultiBatchController::MultiBatchThreadIsNotReady(int multi_batch_id) {
 }
 
 void MultiBatchController::NotifyCurrentBatchThreadNotReady(int cur_muilt_batch_id) {
-  KLLM_LOG_DEBUG << "notify not ready cur_muilt_batch_id=" << cur_muilt_batch_id;
+  KLLM_LOG_COMMUNICATION << "notify not ready cur_muilt_batch_id=" << cur_muilt_batch_id;
   MultiBatchThreadIsNotReady(cur_muilt_batch_id);
   constexpr bool force_change = true;
   NotifyOtherBatchCanRun(force_change);

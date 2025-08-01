@@ -16,7 +16,7 @@ namespace ksana_llm {
 
 InferenceServer::InferenceServer(const std::string &config_file, const EndpointConfig &endpoint_config) {
   InitLoguru();
-  KLLM_LOG_INFO << "Log INFO level: " << GetLevelName(GetLogLevel());
+  KLLM_LOG_INFO << "Log levels: " << Vector2Str(GetLogLevels());
 
   KLLM_LOG_INFO << "Init inference server with config file: " << config_file;
   auto env = Singleton<Environment>::GetInstance();

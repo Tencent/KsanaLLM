@@ -23,10 +23,10 @@ class MultiBatchController  {
   void WaitUtilCurrentBatchCanRun(int multi_batch_id);
 
   // Notify current multi_batch_id can be running, and keep current multi_batch_id or not
-  void NotifyOtherBatchCanRun(bool force_change = false);
+  int NotifyOtherBatchCanRun(bool force_change = false);
 
   // Wait util current multi_batch_id can recv hidden units
-  void WaitUtilCanRecvCurrentHiddenUnits(int multi_batch_id);
+  void WaitUtilCanRecvCurrentHiddenUnits(int cur_multi_batch_id, int next_multi_batch_id);
 
   ////// for recv hiddens order
   // Notify last batch id can recv hidden units at current id

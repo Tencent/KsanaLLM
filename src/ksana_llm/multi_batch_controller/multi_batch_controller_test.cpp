@@ -16,7 +16,10 @@ using namespace ksana_llm;
 
 class MultiBatchControllerTest : public testing::Test {
  protected:
-  static void SetUpTestSuite() { InitLoguru(); }
+  static void SetUpTestSuite() {
+    setenv("KLLM_LOG_LEVEL", "COMMUNICATION", 1);
+    InitLoguru();
+  }
 
   void SetUp() override { Reset(4); }
 
@@ -114,9 +117,9 @@ class MultiBatchControllerTest : public testing::Test {
       StepPreface(batch_id);
 
       multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(batch_id);
-      multi_batch_controller_->NotifyOtherBatchCanRun();
+      auto next_multi_batch_id = multi_batch_controller_->NotifyOtherBatchCanRun();
 
-      multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(batch_id);
+      multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(batch_id, next_multi_batch_id);
       RecordRecvOrder(batch_id);
 
       multi_batch_controller_->WaitUtilCurrentBatchCanRun(batch_id);
