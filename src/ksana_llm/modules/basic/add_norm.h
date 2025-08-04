@@ -14,7 +14,7 @@ template <typename T>
 class AddNorm {
  public:
   // Disable a default constructor
-  AddNorm(const std::string& weight_name, float norm_eps, const LayerCreationContext<T>& creation_context);
+  AddNorm(const std::string& weight_name, float norm_eps, const LayerCreationContext& creation_context);
 
   ~AddNorm();
 

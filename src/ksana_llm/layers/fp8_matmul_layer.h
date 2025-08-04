@@ -8,7 +8,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Fp8MatMulLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -19,6 +18,10 @@ class Fp8MatMulLayer : public BaseLayer {
   size_t GetWorkSpaceSize(const int m, const int k);
 
   virtual size_t GetWorkSpaceSize() override;
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  private:
   int max_m_;

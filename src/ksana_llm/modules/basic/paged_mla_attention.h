@@ -15,7 +15,7 @@ class PagedMlaAttention {
  public:
   // Disable a default constructor
   PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
-                    const LayerCreationContext<T>& creation_context, const AttentionCreationConfig& attn_config);
+                    const LayerCreationContext& creation_context, const AttentionCreationConfig& attn_config);
 
   ~PagedMlaAttention() = default;
 

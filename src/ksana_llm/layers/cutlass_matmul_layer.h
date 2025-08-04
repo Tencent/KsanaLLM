@@ -21,7 +21,7 @@ namespace ksana_llm {
  * - 在M小于5时，支持速度更快的cuda gemv计算
  * - 支持half和bfloat16的激活类型
  */
-template <typename T, DataType WT>
+
 class CutlassMatMulLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -34,6 +34,22 @@ class CutlassMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+  template <typename T>
+  Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+               std::shared_ptr<Context> context, int rank);
+
+  template <typename T>
+  size_t GetWorkSpaceSizeT();
+
+  template <typename T>
+  Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
+
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+ private:
+  DataType weight_data_type_;
+
   bool is_awq_;
 
   size_t max_m_, max_n_, max_k_;

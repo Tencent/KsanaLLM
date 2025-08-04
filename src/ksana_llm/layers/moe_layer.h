@@ -23,7 +23,6 @@ struct WorkspaceInfo {
   std::vector<size_t> workspace_sizes;
 };
 #ifdef ENABLE_CUDA
-template <typename T>
 class MoeLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -40,6 +39,19 @@ class MoeLayer : public BaseLayer {
  private:
   // 执行 GroupedTopk 计算的辅助函数
   Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens);
+
+  template <typename T>
+  Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+               std::shared_ptr<Context> context, int rank);
+
+  template <typename T>
+  size_t GetWorkSpaceSizeT();
+
+  template <typename T>
+  Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);
+
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  protected:
   bool set_workspace_buffer_info_ = true;
@@ -111,7 +123,7 @@ class MoeLayer : public BaseLayer {
   WorkspaceInfo workspace_info_;
 
   // GroupedTopk layer for handling topk computation
-  std::shared_ptr<GroupedTopkLayer<T>> grouped_topk_layer_;
+  std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 };
 #endif

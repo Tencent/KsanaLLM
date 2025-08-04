@@ -8,7 +8,7 @@ namespace ksana_llm {
 
 template <typename T>
 CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,
-                                            LayerCreationContext<T>& creation_context,
+                                            LayerCreationContext& creation_context,
                                             ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx), cla_share_factor_(cla_share_factor), cla_buffers_(cla_buffers) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -49,7 +49,7 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
 template <typename T>
 Status CrossLayerAttention<T>::QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_tensors_0,
                                                 std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                ForwardingContext<T>& forwarding_context) {
+                                                ForwardingContext& forwarding_context) {
   if (cla_share_factor_ == 0) {
     return Status();
   }
@@ -86,7 +86,7 @@ Status CrossLayerAttention<T>::QKVClaBufferCopy(std::vector<Tensor>& hidden_buff
 template <typename T>
 Status CrossLayerAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                        std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                       ForwardingContext<T>& forwarding_context) {
+                                       ForwardingContext& forwarding_context) {
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);

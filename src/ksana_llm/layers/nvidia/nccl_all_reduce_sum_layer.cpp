@@ -4,12 +4,11 @@
 
 #include "ksana_llm/layers/nccl_all_reduce_sum_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
-
+#include "ksana_llm/utils/nvidia/nccl_utils.h"
 namespace ksana_llm {
 
-template <typename T>
-Status NcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                      std::shared_ptr<Context> context, int rank) {
+Status NcclAllReduceSumLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                   std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
 
   // When using cudaMalloc and reduce operations with P2P enabled, the system may hang. This issue may be a bug in NCCL
@@ -21,9 +20,7 @@ Status NcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, c
   return Status();
 }
 
-template <typename T>
-Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+Status NcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl stream just enable when IsRunContextDecodeAndDecodeSerially == false
   cudaStream_t* stream;
@@ -40,7 +37,7 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
     }
     ncclResult_t ncclError =
         ncclAllReduce(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-                      input_tensors[0].GetElementNumber(), GetNcclDataType<T>(), ncclSum,
+                      input_tensors[0].GetElementNumber(), GetNcclDataType(inter_data_type_), ncclSum,
                       context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
@@ -55,9 +52,5 @@ Status NcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class NcclAllReduceSumLayer<float>;
-template class NcclAllReduceSumLayer<half>;
-template class NcclAllReduceSumLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

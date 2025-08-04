@@ -12,7 +12,7 @@ namespace ksana_llm {
 template <typename T>
 class Add {
  public:
-  explicit Add(const LayerCreationContext<T>& creation_context, const std::string& weight_name = "");
+  explicit Add(const LayerCreationContext& creation_context, const std::string& weight_name = "");
 
   ~Add();
 

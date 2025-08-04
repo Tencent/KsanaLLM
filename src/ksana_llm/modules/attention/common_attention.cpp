@@ -8,8 +8,7 @@ namespace ksana_llm {
 
 template <typename T>
 CommonAttention<T>::CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm,
-                                    LayerCreationContext<T>& creation_context,
-                                    ModelCreationConfig& model_creation_config)
+                                    LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   attn_o_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
@@ -35,7 +34,7 @@ CommonAttention<T>::CommonAttention(int layer_idx, bool is_neox, bool use_qk_nor
 template <typename T>
 Status CommonAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                    std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                   ForwardingContext<T>& forwarding_context) {
+                                   ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   auto& shared_buffer_tensors = reduce_buffer_tensors;
   auto& paged_buffer_tensors = reduce_buffer_tensors;

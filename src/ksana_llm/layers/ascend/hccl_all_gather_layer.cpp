@@ -6,9 +6,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status HcclAllGatherLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                   std::shared_ptr<Context> context, int rank) {
+Status HcclAllGatherLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   context_ = context;
   rank_ = rank;
@@ -28,8 +27,7 @@ Status HcclAllGatherLayer<T>::Init(const std::vector<std::any>& parameters, cons
   return Status();
 }
 
-template <typename T>
-Status HcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status HcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   output_tensors[0].dtype = input_tensors[0].dtype;
   size_t tp_size = context_->GetTensorParallelSize();
   if (tp_size == 1) {
@@ -58,9 +56,5 @@ Status HcclAllGatherLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   output_tensors[0].shape = {h, tp_size * w_per};
   return Status();
 }
-
-template class HcclAllGatherLayer<float>;
-template class HcclAllGatherLayer<float16>;
-template class HcclAllGatherLayer<bfloat16>;
 
 }  // namespace ksana_llm

@@ -222,6 +222,7 @@ TEST_F(QuantWeightTest, ProcessMlaFp8E4m3BlockWiseScaleOfWeightTest) {
   model_config.head_num = 1;
   model_config.mla_config.kv_lora_rank = 2;
   model_config.quant_config.weight_block_size = {2, 2};
+  runtime_config.inter_data_type = model_config.weight_data_type;
 
   std::vector<size_t> kv_b_weight_shape = {
       model_config.head_num * (model_config.mla_config.qk_nope_head_dim + model_config.mla_config.v_head_dim),

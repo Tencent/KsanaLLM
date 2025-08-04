@@ -6,18 +6,13 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status BatchedMatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+Status BatchedMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                    std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
 
-template <typename T>
-Status BatchedMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status BatchedMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   return Status(RET_UNDEFINED_REFERENCE, "BatchedMatMulLayer not supported.");
 }
-template class BatchedMatMulLayer<float>;
-template class BatchedMatMulLayer<float16>;
-template class BatchedMatMulLayer<bfloat16>;
 }  // namespace ksana_llm

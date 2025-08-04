@@ -10,7 +10,7 @@ namespace ksana_llm {
 
 template <typename T>
 FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
-                                        const LayerCreationContext<T>& creation_context,
+                                        const LayerCreationContext& creation_context,
                                         const AttentionCreationConfig& attn_config)
     : context_(creation_context.context), rank_(creation_context.rank) {
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;

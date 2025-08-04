@@ -10,7 +10,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Bmm<T>::Bmm(const std::string& weight_name, const LayerCreationContext<T>& creation_context,
+Bmm<T>::Bmm(const std::string& weight_name, const LayerCreationContext& creation_context,
             const GroupQuantBackend& group_quant_backend) {
   bmm_layer_ = creation_context.matmul_layer_factory->AutoCreateLayer(
       creation_context.base_weight, "", TYPE_VOID, creation_context.input_type, creation_context.output_type,

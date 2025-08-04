@@ -8,7 +8,7 @@ namespace ksana_llm {
 
 template <typename T>
 HunyuanDecoderLayer<T>::HunyuanDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, int cla_share_factor,
-                                            ClaBuffers& cla_buffers, LayerCreationContext<T>& creation_context,
+                                            ClaBuffers& cla_buffers, LayerCreationContext& creation_context,
                                             ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx), moe_buffer_(moe_buffer) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -38,7 +38,7 @@ HunyuanDecoderLayer<T>::HunyuanDecoderLayer(int layer_idx, TensorBuffer* moe_buf
 
 template <typename T>
 Status HunyuanDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                       ForwardingContext<T>& forwarding_context) {
+                                       ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   // Pre attn layernorm
@@ -74,7 +74,7 @@ Status HunyuanDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, con
 template <typename T>
 Status HunyuanDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                           std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                          ForwardingContext<T>& forwarding_context) {
+                                          ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
   auto& gated_buffer_ = reduce_buffer_tensors;
   // Expert gating MatMul
@@ -111,13 +111,13 @@ HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const R
 }
 
 template <typename T>
-Status HunyuanLargeModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status HunyuanLargeModel<T>::CreateLayers(LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config) {
   return hunyuan_large_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status HunyuanLargeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status HunyuanLargeModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(hunyuan_large_.Forward(residual_buffer, forwarding_context));
@@ -137,7 +137,7 @@ Status HunyuanLarge<T>::GetModelRunConfig(ModelRunConfig& model_run_config, cons
 }
 
 template <typename T>
-Status HunyuanLarge<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status HunyuanLarge<T>::CreateLayers(LayerCreationContext& creation_context,
                                      ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
   cla_share_factor_ = model_config.cla_share_factor;
@@ -160,7 +160,7 @@ Status HunyuanLarge<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 }
 
 template <typename T>
-Status HunyuanLarge<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status HunyuanLarge<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {

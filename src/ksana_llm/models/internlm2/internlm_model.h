@@ -14,8 +14,8 @@ class Internlm2 : public ModelInterface<T> {
   ~Internlm2() = default;
 
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
@@ -29,8 +29,8 @@ class Internlm2Model : public CommonModel<T> {
   ~Internlm2Model() {}
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

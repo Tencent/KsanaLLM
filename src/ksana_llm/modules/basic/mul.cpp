@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Mul<T>::Mul(const LayerCreationContext<T>& creation_context) {
+Mul<T>::Mul(const LayerCreationContext& creation_context) {
   mul_layer_ = std::make_shared<MulLayer<T>>();
   mul_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }

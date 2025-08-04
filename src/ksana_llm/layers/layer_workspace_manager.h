@@ -22,7 +22,7 @@ namespace ksana_llm {
 
 // Assumption: workspaces of all layers can be reused.
 // TODO(robertyuan): minimize workspace buffer
-template <typename T>
+
 class LayerWorkspaceManager {
  public:
   explicit LayerWorkspaceManager(const int rank) : rank_(rank) {}

@@ -13,7 +13,7 @@ template <typename T>
 class Mul {
  public:
   // Disable a default constructor
-  explicit Mul(const LayerCreationContext<T>& creation_context);
+  explicit Mul(const LayerCreationContext& creation_context);
 
   ~Mul() = default;
 

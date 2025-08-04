@@ -20,7 +20,7 @@ namespace ksana_llm {
 
 template <typename T>
 MultiHeadAttention<T>::MultiHeadAttention(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_norm,
-                                          LayerCreationContext<T>& creation_context,
+                                          LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config)
     : add_qkv_bias_(add_qkv_bias) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -40,7 +40,7 @@ MultiHeadAttention<T>::MultiHeadAttention(int layer_idx, bool is_neox, bool add_
 template <typename T>
 Status MultiHeadAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                       std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                      ForwardingContext<T>& forwarding_context) {
+                                      ForwardingContext& forwarding_context) {
   {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     // Attn proj MatMul

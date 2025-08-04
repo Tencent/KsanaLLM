@@ -21,23 +21,23 @@ class ExpertParallelDataTransfer {
   ExpertParallelDataTransfer();
   ~ExpertParallelDataTransfer() {}
   // Get a reference for hidden buffer.
-  std::vector<Tensor>& GetHiddenUnitBufferRef(ForwardingContext<T>& forwarding_context);
+  std::vector<Tensor>& GetHiddenUnitBufferRef(ForwardingContext& forwarding_context);
   std::vector<Tensor>& GetExpertRecvHiddenUnitBufferRef(HiddenUnitDeviceBuffer* hidden_unit,
-                                                        ForwardingContext<T>& forwarding_context);
+                                                        ForwardingContext& forwarding_context);
   // Broadcast hidden state to other expert parallel nodes.
-  void SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context,
+  void SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context,
                                  bool is_sync);
-  std::vector<Tensor>& RecvHiddenUnitBufferForEP(ForwardingContext<T>& forwarding_context);
-  std::vector<Tensor>& AsyncRecvHiddenUnitBufferForEP(ForwardingContext<T>& forwarding_context);
+  std::vector<Tensor>& RecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context);
+  std::vector<Tensor>& AsyncRecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context);
   // Combine hidden state from other ep-worker after moe.
-  void CombineHiddenUnitBufferForEP(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context);
+  void CombineHiddenUnitBufferForEP(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context);
   // Set hidden state,
   HiddenUnitDeviceBuffer* SetHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
-                                                   ForwardingContext<T>& forwarding_context);
+                                                   ForwardingContext& forwarding_context);
   // Set hidden state,
   HiddenUnitDeviceBuffer* SetCommMetaHiddenUnitBufferForEP(expert_parallel_comm_meta& meta, DataType dtype,
-                                                           ForwardingContext<T>& forwarding_context);
-  void FreeHiddenUnitDeviceBuffer(ForwardingContext<T>& forwarding_context);
+                                                           ForwardingContext& forwarding_context);
+  void FreeHiddenUnitDeviceBuffer(ForwardingContext& forwarding_context);
 
  private:
   std::vector<Tensor> distributed_device_buffer_;

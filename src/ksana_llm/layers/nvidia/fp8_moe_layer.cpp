@@ -8,15 +8,25 @@
 #include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
-#ifdef ENABLE_CUDA
-template <typename T, typename WT>
-Status Fp8MoeLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                std::shared_ptr<Context> context, int rank) {
-  return MoeLayer<T>::Init(parameters, runtime_config, context, rank);
+#define WT fp8e4m3  // TODO(robertyuan): Only support fp8e4m3 rightnow.
+
+Status Fp8MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
+  return MoeLayer::Init(parameters, runtime_config, context, rank);
 }
 
-template <typename T, typename WT>
-size_t Fp8MoeLayer<T, WT>::GetWorkSpaceSize() {
+size_t Fp8MoeLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT_WO_float(inter_data_type_); }
+
+Status Fp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+  LAYER_PreprocessT_WO_float(inter_data_type_, model_config, runtime_config);
+}
+
+Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT_WO_float(inter_data_type_, input_tensors, output_tensors);
+}
+
+template <typename T>
+size_t Fp8MoeLayer::GetWorkSpaceSizeT() {
   GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_, this->expert_hidden_size_,
                                      this->expert_inter_size_, this->expert_topk_, this->tp_size_, this->rank_,
                                      this->use_lora_, this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
@@ -26,8 +36,7 @@ size_t Fp8MoeLayer<T, WT>::GetWorkSpaceSize() {
   return this->max_ws_bytes_;
 }
 
-template <typename T, typename WT>
-Status Fp8MoeLayer<T, WT>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+Status Fp8MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   this->workspace_buffer_ = workspace_buffer;
   this->scale_probabilities_size_ = this->max_token_num_ * this->expert_num_ * sizeof(float);
   this->src_to_dest_map_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);
@@ -38,15 +47,15 @@ Status Fp8MoeLayer<T, WT>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& wor
   return Status();
 }
 
-template <typename T, typename WT>
-Status Fp8MoeLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+template <typename T>
+Status Fp8MoeLayer::PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   bool is_fp8 = true;
   best_config_index_ = InvokeMoeGemmConfigProfile<WT, WT, T>(this->tactics_, is_fp8);
   return Status();
 }
 
-template <typename T, typename WT>
-Status Fp8MoeLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+template <typename T>
+Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts
   const size_t num_tokens = input_tensors[0].shape[0];
   bool is_fp8 = true;
@@ -117,11 +126,7 @@ Status Fp8MoeLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors, std
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-#  ifdef ENABLE_FP8
-template class Fp8MoeLayer<half, __nv_fp8_e4m3>;
-template class Fp8MoeLayer<__nv_bfloat16, __nv_fp8_e4m3>;
-#  endif
 
-#endif
+#undef WT
 
 }  // namespace ksana_llm

@@ -9,16 +9,20 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status BatchedMatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                   std::shared_ptr<Context> context, int rank) {
+Status BatchedMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
+  inter_data_type_ = runtime_config.inter_data_type;
   return Status();
 }
 
+Status BatchedMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status BatchedMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status BatchedMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_CHECK_WITH_INFO(input_tensors.size() == 2, "shoud have two input tensors.");
   KLLM_CHECK_WITH_INFO(input_tensors[0].shape.size() == 3, "input tensors shape size should be 3.");
   KLLM_CHECK_WITH_INFO(input_tensors[1].shape.size() == 3, "input tensors shape size should be 3.");
@@ -53,9 +57,4 @@ Status BatchedMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, 
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class BatchedMatMulLayer<float>;
-template class BatchedMatMulLayer<half>;
-template class BatchedMatMulLayer<__nv_bfloat16>;
-
 }  // namespace ksana_llm

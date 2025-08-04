@@ -17,15 +17,15 @@ template <typename T>
 class HunyuanDecoderLayer {
  public:
   HunyuanDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, int cla_share_factor, ClaBuffers& cla_buffers,
-                      LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+                      LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
   ~HunyuanDecoderLayer() = default;
 
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   Status ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                    const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                    const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;
@@ -50,8 +50,8 @@ class HunyuanLarge : public ModelInterface<T> {
   ~HunyuanLarge() = default;
 
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   // for cla (if the model not use cross of attention, default nullptr)
@@ -69,10 +69,10 @@ class HunyuanLargeModel : public CommonModel<T> {
                     std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
 
   // Execute the forward of specific layers.
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

@@ -9,7 +9,6 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-template <typename T>
 class MarlinMoeLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -22,6 +21,10 @@ class MarlinMoeLayer : public BaseLayer {
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+
+ private:
+  template <typename T>
+  size_t GetWorkSpaceSizeT();
 
  private:
   MoeScaleNormMode moe_scale_norm_mode_;

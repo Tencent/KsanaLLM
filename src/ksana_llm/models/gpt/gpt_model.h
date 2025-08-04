@@ -25,27 +25,27 @@ namespace ksana_llm {
 template <typename T>
 class GPTDecoderLayer {
  public:
-  GPTDecoderLayer(int layer_idx, LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config,
+  GPTDecoderLayer(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
                   TensorBuffer* mlp_temp_buffer_);
   ~GPTDecoderLayer() {}
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   Status ForwardMlp(std::vector<Tensor>& mlp_temp_buffer_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
                     std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                    ForwardingContext<T>& forwarding_context);
+                    ForwardingContext& forwarding_context);
 
   Status ForwardMha(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                    const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                    const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
   Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               ForwardingContext<T>& forwarding_context);
+                               ForwardingContext& forwarding_context);
 
   Status PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               ForwardingContext<T>& forwarding_context);
+                               ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;
@@ -77,8 +77,8 @@ class Gpt : public ModelInterface<T> {
   Gpt() {}
   ~Gpt() = default;
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   std::map<int, std::shared_ptr<GPTDecoderLayer<T>>> decoder_layers_;
@@ -94,10 +94,10 @@ class GptModel : public CommonModel<T> {
   ~GptModel() {}
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
 
   // Execute the forward of specific layers.
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
   void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
 

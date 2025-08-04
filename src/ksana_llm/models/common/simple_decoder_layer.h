@@ -20,11 +20,11 @@ namespace ksana_llm {
 template <typename T>
 class SimpleDecoderLayer {
  public:
-  SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias, LayerCreationContext<T>& creation_context,
+  SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias, LayerCreationContext& creation_context,
                      ModelCreationConfig& model_creation_config);
   ~SimpleDecoderLayer() {}
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;

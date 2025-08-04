@@ -141,10 +141,10 @@ class FakeModel {
   std::shared_ptr<Context> context_;
   int rank_;
 
-  LayerCreationContext<T> layer_creation_context_;
+  LayerCreationContext layer_creation_context_;
 
   ModelBuffers buffers_;
-  ForwardingContext<T> forwarding_context_;
+  ForwardingContext forwarding_context_;
 
   size_t head_num_;
   uint32_t size_per_head_;

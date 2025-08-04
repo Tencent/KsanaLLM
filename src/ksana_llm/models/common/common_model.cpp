@@ -21,8 +21,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-void RecordRequestSchedEventWithFContext(ForwardingContext<T>& forwarding_context, const char* type,
+void RecordRequestSchedEventWithFContext(ForwardingContext& forwarding_context, const char* type,
                                          RequestEventPhase phase) {
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, type, phase);
@@ -81,7 +80,7 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
     // Initialize all forwarding contexts in the buffer
     forwarding_context_buffer_.reserve(forwarding_context_buffer_size);
     for (size_t multi_batch_id = 0; multi_batch_id < forwarding_context_buffer_size; ++multi_batch_id) {
-      auto forwarding_context = std::make_unique<ForwardingContext<T>>();
+      auto forwarding_context = std::make_unique<ForwardingContext>();
       // TODO(karlluo): each forwarding_context binding different model buffer
       forwarding_context->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
                                model_buffers_.buffers_.get(), GetBufferManager(), multi_batch_id);
@@ -183,13 +182,13 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
 template <typename T>
 float* CommonModel<T>::GetLogitsPtr(size_t multi_batch_id) {
   SetDevice(rank_);
-  ForwardingContext<T>* forwarding_context = GetForwardingContext(multi_batch_id);
+  ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
   return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>();
 }
 
 template <typename T>
 Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                                         ForwardingContext<T>& forwarding_context) {
+                                         ForwardingContext& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
   memcpy(input_tokens_ptr, forwarding_context.GetModelInput()->input_ids_cpu.data(),
          forwarding_context.GetModelInput()->input_ids_cpu.size() * sizeof(int));
@@ -201,7 +200,7 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
 }
 
 template <typename T>
-Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext<T>& forwarding_context) {
+Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context) {
   // Wait the computation of input_ids.
   StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->input_ids_event);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
@@ -302,7 +301,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
 }
 
 template <typename T>
-std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>& forwarding_context) {
+std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext& forwarding_context) {
   if (context_->IsStandalone()) {
     return model_buffers_.local_residual_buffer_tensors_;
   }
@@ -343,7 +342,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext<T>
 }
 
 template <typename T>
-std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext<T>& forwarding_context, bool do_recv) {
+std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext& forwarding_context, bool do_recv) {
   if (do_recv) {
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::Begin);
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
@@ -415,8 +414,7 @@ Status CommonModel<T>::FreeResources(size_t multi_batch_id) {
 }
 
 template <typename T>
-void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer,
-                                         ForwardingContext<T>& forwarding_context) {
+void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   if (forwarding_context.IsForwardingLayers()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::End);
   }
@@ -434,7 +432,7 @@ void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer,
 }
 
 template <typename T>
-ForwardingContext<T>* CommonModel<T>::GetForwardingContext(size_t multi_batch_id) {
+ForwardingContext* CommonModel<T>::GetForwardingContext(size_t multi_batch_id) {
   {
     std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
     auto it = schedule_to_context_map_.find(multi_batch_id);
@@ -451,7 +449,7 @@ Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm:
                                std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
   // Get the forwarding context for this multi_batch_id
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  ForwardingContext<T>* forwarding_context = GetForwardingContext(multi_batch_id);
+  ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
   KLLM_LOG_DEBUG << "start forward multi_batch_id=" << forwarding_context->GetMultiBatchId() << ", rank=" << rank_;
 
   PROFILE_EVENT_SCOPE(
@@ -494,7 +492,7 @@ Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm:
 }
 
 template <typename T>
-Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
+Status CommonModel<T>::LookupEmbedding(ForwardingContext& forwarding_context,
                                        std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                                        std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   KLLM_LOG_DEBUG << "start lookup embedding multi_batch_id=" << forwarding_context.GetMultiBatchId()
@@ -532,7 +530,7 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext<T>& forwarding_context,
 }
 
 template <typename T>
-Status CommonModel<T>::LmHead(ForwardingContext<T>& forwarding_context,
+Status CommonModel<T>::LmHead(ForwardingContext& forwarding_context,
                               std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                               std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;

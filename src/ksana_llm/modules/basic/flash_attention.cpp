@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext<T>& creation_context,
+FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext& creation_context,
                                   const AttentionCreationConfig& attn_config)
     : reuse_prefix_caching_(attn_config.reuse_prefix_caching),
       context_(creation_context.context),

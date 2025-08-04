@@ -14,12 +14,12 @@ namespace ksana_llm {
 template <typename T>
 class MixtralDecoderLayer {
  public:
-  MixtralDecoderLayer(int layer_idx, LayerCreationContext<T>& creation_context,
+  MixtralDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
                       ModelCreationConfig& model_creation_config);
   ~MixtralDecoderLayer() = default;
 
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;
@@ -40,8 +40,8 @@ class Mixtral : public ModelInterface<T> {
   ~Mixtral() = default;
 
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   std::map<int, std::shared_ptr<MixtralDecoderLayer<T>>> decoder_layers_;
@@ -55,8 +55,8 @@ class MixtralModel : public CommonModel<T> {
   ~MixtralModel() = default;
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

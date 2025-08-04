@@ -66,7 +66,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
  public:
   using CommonModel<T>::model_config_;
 
-  ForwardingContext<T>* forwarding_context_;
+  ForwardingContext* forwarding_context_;
 
   using CommonModel<T>::cast_layer_;
 
@@ -86,7 +86,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
 
   ~MultiHeadLatentAttentionTestModel() { CommonModel<T>::FreeResources(schedule_id); }
 
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override {
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
                                                creation_context.runtime_config, mla_buffers_);
     bool is_neox = true;
@@ -96,7 +96,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
     return Status();
   }
 
-  Status LayerForward(ForwardingContext<T>& forwarding_context_, const RunMode run_mode = RunMode::kMain) override {
+  Status LayerForward(ForwardingContext& forwarding_context_, const RunMode run_mode = RunMode::kMain) override {
     return Status();
   }
 
@@ -351,6 +351,7 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
@@ -369,6 +370,7 @@ TEST_F(MlaTest, ForwardTest) {
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
@@ -386,6 +388,7 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();

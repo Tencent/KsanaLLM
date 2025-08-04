@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class CustomAllReduceSumLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -24,6 +23,10 @@ class CustomAllReduceSumLayer : public BaseLayer {
       delete reduce_op_;
     }
   }
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  private:
   void** signals_;

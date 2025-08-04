@@ -312,6 +312,9 @@ struct RuntimeConfig {
 
   // TODO(robertyuan): No body set it?
   bool embed_tokens_use_cpu{false};  // Embed_tokens gather operation is processed on the CPU.
+
+  // data type of intermediate data: input data and output data type of kernels
+  DataType inter_data_type;
 };
 
 class ScheduleConfigParser {

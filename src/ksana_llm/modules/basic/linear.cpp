@@ -7,7 +7,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Linear<T>::Linear(const std::string& weight_name, const LayerCreationContext<T>& creation_context,
+Linear<T>::Linear(const std::string& weight_name, const LayerCreationContext& creation_context,
                   const GroupQuantBackend& group_quant_backend) {
   proj_layer_ = creation_context.matmul_layer_factory->AutoCreateLayer(
       creation_context.base_weight, weight_name, creation_context.weight_type, creation_context.input_type,

@@ -14,10 +14,10 @@ class MoE {
  public:
   // Disable a default constructor
   MoE(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
-      const LayerCreationContext<T>& creation_context, MoeScaleNormMode moe_scale_norm_mode);
+      const LayerCreationContext& creation_context, MoeScaleNormMode moe_scale_norm_mode);
 
   MoE(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
-      const std::string& e_score_correction_bias_weight_name, const LayerCreationContext<T>& creation_context,
+      const std::string& e_score_correction_bias_weight_name, const LayerCreationContext& creation_context,
       MoeScaleNormMode moe_scale_norm_mode);
 
   ~MoE();
@@ -26,7 +26,7 @@ class MoE {
 
  private:
   void Init(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
-            const LayerCreationContext<T>& creation_context, MoeScaleNormMode moe_scale_norm_mode);
+            const LayerCreationContext& creation_context, MoeScaleNormMode moe_scale_norm_mode);
 
  protected:
   std::shared_ptr<BaseLayer> moe_layer_;

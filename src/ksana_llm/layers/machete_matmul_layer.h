@@ -19,7 +19,6 @@ namespace ksana_llm {
  * - 不支持desc操作
  * - 支持half和bfloat16的激活类型
  */
-template <typename T, DataType WT>
 class MacheteMatMulLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -32,6 +31,8 @@ class MacheteMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+  DataType weight_data_type_;
+
   bool is_awq_;
   size_t max_m_, max_n_, max_k_;
   size_t groupsize_;

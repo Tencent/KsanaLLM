@@ -8,8 +8,7 @@ namespace ksana_llm {
 
 template <typename T>
 Qwen2MoeDecoderLayer<T>::Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer,
-                                              TensorBuffer* share_gating_buffer,
-                                              LayerCreationContext<T>& creation_context,
+                                              TensorBuffer* share_gating_buffer, LayerCreationContext& creation_context,
                                               ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx), moe_buffer_(moe_buffer), share_gating_buffer_(share_gating_buffer) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -50,7 +49,7 @@ Qwen2MoeDecoderLayer<T>::Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_b
 
 template <typename T>
 Status Qwen2MoeDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                        ForwardingContext<T>& forwarding_context) {
+                                        ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
@@ -88,8 +87,7 @@ Status Qwen2MoeDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, co
 template <typename T>
 Status Qwen2MoeDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                            std::vector<Tensor>& reduce_buffer_tensors,
-                                           const bool is_multi_token_forward,
-                                           ForwardingContext<T>& forwarding_context) {
+                                           const bool is_multi_token_forward, ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
   CREATE_BUFFER_SCOPE(share_gating_buffer_tensors, share_gating_buffer_);
   auto& gated_buffer_ = reduce_buffer_tensors;
@@ -134,8 +132,7 @@ Status Qwen2Moe<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const Mo
 }
 
 template <typename T>
-Status Qwen2Moe<T>::CreateLayers(LayerCreationContext<T>& creation_context,
-                                 ModelCreationConfig& model_creation_config) {
+Status Qwen2Moe<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
   DataType weight_type = model_config.weight_data_type;
 
@@ -155,7 +152,7 @@ Status Qwen2Moe<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 }
 
 template <typename T>
-Status Qwen2Moe<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Qwen2Moe<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -182,13 +179,13 @@ Qwen2MoeModel<T>::Qwen2MoeModel(const ModelConfig& model_config, const RuntimeCo
 }
 
 template <typename T>
-Status Qwen2MoeModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status Qwen2MoeModel<T>::CreateLayers(LayerCreationContext& creation_context,
                                       ModelCreationConfig& model_creation_config) {
   return qwen2moe_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status Qwen2MoeModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status Qwen2MoeModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(qwen2moe_.Forward(residual_buffer, forwarding_context));

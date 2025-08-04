@@ -13,7 +13,7 @@ template <typename T>
 class Bmm {
  public:
   // Disable a default constructor
-  Bmm(const std::string& weight_name, const LayerCreationContext<T>& creation_context,
+  Bmm(const std::string& weight_name, const LayerCreationContext& creation_context,
       const GroupQuantBackend& group_quant_backend);
 
   ~Bmm() = default;

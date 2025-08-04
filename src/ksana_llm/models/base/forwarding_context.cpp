@@ -167,10 +167,9 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   }
 }
 
-template <typename T>
-void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-                                const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config,
-                                ForwardingBuffers* buffers, BufferManager* buffer_mgr, size_t multi_batch_id) {
+void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
+                             const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config,
+                             ForwardingBuffers* buffers, BufferManager* buffer_mgr, size_t multi_batch_id) {
   pipeline_config_ = pipeline_config;
   context_ = context;
   rank_ = rank;
@@ -214,7 +213,7 @@ void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, cons
 
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, buffers_->hidden_buffer_0);
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, buffers_->shared_buffer);
-    model_communicator_ = std::make_shared<ModelCommunicator<T>>(
+    model_communicator_ = std::make_shared<ModelCommunicator>(
         /* buffer */ &(hidden_buffer_tensors_0[0]),
         /* input */ &(reduce_buffer_tensors[0]), rank_, runtime_config, context_);
   } else {
@@ -222,8 +221,7 @@ void ForwardingContext<T>::Init(std::shared_ptr<Context> context, int rank, cons
   }
 }
 
-template <typename T>
-void ForwardingContext<T>::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
+void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
   model_input_->ParseFromRequests(forward_reqs, run_mode);
 
@@ -254,15 +252,10 @@ void ForwardingContext<T>::UpdateBeforeForward(std::vector<ForwardRequest>& forw
   ((Tensor)attn_ctx_.flag_tensor).GetPtr<bool>()[0] = model_input_->use_cache;
 }
 
-template <typename T>
-void ForwardingContext<T>::UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs) {
+void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs) {
   // Cast to float & Copy to logits buffer
   attn_ctx_.forward_shape.shape = {forward_reqs[0].logits_offset * vocab_size_ * sizeof(float), vocab_size_,
                                    vocab_size_pad_};
 }
-
-template class ForwardingContext<float>;
-template class ForwardingContext<float16>;
-template class ForwardingContext<bfloat16>;
 
 }  // namespace ksana_llm

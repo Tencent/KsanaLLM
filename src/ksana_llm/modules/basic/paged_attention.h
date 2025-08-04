@@ -13,7 +13,7 @@ template <typename T>
 class PagedAttention {
  public:
   // Disable a default constructor
-  PagedAttention(bool is_neox, const LayerCreationContext<T>& creation_context,
+  PagedAttention(bool is_neox, const LayerCreationContext& creation_context,
                  const AttentionCreationConfig& attn_config);
 
   ~PagedAttention();

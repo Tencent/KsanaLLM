@@ -10,7 +10,7 @@ namespace ksana_llm {
 
 template <typename T>
 PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
-                                        const LayerCreationContext<T>& creation_context,
+                                        const LayerCreationContext& creation_context,
                                         const AttentionCreationConfig& attn_config) {
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;

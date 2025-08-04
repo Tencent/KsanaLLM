@@ -17,12 +17,13 @@ namespace ksana_llm {
 template <typename T>
 class Qwen3MoeDecoderLayer {
  public:
-  Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer,
-                       LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+  Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, LayerCreationContext& creation_context,
+                       ModelCreationConfig& model_creation_config);
   ~Qwen3MoeDecoderLayer() = default;
 
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
+
  private:
   int layer_idx_;
   std::shared_ptr<Add<T>> adds_;
@@ -44,8 +45,8 @@ class Qwen3Moe : public ModelInterface<T> {
   ~Qwen3Moe() = default;
 
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   TensorBuffer* moe_buffer_;
@@ -61,8 +62,8 @@ class Qwen3MoeModel : public CommonModel<T> {
   ~Qwen3MoeModel() = default;
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

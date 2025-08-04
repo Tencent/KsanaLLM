@@ -7,7 +7,7 @@
 namespace ksana_llm {
 
 template <typename T>
-TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext<T>& creation_context,
+TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
                                 ModelCreationConfig& model_creation_config) {
   const std::string weight_name_format = ".mlp.{}.weight";
   InitConfig(layer_idx, creation_context, weight_name_format);
@@ -15,14 +15,14 @@ TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext<T>& creation
 }
 
 template <typename T>
-TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext<T>& creation_context,
+TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
                                 ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
   InitConfig(layer_idx, creation_context, weight_name_format);
   InitLayers(layer_idx, creation_context, model_creation_config, weight_name_format);
 }
 
 template <typename T>
-void TwoLayeredFFN<T>::InitConfig(int layer_idx, LayerCreationContext<T>& creation_context,
+void TwoLayeredFFN<T>::InitConfig(int layer_idx, LayerCreationContext& creation_context,
                                   const std::string& weight_name_format) {
   std::string up_gate_proj_weights_name =
       fmt::format("model.layers.{}" + weight_name_format, layer_idx, "gate_up_proj");
@@ -42,7 +42,7 @@ void TwoLayeredFFN<T>::InitConfig(int layer_idx, LayerCreationContext<T>& creati
 }
 
 template <typename T>
-void TwoLayeredFFN<T>::InitLayers(int layer_idx, LayerCreationContext<T>& creation_context,
+void TwoLayeredFFN<T>::InitLayers(int layer_idx, LayerCreationContext& creation_context,
                                   ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   GroupQuantBackend linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
@@ -70,7 +70,7 @@ void TwoLayeredFFN<T>::InitLayers(int layer_idx, LayerCreationContext<T>& creati
 template <typename T>
 Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                  std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                 ForwardingContext<T>& forwarding_context) {
+                                 ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (fuse_gate_up_proj_) {
     // Mlp gate_up_proj MatMul

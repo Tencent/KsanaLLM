@@ -13,7 +13,7 @@ template <typename T>
 class Sigmoid {
  public:
   // Disable a default constructor
-  explicit Sigmoid(const LayerCreationContext<T>& creation_context);
+  explicit Sigmoid(const LayerCreationContext& creation_context);
 
   ~Sigmoid() = default;
 

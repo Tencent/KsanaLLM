@@ -8,7 +8,7 @@ namespace ksana_llm {
 
 template <typename T>
 Llama4DecoderLayer<T>::Llama4DecoderLayer(int layer_idx, TensorBuffer* moe_buffer, bool is_moe_layer,
-                                          LayerCreationContext<T>& creation_context,
+                                          LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx), moe_buffer_(moe_buffer), is_moe_layer_(is_moe_layer) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -47,7 +47,7 @@ Llama4DecoderLayer<T>::Llama4DecoderLayer(int layer_idx, TensorBuffer* moe_buffe
 
 template <typename T>
 Status Llama4DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                      ForwardingContext<T>& forwarding_context) {
+                                      ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
@@ -91,7 +91,7 @@ Status Llama4DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, cons
 template <typename T>
 Status Llama4DecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                          std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                         ForwardingContext<T>& forwarding_context) {
+                                         ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
   auto& gated_buffer_ = reduce_buffer_tensors;
 
@@ -121,7 +121,7 @@ Status Llama4<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const Mode
 }
 
 template <typename T>
-Status Llama4<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
+Status Llama4<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
   DataType weight_type = model_config.weight_data_type;
 
@@ -147,7 +147,7 @@ Status Llama4<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelC
 }
 
 template <typename T>
-Status Llama4<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Llama4<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -174,13 +174,13 @@ Llama4Model<T>::Llama4Model(const ModelConfig& model_config, const RuntimeConfig
 }
 
 template <typename T>
-Status Llama4Model<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status Llama4Model<T>::CreateLayers(LayerCreationContext& creation_context,
                                     ModelCreationConfig& model_creation_config) {
   return Llama4_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status Llama4Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status Llama4Model<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(Llama4_.Forward(residual_buffer, forwarding_context));

@@ -6,12 +6,12 @@
 #include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
-#ifdef ENABLE_CUDA
-template <typename T>
-Status MarlinMoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+
+Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
+  inter_data_type_ = runtime_config.inter_data_type;
 
   int parameter_index = 0;
   moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
@@ -36,8 +36,10 @@ Status MarlinMoeLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
+size_t MarlinMoeLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+
 template <typename T>
-size_t MarlinMoeLayer<T>::GetWorkSpaceSize() {
+size_t MarlinMoeLayer::GetWorkSpaceSizeT() {
   max_gating_size_ = sizeof(float) * max_token_num_ * expert_num_;
   max_ws_bytes_ = max_gating_size_;
   max_ws_bytes_ += InvokeGetFusedMarlinMoeWorkspaceSize(max_token_num_, expert_inter_size_, expert_hidden_size_,
@@ -45,19 +47,16 @@ size_t MarlinMoeLayer<T>::GetWorkSpaceSize() {
   return max_ws_bytes_;
 }
 
-template <typename T>
-Status MarlinMoeLayer<T>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+Status MarlinMoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   workspace_buffer_ = workspace_buffer;
   return Status();
 }
 
-template <typename T>
-Status MarlinMoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+Status MarlinMoeLayer::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   return Status();
 }
 
-template <typename T>
-Status MarlinMoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (input_tensors[0].dtype == TYPE_FP16) {
     half* output = static_cast<half*>(output_tensors[0].GetPtr<void>());
     half* input = static_cast<half*>(input_tensors[0].GetPtr<void>());
@@ -108,9 +107,5 @@ Status MarlinMoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   return Status();
 }
 
-template class MarlinMoeLayer<float>;
-template class MarlinMoeLayer<half>;
-template class MarlinMoeLayer<__nv_bfloat16>;
 
-#endif
 }  // namespace ksana_llm

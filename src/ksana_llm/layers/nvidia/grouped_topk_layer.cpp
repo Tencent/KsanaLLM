@@ -8,10 +8,8 @@
 
 namespace ksana_llm {
 
-#ifdef ENABLE_CUDA
-template <typename T>
-Status GroupedTopkLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                 std::shared_ptr<Context> context, int rank) {
+Status GroupedTopkLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                              std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
 
   int parameter_index = 0;
@@ -29,8 +27,12 @@ Status GroupedTopkLayer<T>::Init(const std::vector<std::any>& parameters, const 
   return Status();
 }
 
+Status GroupedTopkLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status GroupedTopkLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status GroupedTopkLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors:
   // [0] gating_output [num_tokens, num_experts]
   // [1] e_bias (optional, can be nullptr)
@@ -63,12 +65,5 @@ Status GroupedTopkLayer<T>::Forward(const std::vector<Tensor>& input_tensors, st
 
   return Status();
 }
-
-// 显式实例化模板
-template class GroupedTopkLayer<float>;
-template class GroupedTopkLayer<half>;
-template class GroupedTopkLayer<__nv_bfloat16>;
-
-#endif
 
 }  // namespace ksana_llm

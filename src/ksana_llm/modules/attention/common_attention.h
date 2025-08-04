@@ -17,11 +17,11 @@ namespace ksana_llm {
 template <typename T>
 class CommonAttention {
  public:
-  CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, LayerCreationContext<T>& creation_context,
+  CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, LayerCreationContext& creation_context,
                   ModelCreationConfig& model_creation_config);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                 const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                 const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;

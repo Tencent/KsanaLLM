@@ -7,7 +7,7 @@
 namespace ksana_llm {
 
 template <typename T>
-MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext<T>& creation_context,
+MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
                                             ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -38,7 +38,7 @@ MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext<
 
 template <typename T>
 Status MixtralDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                       ForwardingContext<T>& forwarding_context) {
+                                       ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   auto& gated_buffer_ = reduce_buffer_tensors;
@@ -84,7 +84,7 @@ Status Mixtral<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const Mod
 }
 
 template <typename T>
-Status Mixtral<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
+Status Mixtral<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
     decoder_layers_[layer_idx] =
@@ -94,7 +94,7 @@ Status Mixtral<T>::CreateLayers(LayerCreationContext<T>& creation_context, Model
 }
 
 template <typename T>
-Status Mixtral<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Mixtral<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -121,13 +121,13 @@ MixtralModel<T>::MixtralModel(const ModelConfig& model_config, const RuntimeConf
 }
 
 template <typename T>
-Status MixtralModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status MixtralModel<T>::CreateLayers(LayerCreationContext& creation_context,
                                      ModelCreationConfig& model_creation_config) {
   return mixtral_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status MixtralModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status MixtralModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(mixtral_.Forward(residual_buffer, forwarding_context));

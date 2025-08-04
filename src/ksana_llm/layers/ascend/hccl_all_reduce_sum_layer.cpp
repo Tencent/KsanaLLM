@@ -6,9 +6,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status HcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                      std::shared_ptr<Context> context, int rank) {
+Status HcclAllReduceSumLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                   std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   context_ = context;
   rank_ = rank;
@@ -22,9 +21,7 @@ Status HcclAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, c
   return Status();
 }
 
-template <typename T>
-Status HcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+Status HcclAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
 
@@ -45,9 +42,5 @@ Status HcclAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensor
   }
   return Status();
 }
-
-template class HcclAllReduceSumLayer<float>;
-template class HcclAllReduceSumLayer<float16>;
-template class HcclAllReduceSumLayer<bfloat16>;
 
 }  // namespace ksana_llm

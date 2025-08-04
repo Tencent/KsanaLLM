@@ -18,15 +18,15 @@ template <typename T>
 class Qwen2MoeDecoderLayer {
  public:
   Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, TensorBuffer* share_gating_buffer,
-                       LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+                       LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
   ~Qwen2MoeDecoderLayer() = default;
 
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   Status ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                    const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                    const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;
@@ -55,8 +55,8 @@ class Qwen2Moe : public ModelInterface<T> {
   ~Qwen2Moe() = default;
 
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   TensorBuffer* moe_buffer_;
@@ -73,8 +73,8 @@ class Qwen2MoeModel : public CommonModel<T> {
   ~Qwen2MoeModel() = default;
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class HcclAllGatherLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,

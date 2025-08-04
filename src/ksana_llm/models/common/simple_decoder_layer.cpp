@@ -21,7 +21,7 @@ namespace ksana_llm {
 
 template <typename T>
 SimpleDecoderLayer<T>::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias,
-                                          LayerCreationContext<T>& creation_context,
+                                          LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -43,7 +43,7 @@ SimpleDecoderLayer<T>::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_
 
 template <typename T>
 Status SimpleDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                      ForwardingContext<T>& forwarding_context) {
+                                      ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 

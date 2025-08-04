@@ -18,11 +18,11 @@ namespace ksana_llm {
 static const std::unordered_map<vllm_dtype::ScalarType::Id, DataType> MacheteTypeIdToDataType = {
     {vllm_dtype::kHalf.id(), DataType::TYPE_FP16}, {vllm_dtype::kBFloat16.id(), DataType::TYPE_BF16}};
 
-template <typename T, DataType WT>
-Status MacheteMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                       std::shared_ptr<Context> context, int rank) {
+Status MacheteMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
+  inter_data_type_ = runtime_config.inter_data_type;
 
   int parameter_index = 0;
   max_m_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -33,13 +33,13 @@ Status MacheteMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, 
   [[maybe_unused]] bool is_gptq_desc_ = std::any_cast<const bool>(parameters[parameter_index++]);
   [[maybe_unused]] bool is_k_full_ = std::any_cast<const bool>(parameters[parameter_index++]);
   [[maybe_unused]] bool cutlass_use_gemv_cuda_core_ = std::any_cast<const bool>(parameters[parameter_index++]);
+  weight_data_type_ = std::any_cast<const DataType>(parameters[parameter_index++]);
 
   return Status();
 }
 
-template <typename T, DataType WT>
-size_t MacheteMatMulLayer<T, WT>::GetWorkSpaceSize() {
-  if constexpr (WT == TYPE_I4_GROUP) {
+size_t MacheteMatMulLayer::GetWorkSpaceSize() {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     // shape配置
     const size_t bits = 4;
     const size_t pack_factor = 32 / bits;
@@ -59,9 +59,9 @@ size_t MacheteMatMulLayer<T, WT>::GetWorkSpaceSize() {
 
     // 根据模板类型确定各类型
     vllm_dtype::ScalarType::Id activation_type_id;
-    if constexpr (std::is_same_v<T, half>) {
+    if (inter_data_type_ == DataType::TYPE_FP16) {
       activation_type_id = vllm_dtype::kHalf.id();
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+    } else if (inter_data_type_ == DataType::TYPE_BF16) {
       activation_type_id = vllm_dtype::kBFloat16.id();
     } else {
       KLLM_THROW("MacheteMatMul only supports half and bfloat16 activation types");
@@ -137,12 +137,12 @@ size_t MacheteMatMulLayer<T, WT>::GetWorkSpaceSize() {
     KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MacheteMatMulLayer", rank_, max_ws_bytes);
     return max_ws_bytes;
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
 
-template <typename T, DataType WT>
-Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+Status MacheteMatMulLayer::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
   if (record_iters == 0) {
     KLLM_LOG_INFO << "$QUANT_PROFILE==0, Skipping MacheteMatMulLayer Preprocess";
@@ -150,7 +150,7 @@ Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
   }
   const size_t warmup_iters = std::max(1UL, record_iters / 2);  // warmup不能为0
 
-  if constexpr (WT == TYPE_I4_GROUP) {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     // shape配置
     const size_t bits = 4;
     const size_t pack_factor = 32 / bits;
@@ -171,9 +171,9 @@ Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
 
     // 确定类型
     vllm_dtype::ScalarType::Id activation_type_id;
-    if constexpr (std::is_same_v<T, half>) {
+    if (inter_data_type_ == DataType::TYPE_FP16) {
       activation_type_id = vllm_dtype::kHalf.id();
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+    } else if (inter_data_type_ == DataType::TYPE_BF16) {
       activation_type_id = vllm_dtype::kBFloat16.id();
     } else {
       KLLM_THROW("MacheteMatMul only supports half and bfloat16 activation types");
@@ -242,19 +242,18 @@ Status MacheteMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
 
     return Status();
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
 
-template <typename T, DataType WT>
-Status MacheteMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors) {
-  if constexpr (WT == TYPE_I4_GROUP) {
+Status MacheteMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     // 根据模板类型确定各类型
     vllm_dtype::ScalarType::Id activation_type_id;
-    if constexpr (std::is_same_v<T, half>) {
+    if (inter_data_type_ == DataType::TYPE_FP16) {
       activation_type_id = vllm_dtype::kHalf.id();
-    } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+    } else if (inter_data_type_ == DataType::TYPE_BF16) {
       activation_type_id = vllm_dtype::kBFloat16.id();
     } else {
       KLLM_THROW("MacheteMatMul only supports half and bfloat16 activation types");
@@ -292,12 +291,9 @@ Status MacheteMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tenso
     output_tensors[0].dtype = input_tensors[0].dtype;
     return Status();
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. MacheteMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
-
-template class MacheteMatMulLayer<float, TYPE_I4_GROUP>;
-template class MacheteMatMulLayer<half, TYPE_I4_GROUP>;
-template class MacheteMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
 
 }  // namespace ksana_llm

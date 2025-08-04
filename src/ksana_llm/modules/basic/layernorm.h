@@ -13,7 +13,7 @@ template <typename T>
 class Layernorm {
  public:
   // Disable a default constructor
-  Layernorm(const std::string& weight_name, float layernorm_eps, const LayerCreationContext<T>& creation_context,
+  Layernorm(const std::string& weight_name, float layernorm_eps, const LayerCreationContext& creation_context,
             const std::string& weight_bias_name = "");
 
   ~Layernorm();

@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext<T>& creation_context,
+PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext& creation_context,
                                   const AttentionCreationConfig& attn_config) {
   paged_attention_layer_ =
       CreateAttentionLayer<T, PagedAttentionLayer>(creation_context.runtime_config.attn_backend_config.kv_cache_dtype);

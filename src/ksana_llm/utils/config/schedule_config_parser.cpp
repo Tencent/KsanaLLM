@@ -533,6 +533,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
       runtime_config_.parallel_basic_config.tensor_parallel_size /
       runtime_config_.parallel_basic_config.expert_parallel_size;
 
+  runtime_config_.inter_data_type = model_config.weight_data_type;
   // TODO(robertyuan): These members should be removed from other configs
   runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;

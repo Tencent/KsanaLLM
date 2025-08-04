@@ -82,4 +82,15 @@ ncclUniqueId GenerateNCCLUniqueID();
 // Convert data type to nccl data type.
 Status GetNcclDataType(DataType dtype, ncclDataType_t& nccl_dtype);
 
+// Convert data type to nccl data type.
+inline ncclDataType_t GetNcclDataType(DataType dtype) {
+  ncclDataType_t nccl_dtype;
+  Status status = GetNcclDataType(dtype, nccl_dtype);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "Not supported type for casting to NCCL data type. msg" << status.GetMessage();
+    exit(RetCode::RET_INVALID_ARGUMENT);
+  }
+  return nccl_dtype;
+}
+
 }  // namespace ksana_llm

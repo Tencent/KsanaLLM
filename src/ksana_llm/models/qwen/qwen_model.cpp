@@ -16,7 +16,7 @@ Status Qwen<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelC
 }
 
 template <typename T>
-Status Qwen<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
+Status Qwen<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   bool is_neox = true;
   bool add_qkv_bias = model_creation_config.attn_config.model_config.enable_add_qkv_bias;
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
@@ -28,7 +28,7 @@ Status Qwen<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCre
 }
 
 template <typename T>
-Status Qwen<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Qwen<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -55,13 +55,12 @@ QwenModel<T>::QwenModel(const ModelConfig& model_config, const RuntimeConfig& ru
 }
 
 template <typename T>
-Status QwenModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
-                                  ModelCreationConfig& model_creation_config) {
+Status QwenModel<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   return qwen_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status QwenModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status QwenModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(qwen_.Forward(residual_buffer, forwarding_context));

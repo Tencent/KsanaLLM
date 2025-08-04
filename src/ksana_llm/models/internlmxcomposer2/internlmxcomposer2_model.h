@@ -22,29 +22,29 @@ namespace ksana_llm {
 template <typename T>
 class InternlmxComposer2DecoderLayer {
  public:
-  InternlmxComposer2DecoderLayer(int layer_idx, LayerCreationContext<T>& creation_context,
+  InternlmxComposer2DecoderLayer(int layer_idx, LayerCreationContext& creation_context,
                                  ModelCreationConfig& model_creation_config, TensorBuffer* plora_a_buffer_,
                                  TensorBuffer* plora_b_buffer_);
   ~InternlmxComposer2DecoderLayer() {}
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
  private:
   Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               ForwardingContext<T>& forwarding_context);
+                               ForwardingContext& forwarding_context);
 
   Status PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               ForwardingContext<T>& forwarding_context);
+                               ForwardingContext& forwarding_context);
 
   Status ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,
                     std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                    ForwardingContext<T>& forwarding_context);
+                    ForwardingContext& forwarding_context);
 
   Status ForwardMha(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                     std::vector<Tensor>& hidden_buffer_tensors_1, const bool is_multi_token_forward,
-                    ForwardingContext<T>& forwarding_context);
+                    ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;
@@ -92,8 +92,8 @@ class InternlmxComposer2 : public ModelInterface<T> {
   InternlmxComposer2() {}
   ~InternlmxComposer2() = default;
   Status GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) override;
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
   std::map<int, std::shared_ptr<InternlmxComposer2DecoderLayer<T>>> decoder_layers_;
@@ -109,10 +109,10 @@ class InternlmxComposer2Model : public CommonModel<T> {
   ~InternlmxComposer2Model() {}
 
  private:
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
 
   // Execute the forward of specific layers.
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

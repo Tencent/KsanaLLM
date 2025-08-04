@@ -26,8 +26,7 @@ Status Internlm2<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const M
 }
 
 template <typename T>
-Status Internlm2<T>::CreateLayers(LayerCreationContext<T>& creation_context,
-                                  ModelCreationConfig& model_creation_config) {
+Status Internlm2<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   bool is_neox = true;
   bool add_qkv_bias = false;
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
@@ -39,7 +38,7 @@ Status Internlm2<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 }
 
 template <typename T>
-Status Internlm2<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Internlm2<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -63,13 +62,13 @@ Internlm2Model<T>::Internlm2Model(const ModelConfig& model_config, const Runtime
 }
 
 template <typename T>
-Status Internlm2Model<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status Internlm2Model<T>::CreateLayers(LayerCreationContext& creation_context,
                                        ModelCreationConfig& model_creation_config) {
   return internlm2_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status Internlm2Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status Internlm2Model<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(internlm2_.Forward(residual_buffer, forwarding_context));

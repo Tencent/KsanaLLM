@@ -11,12 +11,11 @@
 
 namespace ksana_llm {
 
-template <typename T>
 struct LayerCreationContext {
   std::shared_ptr<BaseWeight> base_weight;
-  std::shared_ptr<MatMulLayerFactory<T>> matmul_layer_factory;
-  std::shared_ptr<MoeLayerFactory<T>> moe_layer_factory;
-  std::shared_ptr<LayerWorkspaceManager<T>> workspace_mgr;
+  std::shared_ptr<MatMulLayerFactory> matmul_layer_factory;
+  std::shared_ptr<MoeLayerFactory> moe_layer_factory;
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr;
 
   std::shared_ptr<Context> context;
   ModelConfig model_config;

@@ -71,7 +71,6 @@ struct ModelBuffers {
             const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
 };
 
-template <typename T>
 class ForwardingContext {
  public:
   ~ForwardingContext() {}
@@ -90,7 +89,7 @@ class ForwardingContext {
 
   inline const size_t GetAttentionDataParallelSize() { return attn_data_parallel_size_; }
 
-  std::shared_ptr<ModelCommunicator<T>>& GetModelCommunicator() { return model_communicator_; }
+  std::shared_ptr<ModelCommunicator>& GetModelCommunicator() { return model_communicator_; }
 
   std::shared_ptr<ModelOutput>& GetModelOutput() { return model_output_; }
 
@@ -136,7 +135,7 @@ class ForwardingContext {
   BatchRequestSchedInfo batch_event_info_;
 
   // The model communicator.
-  std::shared_ptr<ModelCommunicator<T>> model_communicator_;
+  std::shared_ptr<ModelCommunicator> model_communicator_;
 
   // Pipeline parallel configuration
   PipelineConfig pipeline_config_;

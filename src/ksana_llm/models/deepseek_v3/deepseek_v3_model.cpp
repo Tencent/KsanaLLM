@@ -17,7 +17,7 @@
 namespace ksana_llm {
 
 template <typename T>
-DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext<T>& creation_context,
+DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
                                                   TensorBuffer* moe_buffer)
     : is_moe_(is_moe), mla_buffers_(mla_buffers), moe_buffer_(moe_buffer) {
@@ -81,7 +81,7 @@ DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, La
 
 template <typename T>
 Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                          ForwardingContext<T>& forwarding_context, bool need_add_residual_before_attn,
+                                          ForwardingContext& forwarding_context, bool need_add_residual_before_attn,
                                           bool need_add_residual_after_mlp) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
@@ -127,8 +127,7 @@ Status DeepSeekV3DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, 
 template <typename T>
 Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                             std::vector<Tensor>& reduce_buffer_tensors,
-                                            const bool is_multi_token_forward,
-                                            ForwardingContext<T>& forwarding_context) {
+                                            const bool is_multi_token_forward, ForwardingContext& forwarding_context) {
   size_t seq_len = hidden_buffer_tensors_0[0].shape[0];
   size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
 
@@ -291,7 +290,7 @@ Status DeepSeekV3DecoderLayer<T>::CommonMlp(std::vector<Tensor>& hidden_buffer_t
 }
 
 template <typename T>
-DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext<T>& creation_context,
+DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config,
                                           std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer) {
   enorm_ =
@@ -319,7 +318,7 @@ DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationCont
 }
 
 template <typename T>
-Status DeepSeekV3MtpLayer<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status DeepSeekV3MtpLayer<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
   auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;
@@ -372,7 +371,7 @@ DeepSeekV3Model<T>::DeepSeekV3Model(const ModelConfig& model_config, const Runti
 }
 
 template <typename T>
-Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext& creation_context,
                                         ModelCreationConfig& model_creation_config) {
   MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
                                              creation_context.runtime_config, mla_buffers_);
@@ -417,7 +416,7 @@ Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext<T>& creation_contex
 }
 
 template <typename T>
-Status DeepSeekV3Model<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status DeepSeekV3Model<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   PROFILE_EVENT_SCOPE(DS_LayerForward_, fmt::format("DS_LayerForward_{}", forwarding_context.GetMultiBatchId()),
                       forwarding_context.GetCurrentRank());
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;

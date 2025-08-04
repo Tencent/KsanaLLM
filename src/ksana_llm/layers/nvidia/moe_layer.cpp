@@ -10,10 +10,26 @@
 #include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
-#ifdef ENABLE_CUDA
+
+Status MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) {
+  inter_data_type_ = runtime_config.inter_data_type;
+  LAYER_InitT(inter_data_type_, parameters, runtime_config, context, rank);
+}
+
+size_t MoeLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+
+Status MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+  LAYER_PreprocessT(inter_data_type_, model_config, runtime_config);
+}
+
+Status MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                         std::shared_ptr<Context> context, int rank) {
+Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                       std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -64,7 +80,7 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeC
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
 
   // 初始化 GroupedTopkLayer
-  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer<T>>();
+  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
   std::vector<std::any> grouped_topk_params = {
       static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
       static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
@@ -78,7 +94,7 @@ Status MoeLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeC
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
 template <typename T>
-size_t MoeLayer<T>::GetWorkSpaceSize() {
+size_t MoeLayer::GetWorkSpaceSizeT() {
   GetMoeGemmWorkspaceSize<T, T, T>(max_token_num_, expert_num_, expert_hidden_size_, expert_inter_size_, expert_topk_,
                                    tp_size_, rank_, use_lora_, max_ws_bytes_, workspace_info_.workspace_sizes);
   if (use_vllm_moe_) {
@@ -111,8 +127,7 @@ size_t MoeLayer<T>::GetWorkSpaceSize() {
   return max_ws_bytes_;
 }
 
-template <typename T>
-Status MoeLayer<T>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+Status MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   workspace_buffer_ = workspace_buffer;
   scale_probabilities_size_ = max_token_num_ * expert_num_ * sizeof(float);
   src_to_dest_map_size_ = expert_topk_ * max_token_num_ * sizeof(int);
@@ -125,7 +140,7 @@ Status MoeLayer<T>::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_
 }
 
 template <typename T>
-Status MoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+Status MoeLayer::PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   config_map_.resize(runtime_config.max_batch_size + 1);
   for (size_t m = 1; m <= static_cast<size_t>(runtime_config.max_batch_size); m++) {
     size_t best_config_index = InvokeMoeGemmConfigProfile<T, T, T>(tactics_);
@@ -135,7 +150,7 @@ Status MoeLayer<T>::Preprocess(const ModelConfig& model_config_, const RuntimeCo
 }
 
 template <typename T>
-Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   const size_t num_tokens = input_tensors[0].shape[0];
   size_t best_config_index = 0;  // TODO(winminkong): op optimization
   void* e_score_correction_bias_weight_void = nullptr;
@@ -319,8 +334,7 @@ Status MoeLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   return Status();
 }
 
-template <typename T>
-Status MoeLayer<T>::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens) {
+Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens) {
   // 准备 GroupedTopkLayer 的输入和输出张量
   std::vector<Tensor> grouped_topk_input_tensors;
   std::vector<Tensor> grouped_topk_output_tensors;
@@ -349,9 +363,4 @@ Status MoeLayer<T>::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors,
   return grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
 }
 
-template class MoeLayer<float>;
-template class MoeLayer<half>;
-template class MoeLayer<__nv_bfloat16>;
-
-#endif
 }  // namespace ksana_llm

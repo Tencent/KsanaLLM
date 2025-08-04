@@ -20,10 +20,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class MatMulLayerFactory {
  public:
-  typedef std::shared_ptr<BaseLayer> (MatMulLayerFactory<T>::*BuildLayerFunc)();
+  typedef std::shared_ptr<BaseLayer> (MatMulLayerFactory::*BuildLayerFunc)();
   MatMulLayerFactory(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                      std::shared_ptr<Context> context) {
     context_ = context;
@@ -32,56 +31,56 @@ class MatMulLayerFactory {
     runtime_config_ = runtime_config;
 
     builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<MatMulLayer>;
     builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<MatMulLayer>;
     builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<MatMulLayer>;
 
     builder_map_[{TYPE_VOID, TYPE_FP32, TYPE_FP32, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BatchedMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
     builder_map_[{TYPE_VOID, TYPE_FP16, TYPE_FP16, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BatchedMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
     builder_map_[{TYPE_VOID, TYPE_BF16, TYPE_BF16, QUANT_NONE, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BatchedMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
 
 #ifdef ENABLE_CUDA
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, CUTLASS_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<CutlassMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<CutlassMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, CUTLASS_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<CutlassMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<CutlassMatMulLayer>;
 
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MARLIN_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MarlinMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MARLIN_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MarlinMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MARLIN_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MarlinMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
 
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MACHETE_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MacheteMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MACHETE_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MacheteMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MACHETE_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MacheteMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
     builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_AWQ, MACHETE_BACKEND}] =
-        &MatMulLayerFactory<T>::BuildLayer<MacheteMatMulLayer<T, TYPE_I4_GROUP>>;
+        &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
 
 #endif
 #ifdef ENABLE_FP8
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<Fp8MatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
 
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BlockwiseMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BlockwiseMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MatMulLayerFactory<T>::BuildLayer<BlockwiseMatMulLayer<T>>;
+        &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
 
 #endif
   }
@@ -152,6 +151,7 @@ class MatMulLayerFactory {
           group_matmul_param.push_back(static_cast<bool>(model_config_.quant_config.desc_act));             // gptq desc
           group_matmul_param.push_back(static_cast<bool>(std::get<2>(kn.second)));                          // k full
           group_matmul_param.push_back(true);                                                               // cuda gemv
+          group_matmul_param.push_back(TYPE_I4_GROUP);  // weight data type
           if (weight_name.find("kv_a_rope_proj") != std::string::npos) {
             return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ, MARLIN_BACKEND);
           }
@@ -220,7 +220,6 @@ class MatMulLayerFactory {
                       GetQuantModeString(quant_mode), GetGroupQuantBackendString(backend)));
     }
   }
-
 
  private:
   std::shared_ptr<Context> context_;

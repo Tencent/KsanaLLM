@@ -21,21 +21,21 @@ template <typename T>
 class CrossLayerAttention {
  public:
   CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,
-                      LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
+                      LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
   ~CrossLayerAttention() = default;
 
   // Input tensors: hidden_buffer_tensors_0
   // Output tensors: hidden_buffer_tensors_0
   //                 or reduce_buffer_tensors if have forwarding_context.GetModelCommunicator()
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                 const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                 const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
   static Status CreateBuffers(BufferManager* buffer_mgr, const RuntimeConfig& runtime_config,
                               const AttentionCreationConfig& attn_config, ClaBuffers& cla_buffers);
 
  private:
   Status QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,
-                          ForwardingContext<T>& forwarding_context);
+                          ForwardingContext& forwarding_context);
 
  private:
   int layer_idx_;

@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Split<T>::Split(const LayerCreationContext<T>& creation_context) {
+Split<T>::Split(const LayerCreationContext& creation_context) {
   split_layer_ = std::make_shared<SplitLayer<T>>();
   split_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }

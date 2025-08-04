@@ -9,9 +9,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                            std::shared_ptr<Context> context, int rank) {
+Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -25,13 +24,9 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-template <typename T>
-size_t MatMulLayer<T>::GetWorkSpaceSize() {
-  return 0;
-}
+size_t MatMulLayer::GetWorkSpaceSize() { return 0; }
 
-template <typename T>
-Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // TODO(karlluo): support bias
   int64_t m = input_tensors[0].shape[0];
   int64_t n = (GetACLFormat(input_tensors[1].data_format) == aclFormat::ACL_FORMAT_FRACTAL_NZ)
@@ -54,9 +49,5 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
-
-template class MatMulLayer<float>;
-template class MatMulLayer<float16>;
-template class MatMulLayer<bfloat16>;
 
 }  // namespace ksana_llm

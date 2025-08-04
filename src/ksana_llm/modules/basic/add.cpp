@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Add<T>::Add(const LayerCreationContext<T>& creation_context, const std::string& weight_name) {
+Add<T>::Add(const LayerCreationContext& creation_context, const std::string& weight_name) {
   add_layer_ = std::make_shared<AddLayer<T>>();
   add_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
   if (weight_name != "") {

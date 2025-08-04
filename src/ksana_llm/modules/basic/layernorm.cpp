@@ -10,7 +10,7 @@ namespace ksana_llm {
 
 template <typename T>
 Layernorm<T>::Layernorm(const std::string& weight_name, float layernorm_eps,
-                        const LayerCreationContext<T>& creation_context, const std::string& weight_bias_name) {
+                        const LayerCreationContext& creation_context, const std::string& weight_bias_name) {
   layernorm_layer_ = std::make_shared<LayernormLayer<T>>();
   layernorm_layer_->Init({layernorm_eps}, creation_context.runtime_config, creation_context.context,
                          creation_context.rank);

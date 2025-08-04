@@ -16,6 +16,7 @@
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
+#include "ksana_llm/layers/layer_workspace_manager.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
 #include "ksana_llm/layers/marlin_matmul_layer.h"
@@ -31,7 +32,6 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/search_status.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/layers/layer_workspace_manager.h"
 #include "test.h"
 
 #ifdef ENABLE_CUDA
@@ -82,6 +82,7 @@ class LayerTest : public testing::Test {
 
     runtime_config.attn_backend_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
     runtime_config.attn_backend_config.block_size = block_manager_config.device_allocator_config.block_size;
+    runtime_config.inter_data_type = model_config.weight_data_type;
 
     Singleton<Environment>::GetInstance()->SetBlockManagerConfig(block_manager_config);
     context_ = std::make_shared<Context>(1, 1, 1);
@@ -477,6 +478,7 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
   constexpr int kDeviceRank = 0;
   using dtype = half_float::half;
   using device_type = half;
+  runtime_config.inter_data_type = TYPE_FP16;
 
   // 初始化参数
   const size_t max_m = 1024;
@@ -489,10 +491,10 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
   const bool cutlass_use_gemv_cuda_core = false;
 
   // 创建MacheteMatMulLayer实例
-  MacheteMatMulLayer<device_type, TYPE_I4_GROUP> machete_matmul_layer;
+  MacheteMatMulLayer machete_matmul_layer;
   machete_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
-      context_, kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+      runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = machete_matmul_layer.GetWorkSpaceSize();
@@ -633,7 +635,7 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
 #ifdef ENABLE_CUDA
   constexpr int kDeviceRank = 0;
   using dtype = half_float::half;
-  using device_type = half;
+  runtime_config.inter_data_type = TYPE_FP16;
 
   // 初始化参数
   const size_t max_m = 1024;
@@ -646,10 +648,10 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
   const bool cutlass_use_gemv_cuda_core = true;
 
   // 创建CutlassMatMulLayer实例
-  CutlassMatMulLayer<device_type, TYPE_I4_GROUP> cutlass_matmul_layer;
+  CutlassMatMulLayer cutlass_matmul_layer;
   cutlass_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
-      context_, kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+      runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = cutlass_matmul_layer.GetWorkSpaceSize();
@@ -731,6 +733,7 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   constexpr int kDeviceRank = 0;
   using dtype = half_float::half;
   using device_type = half;
+  runtime_config.inter_data_type = TYPE_FP16;
 
   // 初始化参数
   const size_t max_m = 1024;
@@ -743,10 +746,10 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   const bool cutlass_use_gemv_cuda_core = false;
 
   // 创建MarlinMatMulLayer实例
-  MarlinMatMulLayer<device_type, TYPE_I4_GROUP> marlin_matmul_layer;
+  MarlinMatMulLayer marlin_matmul_layer;
   marlin_matmul_layer.Init(
-      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core}, runtime_config,
-      context_, kDeviceRank);
+      {max_m, max_n, max_k, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+      runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
   size_t workspace_size = marlin_matmul_layer.GetWorkSpaceSize();
@@ -873,7 +876,7 @@ TEST_F(LayerTest, BatchedMatMulLayerTest) {
   const int n = 64;
   const int k = 128;
 
-  BatchedMatMulLayer<device_type> batched_matmul_layer;
+  BatchedMatMulLayer batched_matmul_layer;
   batched_matmul_layer.Init({}, runtime_config, context_, kDeviceRank);
 
   Tensor input_a = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, m, k}, kDeviceRank);
@@ -959,17 +962,18 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
   const bool is_gptq_desc = false;
   const bool is_k_full = false;
   const bool cutlass_use_gemv_cuda_core = false;
-  std::shared_ptr<LayerWorkspaceManager<half>> workspace_mgr =
-      std::make_shared<LayerWorkspaceManager<half>>(kDeviceRank);
+
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory>(model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
-      std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
-          TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
-          {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
-          QUANT_GPTQ, MACHETE_BACKEND);
+      std::shared_ptr<BaseLayer> layer =
+          matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
+                                            {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
+                                             cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+                                            QUANT_GPTQ, MACHETE_BACKEND);
       layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
       layer->Preprocess(model_config, runtime_config);
     }
@@ -980,16 +984,17 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
 
   auto t2 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory>(model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
         for (const auto& nk : n_k_pairs) {
-          std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
-              TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
-              {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
-              QUANT_GPTQ, MACHETE_BACKEND);
+          std::shared_ptr<BaseLayer> layer =
+              matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
+                                                {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
+                                                 cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+                                                QUANT_GPTQ, MACHETE_BACKEND);
           layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
           layer->Preprocess(model_config, runtime_config);
         }
@@ -1029,17 +1034,17 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
   const bool is_gptq_desc = false;
   const bool is_k_full = false;
   const bool cutlass_use_gemv_cuda_core = true;
-  std::shared_ptr<LayerWorkspaceManager<half>> workspace_mgr =
-      std::make_shared<LayerWorkspaceManager<half>>(kDeviceRank);
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory>(model_config, runtime_config, kDeviceRank, context_);
     for (const auto& nk : n_k_pairs) {
-      std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
-          TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
-          {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
-          QUANT_GPTQ, CUTLASS_BACKEND);
+      std::shared_ptr<BaseLayer> layer =
+          matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
+                                            {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
+                                             cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+                                            QUANT_GPTQ, CUTLASS_BACKEND);
       layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
       layer->Preprocess(model_config, runtime_config);
     }
@@ -1050,16 +1055,17 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
 
   auto t2 = std::chrono::high_resolution_clock::now();
   {
-    std::shared_ptr<MatMulLayerFactory<half>> matmul_layer_factory =
-        std::make_shared<MatMulLayerFactory<half>>(model_config, runtime_config, kDeviceRank, context_);
+    std::shared_ptr<MatMulLayerFactory> matmul_layer_factory =
+        std::make_shared<MatMulLayerFactory>(model_config, runtime_config, kDeviceRank, context_);
 
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
         for (const auto& nk : n_k_pairs) {
-          std::shared_ptr<BaseLayer> layer = matmul_layer_factory->CreateLayer(
-              TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
-              {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full, cutlass_use_gemv_cuda_core},
-              QUANT_GPTQ, CUTLASS_BACKEND);
+          std::shared_ptr<BaseLayer> layer =
+              matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
+                                                {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
+                                                 cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
+                                                QUANT_GPTQ, CUTLASS_BACKEND);
           layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
           layer->Preprocess(model_config, runtime_config);
         }
@@ -1186,7 +1192,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
 
   // run moe_layer
-  Fp8MoeLayer<half, __nv_fp8_e4m3> moe_layer = Fp8MoeLayer<half, __nv_fp8_e4m3>();
+  Fp8MoeLayer moe_layer = Fp8MoeLayer();
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   size_t workspace_size = moe_layer.GetWorkSpaceSize();
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3, {workspace_size}, kDeviceRank);
@@ -1299,7 +1305,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
 
   // run moe_layer
-  MarlinMoeLayer<half> moe_layer = MarlinMoeLayer<half>();
+  MarlinMoeLayer moe_layer = MarlinMoeLayer();
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
   size_t workspace_size = moe_layer.GetWorkSpaceSize();
   Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
@@ -1328,7 +1334,6 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
 #ifdef ENABLE_CUDA
   constexpr int kDeviceRank = 0;
   using dtype = half_float::half;
-  using device_type = half;
 
   // 测试参数
   const int num_tokens = 4;
@@ -1342,7 +1347,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   const bool use_e_score_correction_bias = false;
 
   // 创建 GroupedTopkLayer
-  GroupedTopkLayer<device_type> grouped_topk_layer;
+  GroupedTopkLayer grouped_topk_layer;
 
   // 测试初始化
   std::vector<std::any> parameters = {topk,         renormalize,           num_expert_group,           topk_group,
@@ -1435,7 +1440,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   }
 
   // 测试带 e_bias 的情况
-  GroupedTopkLayer<device_type> grouped_topk_layer_with_bias;
+  GroupedTopkLayer grouped_topk_layer_with_bias;
   std::vector<std::any> parameters_with_bias = {
       topk, renormalize, num_expert_group, topk_group, scoring_func, routed_scaling_factor,
       true  // use_e_score_correction_bias = true

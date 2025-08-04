@@ -20,7 +20,7 @@
 namespace ksana_llm {
 
 template <typename T>
-GPTDecoderLayer<T>::GPTDecoderLayer(int layer_idx, LayerCreationContext<T>& creation_context,
+GPTDecoderLayer<T>::GPTDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
                                     ModelCreationConfig& model_creation_config, TensorBuffer* mlp_temp_buffer_)
     : layer_idx_(layer_idx), mlp_temp_buffer_(mlp_temp_buffer_) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
@@ -71,7 +71,7 @@ template <typename T>
 Status GPTDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& mlp_temp_buffer_tensors,
                                       std::vector<Tensor>& hidden_buffer_tensors_0,
                                       std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                      ForwardingContext<T>& forwarding_context) {
+                                      ForwardingContext& forwarding_context) {
   STATUS_CHECK_RETURN(mlp_gate_bias_add_->Forward(mlp_temp_buffer_tensors[0], mlp_temp_buffer_tensors));
   std::swap(mlp_temp_buffer_tensors, hidden_buffer_tensors_0);
   STATUS_CHECK_RETURN(activation_layer_->Forward({hidden_buffer_tensors_0[0]}, hidden_buffer_tensors_0));
@@ -92,7 +92,7 @@ Status GPTDecoderLayer<T>::ForwardMlp(std::vector<Tensor>& mlp_temp_buffer_tenso
 template <typename T>
 Status GPTDecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden_buffer_tensors_0,
                                       std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                      ForwardingContext<T>& forwarding_context) {
+                                      ForwardingContext& forwarding_context) {
   {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], qkv_bias_, hidden_buffer_tensors_1));
@@ -107,7 +107,7 @@ Status GPTDecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden_buffer_tensors
 
 template <typename T>
 Status GPTDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                   ForwardingContext<T>& forwarding_context) {
+                                   ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   CREATE_BUFFER_SCOPE(mlp_temp_buffer_tensors, mlp_temp_buffer_);
@@ -165,7 +165,7 @@ Status Gpt<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelCo
 }
 
 template <typename T>
-Status Gpt<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) {
+Status Gpt<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
   auto& runtime_config = creation_context.runtime_config;
   int hidden_units = model_config.size_per_head * model_config.head_num;
@@ -182,7 +182,7 @@ Status Gpt<T>::CreateLayers(LayerCreationContext<T>& creation_context, ModelCrea
 }
 
 template <typename T>
-Status Gpt<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Gpt<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -209,13 +209,12 @@ GptModel<T>::GptModel(const ModelConfig& model_config, const RuntimeConfig& runt
 }
 
 template <typename T>
-Status GptModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
-                                 ModelCreationConfig& model_creation_config) {
+Status GptModel<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   return gpt_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status GptModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status GptModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(gpt_.Forward(residual_buffer, forwarding_context));

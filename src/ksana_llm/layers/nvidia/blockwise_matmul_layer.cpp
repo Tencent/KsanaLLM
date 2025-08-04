@@ -12,10 +12,10 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status BlockwiseMatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                     std::shared_ptr<Context> context, int rank) {
+Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                  std::shared_ptr<Context> context, int rank) {
   STATUS_CHECK_FAILURE(BaseLayer::Init(parameters, runtime_config, context, rank));
+
   int parameter_index = 0;
   max_m_ = std::any_cast<size_t>(parameters[parameter_index++]);
   n_ = std::any_cast<size_t>(parameters[parameter_index++]);
@@ -24,7 +24,7 @@ Status BlockwiseMatMulLayer<T>::Init(const std::vector<std::any>& parameters, co
   size_t tp_size = std::any_cast<size_t>(parameters[parameter_index++]);
 
   // currently, DeepGEMM only support bfloat16
-  if (std::is_same<T, __nv_bfloat16>::value && std::getenv("DISABLE_DEEPGEMM") == nullptr) {
+  if ((inter_data_type_ == DataType::TYPE_BF16) && std::getenv("DISABLE_DEEPGEMM") == nullptr) {
     if (std::getenv("DEEPGEMM_MAX_M_THRESHOLD") != nullptr) {
       kDeepGemmMaxMThreshold_ = std::stoi(std::getenv("DEEPGEMM_MAX_M_THRESHOLD"));
     } else {
@@ -82,8 +82,7 @@ Status BlockwiseMatMulLayer<T>::Init(const std::vector<std::any>& parameters, co
   return Status();
 }
 
-template <typename T>
-size_t BlockwiseMatMulLayer<T>::GetWorkSpaceSize() {
+size_t BlockwiseMatMulLayer::GetWorkSpaceSize() {
   size_t input_size = max_m_ * k_ * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = max_m_ * DivRoundUp(k_, block_size_) * GetTypeSize(TYPE_FP32);
   size_t cutlass_buffer_size = max_m_ * k_ * GetTypeSize(TYPE_FP8_E4M3);
@@ -92,8 +91,12 @@ size_t BlockwiseMatMulLayer<T>::GetWorkSpaceSize() {
   return workspace_size_;
 }
 
+Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status BlockwiseMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int m = input_tensors[0].shape[0];
   int k = input_tensors[0].shape[1];
   int n = input_tensors[1].shape[0];
@@ -144,10 +147,6 @@ Status BlockwiseMatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors
   }
   return Status();
 }
-
-template class BlockwiseMatMulLayer<float>;
-template class BlockwiseMatMulLayer<half>;
-template class BlockwiseMatMulLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm
 #endif

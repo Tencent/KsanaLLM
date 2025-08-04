@@ -9,34 +9,36 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status Fp8MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status Fp8MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   STATUS_CHECK_FAILURE(BaseLayer::Init(parameters, runtime_config, context, rank));
   int parameter_index = 0;
   max_m_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   max_k_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   cublas_workspace_size_ = InvokeGetCublasWorkspaceSize();
+
   return Status();
 }
 
-template <typename T>
-size_t Fp8MatMulLayer<T>::GetWorkSpaceSize(const int m, const int k) {
+size_t Fp8MatMulLayer::GetWorkSpaceSize(const int m, const int k) {
   size_t input_size = m * k * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = GetTypeSize(TYPE_FP32);
   size_t workspace_size = input_size + scale_size + cublas_workspace_size_;
   return workspace_size;
 }
 
-template <typename T>
-size_t Fp8MatMulLayer<T>::GetWorkSpaceSize() {
+size_t Fp8MatMulLayer::GetWorkSpaceSize() {
   size_t workspace_size = GetWorkSpaceSize(max_m_, max_k_);
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for Fp8MatMulLayer", rank_, workspace_size);
   return workspace_size;
 }
 
+Status Fp8MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int m = input_tensors[0].shape[0];
   int k = input_tensors[0].shape[1];
   int n = input_tensors[1].shape[0];
@@ -93,10 +95,6 @@ Status Fp8MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   cublaslt_algo_ptr_ = nullptr;
   return Status();
 }
-
-template class Fp8MatMulLayer<float>;
-template class Fp8MatMulLayer<half>;
-template class Fp8MatMulLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm
 #endif

@@ -14,19 +14,19 @@ namespace ksana_llm {
 template <typename T>
 class TwoLayeredFFN {
  public:
-  TwoLayeredFFN(int layer_idx, LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config);
-  TwoLayeredFFN(int layer_idx, LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config,
+  TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
+  TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
                 const std::string& weight_name_format);
   ~TwoLayeredFFN() {}
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                 const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                 const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
-  void InitLayers(int layer_idx, LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config,
+  void InitLayers(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
                   const std::string& weight_name_format);
 
-  void InitConfig(int layer_idx, LayerCreationContext<T>& creation_context, const std::string& weight_name_format);
+  void InitConfig(int layer_idx, LayerCreationContext& creation_context, const std::string& weight_name_format);
 
  private:
   bool fuse_gate_up_proj_ = false;

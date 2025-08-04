@@ -13,7 +13,7 @@ template <typename T>
 class FlashMlaAttention {
  public:
   // Disable a default constructor
-  FlashMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext<T>& creation_context,
+  FlashMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
                     const AttentionCreationConfig& attn_config);
 
   ~FlashMlaAttention() = default;

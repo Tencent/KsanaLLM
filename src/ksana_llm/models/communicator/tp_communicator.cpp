@@ -11,7 +11,7 @@ namespace ksana_llm {
 template <typename T>
 Status TpCommunicator<T>::AllReduce(std::vector<Tensor>& reduce_buffer_tensors,
                                     std::vector<Tensor>& hidden_buffer_tensors_0, const bool is_multi_token_forward,
-                                    ForwardingContext<T>& forwarding_context) {
+                                    ForwardingContext& forwarding_context) {
   // NOTE(karlluo): multiple event in nccl will cause preformance regression
   // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
   if (!forwarding_context.GetContext()->IsRunContextDecodeAndDecodeSerially()) {
@@ -30,7 +30,7 @@ Status TpCommunicator<T>::AllReduce(std::vector<Tensor>& reduce_buffer_tensors,
 }
 
 template <typename T>
-Status TpCommunicator<T>::AllGather(Tensor& gather_tensor, Tensor& buffer, ForwardingContext<T>& forwarding_context) {
+Status TpCommunicator<T>::AllGather(Tensor& gather_tensor, Tensor& buffer, ForwardingContext& forwarding_context) {
   if (!forwarding_context.GetModelCommunicator()) {
     return Status();
   }

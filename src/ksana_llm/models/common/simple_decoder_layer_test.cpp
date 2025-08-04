@@ -325,6 +325,7 @@ class FakeTinyWeightTest : public testing::Test {
 #endif
     model_config.is_quant = false;
     model_config.weight_data_type = TYPE_FP16;
+    runtime_config.inter_data_type = model_config.weight_data_type;
     model_config.quant_config.method = QUANT_NONE;
     KLLM_LOG_INFO << "Test TYPE_FP16 weight_data_type forward.";
     DefaultWeightValueInitializer default_weight_initializer;
@@ -362,6 +363,7 @@ class FakeTinyWeightTest : public testing::Test {
     if (model_test_config.test_fp16) {
       model_config.is_quant = false;
       model_config.weight_data_type = TYPE_FP16;
+      runtime_config.inter_data_type = model_config.weight_data_type;
       model_config.quant_config.method = QUANT_NONE;
       KLLM_LOG_INFO << "Test TYPE_FP16 weight_data_type forward.";
       DoLayerTest<ModelType, float16, WeightType>(model_test_config, prefill_hidden_state_baseline,
@@ -383,6 +385,7 @@ class FakeTinyWeightTest : public testing::Test {
     if (model_test_config.test_bf16) {
       model_config.is_quant = false;
       model_config.weight_data_type = TYPE_BF16;
+      runtime_config.inter_data_type = model_config.weight_data_type;
       model_config.quant_config.method = QUANT_NONE;
       KLLM_LOG_INFO << "Test TYPE_BF16 weight_data_type forward.";
       DoLayerTest<ModelType, bfloat16, WeightType>(model_test_config, prefill_hidden_state_baseline,

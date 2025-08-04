@@ -12,9 +12,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
-                                        std::shared_ptr<Context> context)
+ModelCommunicator::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
+                                     std::shared_ptr<Context> context)
     : rank_(rank), context_(context), buffer_(buffer), input_(input) {
   EventCreateWithFlags(&comm_finish_event_, EVENT_DISABLE_TIMING);
 
@@ -25,10 +24,10 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
     select_all_reduce_by_size_ = true;
   }
 
-  nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer<T>>();
+  nccl_all_reduce_sum_layer_ = std::make_shared<NcclAllReduceSumLayer>();
   nccl_all_reduce_sum_layer_->Init({}, runtime_config, context_, rank_);
 
-  nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer<T>>();
+  nccl_all_gather_layer_ = std::make_shared<NcclAllGatherLayer>();
   nccl_all_gather_layer_->Init({}, runtime_config, context_, rank_);
 
   is_full_nvlink_ = context_->ext->IsFullNvLink();
@@ -39,17 +38,17 @@ ModelCommunicator<T>::ModelCommunicator(Tensor* buffer, Tensor* input, int rank,
   InitTensorParaCustomAllReduceSumLayer(input, runtime_config);
 
 #elif defined(ENABLE_ACL)
-  hccl_all_reduce_sum_layer_ = std::make_shared<HcclAllReduceSumLayer<T>>();
+  hccl_all_reduce_sum_layer_ = std::make_shared<HcclAllReduceSumLayer>();
   hccl_all_reduce_sum_layer_->Init({}, runtime_config, context, rank);
 
-  hccl_all_gather_layer_ = std::make_shared<HcclAllGatherLayer<T>>();
+  hccl_all_gather_layer_ = std::make_shared<HcclAllGatherLayer>();
   hccl_all_gather_layer_->Init({}, runtime_config, context, rank);
 #endif
 }
 
 #ifdef ENABLE_CUDA
-template <typename T>
-void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input, const RuntimeConfig& runtime_config) {
+
+void ModelCommunicator::InitTensorParaCustomAllReduceSumLayer(Tensor* input, const RuntimeConfig& runtime_config) {
   if (!context_->ext->IsSupportedP2PAccess()) {
     return;
   }
@@ -65,7 +64,7 @@ void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input, 
   // is enough for 131072 such tuples. The largest model I've seen only
   // needs less than 10000 of registered tuples.
   constexpr size_t rank_data_sz = 8 * 1024 * 1024;
-  tp_custom_all_reduce_sum_layer_ = std::make_shared<CustomAllReduceSumLayer<T>>();
+  tp_custom_all_reduce_sum_layer_ = std::make_shared<CustomAllReduceSumLayer>();
   tp_custom_all_reduce_rank_tensor_ =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {rank_data_sz}, rank_, nullptr, stream);
   StreamSynchronize(*stream);
@@ -76,13 +75,9 @@ void ModelCommunicator<T>::InitTensorParaCustomAllReduceSumLayer(Tensor* input, 
 }
 #endif
 
-template <typename T>
-ModelCommunicator<T>::~ModelCommunicator() {
-  EventDestroy(comm_finish_event_);
-}
+ModelCommunicator::~ModelCommunicator() { EventDestroy(comm_finish_event_); }
 
-template <typename T>
-Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(nccl_all_gather_layer_->Forward(input_tensors, output_tensors));
   if (!context_->IsRunContextDecodeAndDecodeSerially()) {
@@ -106,9 +101,8 @@ Status ModelCommunicator<T>::AllGather(const std::vector<Tensor>& input_tensors,
   return Status();
 }
 
-template <typename T>
-Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
-                                       bool is_multi_token_forward, bool use_custom) {
+Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                                    bool is_multi_token_forward, bool use_custom) {
 #ifdef ENABLE_CUDA
   if (CheckIfUseCustomReduceSum(input_tensors, use_custom)) {
     STATUS_CHECK_RETURN(tp_custom_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
@@ -140,8 +134,7 @@ Status ModelCommunicator<T>::ReduceSum(const std::vector<Tensor>& input_tensors,
   return Status();
 }
 
-template <typename T>
-bool ModelCommunicator<T>::CheckIfUseCustomReduceSum(const std::vector<Tensor>& input_tensors, bool use_custom) {
+bool ModelCommunicator::CheckIfUseCustomReduceSum(const std::vector<Tensor>& input_tensors, bool use_custom) {
   if (select_all_reduce_by_size_ && input_tensors[0].GetTotalBytes() > kAllReduceThreshold) {
     return false;
   }
@@ -153,9 +146,5 @@ bool ModelCommunicator<T>::CheckIfUseCustomReduceSum(const std::vector<Tensor>& 
   int batch_size = input_tensors[0].shape[0];
   return use_custom && (tp_size_ == 2 || is_full_nvlink_);
 }
-
-template class ModelCommunicator<float>;
-template class ModelCommunicator<float16>;
-template class ModelCommunicator<bfloat16>;
 
 }  // namespace ksana_llm

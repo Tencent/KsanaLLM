@@ -289,6 +289,7 @@ TEST_F(LlamaTest, ForwardTest) {
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestLlamaForward<float16>();
@@ -304,6 +305,7 @@ TEST_F(LlamaTest, ForwardTest) {
 #ifdef ENABLE_CUDA
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_BF16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
   TestLlamaForward<bfloat16>();

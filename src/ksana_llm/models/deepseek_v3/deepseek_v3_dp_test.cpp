@@ -308,6 +308,7 @@ TEST_F(DeepSeekV3DPTest, DataParallelTest) {
 #ifdef ENABLE_CUDA
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
   TestDeepSeekV3DPForward();
 #endif

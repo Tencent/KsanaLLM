@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-Activation<T>::Activation(const std::string& activation_type, const LayerCreationContext<T>& creation_context) {
+Activation<T>::Activation(const std::string& activation_type, const LayerCreationContext& creation_context) {
   if (activation_type == "gelu") {
     activation_layer_ = std::make_shared<ActivationLayer<ActivationType::Gelu, T>>();
   } else if (activation_type == "relu") {

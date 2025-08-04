@@ -19,7 +19,7 @@ Status Baichuan<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const Mo
 }
 
 template <typename T>
-Status Baichuan<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status Baichuan<T>::CreateLayers(LayerCreationContext& creation_context,
                                  ModelCreationConfig& model_creation_config) {
   bool is_neox = true;
   bool add_qkv_bias = false;
@@ -32,7 +32,7 @@ Status Baichuan<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 }
 
 template <typename T>
-Status Baichuan<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+Status Baichuan<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -59,13 +59,13 @@ BaichuanModel<T>::BaichuanModel(const ModelConfig& model_config, const RuntimeCo
 }
 
 template <typename T>
-Status BaichuanModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status BaichuanModel<T>::CreateLayers(LayerCreationContext& creation_context,
                                       ModelCreationConfig& model_creation_config) {
   return baichuan_.CreateLayers(creation_context, model_creation_config);
 }
 
 template <typename T>
-Status BaichuanModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status BaichuanModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(baichuan_.Forward(residual_buffer, forwarding_context));

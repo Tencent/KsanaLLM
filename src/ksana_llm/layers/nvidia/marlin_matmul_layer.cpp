@@ -8,11 +8,11 @@
 
 namespace ksana_llm {
 
-template <typename T, DataType WT>
-Status MarlinMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                      std::shared_ptr<Context> context, int rank) {
+Status MarlinMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                               std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
+  inter_data_type_ = runtime_config.inter_data_type;
 
   int parameter_index = 0;
   max_m_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -23,6 +23,7 @@ Status MarlinMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, c
   is_gptq_desc_ = std::any_cast<const bool>(parameters[parameter_index++]);
   is_k_full_ = std::any_cast<const bool>(parameters[parameter_index++]);
   bool cutlass_use_gemv_cuda_core_ = std::any_cast<const bool>(parameters[parameter_index++]);  // unused
+  weight_data_type_ = std::any_cast<const DataType>(parameters[parameter_index++]);
 
   // double check some parameter
   is_k_full_ = is_gptq_desc_ ? is_k_full_ : true;
@@ -30,11 +31,17 @@ Status MarlinMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, c
   return Status();
 }
 
+size_t MarlinMatMulLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+
+Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
-template <typename T, DataType WT>
-size_t MarlinMatMulLayer<T, WT>::GetWorkSpaceSize() {
-  if constexpr (WT == TYPE_I4_GROUP) {
+template <typename T>
+size_t MarlinMatMulLayer::GetWorkSpaceSizeT() {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     llm_kernels::nvidia::marlin::WorkspaceInfo info = GetMarlinWorkspace<T>(true, is_gptq_desc_, rank_, max_m_, max_k_);
 
     marlin_workspace_size_ = AlignAddress(info.workspace_size);
@@ -50,14 +57,14 @@ size_t MarlinMatMulLayer<T, WT>::GetWorkSpaceSize() {
     KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MarlinMatMulLayer", rank_, max_ws_bytes);
     return max_ws_bytes;
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. MarlinMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. MarlinMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
 
-template <typename T, DataType WT>
-Status MarlinMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
-  if constexpr (WT == TYPE_I4_GROUP) {
+template <typename T>
+Status MarlinMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     const Tensor& weight_tensor = input_tensors[1];
     void* p_qweight_tensor = weight_tensor.GetPtr<void>();
     void* p_scales_tensor = weight_tensor.scales->GetPtr<void>();
@@ -83,12 +90,9 @@ Status MarlinMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensor
     output_tensors[0].dtype = input_tensors[0].dtype;
     return Status();
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. MarlinMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. MarlinMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
-
-template class MarlinMatMulLayer<float, TYPE_I4_GROUP>;
-template class MarlinMatMulLayer<half, TYPE_I4_GROUP>;
-template class MarlinMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
 
 }  // namespace ksana_llm

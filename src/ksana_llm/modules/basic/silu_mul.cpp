@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 template <typename T>
-SiluMul<T>::SiluMul(const LayerCreationContext<T>& creation_context) {
+SiluMul<T>::SiluMul(const LayerCreationContext& creation_context) {
   silu_mul_layer_ = std::make_shared<SiluMulLayer<T>>();
   silu_mul_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }

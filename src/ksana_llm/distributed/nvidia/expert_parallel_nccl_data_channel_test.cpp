@@ -143,7 +143,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
         std::make_shared<ExpertParallelNcclDataChannel>(expert_hidden_unit_buffer_pool_, env_, context_);
 
     // Create send_thread_
-    ForwardingContext<float> forwarding_context = ForwardingContext<float>();
+    ForwardingContext forwarding_context = ForwardingContext();
     forwarding_context.SetCurrentRank(0);
     forwarding_context.SetContext(context_);
     forwarding_context.GetModelInput() = model_input_;
@@ -243,7 +243,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
         std::make_shared<ExpertParallelNcclDataChannel>(expert_hidden_unit_buffer_pool_, env_, context_);
 
     nccl_data_channel_->Connect();
-    ForwardingContext<float> forwarding_context = ForwardingContext<float>();
+    ForwardingContext forwarding_context = ForwardingContext();
     forwarding_context.SetCurrentRank(0);
     forwarding_context.SetContext(context_);
     forwarding_context.GetModelInput() = model_input_;

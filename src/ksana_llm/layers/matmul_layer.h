@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class MatMulLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -20,6 +19,10 @@ class MatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
   virtual size_t GetWorkSpaceSize() override;
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  private:
 #ifdef ENABLE_CUDA

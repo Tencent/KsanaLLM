@@ -9,26 +9,30 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                            std::shared_ptr<Context> context, int rank) {
+Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
   cublas_workspace_ptr_ = nullptr;
   cublaslt_algo_ptr_ = nullptr;
+  inter_data_type_ = runtime_config.inter_data_type;
+
   return Status();
 }
 
-template <typename T>
-size_t MatMulLayer<T>::GetWorkSpaceSize() {
+size_t MatMulLayer::GetWorkSpaceSize() {
   if (context_->ext->GetGPUGemmAlgoHelper().IsInit() || std::getenv("MATMUL_LAYER_USE_WORKSPACE")) {
     cublas_workspace_size_ = llm_kernels::nvidia::GetCublasWorkspaceSize();
   }
   return cublas_workspace_size_;
 }
 
+Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (cublas_workspace_size_ > 0) {
     cublas_workspace_ptr_ = workspace_buffer_->GetPtr<void>();
   }
@@ -66,9 +70,5 @@ Status MatMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
   cublaslt_algo_ptr_ = nullptr;
   return Status();
 }
-
-template class MatMulLayer<float>;
-template class MatMulLayer<half>;
-template class MatMulLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

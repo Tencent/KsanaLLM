@@ -13,7 +13,7 @@ template <typename T>
 class SiluMul {
  public:
   // Disable a default constructor
-  explicit SiluMul(const LayerCreationContext<T>& creation_context);
+  explicit SiluMul(const LayerCreationContext& creation_context);
 
   ~SiluMul();
 

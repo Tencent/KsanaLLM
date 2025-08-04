@@ -20,10 +20,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class MoeLayerFactory {
  public:
-  typedef std::shared_ptr<BaseLayer> (MoeLayerFactory<T>::*BuildLayerFunc)();
+  typedef std::shared_ptr<BaseLayer> (MoeLayerFactory::*BuildLayerFunc)();
   MoeLayerFactory(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                   std::shared_ptr<Context> context) {
     context_ = context;
@@ -34,36 +33,37 @@ class MoeLayerFactory {
 #ifdef ENABLE_CUDA
     // TODO(winminkong): Organize the quantization backend and quantization types of the MoE layer.
     builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, MOE_QUANT_NONE, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, MOE_QUANT_NONE, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, MOE_QUANT_NONE, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     // for fused_moe_gtpq_triton
     builder_map_[{TYPE_UINT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     builder_map_[{TYPE_UINT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
 
     // for marlin gptq moe
     builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_BACKEND}] =
-        &MoeLayerFactory<T>::BuildLayer<MarlinMoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MarlinMoeLayer>;
 #endif
 
 #ifdef ENABLE_FP8
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, MOE_QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, MOE_QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
     builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, MOE_QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
-        &MoeLayerFactory<T>::BuildLayer<MoeLayer<T>>;
-    if constexpr (!std::is_same_v<T, float>) {
+        &MoeLayerFactory::BuildLayer<MoeLayer>;
+    if (runtime_config.inter_data_type != TYPE_FP32) {  // TODO(robertyuan): weird condition
+      // NOTE: Fp8MoeLayer only suport fp8e4m3 rightnow
       builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, MOE_QUANT_FP8_E4M3, NONE_QUANT}] =
-          &MoeLayerFactory<T>::BuildLayer<Fp8MoeLayer<T, fp8e4m3>>;
+          &MoeLayerFactory::BuildLayer<Fp8MoeLayer>;
       builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, MOE_QUANT_FP8_E4M3, NONE_QUANT}] =
-          &MoeLayerFactory<T>::BuildLayer<Fp8MoeLayer<T, fp8e4m3>>;
+          &MoeLayerFactory::BuildLayer<Fp8MoeLayer>;
       builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, MOE_QUANT_FP8_E4M3, NONE_QUANT}] =
-          &MoeLayerFactory<T>::BuildLayer<Fp8MoeLayer<T, fp8e4m3>>;
+          &MoeLayerFactory::BuildLayer<Fp8MoeLayer>;
     }
 #endif
   }

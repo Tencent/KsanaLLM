@@ -19,7 +19,7 @@ ExpertParallelDataTransfer<T>::ExpertParallelDataTransfer() {}
 
 template <typename T>
 void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
-                                                              ForwardingContext<T>& forwarding_context, bool is_sync) {
+                                                              ForwardingContext& forwarding_context, bool is_sync) {
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) return;
 
   // Send comm meta.
@@ -66,8 +66,7 @@ void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<
 }
 
 template <typename T>
-std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(
-    ForwardingContext<T>& forwarding_context) {
+std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context) {
   static std::vector<Tensor> empty;
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
@@ -95,7 +94,7 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(
 
 template <typename T>
 std::vector<Tensor>& ExpertParallelDataTransfer<T>::AsyncRecvHiddenUnitBufferForEP(
-    ForwardingContext<T>& forwarding_context) {
+    ForwardingContext& forwarding_context) {
   static std::vector<Tensor> empty;
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
@@ -123,13 +122,13 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::AsyncRecvHiddenUnitBufferFor
 // states asynchronously.
 template <typename T>
 void ExpertParallelDataTransfer<T>::CombineHiddenUnitBufferForEP(std::vector<Tensor>& residual_buffer,
-                                                                 ForwardingContext<T>& forwarding_context) {
+                                                                 ForwardingContext& forwarding_context) {
   return;
 }
 
 template <typename T>
 std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBufferRef(
-    HiddenUnitDeviceBuffer* hidden_unit, ForwardingContext<T>& forwarding_context) {
+    HiddenUnitDeviceBuffer* hidden_unit, ForwardingContext& forwarding_context) {
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     // Should not execute here.
     KLLM_LOG_INFO << "Not expert parallel mode, return empty result.";
@@ -164,7 +163,7 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBuffe
 // Now used for expert parallel.
 template <typename T>
 HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
-    const std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context) {
+    const std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
@@ -187,7 +186,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
 
 template <typename T>
 HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBufferForEP(
-    expert_parallel_comm_meta& meta_data, DataType dtype, ForwardingContext<T>& forwarding_context) {
+    expert_parallel_comm_meta& meta_data, DataType dtype, ForwardingContext& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
@@ -212,7 +211,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBuff
 }
 
 template <typename T>
-void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext<T>& forwarding_context) {
+void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext& forwarding_context) {
   if (forwarding_context.GetCurrentRank() == 0) {
     while (!hidden_device_buffer_.empty()) {
       HiddenUnitDeviceBuffer* hidden_unit_buffer = hidden_device_buffer_.back();

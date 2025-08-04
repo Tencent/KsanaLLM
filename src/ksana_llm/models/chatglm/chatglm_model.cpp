@@ -19,7 +19,7 @@ ChatglmModel<T>::ChatglmModel(const ModelConfig& model_config, const RuntimeConf
 }
 
 template <typename T>
-Status ChatglmModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
+Status ChatglmModel<T>::CreateLayers(LayerCreationContext& creation_context,
                                      ModelCreationConfig& model_creation_config) {
   bool is_neox = false;
   bool add_qkv_bias = true;
@@ -32,7 +32,7 @@ Status ChatglmModel<T>::CreateLayers(LayerCreationContext<T>& creation_context,
 }
 
 template <typename T>
-Status ChatglmModel<T>::LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode) {
+Status ChatglmModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
 
   std::vector<Tensor>& residual_buffer =

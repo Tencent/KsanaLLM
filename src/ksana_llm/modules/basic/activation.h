@@ -13,7 +13,7 @@ template <typename T>
 class Activation {
  public:
   // Disable a default constructor
-  explicit Activation(const std::string& activation_type, const LayerCreationContext<T>& creation_context);
+  explicit Activation(const std::string& activation_type, const LayerCreationContext& creation_context);
 
   ~Activation();
 

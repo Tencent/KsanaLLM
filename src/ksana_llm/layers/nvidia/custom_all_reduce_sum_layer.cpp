@@ -9,11 +9,11 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                        std::shared_ptr<Context> context, int rank) {
+Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                     std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
+  inter_data_type_ = runtime_config.inter_data_type;
 
   // No need to initialize custom reduce sum when `tp == 1`.
   if (context_->GetTensorParallelSize() == 1) {
@@ -69,9 +69,13 @@ Status CustomAllReduceSumLayer<T>::Init(const std::vector<std::any>& parameters,
   return Status();
 }
 
+Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors,
+                                         std::vector<Tensor>& output_tensors) {
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
@@ -103,9 +107,5 @@ Status CustomAllReduceSumLayer<T>::Forward(const std::vector<Tensor>& input_tens
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class CustomAllReduceSumLayer<float>;
-template class CustomAllReduceSumLayer<half>;
-template class CustomAllReduceSumLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

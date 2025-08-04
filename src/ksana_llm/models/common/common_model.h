@@ -92,32 +92,31 @@ class CommonModel : public BaseModel {
   bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 
  private:
-  virtual Status CreateLayers(LayerCreationContext<T>& creation_context,
-                              ModelCreationConfig& model_creation_config) = 0;
+  virtual Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) = 0;
 
  private:
   // Execute the embedding lookup.
-  Status LookupEmbedding(ForwardingContext<T>& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+  Status LookupEmbedding(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                          std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
   // Execute the forward of specific layers.
-  virtual Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
+  virtual Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
 
   // Execute the lm head, and generate the logits.
-  Status LmHead(ForwardingContext<T>& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+  Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                 std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
 
   // Get a reference for hidden buffer.
-  std::vector<Tensor>& GetHiddenUnitBufferRef(ForwardingContext<T>& forwarding_context);
+  std::vector<Tensor>& GetHiddenUnitBufferRef(ForwardingContext& forwarding_context);
 
  protected:
   // Get hidden state from previous pipeline block
-  std::vector<Tensor>& GetHiddenUnitBuffer(ForwardingContext<T>& forwarding_context, bool do_recv);
+  std::vector<Tensor>& GetHiddenUnitBuffer(ForwardingContext& forwarding_context, bool do_recv);
 
   // Set hidden state, it will be send  to next pipeline block
-  void SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context);
+  void SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context);
 
-  ForwardingContext<T>* GetForwardingContext(size_t multi_batch_id);
+  ForwardingContext* GetForwardingContext(size_t multi_batch_id);
 
  public:
   using BaseModel::context_;
@@ -161,11 +160,11 @@ class CommonModel : public BaseModel {
   // TODO(robertyuan): layer_creation_context_ should be deleted after layer creation.
   // However, matmul_layer_factory will delete the buffer during destroying.
   // Fix this after CommonModel is deleted.
-  LayerCreationContext<T> layer_creation_context_;
+  LayerCreationContext layer_creation_context_;
 
   ModelBuffers model_buffers_;
   // Buffer of forwarding contexts for parallel batch processing
-  std::vector<std::unique_ptr<ForwardingContext<T>>> forwarding_context_buffer_;
+  std::vector<std::unique_ptr<ForwardingContext>> forwarding_context_buffer_;
   // Map from multi_batch_id to index in the forwarding_context_buffer_
   std::unordered_map<size_t, size_t> schedule_to_context_map_;
   // Mutex to protect access to the buffer and map
@@ -185,9 +184,9 @@ class CommonModel : public BaseModel {
   bool IsPrefixCachingComputationReuse();
 
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                           ForwardingContext<T>& forwarding_context);
+                           ForwardingContext& forwarding_context);
 
-  virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext<T>& forwarding_context);
+  virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context);
 };
 
 }  // namespace ksana_llm

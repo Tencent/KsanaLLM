@@ -23,17 +23,17 @@ namespace ksana_llm {
 template <typename T>
 class DeepSeekV3DecoderLayer {
  public:
-  DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext<T>& creation_context,
+  DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                          ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers, TensorBuffer* moe_buffer);
 
   ~DeepSeekV3DecoderLayer() = default;
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                 ForwardingContext<T>& forwarding_context, bool need_add_residual_before_attn,
+                 ForwardingContext& forwarding_context, bool need_add_residual_before_attn,
                  bool need_add_residual_after_mlp);
 
  private:
   Status CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                   const bool is_multi_token_forward, ForwardingContext<T>& forwarding_context);
+                   const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
   bool is_moe_;
@@ -72,13 +72,13 @@ class DeepSeekV3DecoderLayer {
 template <typename T>
 class DeepSeekV3MtpLayer {
  public:
-  DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext<T>& creation_context,
+  DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,
                      ModelCreationConfig& model_creation_config,
                      std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer);
 
   ~DeepSeekV3MtpLayer() = default;
 
-  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext<T>& forwarding_context);
+  Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context);
 
  private:
   std::shared_ptr<Layernorm<T>> enorm_;
@@ -98,9 +98,9 @@ class DeepSeekV3Model : public CommonModel<T> {
   DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                   std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
 
-  Status CreateLayers(LayerCreationContext<T>& creation_context, ModelCreationConfig& model_creation_config) override;
+  Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
 
-  Status LayerForward(ForwardingContext<T>& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
+  Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel<T>::GetHiddenUnitBuffer;

@@ -9,9 +9,25 @@
 
 namespace ksana_llm {
 
-template <typename T, DataType WT>
-Status CutlassMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                       std::shared_ptr<Context> context, int rank) {
+Status CutlassMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                std::shared_ptr<Context> context, int rank) {
+  inter_data_type_ = runtime_config.inter_data_type;
+  LAYER_InitT(inter_data_type_, parameters, runtime_config, context, rank);
+}
+
+size_t CutlassMatMulLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+
+Status CutlassMatMulLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+  LAYER_PreprocessT(inter_data_type_, model_config, runtime_config);
+}
+
+Status CutlassMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
+template <typename T>
+Status CutlassMatMulLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                 std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -24,6 +40,7 @@ Status CutlassMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, 
   [[maybe_unused]] bool is_gptq_desc_ = std::any_cast<const bool>(parameters[parameter_index++]);  // unused
   [[maybe_unused]] bool is_k_full_ = std::any_cast<const bool>(parameters[parameter_index++]);     // unused
   cutlass_use_gemv_cuda_core_ = std::any_cast<const bool>(parameters[parameter_index++]);
+  weight_data_type_ = std::any_cast<const DataType>(parameters[parameter_index++]);
 
   // double check some parameter
   if (cutlass_use_gemv_cuda_core_) {
@@ -32,9 +49,9 @@ Status CutlassMatMulLayer<T, WT>::Init(const std::vector<std::any>& parameters, 
   return Status();
 }
 
-template <typename T, DataType WT>
-size_t CutlassMatMulLayer<T, WT>::GetWorkSpaceSize() {
-  if constexpr (WT == TYPE_I4_GROUP) {
+template <typename T>
+size_t CutlassMatMulLayer::GetWorkSpaceSizeT() {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     static std::mutex g_mtx;
     std::lock_guard<std::mutex> guard(g_mtx);
     // 检查是否可以跳过
@@ -53,12 +70,13 @@ size_t CutlassMatMulLayer<T, WT>::GetWorkSpaceSize() {
     KLLM_LOG_INFO << fmt::format("Rank[{}] Request {} for CutlassMatMulLayer", rank_, max_ws_bytes);
     return max_ws_bytes;
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
 
-template <typename T, DataType WT>
-Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
+template <typename T>
+Status CutlassMatMulLayer::PreprocessT(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 5);
   if (record_iters == 0) {
     KLLM_LOG_DEBUG << "$QUANT_PROFILE==0, Skipping CutlassMatMulLayer Preprocess";
@@ -66,7 +84,7 @@ Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
   }
   const size_t warmup_iters = std::max(1UL, record_iters / 2);  // warmup不能为0
 
-  if constexpr (WT == TYPE_I4_GROUP) {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     const size_t max_posible_m = runtime_config.max_batch_size;
     const size_t posible_n = max_n_;
     const size_t posible_k = max_k_;
@@ -92,7 +110,7 @@ Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
                               rank_);
     Tensor buffer_output(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP16, {max_posible_m, posible_n}, rank_);
     void* zeros_ptr = buffer_input_zeros.GetPtr<void>();
-    if (model_config_.quant_config.method == QUANT_GPTQ) {
+    if (model_config.quant_config.method == QUANT_GPTQ) {
       zeros_ptr = nullptr;
     }
 
@@ -120,14 +138,14 @@ Status CutlassMatMulLayer<T, WT>::Preprocess(const ModelConfig& model_config_, c
 
     return Status();
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
 
-template <typename T, DataType WT>
-Status CutlassMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors) {
-  if constexpr (WT == TYPE_I4_GROUP) {
+template <typename T>
+Status CutlassMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (weight_data_type_ == TYPE_I4_GROUP) {
     const Tensor& weight_tensor = input_tensors[1];
     void* p_qweight_tensor = weight_tensor.GetPtr<void>();
     void* p_scales_tensor = weight_tensor.scales->GetPtr<void>();
@@ -156,12 +174,9 @@ Status CutlassMatMulLayer<T, WT>::Forward(const std::vector<Tensor>& input_tenso
     output_tensors[0].dtype = input_tensors[0].dtype;
     return Status();
   } else {
-    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.", WT));
+    KLLM_THROW(fmt::format("Not supported weight data type: {}. CutlassMatMul only supports TYPE_I4_GROUP.",
+                           weight_data_type_));
   }
 }
-
-template class CutlassMatMulLayer<float, TYPE_I4_GROUP>;
-template class CutlassMatMulLayer<half, TYPE_I4_GROUP>;
-template class CutlassMatMulLayer<__nv_bfloat16, TYPE_I4_GROUP>;
 
 }  // namespace ksana_llm

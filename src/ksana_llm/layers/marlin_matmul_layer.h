@@ -19,7 +19,6 @@ namespace ksana_llm {
  * - 支持desc操作
  * - 目前只支持half的激活类型
  */
-template <typename T, DataType WT>
 class MarlinMatMulLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -30,6 +29,15 @@ class MarlinMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+  template <typename T>
+  size_t GetWorkSpaceSizeT();
+
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+ private:
+  DataType weight_data_type_;
+
   bool is_awq_;
   bool is_gptq_desc_;
   // Whether the K-dimension of the weights is complete. If the weights split in the K dimension, is_k_full_ = false
