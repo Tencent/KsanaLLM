@@ -3,34 +3,32 @@
 # ==============================================================================
 import asyncio
 import json
-import random
 import logging
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from config import settings
-from db import db
-from .database_nodes import get_available_nodes_from_db
-
-if settings.router_rule == "polaris":
-    from .polaris_nodes import get_available_nodes_with_polaris, update_polaris_service_call_result
+from .name_service.name_service import NameServiceRegistry
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Configuration for prefill and decode nodes (used as fallback for fixed mode)
-PREFILL_NODES = [("prefill_group_1", "localhost:8088")]
-DECODE_NODES = [("decode_group_1", "localhost:8089")]
+# 在模块初始化时加载 name service 提供者
+try:
+    NAME_SERVICE_PROVIDER = NameServiceRegistry.get_provider_from_config(
+        settings.name_service_provider
+    )
+    if not NAME_SERVICE_PROVIDER:
+        raise RuntimeError(
+            f"Failed to load name service provider from '{settings.name_service_provider}'"
+        )
+    logger.info(f"Loaded name service provider: {NAME_SERVICE_PROVIDER.name}")
+except Exception as e:
+    logger.error(f"Failed to initialize name service provider: {e}")
+    raise
 
 raw_router = APIRouter()
-
-
-# Helper function to randomly select a node from a list
-def pick(l):
-    if not l:
-        raise HTTPException(status_code=503, detail="No available nodes for processing")
-    return random.choice(l)
 
 
 # Constants for stream processing
@@ -69,7 +67,7 @@ async def forward_request(req: Request, endpoint_path: str):
     # Get request method and body
     method = req.method
     body = await req.body()
-    
+
     # Parse body for POST requests
     body_json = {}
     if method in ["POST", "PUT", "PATCH"] and body:
@@ -81,56 +79,26 @@ async def forward_request(req: Request, endpoint_path: str):
     # Get query parameters for GET requests
     query_params = dict(req.query_params)
 
-    # Select prefill and decode nodes based on router_rule
-    prefill_url = ""
-    decode_url = ""
-
-    def select_nodes_with_fallback(available_nodes, prefill_nodes, decode_nodes):
-        if available_nodes["prefill"]:
-            prefill = pick(available_nodes["prefill"])
-            prefill_name = prefill[0]
-            prefill_url = f"http://{prefill[1]}{endpoint_path}"
-        else:
-            logger.warning("No available prefill nodes found, using fallback")
-            prefill = pick(prefill_nodes)
-            prefill_name = prefill[0]
-            prefill_url = f"http://{prefill[1]}{endpoint_path}"
-
-        if available_nodes["decode"]:
-            decode = pick(available_nodes["decode"])
-            decode_name = decode[0]
-            decode_url = f"http://{decode[1]}{endpoint_path}"
-        else:
-            logger.warning("No available decode nodes found, using fallback")
-            decode = pick(decode_nodes)
-            decode_name = decode[0]
-            decode_url = f"http://{decode[1]}/generate"
-        return prefill, prefill_name, prefill_url, decode, decode_name, decode_url
-
-    prefill_instance = None
-    decode_instance = None
-
-    if settings.router_rule == "auto":
-        # 先尝试数据库，再尝试 polaris
-        available_nodes = get_available_nodes_from_db(db.storage, settings.cluster_name)
-        prefill, prefill_name, prefill_url, decode, decode_name, decode_url = select_nodes_with_fallback(
-            available_nodes, PREFILL_NODES, DECODE_NODES
+    try:
+        # 获取选中的节点
+        prefill_node, decode_node, prefill_instance, decode_instance = (
+            NAME_SERVICE_PROVIDER.get_available_nodes()
         )
-    elif settings.router_rule == "polaris":
-        available_nodes, prefill_instance, decode_instance = get_available_nodes_with_polaris(
-            settings.polaris_namespace, settings.polaris_prefill_service, settings.polaris_decode_service
+
+        # 构建 URL
+        prefill_name, prefill_address = prefill_node
+        prefill_url = f"http://{prefill_address}{endpoint_path}"
+
+        decode_name, decode_address = decode_node
+        decode_url = f"http://{decode_address}{endpoint_path}"
+
+    except Exception as e:
+        logger.error(
+            f"Failed to select nodes using provider '{NAME_SERVICE_PROVIDER.name}': {e}"
         )
-        prefill, prefill_name, prefill_url, decode, decode_name, decode_url = select_nodes_with_fallback(
-            available_nodes, PREFILL_NODES, DECODE_NODES
+        raise HTTPException(
+            status_code=503, detail=f"No available nodes for processing"
         )
-    else:
-        # Use fixed configuration
-        prefill = pick(PREFILL_NODES)
-        prefill_name = prefill[0]
-        prefill_url = f"http://{prefill[1]}{endpoint_path}"
-        decode = pick(DECODE_NODES)
-        decode_name = decode[0]
-        decode_url = f"http://{decode[1]}{endpoint_path}"
 
     # 全局自增 communication id
     if not hasattr(forward_request, "_comm_id"):
@@ -140,7 +108,9 @@ async def forward_request(req: Request, endpoint_path: str):
         "kv-comm-group-key": f"{prefill_name}__{decode_name}",
         "kv-comm-request-id": str(comm_id),
     }
-    logger.info(f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}")
+    logger.info(
+        f"Routing to prefill: {prefill_url}, decode: {decode_url} and comm_id: {comm_id}"
+    )
     forward_request._comm_id += 1
 
     async def merged_stream():
@@ -151,7 +121,7 @@ async def forward_request(req: Request, endpoint_path: str):
             request_kwargs = {
                 "headers": headers,
             }
-            
+
             if method in ["POST", "PUT", "PATCH"]:
                 request_kwargs["json"] = body_json
             elif method == "GET" and query_params:
@@ -164,24 +134,18 @@ async def forward_request(req: Request, endpoint_path: str):
             except httpx.RequestError as e:
                 logger.error(f"HTTP stream request failed: {e}")
                 raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to connect to nodes: {e}"
+                    status_code=500, detail=f"Failed to connect to nodes: {e}"
                 )
             prod_resp, cons_resp = await asyncio.gather(
                 prod_ctx.__aenter__(),
                 cons_ctx.__aenter__(),
             )
-            if settings.router_rule == "polaris":
-                # 更新 Polaris 服务调用结果
-                update_polaris_service_call_result(
-                    settings.polaris_namespace,
-                    settings.polaris_prefill_service,
-                    settings.polaris_decode_service,
-                    prefill_instance,
-                    decode_instance,
-                    prod_resp.status_code < 400,
-                    cons_resp.status_code < 400
-                )
+            NAME_SERVICE_PROVIDER.update_nodes_call_result(
+                prefill_instance=prefill_instance,
+                decode_instance=decode_instance,
+                prefill_success=prod_resp.status_code < 400,
+                decode_success=cons_resp.status_code < 400,
+            )
 
             # ------- 并发读取 -------
             prod_task = asyncio.create_task(
@@ -219,7 +183,9 @@ async def forward_request(req: Request, endpoint_path: str):
 
 
 # Universal proxy routes using path wildcards
-@raw_router.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+@raw_router.api_route(
+    "/v1/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"]
+)
 async def proxy_v1_endpoints(req: Request, path: str):
     """Handle all /v1/* endpoints with any HTTP method"""
     return await forward_request(req, f"/v1/{path}")
@@ -232,13 +198,17 @@ async def generate(req: Request):
 
 
 # Optional: Add more specific wildcards if needed
-@raw_router.api_route("/v2/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+@raw_router.api_route(
+    "/v2/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"]
+)
 async def proxy_v2_endpoints(req: Request, path: str):
     """Handle all /v2/* endpoints with any HTTP method"""
     return await forward_request(req, f"/v2/{path}")
 
 
-@raw_router.api_route("/api/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"])
+@raw_router.api_route(
+    "/api/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"]
+)
 async def proxy_api_endpoints(req: Request, path: str):
     """Handle all /api/* endpoints with any HTTP method"""
     return await forward_request(req, f"/api/{path}")
