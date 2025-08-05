@@ -650,4 +650,8 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
   return Status();
 }
 
+template void LlmRuntime::ReorderInferRequests<InferRequest>(std::vector<std::shared_ptr<InferRequest>> &reqs);
+template void LlmRuntime::ReorderInferRequests<WorkerInferRequest>(
+    std::vector<std::shared_ptr<WorkerInferRequest>> &reqs);
+
 }  // namespace ksana_llm

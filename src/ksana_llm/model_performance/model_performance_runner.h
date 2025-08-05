@@ -20,17 +20,19 @@ class ModelPerformanceRunner {
 
   void OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config);
 
-  size_t GetNeededBlockNum(size_t block_token_num);
+  size_t GetNeededBlockNum(size_t block_token_num) const;
 
   void LoadModel();
 
-  void InitRequests();
+  void InitInferRequests();
 
-  void CheckRequests();
+  void CheckRequests() const;
 
   Status ParsePerformanceRunnerConfig(const std::string& config_file);
 
-  size_t GetBlockNum(const ForwardRequest& req);
+  size_t GetBlockNum(std::shared_ptr<InferRequest> req) const;
+
+  uint32_t GetAttnDpGroupId(int64_t req_id) const;
 
  private:
   ModelConfig model_config_;
@@ -38,8 +40,8 @@ class ModelPerformanceRunner {
   std::shared_ptr<Context> context_ = nullptr;
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<WorkerGroup> worker_group_ = nullptr;
-  std::shared_ptr<CacheManagerInterface> cache_manager_ = nullptr;
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;
+  std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
   uint32_t attn_dp_worker_num_ = 0;
 
   // input_config
@@ -55,12 +57,14 @@ class ModelPerformanceRunner {
   size_t multi_batch_id_ = DEFAULT_MULTI_BATCH_ID;
 
   // requests
-  std::vector<ForwardRequest> forward_reqs_;
+  std::shared_ptr<KsanaPythonInput> ksana_python_input_;
+  std::vector<std::shared_ptr<InferRequest>> infer_reqs_;
   std::vector<std::vector<int>> input_ids_vec_;
   SamplingConfig sampling_config_;
   std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks_;
   std::vector<int> input_refit_pos_;
-  std::vector<std::vector<float>> input_refit_embedding_;
+  std::vector<std::vector<float>> embeddings_;
   EmbeddingSlice embedding_slice_;
+  std::vector<py::object> embedding_tensors_;
 };
 }  // namespace ksana_llm

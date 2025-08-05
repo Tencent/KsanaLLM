@@ -25,24 +25,24 @@ class ModelPerformanceRunnerTest : public testing::Test {
 TEST_F(ModelPerformanceRunnerTest, Test) {
   // test input
   const std::vector<std::vector<int>>& input_ids_vec = model_performance_runner_->input_ids_vec_;
-  const std::vector<ForwardRequest>& forward_reqs = model_performance_runner_->forward_reqs_;
-  EXPECT_EQ(forward_reqs.size(), input_ids_vec.size());
+  const std::vector<std::shared_ptr<InferRequest>>& infer_reqs = model_performance_runner_->infer_reqs_;
+  EXPECT_EQ(infer_reqs.size(), input_ids_vec.size());
   static constexpr size_t expect_multi_token_request_num = 2;
   static constexpr size_t expect_single_token_request_num = 2;
   EXPECT_EQ(expect_single_token_request_num, model_performance_runner_->single_token_request_num_);
   EXPECT_EQ(expect_multi_token_request_num, model_performance_runner_->multi_token_request_num_);
   // test multi token request
   size_t single_token_req_idx = 0;
-  EXPECT_EQ(forward_reqs[single_token_req_idx].forwarding_tokens->size(),
+  EXPECT_EQ(infer_reqs[single_token_req_idx]->forwarding_tokens.size(),
             model_performance_runner_->multi_token_request_token_num_);
   // test single token request
   size_t multi_token_req_idx = expect_multi_token_request_num;
-  EXPECT_EQ(forward_reqs[multi_token_req_idx].kv_cached_token_num,
+  EXPECT_EQ(infer_reqs[multi_token_req_idx]->kv_cached_token_num,
             model_performance_runner_->single_token_request_cached_token_num_);
-  EXPECT_EQ(forward_reqs[multi_token_req_idx].forwarding_tokens->size(),
+  EXPECT_EQ(infer_reqs[multi_token_req_idx]->forwarding_tokens.size(),
             model_performance_runner_->single_token_request_cached_token_num_ + 1);
   // test random input_token
-  EXPECT_NE(input_ids_vec[0][0], input_ids_vec[1][0]);
+  EXPECT_NE(infer_reqs[0]->forwarding_tokens[0], infer_reqs[1]->forwarding_tokens[0]);
 
   // test run
   Status status = model_performance_runner_->RunPerformanceForward();

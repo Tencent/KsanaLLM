@@ -41,10 +41,9 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
   Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 
   // init context
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
+  env->GetRuntimeConfig(runtime_config_);
   constexpr int max_multi_batch_num = 1;
-  context_.reset(new Context(runtime_config.parallel_basic_config.tensor_parallel_size,
+  context_.reset(new Context(runtime_config_.parallel_basic_config.tensor_parallel_size,
                              runtime_config_.parallel_basic_config.attn_data_parallel_size, max_multi_batch_num));
   KLLM_CHECK_WITH_INFO(!context_->IsStandalone(), "Failed to get batch scheduler config error");
 
@@ -77,8 +76,8 @@ void CommunicationPerformanceRunner::Run() {
 }
 
 void CommunicationPerformanceRunner::TestCommunicatePerformance(const std::vector<size_t>& shape, DataType data_type) {
-  static constexpr size_t warm_up_rounds = 10;
-  static constexpr size_t rounds = 100;
+  static constexpr size_t warm_up_rounds = 5;
+  static constexpr size_t rounds = 20;
   SetHiddenUnitMeta(DEFAULT_MULTI_BATCH_ID, shape, data_type);
   if (context_->IsChief()) {  // master node send tensors
     // Use DEFAULT_MULTI_BATCH_ID for performance testing

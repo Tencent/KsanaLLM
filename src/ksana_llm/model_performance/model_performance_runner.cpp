@@ -25,7 +25,7 @@ ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path) {
   InitEnvs(config_path);
   LoadModel();
   model_instance_->AllocResources(multi_batch_id_);
-  InitRequests();
+  InitInferRequests();
 }
 
 ModelPerformanceRunner::~ModelPerformanceRunner() {
@@ -43,10 +43,9 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   env->ParseConfig(config_path);
 
   // init context
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
+  env->GetRuntimeConfig(runtime_config_);
   constexpr int max_multi_batch_num = 1;
-  context_.reset(new Context(runtime_config.parallel_basic_config.tensor_parallel_size,
+  context_.reset(new Context(runtime_config_.parallel_basic_config.tensor_parallel_size,
                              runtime_config_.parallel_basic_config.attn_data_parallel_size, max_multi_batch_num));
 
   // init model_config
@@ -70,6 +69,10 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
   pipeline_config.upper_layer_idx = model_config_.num_layer - 1;
   Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 
+  BatchSchedulerConfig batch_scheduler_config;
+  env->GetBatchSchedulerConfig(batch_scheduler_config);
+  llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, runtime_config_, context_);
+
   // init BlockManager
   BlockManagerConfig block_manager_config;
   env->InitializeBlockManagerConfig();
@@ -87,8 +90,6 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
 
   BlockAllocatorManagerConfig block_allocator_manager_config;
   attn_dp_worker_num_ = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  // TODO(rockcao): support attn_dp_worker_num_ > 1
-  KLLM_CHECK_WITH_INFO(attn_dp_worker_num_ == 1, "Currently only support attn_dp == 1");
   for (int dp_id = 0; dp_id < static_cast<uint32_t>(attn_dp_worker_num_); ++dp_id) {
     BlockAllocatorGroupConfig dp_group_config;
     dp_group_config.devices = env->GetDataParaGroupDevices(dp_id);
@@ -97,14 +98,17 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
     dp_group_config.block_size = runtime_config_.attn_backend_config.block_size;
     dp_group_config.convert_size = env->GetConvertSize();
     block_allocator_manager_config[dp_id] = dp_group_config;
-    std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
-    BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
+  }
+  std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
+  BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
+  for (int dp_id = 0; dp_id < attn_dp_worker_num_; ++dp_id) {
     std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
         block_allocator_manager.GetBlockAllocatorGroup(dp_id);
-
     cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group));
+    cache_managers_.back()->InitializeCachedBlocks();
   }
-  cache_manager_ = cache_managers_[0];
+
+  llm_runtime_->SetCacheManagers(cache_managers_);
 
   // init WorkerGroup
   size_t pp_batch_num = 1;
@@ -121,7 +125,7 @@ void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& bloc
   KLLM_LOG_INFO << fmt::format("Reset block_manager_config.device_allocator_config.blocks_num to {}", needed_block_num);
 }
 
-size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num) {
+size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num) const {
   size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   static constexpr size_t kExtraBlockNum = 10;
   size_t multi_token_request_block_num = (multi_token_request_token_num_ + block_token_num) / block_token_num;
@@ -151,35 +155,20 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
   EventCreate(&start);
   EventCreate(&stop);
   float milliseconds = 0;
+  llm_runtime_->ReorderInferRequests<InferRequest>(infer_reqs_);
 
   // warmup
-  KLLM_LOG_INFO << fmt::format("Start warmup of {} rounds", warmp_up_rounds_);
   Status warmup_status = Status();
   for (size_t i = 0; i < warmp_up_rounds_; ++i) {
-    std::vector<std::future<Status>> inst_results =
-        model_instance_->ForwardAsync(multi_batch_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
-    for (auto& worker_result : inst_results) {
-      Status status = worker_result.get();
-      if (!status.OK()) {
-        warmup_status = status;
-      }
-    }
+    warmup_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
   }
-  KLLM_LOG_INFO << fmt::format("Warmup Done with status {}", warmup_status.GetMessage());
 
   // run
-  Status result_status = Status();
   KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", warmp_up_rounds_);
   EventRecord(start, context_->GetComputeStreams()[device_id]);
+  Status result_status = Status();
   for (size_t i = 0; i < rounds_; ++i) {
-    std::vector<std::future<Status>> inst_results =
-        model_instance_->ForwardAsync(multi_batch_id_, worker_group_, InferStage::STATE_DECODE, forward_reqs_, false);
-    for (auto& worker_result : inst_results) {
-      Status status = worker_result.get();
-      if (!status.OK()) {
-        result_status = status;
-      }
-    }
+    result_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
   }
   EventRecord(stop, context_->GetComputeStreams()[device_id]);
   EventSynchronize(stop);
@@ -200,77 +189,68 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
   return result_status;
 }
 
-void ModelPerformanceRunner::InitRequests() {
-  // random token generater
+void ModelPerformanceRunner::InitInferRequests() {
   static constexpr size_t kVocabSize = 10000;
   std::random_device rd;
   std::mt19937 gen(42);
   std::uniform_int_distribution<> dis(0, kVocabSize);
 
+  embedding_slice_.pos = input_refit_pos_;
+  embedding_slice_.embeddings = embeddings_;
+  embedding_slice_.embedding_tensors = embedding_tensors_;
+  ksana_python_input_ = std::make_shared<KsanaPythonInput>();
+  ksana_python_input_->input_refit_embedding = embedding_slice_;
+  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
+      std::make_shared<std::unordered_map<std::string, std::string>>();
+  std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input_, req_ctx);
+
   size_t total_req_num = single_token_request_num_ + multi_token_request_num_;
   input_ids_vec_.resize(total_req_num);
-  forward_reqs_.resize(total_req_num);
-  embedding_slice_.pos = input_refit_pos_;
-  embedding_slice_.embeddings = input_refit_embedding_;
-
-  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   size_t req_id = 0;
   for (; req_id < total_req_num; req_id++) {
-    ForwardRequest& req = forward_reqs_[req_id];
-    req.cache_manager = cache_manager_;
-    req.req_id = req_id;
-    req.sampling_config = &sampling_config_;
-    req.draft_token_num = 0;
-    req.flexible_cached_copy_tasks = &flexible_cached_copy_tasks_;
-    req.input_refit_embedding = &embedding_slice_;
-    req.logits_buf = model_instance_->GetLogitsPtr(multi_batch_id_);
-    req.logits_offset = 0;
-    req.attn_dp_group_id = 0;
+    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, req_id);
+    infer_reqs_.push_back(infer_req);
+    infer_req->attn_dp_group_id = GetAttnDpGroupId(req_id);
+    infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
+    infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
+    infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
+    infer_req->model_instance = model_instance_;
+    infer_req->step = 0;  // not using
+
     if (req_id < multi_token_request_num_) {  // multi_token_request
       input_ids_vec_[req_id].resize(multi_token_request_token_num_);
-      req.forwarding_tokens = &input_ids_vec_[req_id];
-      std::generate(req.forwarding_tokens->begin(), req.forwarding_tokens->end(), [&]() { return dis(gen); });
-      req.infer_stage = InferStage::STAGE_CONTEXT;
-      req.kv_cached_token_num = multi_token_cached_token_num_;
-      req.prefix_cache_len = multi_token_cached_token_num_;
+      infer_req->input_tokens = input_ids_vec_[req_id];
+      std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
+      infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+      infer_req->kv_cached_token_num = 0;
+      infer_req->prefix_cache_len = 0;
     } else {  // single_token_request
       input_ids_vec_[req_id].resize(single_token_request_cached_token_num_ + 1);
-      req.forwarding_tokens = &input_ids_vec_[req_id];
-      std::generate(req.forwarding_tokens->begin(), req.forwarding_tokens->end(), [&]() { return dis(gen); });
-      req.infer_stage = InferStage::STATE_DECODE;
-      req.kv_cached_token_num = req.forwarding_tokens->size() - 1;
+      infer_req->input_tokens = input_ids_vec_[req_id];
+      std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
+      infer_req->infer_stage = InferStage::STATE_DECODE;
+      infer_req->kv_cached_token_num = infer_req->input_tokens.size() - 1;
     }
-    req.kv_cache_ptrs.resize(tp_size);
-    std::vector<std::vector<int>> block_ids(tp_size);
-    for (size_t rank = 0; rank < tp_size; ++rank) {
-      SetDevice(rank);
-      KLLM_CHECK_WITH_INFO(cache_manager_->GetBlockAllocatorGroup()
-                               ->GetDeviceBlockAllocator(rank)
-                               ->AllocateBlocks(GetBlockNum(req), block_ids[rank])
-                               .OK(),
-                           "faild to allocate blocks");
-      cache_manager_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(block_ids[rank],
-                                                                                            req.kv_cache_ptrs[rank]);
+    infer_req->forwarding_tokens = infer_req->input_tokens;
+    Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
+                                                                    infer_req->kv_cache_blocks);
+    if (!status.OK()) {
+      KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
     }
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
-    uint32_t layer_num = model_instance_->GetLayerNum();
-    LlmRuntime::BuildFlatKVCacheBlkIds(layer_num, block_ids, req.atb_kv_cache_base_blk_ids, req.cache_manager);
-#endif
   }
-
   CheckRequests();
 }
 
-void ModelPerformanceRunner::CheckRequests() {
+void ModelPerformanceRunner::CheckRequests() const {
   BatchSchedulerConfig batch_scheduler_config;
   KLLM_CHECK_WITH_INFO(Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config).OK(),
                        "Failed to get batch scheduler config error");
-  KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_batch_size >= forward_reqs_.size(),
+  KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_batch_size >= infer_reqs_.size(),
                        fmt::format("max_batch_size {} should not less than number of requests {}",
-                                   batch_scheduler_config.max_batch_size, forward_reqs_.size()));
-  size_t step_tokens =
-      std::accumulate(forward_reqs_.begin(), forward_reqs_.end(), size_t{0}, [](size_t acc, const ForwardRequest& req) {
-        return acc + (req.infer_stage == InferStage::STAGE_CONTEXT ? req.forwarding_tokens->size() : 1);
+                                   batch_scheduler_config.max_batch_size, infer_reqs_.size()));
+  size_t step_tokens = std::accumulate(
+      infer_reqs_.begin(), infer_reqs_.end(), size_t{0}, [](size_t acc, std::shared_ptr<InferRequest> req) {
+        return acc + (req->infer_stage == InferStage::STAGE_CONTEXT ? req->forwarding_tokens.size() : 1);
       });
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_step_token_num >= step_tokens,
                        fmt::format("max_step_token_num {} should not less than step_tokens {}",
@@ -310,12 +290,14 @@ Status ModelPerformanceRunner::ParsePerformanceRunnerConfig(const std::string& c
   return Status();
 }
 
-size_t ModelPerformanceRunner::GetBlockNum(const ForwardRequest& req) {
+size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) const {
   size_t shared_block_num = 0;
   size_t unique_block_num = 0;
   size_t shared_token_num = 0;
-  cache_manager_->GetRequestPrefixBlockNumber(req.req_id, *req.forwarding_tokens, shared_block_num, unique_block_num,
-                                              shared_token_num);
+  req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num,
+                                                  unique_block_num, shared_token_num);
   return shared_block_num + unique_block_num;
 }
+
+uint32_t ModelPerformanceRunner::GetAttnDpGroupId(int64_t req_id) const { return req_id % attn_dp_worker_num_; }
 }  // namespace ksana_llm

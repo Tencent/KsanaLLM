@@ -45,6 +45,15 @@ class LlmRuntime {
   // epilogue is used only for distributed master node, to process lm head and sampler.
   Status Step(ScheduleOutput *schedule_output, bool epilogue);
 
+  // Execute the forward.
+  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
+                 RunMode run_mode = RunMode::kMain);
+
+  // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
+  // and the requests from the Single-Token Forwarding at the back.
+  template <typename T>
+  void ReorderInferRequests(std::vector<std::shared_ptr<T>> &reqs);
+
   // TODO(robertyuan): move static funtions to other place
   static void BuildForwardRequestFromInferRequest(ForwardRequest &forward_req, std::shared_ptr<InferRequest> &infer_req,
                                                   uint32_t layer_num, std::vector<float *> logits_buf);
@@ -57,10 +66,6 @@ class LlmRuntime {
 #endif
 
  private:
-  // Execute the forward.
-  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
-                 RunMode run_mode = RunMode::kMain);
-
   // Execute the forward, for distributed worker node.
   Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
 
@@ -81,10 +86,6 @@ class LlmRuntime {
   void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
                             std::vector<SamplingRequest> &sampling_reqs);
 
-  // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
-  // and the requests from the Single-Token Forwarding at the back.
-  template <typename T>
-  void ReorderInferRequests(std::vector<std::shared_ptr<T>> &reqs);
 
   // Run multi-token and single-token serially in single thread.
   Status RunSerially(

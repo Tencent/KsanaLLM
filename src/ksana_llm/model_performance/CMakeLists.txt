@@ -11,7 +11,7 @@ file(GLOB_RECURSE model_performance_SRCS
 list(FILTER model_performance_SRCS EXCLUDE REGEX ".*test.cpp")
 
 add_library(model_performance STATIC ${model_performance_SRCS})
-target_link_libraries(model_performance PUBLIC cache_manager models cache_manager layers samplers runtime ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS} data_hub distributed)
+target_link_libraries(model_performance PUBLIC cache_manager models runtime layers samplers runtime ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS} data_hub distributed)
 
 
 add_executable(run_model_performance ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_model_performance.cpp)
