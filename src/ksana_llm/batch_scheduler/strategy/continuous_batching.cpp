@@ -478,6 +478,7 @@ Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_pt
 }
 
 void ContinuousBatchingStrategy::ProcessRunningQueue() {
+  PROFILE_EVENT_SCOPE(ProcessRunningQueue, "ProcessRunningQueue");
   KLLM_LOG_DEBUG << "ProcessRunningQueue invoked: " << *batch_state_
                  << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                  << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
@@ -634,6 +635,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
 }
 
 void ContinuousBatchingStrategy::ProcessSwappedQueue() {
+  PROFILE_EVENT_SCOPE(ProcessSwappedQueue, "ProcessSwappedQueue");
   KLLM_LOG_DEBUG << "ProcessSwappedQueue invoked:" << *batch_state_
                  << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                  << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
@@ -795,6 +797,7 @@ bool ContinuousBatchingStrategy::ProcessSplitFuseToken(std::shared_ptr<InferRequ
 }
 
 void ContinuousBatchingStrategy::ProcessWaitingQueue() {
+  PROFILE_EVENT_SCOPE(ProcessWaitingQueue, "ProcessWaitingQueue");
   KLLM_LOG_DEBUG << "ProcessWaitingQueue invoked, waiting queue size:" << batch_state_->waiting_queue.size()
                  << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                  << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
@@ -1042,6 +1045,7 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
 }
 
 void ContinuousBatchingStrategy::ProcessTransferQueue() {
+  PROFILE_EVENT_SCOPE(ProcessTransferQueue, "ProcessTransferQueue");
   if (connector_config_.group_role == GroupRole::DECODE) {
     ProcessDecodeTransferQueue();
     AddTransferMeta(batch_state_->transfer_queue);

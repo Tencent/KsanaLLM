@@ -176,7 +176,7 @@ void LlmRuntime::BuildForwardRequests(
                            req_ptr->cache_manager);
 
 #endif
-    grouped_reqs[key][grouped_stage].push_back(forward_req);
+    grouped_reqs[key][grouped_stage].emplace_back(std::move(forward_req));
   }
 }
 
@@ -307,7 +307,7 @@ Status LlmRuntime::AuxForward(
     size_t multi_batch_id,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
     bool epilogue, RunMode run_mode) {
-  PROFILE_EVENT_SCOPE(AuxForward_, fmt::format("AuxForward_{}_{}", multi_batch_id, epilogue));
+  PROFILE_EVENT_SCOPE(Forward_, fmt::format("Forward_{}_{}", multi_batch_id, epilogue));
   // context decode and decode run serially in single thread
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     // Wait all instances done and check status.
@@ -337,6 +337,7 @@ Status LlmRuntime::AuxForward(
 
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                                       std::vector<SamplingRequest>& sampling_reqs) {
+  PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
     sampling_req.req_id = req_ptr->req_id;
@@ -368,6 +369,7 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
 }
 
 Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs) {
+  PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
   std::vector<SamplingRequest> sampling_reqs;
   BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs);
 
@@ -493,7 +495,7 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
   if (draft_generator_ == nullptr) {
     return;
   }
-
+  PROFILE_EVENT_SCOPE(GenerateDraftToken_, fmt::format("GenerateDraftToken"));
   for (auto& req : reqs) {
     std::vector<int> tokens;
     tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +

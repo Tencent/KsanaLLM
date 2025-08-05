@@ -16,6 +16,7 @@ namespace ksana_llm {
 class PPMultibatchWorkloadBalancerTest : public testing::Test {
  protected:
   void SetUp() override {
+    setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
     InitLoguru();
     InitializeScheduleOutputPool();
   }

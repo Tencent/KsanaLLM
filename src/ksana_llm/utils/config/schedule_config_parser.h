@@ -32,7 +32,7 @@ enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
 
 enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
 
-enum PPMultibatchWBStrategy { NO_WB = 0, NO_DYNAMIC_WB = 1, WB_BATCH_REQ = 2, WB_BATCH_TOKEN = 3 };
+enum PPMultibatchWBStrategy { NO_WB = 0, NO_DYNAMIC_WB = 1, WB_BATCH_REQ = 2, WB_BATCH_TOKEN = 3, WB_REQ_TOKEN = 4 };
 
 struct BatchSchedulerConfig {
   // The batch schedule strategy.

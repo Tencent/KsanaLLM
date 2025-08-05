@@ -82,6 +82,7 @@ TEST_F(NcclDataChannelTest, TestDataChannel) {
   }
 
   char unique_id[128];
+  setenv("KLLM_LOG_LEVEL", "COMMUNICATION", 1);
 
   const char* all_devices = getenv("CUDA_VISIBLE_DEVICES");
   std::vector<std::string> devices = Str2Vector(all_devices, ",");

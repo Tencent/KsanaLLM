@@ -138,6 +138,7 @@ Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<
   std::unique_lock<std::mutex> lock(mutex_);
 
   addrs.clear();
+  addrs.reserve(blocks.size());
   for (auto block_id : blocks) {
     auto it = used_blocks_.find(block_id);
     if (it != used_blocks_.end()) {

@@ -4,6 +4,8 @@
 
 #include "ksana_llm/batch_scheduler/batch_scheduler_balance_reqs_algo.h"
 
+#include "ksana_llm/utils/logger.h"
+
 namespace ksana_llm {
 
 void BalanceReqsAlgo::BalanceReqs(const std::vector<float>& workloads,
@@ -37,15 +39,19 @@ void BalanceReqsAlgo::BalanceReqs(const std::vector<float>& workloads,
     auto min_it = std::min_element(current_token_sums.begin(), current_token_sums.end());
     int min_idx = std::distance(current_token_sums.begin(), min_it);
 
+    KLLM_LOG_SCHEDULER << "[ Group " << min_idx << " add 1 req, req id: " << req.second->req_id
+                       << ", req_tokens: " << req.first << ", workload: " << current_token_sums[min_idx] << " -> "
+                       << current_token_sums[min_idx] + req.first << " ] ";
     current_token_sums[min_idx] += req.first;
     outputs_reqs[min_idx].push_back(req.second);
   }
 
-  KLLM_LOG_DEBUG << "BalanceAlgo distribution:";
+  std::stringstream ss;
   for (size_t i = 0; i < current_token_sums.size(); ++i) {
-    KLLM_LOG_DEBUG << "Group " << i << ": weight=" << workloads[i] << ", result_tokens=" << current_token_sums[i]
-                   << ", reqs=" << outputs_reqs[i].size();
+    ss << "[ Group " << i << ": input workloads=" << workloads.at(i) << ", result_tokens=" << current_token_sums.at(i)
+       << ", reqs=" << outputs_reqs.at(i).size() << " ] ";
   }
+  KLLM_LOG_SCHEDULER << "BalanceAlgo distribution:" << ss.str();
 }
 
 }  // namespace ksana_llm

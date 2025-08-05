@@ -142,11 +142,12 @@ std::vector<int> InferRequest::GetVerifiedTokens() {
 
 std::vector<std::vector<void *>> InferRequest::GetBlockPtrs() {
   std::vector<std::vector<void *>> block_ptrs;
+  block_ptrs.reserve(kv_cache_blocks.size());
   for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
     std::vector<void *> block_ptr(kv_cache_blocks[rank].size());
     cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
                                                                                          block_ptr);
-    block_ptrs.push_back(block_ptr);
+    block_ptrs.emplace_back(std::move(block_ptr));
   }
   return block_ptrs;
 }

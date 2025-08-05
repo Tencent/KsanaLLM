@@ -37,6 +37,11 @@ class TestBatchScheduler : public BatchScheduler {
 
 class BalanceReqsTest : public BatchSchedulerTest {
  protected:
+  void SetUp() override {
+    setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+    InitLoguru();
+  }
+
   void CommonSetUp(int dp_num) {
     BatchSchedulerTest::CommonSetUp(dp_num);
     std::vector<std::shared_ptr<ModelInstance>> model_instance;
@@ -48,16 +53,21 @@ class BalanceReqsTest : public BatchSchedulerTest {
     BatchSchedulerTest::TearDown();
   }
 
-  size_t InitReqs(int reqs_num, std::vector<std::shared_ptr<InferRequest>>& requests, int token_num = 0) {
+  size_t InitReqs(int reqs_num, std::vector<std::shared_ptr<Request>>& src_reqs,
+                  std::vector<std::shared_ptr<InferRequest>>& requests, int token_num = 0) {
     size_t total_tokens = 0;
     for (int i = 0; i < reqs_num; i++) {
-      std::shared_ptr<Request> req;
-      auto infer_req_group = env_simulator_->InitRequest(i, 10, 5, req, {{0, i}});
-      auto r = infer_req_group[0];
       int tokens = (token_num > 0) ? token_num : (i + 1);
+      std::shared_ptr<Request> req;
+      int input_tokens = i + tokens;
+      int expect_output_tokens = tokens + 1;
+      auto infer_req_group = env_simulator_->InitRequest(i, input_tokens, expect_output_tokens, req, {{0, i}});
+      auto r = infer_req_group[0];
       r->kv_cached_token_num = i;
       r->forwarding_tokens.resize(i + tokens);
+      KLLM_LOG_INFO << "Init req id" << r->req_id << " with " << tokens << " tokens, kv_cached_token_num: " << i;
       requests.push_back(r);
+      src_reqs.push_back(req);
       total_tokens += i + 1;
     }
     return total_tokens;
@@ -68,7 +78,9 @@ class BalanceReqsTest : public BatchSchedulerTest {
     pairs.clear();
     pairs.reserve(requests.size());
     for (auto req : requests) {
-      int token_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      size_t token_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      KLLM_LOG_INFO << "Req " << req->req_id << " with " << token_num
+                    << " tokens, kv_cached_token_num: " << req->kv_cached_token_num;
       pairs.push_back(std::make_pair(token_num, req));
     }
   }
@@ -86,9 +98,10 @@ TEST_F(BalanceReqsTest, BasicAlgoTest) {
   std::vector<float> workloads = {5.0, 6.0, 7.0};  // 三个处理组的初始负载
 
   // 创建一些请求
+  std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
   int reqs_num = dp_num * 5 + 1;
-  size_t total_tokens = InitReqs(reqs_num, requests);
+  size_t total_tokens = InitReqs(reqs_num, src_reqs, requests);
   std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> total_reqs;
   ReqsToPairs(requests, total_reqs);
 
@@ -151,9 +164,10 @@ TEST_F(BalanceReqsTest, DifferentWorkloadsTest) {
   // 创建测试数据
   std::vector<float> workloads = {1.0, 5.0, 10.0};  // 初始工作负载差异很大
 
+  std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
   int token_num = 10;
-  InitReqs(20, requests, token_num);
+  InitReqs(20, src_reqs, requests, token_num);
   std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> total_reqs;
   ReqsToPairs(requests, total_reqs);
 
@@ -178,8 +192,48 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   CommonSetUp(dp_num);
   size_t multi_batch_id = 0;
   // 创建一些请求
+  std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
-  InitReqs(dp_num * 5 + 1, requests);
+  InitReqs(dp_num * 5 + 1, src_reqs, requests);
+  for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->swapped_queue.clear();
+  }
+
+  // 添加请求到waiting_reqs_
+  test_batch_scheduler_->AddToWaitingReqs(requests);
+  test_batch_scheduler_->ClearDpWaitingReqs();
+
+  test_batch_scheduler_->BalanceWaitingReqs();
+
+  // 验证结果
+  // 1. 所有请求都应该被分配
+  size_t total_assigned = 0;
+  for (int i = 0; i < dp_num; i++) {
+    total_assigned += test_batch_scheduler_->dp_waiting_reqs_[i].size();
+  }
+  EXPECT_EQ(total_assigned, requests.size());
+
+  // 2. 工作负载较低的组应该分配更多的请求
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[0].size(), test_batch_scheduler_->dp_waiting_reqs_[1].size());
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[1].size(), test_batch_scheduler_->dp_waiting_reqs_[2].size());
+
+  EXPECT_TRUE(test_batch_scheduler_->IsIdle(multi_batch_id));
+}
+
+TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
+  int dp_num = 3;
+  CommonSetUp(dp_num);
+  size_t multi_batch_id = 0;
+  // 创建一些请求
+  std::vector<std::shared_ptr<Request>> src_reqs;
+  std::vector<std::shared_ptr<InferRequest>> requests;
+  InitReqs(dp_num * 5 + 1, src_reqs, requests);
+  for (std::shared_ptr<InferRequest> req : requests) {
+    req->input_tokens.resize(req->forwarding_tokens.size());
+    req->forwarding_tokens.clear();
+  }
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);

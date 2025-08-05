@@ -33,7 +33,7 @@ NcclDataChannel::NcclDataChannel(HiddenUnitBufferPool* hidden_unit_buffer_pool, 
 
   recv_thread_ = std::unique_ptr<std::thread>(new std::thread(&NcclDataChannel::ProcessRecvLoop, this));
   send_thread_ = std::unique_ptr<std::thread>(new std::thread(&NcclDataChannel::ProcessSendLoop, this));
-  KLLM_LOG_DEBUG << "NcclDataChannel() succeed \n";
+  KLLM_LOG_COMMUNICATION << "NcclDataChannel() succeed \n";
 }
 
 NcclDataChannel::~NcclDataChannel() {
@@ -160,8 +160,8 @@ Status NcclDataChannel::ProcessSendLoop() {
       KLLM_LOG_ERROR << "ProcessSendLoop send data failed, info:" << status.GetMessage();
     }
     NotifySendCommandLaunched(hidden_unit);
-    KLLM_LOG_DEBUG << "notitfy send commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
-                   << hidden_unit;
+    KLLM_LOG_COMMUNICATION << "notitfy send commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
+                           << hidden_unit;
   }
 
   return Status();
@@ -196,11 +196,11 @@ Status NcclDataChannel::ProcessRecvLoop() {
       KLLM_LOG_ERROR << "ProcessRecvLoop send data failed, info:" << status.GetMessage();
     }
     NotifyRecvCommandLaunched(hidden_unit);
-    KLLM_LOG_DEBUG << "notitfy recv commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
-                   << hidden_unit;
+    KLLM_LOG_COMMUNICATION << "notify recv commands launched, multi_batch_id:" << hidden_unit->multi_batch_id << ", "
+                           << hidden_unit;
 
     WaitUtilRecvFinished(hidden_unit);
-    KLLM_LOG_DEBUG << "notitfy recv done, multi_batch_id:" << hidden_unit->multi_batch_id << ", " << hidden_unit;
+    KLLM_LOG_COMMUNICATION << "notify recv done, multi_batch_id:" << hidden_unit->multi_batch_id << ", " << hidden_unit;
     // return the recved buffer to be used
     hidden_unit_buffer_pool_->PutToDeviceRecvedQueue(hidden_unit);
   }
@@ -311,10 +311,9 @@ Status NcclDataChannel::ProcessDeviceBuffer(HiddenUnitDeviceBuffer* hidden_unit,
   }
 
   std::string send_or_recv_str = (is_send ? "send" : "recv");
-  KLLM_LOG_DEBUG << "start to " << send_or_recv_str << " multi_batch_id= " << multi_batch_id
-                 << ", shape:" << Vector2Str(shape);
-  PROFILE_EVENT_SCOPE(ProcessDeviceBuffe_,
-                      fmt::format("nccl_{}_multi_batch_id_{}", send_or_recv_str, multi_batch_id));
+  KLLM_LOG_COMMUNICATION << "start to " << send_or_recv_str << " multi_batch_id= " << multi_batch_id
+                         << ", shape:" << Vector2Str(shape);
+  PROFILE_EVENT_SCOPE(ProcessDeviceBuffe_, fmt::format("nccl_{}_multi_batch_id_{}", send_or_recv_str, multi_batch_id));
   int devs_num = static_cast<int>(hidden_unit->tensors.size());
 
   if (is_send) {

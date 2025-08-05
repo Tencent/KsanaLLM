@@ -25,7 +25,8 @@ enum Level {
   ATTENTION = 5,
   COMMUNICATION = 6,
   MOE = 7,
-  MODEL = 8
+  MODEL = 8,
+  SCHEDULER = 9
 };
 
 extern std::vector<std::string> g_categories;
@@ -55,7 +56,8 @@ static std::vector<std::string> GetLogLevels() {
                                                                     {"ATTENTION", Level::ATTENTION},
                                                                     {"COMMUNICATION", Level::COMMUNICATION},
                                                                     {"MOE", Level::MOE},
-                                                                    {"MODEL", Level::MODEL}};
+                                                                    {"MODEL", Level::MODEL},
+                                                                    {"SCHEDULER", Level::SCHEDULER}};
   std::vector<std::string> levels;
   for (auto& category : categories) {
     auto it = log_name_to_level.find(category);
@@ -87,7 +89,7 @@ inline void InitLoguru(bool force = false) {
   // check if have debug category firstly
   for (const auto& level : log_levels) {
     if (level == "DEBUG" || level == "ATTENTION" || level == "COMMUNICATION" ||
-      level == "MOE" || level == "MODEL") {
+      level == "MOE" || level == "MODEL" || level == "SCHEDULER") {
       verbosity = loguru::Verbosity_MAX;
       break;
     }
@@ -130,6 +132,7 @@ inline void InitLoguru(bool force = false) {
 #define KLLM_LOG_COMMUNICATION LOG_S(1) << "COMMUNICATION| " << __FUNCTION__ << " | "
 #define KLLM_LOG_MOE LOG_S(1) << "MOE| " << __FUNCTION__ << " | "
 #define KLLM_LOG_MODEL LOG_S(1) << "MODEL| " << __FUNCTION__ << " | "
+#define KLLM_LOG_SCHEDULER LOG_S(1) << "SCHEDULER| " << __FUNCTION__ << " | "
 
 #define KLLM_LOG_INFO LOG_S(INFO)
 #define KLLM_LOG_WARNING LOG_S(WARNING)

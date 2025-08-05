@@ -72,6 +72,19 @@ TEST_F(LoggerTest, TestLoggingMODELLevels) {
   EXPECT_TRUE(log_contents.find("This is a MODEL level log") != std::string::npos);
 }
 
+TEST_F(LoggerTest, TestLoggingSCHEDULERLevel) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  ksana_llm::InitLoguru(true);
+  KLLM_LOG_SCHEDULER << "This is an SCHEDULER level log";
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  std::ifstream file("test_log_file.log");
+  std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  EXPECT_TRUE(log_contents.find("SCHEDULER") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an SCHEDULER level log") != std::string::npos);
+}
+
 TEST_F(LoggerTest, TestLoggingINFOLevel) {
   setenv("KLLM_LOG_LEVEL", "INFO", 1);
   ksana_llm::InitLoguru(true);

@@ -198,17 +198,25 @@ void BatchScheduler::BalanceWaitingReqs() {
     // inputs are waiting_reqs_ and batch_states_
     // output is dp_waiting_reqs_
     if (waiting_reqs_.empty()) {
+      KLLM_LOG_SCHEDULER << "waiting_reqs_ is empty";
       return;
     }
 
-    if (dp_waiting_reqs_.size() == 1) {
+    if (waiting_reqs_.size() == 1 && dp_waiting_reqs_.size() == 1) {
       dp_waiting_reqs_[0].insert(dp_waiting_reqs_[0].end(), waiting_reqs_.begin(), waiting_reqs_.end());
       waiting_reqs_.clear();
+      KLLM_LOG_SCHEDULER << "waiting_reqs_ size is 1";
       return;
     }
 
     for (auto& req : waiting_reqs_) {
-      int64_t tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      int64_t tokens_num = 0;
+      if (req->forwarding_tokens.size() > 0) {
+        tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      } else {
+        // forwarding_tokens is empty at first time
+        tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+      }
       tokens_num = tokens_num > 0 ? tokens_num : 1;
       waiting_reqs_with_index.emplace_back(
           std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
@@ -218,14 +226,20 @@ void BatchScheduler::BalanceWaitingReqs() {
 
   std::vector<float> workload(dp_num_, 0);
   for (size_t i = 0; i < dp_num_; ++i) {
-    auto& waiting_reqs = dp_waiting_reqs_[i];
-    for (auto& req : waiting_reqs) {
-      int64_t tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+    auto& dp_waiting_reqs = dp_waiting_reqs_[i];
+    for (auto& req : dp_waiting_reqs) {
+      int64_t tokens_num = 0;
+      if (req->forwarding_tokens.size() > 0) {
+        tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      } else {
+        // forwarding_tokens is empty at first time
+        tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+      }
       tokens_num = tokens_num > 0 ? tokens_num : 1;
       waiting_reqs_with_index.emplace_back(
           std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
     }
-    waiting_reqs.clear();
+    dp_waiting_reqs.clear();
 
     size_t running_size = 0;
     size_t swapped_size = 0;
@@ -234,6 +248,7 @@ void BatchScheduler::BalanceWaitingReqs() {
       auto& batch_state = batch_states_[i][j];
       std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
 
+      // Note(TJ): 最好可以使用每个req的tokens总和
       running_size += batch_state->schedule_output->running_reqs.size();
       swapped_size += batch_state->swapped_queue.size();
       waiting_size += batch_state->waiting_queue.size();
@@ -274,6 +289,7 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state) {
 }
 
 std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch_id) {
+  PROFILE_EVENT_SCOPE(Schedule_, fmt::format("Schedule_{}", multi_batch_id));
   std::lock_guard<std::mutex> guard(schedule_mutex_);
 
   KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
@@ -331,7 +347,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
 
   schedule_output_group_->schedule_id++;
 
-  KLLM_LOG_DEBUG << "Finish schedule. multi_batch_id=" << multi_batch_id
+  KLLM_LOG_SCHEDULER << "Finish schedule. multi_batch_id=" << multi_batch_id
                  << ", schedule_id=" << schedule_output_group_->schedule_id
                  << ", running_req.size(): " << total_running_size
                  << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states

@@ -17,7 +17,7 @@ using namespace ksana_llm;
 class MultiBatchControllerTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    setenv("KLLM_LOG_LEVEL", "COMMUNICATION", 1);
+    setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
     InitLoguru();
   }
 
@@ -166,6 +166,7 @@ class MultiBatchControllerTest : public testing::Test {
 
 // 测试多线程环境下running id的有序执行
 TEST_F(MultiBatchControllerTest, BlalancedRunningOrderTest) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 4;
   Reset(max_multi_batch_num);
 
@@ -210,6 +211,7 @@ TEST_F(MultiBatchControllerTest, BlalancedRunningOrderTest) {
 }
 
 TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 8;
   Reset(max_multi_batch_num);
 
@@ -240,6 +242,7 @@ TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
 
 // 测试多线程环境下输入不平衡的情况
 TEST_F(MultiBatchControllerTest, UnBlalancedNotSyncStartOrderTest) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 2;
   Reset(max_multi_batch_num);
 
@@ -267,6 +270,7 @@ TEST_F(MultiBatchControllerTest, UnBlalancedNotSyncStartOrderTest) {
 
 // 测试多线程环境下输入不平衡的情况
 TEST_F(MultiBatchControllerTest, UnBlalancedSyncStartOrderTest) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 2;
   Reset(max_multi_batch_num);
 
