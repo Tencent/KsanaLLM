@@ -162,8 +162,8 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     }
 
     for (size_t i = 0; i < output.size(); i++) {
-      float diff = std::fabs((input_data[i] - output[i]) / output[i]);
-      EXPECT_TRUE(diff < 0.05);
+      const float diff = std::fabs((input_data[i] - output[i]) / output[i]);
+      EXPECT_LT(diff, 0.05);
     }
     return status;
   }

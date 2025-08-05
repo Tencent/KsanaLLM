@@ -190,10 +190,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   kv_cache_ptrs_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER,
                                 {static_cast<uint64_t>(max_batch_size * max_block_num)}, rank_);
 #endif
-
-  // Create buffer for enable_blocked_multi_token_forwarding_kv.
-  dp_input_without_prefix_uint64_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
 }
 
 ModelInput::~ModelInput() {
@@ -268,14 +264,14 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 
   KLLM_LOG_DEBUG << "run mode: " << (run_mode == RunMode::kMain ? "main" : "next")
-                << ", multi_token_request_num: " << multi_token_request_num
-                << ", dp_multi_token_request_num: " << dp_multi_token_request_num
-                << ", flash_input: " << flash_input.reqs.size()
-                << ", page_single_input: " << page_single_input.reqs.size()
-                << ", page_dual_input: " << page_dual_input.reqs.size()
-                << ", flash_dp_input: " << flash_input.dp_reqs.size()
-                << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
-                << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
+                 << ", multi_token_request_num: " << multi_token_request_num
+                 << ", dp_multi_token_request_num: " << dp_multi_token_request_num
+                 << ", flash_input: " << flash_input.reqs.size()
+                 << ", page_single_input: " << page_single_input.reqs.size()
+                 << ", page_dual_input: " << page_dual_input.reqs.size()
+                 << ", flash_dp_input: " << flash_input.dp_reqs.size()
+                 << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
+                 << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
 
   PrepareFlexibleCache(flash_input);
   CheckUseCache(forward_reqs);
@@ -703,7 +699,9 @@ void ModelInput::CheckUseCache(const std::vector<ForwardRequest>& forward_reqs) 
   use_cache = runtime_config_.enable_prefix_caching || runtime_config_.enable_flexible_caching ||
               runtime_config_.separate_prefill_decode;
 
-  if (enable_blocked_multi_token_forwarding_kv_) use_cache = true;
+  if (enable_blocked_multi_token_forwarding_kv_) {
+    use_cache = true;
+  }
 
   if (use_cache) {
     return;
@@ -1114,7 +1112,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   input_prefix_list_uint64.assign(1, 0);
   dp_input_offset_list_uint64.assign(1, 0);
   dp_input_prefix_list_uint64.assign(1, 0);
-  dp_input_without_prefix_list_uint64.assign(1, 0);
   multi_token_request_max_tokens = 0;
   single_token_request_max_tokens = 0;
   dp_multi_token_request_max_tokens = 0;
@@ -1136,16 +1133,12 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     const size_t skip_token_num = std::max(req.kv_cached_token_num, req.prefix_cache_len);
     const size_t input_ids_len = input_length - skip_token_num;
     KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num "
-                  << forwarding_tokens.size() << ", skip_token_num " << skip_token_num << ",kv_cached_token_num "
-                  << req.kv_cached_token_num << ", prefix_cache_len" << req.prefix_cache_len << ", input_length "
-                  << input_length;
+                   << forwarding_tokens.size() << ", skip_token_num " << skip_token_num << ",kv_cached_token_num "
+                   << req.kv_cached_token_num << ", prefix_cache_len" << req.prefix_cache_len << ", input_length "
+                   << input_length;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
-
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
-    if (enable_blocked_multi_token_forwarding_kv_ && in_dp_group) {
-      dp_input_without_prefix_list_uint64.emplace_back(dp_input_without_prefix_list_uint64.back() + input_ids_len);
-    }
 
     if (!is_page) {
       multi_token_request_max_tokens = std::max(multi_token_request_max_tokens, input_length);
@@ -1196,7 +1189,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   KLLM_LOG_DEBUG << "input_prefix_list_uint64 " << input_prefix_list_uint64;
   KLLM_LOG_DEBUG << "dp_input_offset_list_uint64 " << dp_input_offset_list_uint64;
   KLLM_LOG_DEBUG << "dp_input_prefix_list_uint64 " << dp_input_prefix_list_uint64;
-  KLLM_LOG_DEBUG << "dp_input_without_prefix_list_uint64 " << dp_input_without_prefix_list_uint64;
   KLLM_LOG_DEBUG << "dp_prefill_q_offset " << dp_prefill_q_offset;
 
   input_ids.shape = {input_ids_cpu.size()};
@@ -1240,15 +1232,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   MemcpyAsync(dp_input_prefix_uint64_tensor.GetPtr<void>(), dp_input_prefix_list_uint64.data(),
               dp_input_prefix_list_uint64.size() * sizeof(decltype(dp_input_prefix_list_uint64)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
-
-  if (enable_blocked_multi_token_forwarding_kv_) {
-    dp_input_without_prefix_uint64_tensor.shape = {dp_input_without_prefix_list_uint64.size()};
-    dp_input_without_prefix_uint64_tensor.dtype = TYPE_UINT64;
-    MemcpyAsync(
-        dp_input_without_prefix_uint64_tensor.GetPtr<void>(), dp_input_without_prefix_list_uint64.data(),
-        dp_input_without_prefix_list_uint64.size() * sizeof(decltype(dp_input_without_prefix_list_uint64)::value_type),
-        MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
-  }
 
   size_t prefill_offset = 0, decode_offset = std::accumulate(group_prefill_count.begin(), group_prefill_count.end(), 0);
   auto* attn_dp_group_offsets_ptr = attn_dp_group_offsets_.data();

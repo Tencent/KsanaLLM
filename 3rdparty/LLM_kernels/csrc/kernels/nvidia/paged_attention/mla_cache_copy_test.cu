@@ -1,6 +1,7 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+#include <random>
 
 #include <gtest/gtest.h>
 
@@ -51,40 +52,41 @@ class MlaPagedAttentionTestSuit : public NvidiaTestSuitBase {
     }
 
     // Malloc device buffers.
-    cudaMalloc(&dev_k_src_, host_k_src_.size() * sizeof(float));
-    cudaMalloc(&dev_v_src_, host_v_src_.size() * sizeof(float));
-    cudaMalloc(&dev_k_list_, host_block_offsets_.back() * sizeof(void*));
-    cudaMalloc(&dev_v_list_, host_block_offsets_.back() * sizeof(void*));
-    cudaMalloc(&dev_input_offsets_, host_input_offsets_.size() * sizeof(size_t));
-    cudaMalloc(&dev_prefix_offsets_, host_input_offsets_.size() * sizeof(size_t));
-    cudaMalloc(&dev_without_prefix_offsets_, host_input_offsets_.size() * sizeof(size_t));
-    cudaMalloc(&dev_block_offsets_, host_block_offsets_.size() * sizeof(int));
+    cudaMallocAsync(&dev_k_src_, host_k_src_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_v_src_, host_v_src_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_k_list_, host_block_offsets_.back() * sizeof(void*), stream);
+    cudaMallocAsync(&dev_v_list_, host_block_offsets_.back() * sizeof(void*), stream);
+    cudaMallocAsync(&dev_input_offsets_, host_input_offsets_.size() * sizeof(size_t), stream);
+    cudaMallocAsync(&dev_prefix_offsets_, host_input_offsets_.size() * sizeof(size_t), stream);
+    cudaMallocAsync(&dev_without_prefix_offsets_, host_input_offsets_.size() * sizeof(size_t), stream);
+    cudaMallocAsync(&dev_block_offsets_, host_block_offsets_.size() * sizeof(int), stream);
 
     // Copy host to device.
-    cudaMemcpy(dev_k_src_, host_k_src_.data(), host_k_src_.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_v_src_, host_v_src_.data(), host_v_src_.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(dev_k_src_, host_k_src_.data(), host_k_src_.size() * sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_v_src_, host_v_src_.data(), host_v_src_.size() * sizeof(float), cudaMemcpyHostToDevice, stream);
 
-    cudaMemcpy(dev_input_offsets_, host_input_offsets_.data(), host_input_offsets_.size() * sizeof(size_t),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_prefix_offsets_, host_prefix_offset_.data(), host_prefix_offset_.size() * sizeof(size_t),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_without_prefix_offsets_, host_without_prefix_offset_.data(),
-               host_without_prefix_offset_.size() * sizeof(size_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_block_offsets_, host_block_offsets_.data(), host_block_offsets_.size() * sizeof(int),
-               cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(dev_input_offsets_, host_input_offsets_.data(), host_input_offsets_.size() * sizeof(size_t),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_prefix_offsets_, host_prefix_offset_.data(), host_prefix_offset_.size() * sizeof(size_t),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_without_prefix_offsets_, host_without_prefix_offset_.data(),
+                    host_without_prefix_offset_.size() * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_block_offsets_, host_block_offsets_.data(), host_block_offsets_.size() * sizeof(int),
+                    cudaMemcpyHostToDevice, stream);
 
     // Malloc k blocks and v blocks.
     // Make k & v as same pointers.
     host_k_list_ptrs_.resize(host_block_offsets_.back());
     for (int i = 0; i < host_block_offsets_.back(); i++) {
-      cudaMalloc(&host_k_list_ptrs_[i], block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float));
-      cudaMemset(host_k_list_ptrs_[i], 0, block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float));
+      cudaMallocAsync(&host_k_list_ptrs_[i], block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float), stream);
+      cudaMemsetAsync(host_k_list_ptrs_[i], 0, block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float),
+                      stream);
     }
     host_v_list_ptrs_ = host_k_list_ptrs_;
-    cudaMemcpy(dev_k_list_, host_k_list_ptrs_.data(), host_k_list_ptrs_.size() * sizeof(float*),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_v_list_, host_v_list_ptrs_.data(), host_v_list_ptrs_.size() * sizeof(float*),
-               cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(dev_k_list_, host_k_list_ptrs_.data(), host_k_list_ptrs_.size() * sizeof(float*),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_v_list_, host_v_list_ptrs_.data(), host_v_list_ptrs_.size() * sizeof(float*),
+                    cudaMemcpyHostToDevice, stream);
 
     // resize and set initial value.
     host_q_states_.resize(total_len_without_prefix_ * num_heads_ * (qk_nope_head_dim_ + qk_rope_head_dim_));
@@ -110,65 +112,76 @@ class MlaPagedAttentionTestSuit : public NvidiaTestSuitBase {
     host_k_up_buffer_.resize(total_prefix_len_ * num_heads_ * qk_nope_head_dim_, 0);
     host_v_up_buffer_.resize(total_prefix_len_ * num_heads_ * v_head_dim_, 0);
 
-    cudaMalloc(&dev_q_states_, host_q_states_.size() * sizeof(float));
-    cudaMalloc(&dev_k_states_, host_k_states_.size() * sizeof(float));
-    cudaMalloc(&dev_v_states_, host_v_states_.size() * sizeof(float));
-    cudaMalloc(&dev_attn_q_states_, host_attn_q_states_.size() * sizeof(float));
-    cudaMalloc(&dev_attn_k_states_, host_attn_k_states_.size() * sizeof(float));
-    cudaMalloc(&dev_attn_v_states_, host_attn_v_states_.size() * sizeof(float));
-    cudaMalloc(&dev_kv_buffer_, host_kv_buffer_.size() * sizeof(float));
-    cudaMalloc(&dev_k_up_buffer_, host_k_up_buffer_.size() * sizeof(float));
-    cudaMalloc(&dev_v_up_buffer_, host_v_up_buffer_.size() * sizeof(float));
+    cudaMallocAsync(&dev_q_states_, host_q_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_k_states_, host_k_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_v_states_, host_v_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_attn_q_states_, host_attn_q_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_attn_k_states_, host_attn_k_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_attn_v_states_, host_attn_v_states_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_kv_buffer_, host_kv_buffer_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_k_up_buffer_, host_k_up_buffer_.size() * sizeof(float), stream);
+    cudaMallocAsync(&dev_v_up_buffer_, host_v_up_buffer_.size() * sizeof(float), stream);
 
-    cudaMemcpy(dev_q_states_, host_q_states_.data(), host_q_states_.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_k_states_, host_k_states_.data(), host_k_states_.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_v_states_, host_v_states_.data(), host_v_states_.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_attn_q_states_, host_attn_q_states_.data(), host_attn_q_states_.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_attn_k_states_, host_attn_k_states_.data(), host_attn_k_states_.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_attn_v_states_, host_attn_v_states_.data(), host_attn_v_states_.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_kv_buffer_, host_kv_buffer_.data(), host_kv_buffer_.size() * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_k_up_buffer_, host_k_up_buffer_.data(), host_k_up_buffer_.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_v_up_buffer_, host_v_up_buffer_.data(), host_v_up_buffer_.size() * sizeof(float),
-               cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(dev_q_states_, host_q_states_.data(), host_q_states_.size() * sizeof(float), cudaMemcpyHostToDevice,
+                    stream);
+    cudaMemcpyAsync(dev_k_states_, host_k_states_.data(), host_k_states_.size() * sizeof(float), cudaMemcpyHostToDevice,
+                    stream);
+    cudaMemcpyAsync(dev_v_states_, host_v_states_.data(), host_v_states_.size() * sizeof(float), cudaMemcpyHostToDevice,
+                    stream);
+    cudaMemcpyAsync(dev_attn_q_states_, host_attn_q_states_.data(), host_attn_q_states_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_attn_k_states_, host_attn_k_states_.data(), host_attn_k_states_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_attn_v_states_, host_attn_v_states_.data(), host_attn_v_states_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_kv_buffer_, host_kv_buffer_.data(), host_kv_buffer_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_k_up_buffer_, host_k_up_buffer_.data(), host_k_up_buffer_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(dev_v_up_buffer_, host_v_up_buffer_.data(), host_v_up_buffer_.size() * sizeof(float),
+                    cudaMemcpyHostToDevice, stream);
+
+    cudaStreamSynchronize(stream);
   }
 
   void TearDown() override {
-    NvidiaTestSuitBase::TearDown();
     // Free device memory.
-    cudaFree(dev_k_src_);
-    cudaFree(dev_v_src_);
-    cudaFree(dev_k_list_);
-    cudaFree(dev_v_list_);
-    cudaFree(dev_input_offsets_);
-    cudaFree(dev_prefix_offsets_);
-    cudaFree(dev_block_offsets_);
+    cudaFreeAsync(dev_k_src_, stream);
+    cudaFreeAsync(dev_v_src_, stream);
+    cudaFreeAsync(dev_k_list_, stream);
+    cudaFreeAsync(dev_v_list_, stream);
+    cudaFreeAsync(dev_input_offsets_, stream);
+    cudaFreeAsync(dev_prefix_offsets_, stream);
+    cudaFreeAsync(dev_block_offsets_, stream);
     for (auto ptr : host_k_list_ptrs_) {
-      cudaFree(ptr);
+      cudaFreeAsync(ptr, stream);
     }
 
     // Free memory buffer
-    cudaFree(dev_q_states_);
-    cudaFree(dev_k_states_);
-    cudaFree(dev_v_states_);
-    cudaFree(dev_attn_q_states_);
-    cudaFree(dev_attn_k_states_);
-    cudaFree(dev_attn_v_states_);
-    cudaFree(dev_kv_buffer_);
-    cudaFree(dev_k_up_buffer_);
-    cudaFree(dev_v_up_buffer_);
+    cudaFreeAsync(dev_q_states_, stream);
+    cudaFreeAsync(dev_k_states_, stream);
+    cudaFreeAsync(dev_v_states_, stream);
+    cudaFreeAsync(dev_attn_q_states_, stream);
+    cudaFreeAsync(dev_attn_k_states_, stream);
+    cudaFreeAsync(dev_attn_v_states_, stream);
+    cudaFreeAsync(dev_kv_buffer_, stream);
+    cudaFreeAsync(dev_k_up_buffer_, stream);
+    cudaFreeAsync(dev_v_up_buffer_, stream);
+
+    cudaStreamSynchronize(stream);
+
+    NvidiaTestSuitBase::TearDown();
   }
 
   void CopyDeviceBlocksToHost(std::vector<float>& host_k_dst) {
     // Copy result to host, include shared part, to checking the correction.
     host_k_dst.resize(host_block_offsets_.back() * (kv_lora_rank_ + qk_rope_head_dim_) * block_size_);
     for (int i = 0; i < host_block_offsets_.back(); i++) {
-      cudaMemcpy(host_k_dst.data() + i * block_size_ * (kv_lora_rank_ + qk_rope_head_dim_), host_k_list_ptrs_[i],
-                 block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float), cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(host_k_dst.data() + i * block_size_ * (kv_lora_rank_ + qk_rope_head_dim_), host_k_list_ptrs_[i],
+                      block_size_ * (kv_lora_rank_ + qk_rope_head_dim_) * sizeof(float), cudaMemcpyDeviceToHost,
+                      stream);
     }
+    cudaStreamSynchronize(stream);
   }
 
  protected:
@@ -329,12 +342,11 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyKeyBlockWithReplicationTest) {
   // Initialize prefix cache block.
   // kv_lora_rank_: The dimension of the downward projection matrix for keys and values, with a default value of 512.
   size_t kv_stride_size = kv_lora_rank_ + qk_rope_head_dim_;
-  std::vector<std::vector<float>> host_block_list;
+  std::vector<std::vector<float>> host_block_list(host_block_offsets_.back());
   for (size_t i = 0; i < static_cast<size_t>(host_block_offsets_.back()); ++i) {
-    std::vector<float> block(block_size_ * kv_stride_size, 0);
     // Each cache block stores the key data of block_size_ tokens.
     // The size of each cache block is: block_size_ * kv_stride_size
-    host_block_list.push_back(block);
+    host_block_list[i].assign(block_size_ * kv_stride_size, 0);
   }
 
   for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
@@ -346,11 +358,12 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyKeyBlockWithReplicationTest) {
       size_t total_block_idx = base_block_offset + prefix_block_idx;
       for (size_t i = 0; i < block_size_ * kv_stride_size; ++i) {
         host_block_list[total_block_idx][i] = (total_block_idx * 100) + i;
-        cudaMemcpy(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
-                   host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice);
       }
+      cudaMemcpyAsync(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
+                      host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice, stream);
     }
   }
+  cudaStreamSynchronize(stream);
 
   const int num_iterations = 10;
   auto cuda_run = [&]() {
@@ -427,11 +440,12 @@ TEST_F(MlaPagedAttentionTestSuit, MlaCopyValueBlockToBufferTest) {
       size_t total_block_idx = base_block_offset + prefix_block_idx;
       for (size_t i = 0; i < block_size_ * kv_stride_size; ++i) {
         host_block_list[total_block_idx][i] = (total_block_idx * 100) + i;
-        cudaMemcpy(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
-                   host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice);
       }
+      cudaMemcpyAsync(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
+                      host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice, stream);
     }
   }
+  cudaStreamSynchronize(stream);
 
   const int num_iterations = 10;
   auto cuda_run = [&]() {
@@ -481,10 +495,10 @@ TEST_F(MlaPagedAttentionTestSuit, MlaFillKVPrefixTest) {
     }
   }
 
-  cudaMemcpy(dev_k_up_buffer_, host_k_up_buffer_.data(), host_k_up_buffer_.size() * sizeof(float),
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(dev_v_up_buffer_, host_v_up_buffer_.data(), host_v_up_buffer_.size() * sizeof(float),
-             cudaMemcpyHostToDevice);
+  cudaMemcpyAsync(dev_k_up_buffer_, host_k_up_buffer_.data(), host_k_up_buffer_.size() * sizeof(float),
+                  cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(dev_v_up_buffer_, host_v_up_buffer_.data(), host_v_up_buffer_.size() * sizeof(float),
+                  cudaMemcpyHostToDevice, stream);
 
   MlaFillKVPrefix<float, float, llm_kernels::utils::KVCacheType::kAuto>(
       dev_attn_k_states_, dev_attn_v_states_, dev_k_up_buffer_, dev_v_up_buffer_, dev_prefix_offsets_,
@@ -523,47 +537,81 @@ TEST_F(MlaPagedAttentionTestSuit, MlaFillKVPrefixTest) {
   }
 }
 
-TEST_F(MlaPagedAttentionTestSuit, MlaDrainAttnOutPrefixTest) {
-  // Initialize dev_attn_q_states as input, dev_q_states as output.
-  for (int i = 0; i < total_len_with_prefix_; ++i) {
-    for (int j = 0; j < num_heads_; ++j) {
-      for (int k = 0; k < qk_nope_head_dim_ + qk_rope_head_dim_; ++k) {
-        int index =
-            i * num_heads_ * (qk_nope_head_dim_ + qk_rope_head_dim_) + j * (qk_nope_head_dim_ + qk_rope_head_dim_) + k;
-        host_attn_q_states_[index] = (i * 100 + j) * 100 + k;
-      }
-    }
+TEST_F(MlaPagedAttentionTestSuit, MlaGetFromCompressedCacheTest) {
+  // 初始化缓存块数据
+  const size_t kv_stride_size = kv_lora_rank_ + qk_rope_head_dim_;
+  std::vector<std::vector<float>> host_block_list(host_block_offsets_.back());
+  for (size_t i = 0; i < static_cast<size_t>(host_block_offsets_.back()); ++i) {
+    host_block_list[i].resize(block_size_ * kv_stride_size);
   }
-  cudaMemcpy(dev_attn_q_states_, host_attn_q_states_.data(), host_attn_q_states_.size() * sizeof(float),
-             cudaMemcpyHostToDevice);
 
-  MlaDrainAttnOutPrefix<float, float, llm_kernels::utils::KVCacheType::kAuto>(
-      dev_q_states_, dev_attn_q_states_, dev_prefix_offsets_, dev_without_prefix_offsets_, num_heads_,
-      qk_nope_head_dim_ + qk_rope_head_dim_, batch_size_, total_len_without_prefix_, nullptr);
-  cudaDeviceSynchronize();
-
-  // Copy result to host.
-  std::vector<float> host_q_states_dst(host_q_states_.size());
-  cudaMemcpy(host_q_states_dst.data(), dev_q_states_, host_q_states_dst.size() * sizeof(float), cudaMemcpyDeviceToHost);
-
-  // Verify result.
-  size_t stride_size = num_heads_ * (qk_nope_head_dim_ + qk_rope_head_dim_);
+  // 为每个块填充测试数据
+  std::default_random_engine random_engine;
+  std::uniform_real_distribution<float> random_range(0, 1);
   for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
-    // All unique should be equal.
-    size_t prefix_len = host_prefix_offset_[batch_idx + 1] - host_prefix_offset_[batch_idx];
-    size_t unique_len = host_without_prefix_offset_[batch_idx + 1] - host_without_prefix_offset_[batch_idx];
+    const size_t base_block_offset = host_block_offsets_[batch_idx];
+    const size_t token_num = input_token_num_[batch_idx];
 
-    size_t src_token_offset = host_prefix_offset_[batch_idx] + host_without_prefix_offset_[batch_idx];
-    size_t dst_token_offset = host_without_prefix_offset_[batch_idx];
+    const size_t block_num = (token_num + block_size_ - 1) / block_size_;
+    for (size_t block_idx = 0; block_idx < block_num; ++block_idx) {
+      const size_t total_block_idx = base_block_offset + block_idx;
+      for (size_t i = 0; i < block_size_ * kv_stride_size; ++i) {
+        host_block_list[total_block_idx][i] = random_range(random_engine);
+      }
+      cudaMemcpyAsync(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
+                      host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice, stream);
+    }
+  }
+  cudaStreamSynchronize(stream);
 
-    for (size_t i = 0; i < unique_len; ++i) {
-      for (size_t j = 0; j < stride_size; ++j) {
-        size_t src_offset = (src_token_offset + prefix_len + i) * stride_size + j;
-        size_t dst_offset = (dst_token_offset + i) * stride_size + j;
-        EXPECT_FLOAT_EQ(host_q_states_dst[dst_offset], host_attn_q_states_[src_offset]);
+  // 准备输出缓冲区
+  const int total_len = total_len_with_prefix_;
+  std::vector<float> host_latent_buffer(total_len * kv_lora_rank_);
+  std::vector<float> host_rope_buffer(total_len * qk_rope_head_dim_);
+
+  float *dev_latent_buffer, *dev_rope_buffer;
+  cudaMalloc(&dev_latent_buffer, host_latent_buffer.size() * sizeof(float));
+  cudaMalloc(&dev_rope_buffer, host_rope_buffer.size() * sizeof(float));
+
+  // 执行kernel
+  MlaGetFromCompressedCache<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+      dev_rope_buffer, dev_latent_buffer, dev_k_list_, total_len, dev_input_offsets_, dev_block_offsets_, block_size_,
+      qk_rope_head_dim_, kv_lora_rank_, stream);
+  cudaStreamSynchronize(stream);
+
+  // 将结果复制回主机
+  cudaMemcpy(host_latent_buffer.data(), dev_latent_buffer, host_latent_buffer.size() * sizeof(float),
+             cudaMemcpyDeviceToHost);
+  cudaMemcpy(host_rope_buffer.data(), dev_rope_buffer, host_rope_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost);
+
+  // 验证结果
+  const float* host_latent_ptr = host_latent_buffer.data();
+  const float* host_rope_ptr = host_rope_buffer.data();
+
+  for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
+    size_t token_offset = host_input_offsets_[batch_idx];
+    size_t token_num = input_token_num_[batch_idx];
+    size_t base_block_offset = host_block_offsets_[batch_idx];
+
+    for (size_t token_idx = 0; token_idx < token_num; ++token_idx) {
+      size_t block_idx = token_idx / block_size_;
+      size_t token_offset_in_block = token_idx % block_size_;
+      size_t total_block_idx = base_block_offset + block_idx;
+
+      for (size_t i = 0; i < kv_lora_rank_; ++i) {
+        const size_t src_offset = token_offset_in_block * kv_stride_size + i;
+        EXPECT_FLOAT_EQ(*host_latent_ptr++, host_block_list[total_block_idx][src_offset]);
+      }
+      for (size_t i = 0; i < qk_rope_head_dim_; ++i) {
+        const size_t src_offset = token_offset_in_block * kv_stride_size + kv_lora_rank_ + i;
+        EXPECT_FLOAT_EQ(*host_rope_ptr++, host_block_list[total_block_idx][src_offset]);
       }
     }
   }
+
+  // 释放临时分配的内存
+  cudaFree(dev_latent_buffer);
+  cudaFree(dev_rope_buffer);
 }
 
 }  // namespace test

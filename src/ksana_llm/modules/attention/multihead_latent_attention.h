@@ -66,7 +66,7 @@ class MultiHeadLatentAttention {
  private:
   Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               std::vector<Tensor>& prefill_buffer_tensors, Tensor& prefill_q_buffer_tensor,
+                               std::vector<Tensor>& prefill_buffer_tensors, Tensor& q_nope_tensor,
                                Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext& forwarding_context);
 

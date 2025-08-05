@@ -79,15 +79,13 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
 
 template <typename T>
 Status FlashMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                     std::shared_ptr<ModelInput>& model_input,
-                                     std::vector<Tensor>& hidden_buffer_tensors_1,
-                                     const AttentionForwardContext& attn_ctx, Tensor& prefill_q_buffer_tensor,
+                                     std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& workspace_buffer,
+                                     const AttentionForwardContext& attn_ctx, Tensor& q_nope_tensor,
                                      Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
                                      Tensor& k_rope_buffer_tensor, Tensor& prefix_k_buffer_tensor,
                                      Tensor& prefix_v_buffer_tensor, Tensor& prefix_kv_buffer_tensor,
                                      Tensor& prefix_k_up_buffer_tensor, Tensor& prefix_v_up_buffer_tensor,
                                      std::vector<Tensor>& output_tensors) {
-  Tensor query_layernorm_weight, key_layernorm_weight;  // qk_norm not supported, use dummy tensor
   STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({hidden_buffer_tensors_0[0],
                                                            model_input->dp_input_offset_uint64_tensor,
                                                            model_input->flash_input.kv_list,
@@ -104,13 +102,9 @@ Status FlashMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            model_input->dp_src_flexible_token_idx_tensor,
                                                            model_input->dp_flexible_offset_uint64_tensor,
                                                            attn_ctx.forward_shape,
-                                                           query_layernorm_weight, /* for use_qk_norm */
-                                                           key_layernorm_weight,   /* for use_qk_norm */
-                                                           attn_ctx.flag_tensor,
                                                            model_input->flash_input.layer_kv_cache_ptr,
                                                            model_input->flash_input.block_table,
-                                                           model_input->dp_input_without_prefix_uint64_tensor,
-                                                           prefill_q_buffer_tensor,
+                                                           q_nope_tensor,
                                                            q_rope_buffer_tensor,
                                                            kv_buffer_tensor,
                                                            k_rope_buffer_tensor,
@@ -122,7 +116,7 @@ Status FlashMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                            prefix_kv_buffer_tensor,
                                                            prefix_k_up_buffer_tensor,
                                                            prefix_v_up_buffer_tensor,
-                                                           hidden_buffer_tensors_1[0]},
+                                                           workspace_buffer[0]},
                                                           output_tensors));
   return Status();
 }

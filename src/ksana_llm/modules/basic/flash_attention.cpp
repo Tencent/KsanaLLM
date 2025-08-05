@@ -102,7 +102,7 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
        forward_context.flag_tensor,
        model_input->flash_input.layer_kv_cache_ptr,
        model_input->flash_input.block_table,
-       model_input->dp_input_without_prefix_uint64_tensor},
+       model_input->dp_prefill_q_offset_uint64_tensor},
       hidden_buffer_tensors_1));
 #elif defined(ENABLE_ACL)
   // inference on NPU with ATB

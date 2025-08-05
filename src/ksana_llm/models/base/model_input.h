@@ -179,8 +179,6 @@ class ModelInput {
   Tensor kv_cache_ptrs_tensor;
 #endif
 
-  std::vector<size_t> dp_input_without_prefix_list_uint64;
-  Tensor dp_input_without_prefix_uint64_tensor;
   size_t dp_max_forwarding_tokens = 0;
 
   // current rank related attention data para group id
