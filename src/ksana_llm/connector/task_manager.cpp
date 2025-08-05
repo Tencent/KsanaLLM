@@ -304,26 +304,26 @@ void TaskManager::CleanupExpiredTasks(int timeout_seconds) {
           for (size_t shard_idx = range.begin(); shard_idx != range.end(); ++shard_idx) {
             auto& shard = *shards_[shard_idx];
 
-            // Cleanup prefill pending tasks
-            std::vector<TaskKey> expired_prefill_keys;
-            for (auto it = shard.prefill_pending_tasks.begin(); it != shard.prefill_pending_tasks.end(); ++it) {
+            // Cleanup prefill pending tasks (erase by key, increment before erase)
+            for (auto it = shard.prefill_pending_tasks.begin(); it != shard.prefill_pending_tasks.end(); ) {
               if (now - it->second >= timeout_threshold) {
-                expired_prefill_keys.push_back(it->first);
+                auto key = it->first;
+                ++it;
+                shard.prefill_pending_tasks.erase(key);
+              } else {
+                ++it;
               }
-            }
-            for (const auto& key : expired_prefill_keys) {
-              shard.prefill_pending_tasks.erase(key);
             }
 
-            // Cleanup decode confirmed tasks
-            std::vector<TaskKey> expired_decode_keys;
-            for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end(); ++it) {
+            // Cleanup decode confirmed tasks (erase by key, increment before erase)
+            for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end(); ) {
               if (now - it->second >= timeout_threshold) {
-                expired_decode_keys.push_back(it->first);
+                auto key = it->first;
+                ++it;
+                shard.decode_confirmed_tasks.erase(key);
+              } else {
+                ++it;
               }
-            }
-            for (const auto& key : expired_decode_keys) {
-              shard.decode_confirmed_tasks.erase(key);
             }
           }
         });
