@@ -8,24 +8,18 @@
 
 namespace ksana_llm {
 
-template <typename T>
-AddNorm<T>::AddNorm(const std::string& weight_name, float norm_eps, const LayerCreationContext& creation_context) {
-  add_norm_layer_ = std::make_shared<AddNormLayer<T>>();
+AddNorm::AddNorm(const std::string& weight_name, float norm_eps, const LayerCreationContext& creation_context) {
+  add_norm_layer_ = std::make_shared<AddNormLayer>();
   add_norm_layer_->Init({norm_eps}, creation_context.runtime_config, creation_context.context, creation_context.rank);
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
 }
 
-template <typename T>
-AddNorm<T>::~AddNorm() {}
+AddNorm::~AddNorm() {}
 
-template <typename T>
-Status AddNorm<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddNorm::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(add_norm_layer_->Forward({input_tensors[0], input_tensors[1], weight_}, output_tensors));
   return Status();
 }
 
-template class AddNorm<float>;
-template class AddNorm<float16>;
-template class AddNorm<bfloat16>;
 
 }  // namespace ksana_llm

@@ -6,24 +6,21 @@
 
 namespace ksana_llm {
 
-template <typename T>
-TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
-                                ModelCreationConfig& model_creation_config) {
+TwoLayeredFFN::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
+                             ModelCreationConfig& model_creation_config) {
   const std::string weight_name_format = ".mlp.{}.weight";
   InitConfig(layer_idx, creation_context, weight_name_format);
   InitLayers(layer_idx, creation_context, model_creation_config, weight_name_format);
 }
 
-template <typename T>
-TwoLayeredFFN<T>::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
-                                ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
+TwoLayeredFFN::TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context,
+                             ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
   InitConfig(layer_idx, creation_context, weight_name_format);
   InitLayers(layer_idx, creation_context, model_creation_config, weight_name_format);
 }
 
-template <typename T>
-void TwoLayeredFFN<T>::InitConfig(int layer_idx, LayerCreationContext& creation_context,
-                                  const std::string& weight_name_format) {
+void TwoLayeredFFN::InitConfig(int layer_idx, LayerCreationContext& creation_context,
+                               const std::string& weight_name_format) {
   std::string up_gate_proj_weights_name =
       fmt::format("model.layers.{}" + weight_name_format, layer_idx, "gate_up_proj");
   if (creation_context.base_weight->GetModelWeights(up_gate_proj_weights_name).GetElementNumber() > 0) {
@@ -41,19 +38,18 @@ void TwoLayeredFFN<T>::InitConfig(int layer_idx, LayerCreationContext& creation_
   }
 }
 
-template <typename T>
-void TwoLayeredFFN<T>::InitLayers(int layer_idx, LayerCreationContext& creation_context,
-                                  ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
+void TwoLayeredFFN::InitLayers(int layer_idx, LayerCreationContext& creation_context,
+                               ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   GroupQuantBackend linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
   if (fuse_gate_up_proj_) {
-    mlp_gate_up_projs_ = std::make_shared<Linear<T>>(fmt::format(layer_prefix + weight_name_format, "gate_up_proj"),
-                                                     creation_context, linear_group_quant_backend);
-  } else {
-    mlp_gate_projs_ = std::make_shared<Linear<T>>(fmt::format(layer_prefix + weight_name_format, "gate_proj"),
+    mlp_gate_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_up_proj"),
                                                   creation_context, linear_group_quant_backend);
-    mlp_up_projs_ = std::make_shared<Linear<T>>(fmt::format(layer_prefix + weight_name_format, "up_proj"),
-                                                creation_context, linear_group_quant_backend);
+  } else {
+    mlp_gate_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_proj"),
+                                               creation_context, linear_group_quant_backend);
+    mlp_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "up_proj"),
+                                             creation_context, linear_group_quant_backend);
   }
   if (mlp_bias_) {
     mlp_gate_bias_tensor_ = creation_context.base_weight->GetModelWeights(
@@ -61,16 +57,14 @@ void TwoLayeredFFN<T>::InitLayers(int layer_idx, LayerCreationContext& creation_
     mlp_up_bias_tensor_ =
         creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.mlp.{}", layer_idx, "up_proj_bias"));
   }
-  mlp_down_projs_ = std::make_shared<Linear<T>>(fmt::format(layer_prefix + weight_name_format, "down_proj"),
-                                                creation_context, linear_group_quant_backend);
-  adds_ = std::make_shared<Add<T>>(creation_context);
-  silu_muls_ = std::make_shared<SiluMul<T>>(creation_context);
+  mlp_down_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "down_proj"),
+                                             creation_context, linear_group_quant_backend);
+  adds_ = std::make_shared<Add>(creation_context);
+  silu_muls_ = std::make_shared<SiluMul>(creation_context);
 }
 
-template <typename T>
-Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                 std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                 ForwardingContext& forwarding_context) {
+Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                              const bool is_multi_token_forward, ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (fuse_gate_up_proj_) {
     // Mlp gate_up_proj MatMul
@@ -111,9 +105,5 @@ Status TwoLayeredFFN<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 
   return Status();
 }
-
-template class TwoLayeredFFN<float>;
-template class TwoLayeredFFN<float16>;
-template class TwoLayeredFFN<bfloat16>;
 
 }  // namespace ksana_llm

@@ -6,8 +6,12 @@
 
 namespace ksana_llm {
 
+Status CpuEmbLookupLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status CpuEmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CpuEmbLookupLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //   0: input_ids [token_num]
   //   1: cpu_buffer [token_num, hidden_units]
@@ -31,22 +35,5 @@ Status CpuEmbLookupLayer<T>::Forward(const std::vector<Tensor>& input_tensors, s
   output_tensors[0].shape = {token_num, hidden_units};
   return Status();
 }
-
-template class CpuEmbLookupLayer<float>;
-
-#ifdef ENABLE_CUDA
-template class CpuEmbLookupLayer<half>;
-template class CpuEmbLookupLayer<__nv_bfloat16>;
-#endif
-
-#ifdef ENABLE_ACL
-template class CpuEmbLookupLayer<float16>;
-template class CpuEmbLookupLayer<bfloat16>;
-#endif
-
-#ifdef ENABLE_TOPS
-template class CpuEmbLookupLayer<float16>;
-template class CpuEmbLookupLayer<bfloat16>;
-#endif
 
 }  // namespace ksana_llm

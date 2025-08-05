@@ -14,57 +14,57 @@ InternlmxComposer2DecoderLayer<T>::InternlmxComposer2DecoderLayer(int layer_idx,
     : layer_idx_(layer_idx), plora_a_buffer_(plora_a_buffer_), plora_b_buffer_(plora_b_buffer_) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  input_layernorms_ = std::make_shared<Layernorm<T>>(
+  input_layernorms_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
   post_attention_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".post_attention_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<Layernorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
   // GEMM related
-  adds_ = std::make_shared<Add<T>>(creation_context);
-  gate_proj_plora_a_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate_proj.Plora_A.weight", creation_context,
-                                                   model_creation_config.attn_config.model_config.quant_config.backend);
-  gate_proj_plora_b_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate_proj.Plora_B.weight", creation_context,
-                                                   model_creation_config.attn_config.model_config.quant_config.backend);
-  up_proj_plora_a_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.up_proj.Plora_A.weight", creation_context,
-                                                 model_creation_config.attn_config.model_config.quant_config.backend);
-  up_proj_plora_b_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.up_proj.Plora_B.weight", creation_context,
-                                                 model_creation_config.attn_config.model_config.quant_config.backend);
-  down_proj_plora_a_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.down_proj.Plora_A.weight", creation_context,
-                                                   model_creation_config.attn_config.model_config.quant_config.backend);
-  down_proj_plora_b_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.down_proj.Plora_B.weight", creation_context,
-                                                   model_creation_config.attn_config.model_config.quant_config.backend);
-  qkv_lora_a_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.qkv_proj.Plora_A.weight", creation_context,
-                                                 model_creation_config.attn_config.model_config.quant_config.backend);
-  qkv_lora_b_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.qkv_rproj.Plora_B.weight", creation_context,
-                                                 model_creation_config.attn_config.model_config.quant_config.backend);
-  o_lora_a_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.Plora_A.weight", creation_context,
-                                               model_creation_config.attn_config.model_config.quant_config.backend);
-  o_lora_b_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.Plora_B.weight", creation_context,
-                                               model_creation_config.attn_config.model_config.quant_config.backend);
+  adds_ = std::make_shared<Add>(creation_context);
+  gate_proj_plora_a_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate_proj.Plora_A.weight", creation_context,
+                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  gate_proj_plora_b_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate_proj.Plora_B.weight", creation_context,
+                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  up_proj_plora_a_ = std::make_shared<Linear>(layer_prefix + ".mlp.up_proj.Plora_A.weight", creation_context,
+                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  up_proj_plora_b_ = std::make_shared<Linear>(layer_prefix + ".mlp.up_proj.Plora_B.weight", creation_context,
+                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  down_proj_plora_a_ = std::make_shared<Linear>(layer_prefix + ".mlp.down_proj.Plora_A.weight", creation_context,
+                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  down_proj_plora_b_ = std::make_shared<Linear>(layer_prefix + ".mlp.down_proj.Plora_B.weight", creation_context,
+                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  qkv_lora_a_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.qkv_proj.Plora_A.weight", creation_context,
+                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  qkv_lora_b_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.qkv_rproj.Plora_B.weight", creation_context,
+                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  o_lora_a_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.Plora_A.weight", creation_context,
+                                            model_creation_config.attn_config.model_config.quant_config.backend);
+  o_lora_b_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.Plora_B.weight", creation_context,
+                                            model_creation_config.attn_config.model_config.quant_config.backend);
 
   // attention related
   bool is_neox = true;
-  attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
-                                                model_creation_config.attn_config.model_config.quant_config.backend);
-  attn_o_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
-                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
+                                             model_creation_config.attn_config.model_config.quant_config.backend);
+  attn_o_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
+                                           model_creation_config.attn_config.model_config.quant_config.backend);
   model_creation_config.attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
   flash_attentions_ = std::make_shared<FlashAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
   paged_attentions_ = std::make_shared<PagedAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
 
   // ffn related
-  mlp_gate_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate_proj.weight", creation_context,
-                                                model_creation_config.attn_config.model_config.quant_config.backend);
-  mlp_up_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.up_proj.weight", creation_context,
-                                              model_creation_config.attn_config.model_config.quant_config.backend);
-  mlp_down_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.down_proj.weight", creation_context,
-                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  mlp_gate_projs_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate_proj.weight", creation_context,
+                                             model_creation_config.attn_config.model_config.quant_config.backend);
+  mlp_up_projs_ = std::make_shared<Linear>(layer_prefix + ".mlp.up_proj.weight", creation_context,
+                                           model_creation_config.attn_config.model_config.quant_config.backend);
+  mlp_down_projs_ = std::make_shared<Linear>(layer_prefix + ".mlp.down_proj.weight", creation_context,
+                                             model_creation_config.attn_config.model_config.quant_config.backend);
   tp_comm_ = std::make_shared<TpCommunicator<T>>();
-  silu_muls_ = std::make_shared<SiluMul<T>>(creation_context);
+  silu_muls_ = std::make_shared<SiluMul>(creation_context);
 
 #ifdef ENABLE_CUDA
-  mask_muls_ = std::make_shared<Mul<T>>(creation_context);
+  mask_muls_ = std::make_shared<Mul>(creation_context);
 #endif
 }
 
@@ -291,10 +291,10 @@ InternlmxComposer2Model<T>::InternlmxComposer2Model(const ModelConfig& model_con
                                                     const RuntimeConfig& runtime_config, const int rank,
                                                     std::shared_ptr<Context> context,
                                                     std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   internlmx_composer2_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

@@ -6,8 +6,12 @@
 
 namespace ksana_llm {
 
+Status InputRefitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status InputRefitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status InputRefitLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   size_t pos_num = input_tensors[1].shape[0];
   if (pos_num <= 0) return Status();
   void* output_ptr = output_tensors[0].GetPtr<void>();
@@ -45,9 +49,5 @@ Status InputRefitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std
   }
   return Status();
 }
-
-template class InputRefitLayer<float>;
-template class InputRefitLayer<half>;
-template class InputRefitLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

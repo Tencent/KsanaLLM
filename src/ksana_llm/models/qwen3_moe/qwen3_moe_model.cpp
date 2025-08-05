@@ -14,14 +14,14 @@ Qwen3MoeDecoderLayer<T>::Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_b
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   // Common blocks
-  adds_ = std::make_shared<Add<T>>(creation_context);
+  adds_ = std::make_shared<Add>(creation_context);
   tp_comm_ = std::make_shared<TpCommunicator<T>>();
 
-  input_layernorms_ = std::make_shared<Layernorm<T>>(
+  input_layernorms_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
   post_attention_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".post_attention_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<Layernorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
   bool is_neox = true;
   bool add_qkv_bias = false;
@@ -31,11 +31,11 @@ Qwen3MoeDecoderLayer<T>::Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_b
   mha_ = std::make_shared<MultiHeadAttention<T>>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
                                                  model_creation_config);
   // // MoE related blocks
-  expert_gates_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate.weight", creation_context,
-                                              model_creation_config.attn_config.model_config.quant_config.backend);
-  moes_ = std::make_shared<MoE<T>>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
-                                   layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
-                                   MoeScaleNormMode::RE_NORM);
+  expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
+                                           model_creation_config.attn_config.model_config.quant_config.backend);
+  moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+                                layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
+                                MoeScaleNormMode::RE_NORM);
 }
 
 template <typename T>
@@ -119,10 +119,10 @@ template class Qwen3Moe<bfloat16>;
 template <typename T>
 Qwen3MoeModel<T>::Qwen3MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                                 std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   qwen3moe_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

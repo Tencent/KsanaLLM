@@ -29,15 +29,15 @@ class HunyuanDecoderLayer {
 
  private:
   int layer_idx_;
-  std::shared_ptr<Add<T>> adds_;
-  std::shared_ptr<Layernorm<T>> input_layernorms_;
-  std::shared_ptr<Layernorm<T>> post_attention_layernorms_;
+  std::shared_ptr<Add> adds_;
+  std::shared_ptr<Layernorm> input_layernorms_;
+  std::shared_ptr<Layernorm> post_attention_layernorms_;
 
   std::shared_ptr<CrossLayerAttention<T>> cla_;
 
-  std::shared_ptr<TwoLayeredFFN<T>> shared_mlps_;
-  std::shared_ptr<MoE<T>> moes_;
-  std::shared_ptr<Linear<T>> expert_gates_;
+  std::shared_ptr<TwoLayeredFFN> shared_mlps_;
+  std::shared_ptr<MoE> moes_;
+  std::shared_ptr<Linear> expert_gates_;
   std::shared_ptr<TpCommunicator<T>> tp_comm_;
 
   TensorBuffer* moe_buffer_;
@@ -63,7 +63,7 @@ class HunyuanLarge : public ModelInterface<T> {
 };
 
 template <typename T>
-class HunyuanLargeModel : public CommonModel<T> {
+class HunyuanLargeModel : public CommonModel {
  public:
   HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                     std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
@@ -75,8 +75,8 @@ class HunyuanLargeModel : public CommonModel<T> {
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
-  using CommonModel<T>::GetHiddenUnitBuffer;
-  using CommonModel<T>::SetHiddenUnitBuffer;
+  using CommonModel::GetHiddenUnitBuffer;
+  using CommonModel::SetHiddenUnitBuffer;
 
  private:
   HunyuanLarge<T> hunyuan_large_;

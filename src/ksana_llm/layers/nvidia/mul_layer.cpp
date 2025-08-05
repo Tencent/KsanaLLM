@@ -6,8 +6,13 @@
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 
 namespace ksana_llm {
+
+Status MulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status MulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   int input_0_m = input_tensors[0].shape[0];
   int input_0_n = input_tensors[0].shape[1];
   int input_1_m = input_tensors[1].shape[0];
@@ -30,8 +35,5 @@ Status MulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   output_tensors[0].dtype = input_tensors[1].dtype;
   return Status();
 }
-template class MulLayer<float>;
-template class MulLayer<half>;
-template class MulLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

@@ -11,8 +11,7 @@
 
 namespace ksana_llm {
 
-template <typename SRC_DTYPE>
-Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = DataType::TYPE_FP32;
   atb::infer::ElewiseParam param;
@@ -30,7 +29,5 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
   atb_op_executor.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
-template class CastLayer<float>;
-template class CastLayer<float16>;
-template class CastLayer<bfloat16>;
+
 }  // namespace ksana_llm

@@ -353,7 +353,7 @@ TEST_F(LayerTest, AddLayerTest) {
   StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
 
   // 测试相同shape
-  AddLayer<device_type> add_layer = AddLayer<device_type>();
+  AddLayer add_layer = AddLayer();
   add_layer.Init({}, runtime_config, context_, kDeviceRank);
   add_layer.Forward({input, bias_a}, output);
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
@@ -426,7 +426,7 @@ TEST_F(LayerTest, AssembleAcceptedTokensHiddenTest) {
               MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[kDeviceRank]);
   StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
 
-  AssembleTokensHiddenLayer<device_type> test_layer = AssembleTokensHiddenLayer<device_type>();
+  AssembleTokensHiddenLayer test_layer = AssembleTokensHiddenLayer();
   test_layer.Init({}, runtime_config, context_, kDeviceRank);
   test_layer.Forward({input, accepted_tokens_idx}, output);
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);

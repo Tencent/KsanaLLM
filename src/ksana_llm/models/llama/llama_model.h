@@ -23,7 +23,7 @@ class Llama : public ModelInterface<T> {
 };
 
 template <typename T>
-class LlamaModel : public CommonModel<T> {
+class LlamaModel : public CommonModel {
  public:
   LlamaModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
@@ -34,8 +34,8 @@ class LlamaModel : public CommonModel<T> {
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
-  using CommonModel<T>::GetHiddenUnitBuffer;
-  using CommonModel<T>::SetHiddenUnitBuffer;
+  using CommonModel::GetHiddenUnitBuffer;
+  using CommonModel::SetHiddenUnitBuffer;
 
  private:
   Llama<T> llama_;

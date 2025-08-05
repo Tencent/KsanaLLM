@@ -14,24 +14,28 @@ enum class ActivationType {
   Swiglu = 3,
 };
 
-template <ActivationType ACTIVATION_TYPE>
-constexpr bool IsGatedActivation() {
-  if constexpr (ACTIVATION_TYPE == ActivationType::Geglu || ACTIVATION_TYPE == ActivationType::Swiglu) {
-    return true;
-  }
-  return false;
-}
-
-template <ActivationType ACTIVATION_TYPE, typename T>
 class ActivationLayer : public BaseLayer {
  public:
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
+
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+ private:
+  ActivationType activation_type_;
 };
 
-template <typename T>
 class SigmoidLayer : public BaseLayer {
  public:
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 };
 
 }  // namespace ksana_llm

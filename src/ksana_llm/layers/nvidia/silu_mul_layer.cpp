@@ -9,15 +9,18 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                             std::shared_ptr<Context> context, int rank) {
+Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                          std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
 
+Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SiluMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (input_tensors.size() == 1) {
     InvokeRowBasedGatedActivation<llm_kernels::nvidia::SiluActivation, T>(
         reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), static_cast<int>(input_tensors[0].shape[0]),
@@ -38,9 +41,5 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
 
   return Status();
 }
-
-template class SiluMulLayer<float>;
-template class SiluMulLayer<half>;
-template class SiluMulLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

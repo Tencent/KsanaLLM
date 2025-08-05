@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class TwoLayeredFFN {
  public:
   TwoLayeredFFN(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
@@ -33,12 +32,12 @@ class TwoLayeredFFN {
   bool mlp_bias_ = false;
   Tensor mlp_gate_bias_tensor_;
   Tensor mlp_up_bias_tensor_;
-  std::shared_ptr<Add<T>> adds_;
-  std::shared_ptr<SiluMul<T>> silu_muls_;
-  std::shared_ptr<Linear<T>> mlp_gate_up_projs_;
-  std::shared_ptr<Linear<T>> mlp_up_projs_;
-  std::shared_ptr<Linear<T>> mlp_gate_projs_;
-  std::shared_ptr<Linear<T>> mlp_down_projs_;
+  std::shared_ptr<Add> adds_;
+  std::shared_ptr<SiluMul> silu_muls_;
+  std::shared_ptr<Linear> mlp_gate_up_projs_;
+  std::shared_ptr<Linear> mlp_up_projs_;
+  std::shared_ptr<Linear> mlp_gate_projs_;
+  std::shared_ptr<Linear> mlp_down_projs_;
 };  // namespace ksana_llm
 
 }  // namespace ksana_llm

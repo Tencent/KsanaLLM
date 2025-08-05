@@ -8,15 +8,18 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AddLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                         std::shared_ptr<Context> context, int rank) {
+Status AddLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
 
+Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   auto a = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
   auto b = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
   // The Add-Bias-Residual Kernel uses the shape[0] of the input tensor to determine whether
@@ -34,9 +37,5 @@ Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class AddLayer<float>;
-template class AddLayer<half>;
-template class AddLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

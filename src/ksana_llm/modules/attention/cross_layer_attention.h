@@ -39,7 +39,7 @@ class CrossLayerAttention {
 
  private:
   int layer_idx_;
-  std::shared_ptr<Linear<T>> attn_qkv_projs_;
+  std::shared_ptr<Linear> attn_qkv_projs_;
   std::shared_ptr<CommonAttention<T>> attentions_;
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2

@@ -8,23 +8,16 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Split<T>::Split(const LayerCreationContext& creation_context) {
-  split_layer_ = std::make_shared<SplitLayer<T>>();
+Split::Split(const LayerCreationContext& creation_context) {
+  split_layer_ = std::make_shared<SplitLayer>();
   split_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 }
 
-template <typename T>
-Split<T>::~Split() {}
+Split::~Split() {}
 
-template <typename T>
-Status Split<T>::Forward(Tensor input, std::vector<Tensor>& output_tensors) {
+Status Split::Forward(Tensor input, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(split_layer_->Forward({input}, output_tensors));
   return Status();
 }
-
-template class Split<float>;
-template class Split<float16>;
-template class Split<bfloat16>;
 
 }  // namespace ksana_llm

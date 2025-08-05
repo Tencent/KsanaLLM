@@ -25,13 +25,13 @@ MultiHeadAttention<T>::MultiHeadAttention(int layer_idx, bool is_neox, bool add_
     : add_qkv_bias_(add_qkv_bias) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
-                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
+                                             model_creation_config.attn_config.model_config.quant_config.backend);
   if (add_qkv_bias_) {
     qkv_bais_ = creation_context.base_weight->GetModelWeights(layer_prefix + ".self_attn.query_key_value.bias");
   }
 
-  adds_ = std::make_shared<Add<T>>(creation_context);
+  adds_ = std::make_shared<Add>(creation_context);
 
   attentions_ =
       std::make_shared<CommonAttention<T>>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);

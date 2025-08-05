@@ -8,15 +8,18 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status SplitLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                           std::shared_ptr<Context> context, int rank) {
+Status SplitLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                        std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   return Status();
 }
 
+Status SplitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status SplitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SplitLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   std::vector<T*> output_ptrs(output_tensors.size());
   for (size_t i = 0; i < output_tensors.size(); ++i) {
     output_ptrs[i] = output_tensors[i].GetPtr<T>();
@@ -29,9 +32,5 @@ Status SplitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vec
                  input_tensors[0].shape[1], output_tensors.size(), context_->GetComputeStreams()[rank_].Get());
   return Status();
 }
-
-template class SplitLayer<float>;
-template class SplitLayer<half>;
-template class SplitLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

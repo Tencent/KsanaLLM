@@ -10,7 +10,6 @@
 namespace ksana_llm {
 
 // Fused Add and RMS Norm operation (currently Layernorm is not supported)
-template <typename T>
 class AddNorm {
  public:
   // Disable a default constructor

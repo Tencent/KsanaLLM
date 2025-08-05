@@ -26,18 +26,18 @@ SimpleDecoderLayer<T>::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  input_layernorms_ = std::make_shared<Layernorm<T>>(
+  input_layernorms_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
   post_attention_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".post_attention_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<Layernorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
-  adds_ = std::make_shared<Add<T>>(creation_context);
+  adds_ = std::make_shared<Add>(creation_context);
 
   bool use_qk_norm = model_creation_config.attn_config.use_qk_norm;
   mha_ = std::make_shared<MultiHeadAttention<T>>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
                                                  model_creation_config);
-  mlps_ = std::make_shared<TwoLayeredFFN<T>>(layer_idx, creation_context, model_creation_config);
+  mlps_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   tp_comm_ = std::make_shared<TpCommunicator<T>>();
 }
 

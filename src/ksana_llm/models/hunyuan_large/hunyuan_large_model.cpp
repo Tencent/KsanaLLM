@@ -14,26 +14,26 @@ HunyuanDecoderLayer<T>::HunyuanDecoderLayer(int layer_idx, TensorBuffer* moe_buf
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   // Common blocks
-  adds_ = std::make_shared<Add<T>>(creation_context);
-  input_layernorms_ = std::make_shared<Layernorm<T>>(
+  adds_ = std::make_shared<Add>(creation_context);
+  input_layernorms_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
   post_attention_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".post_attention_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<Layernorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
   tp_comm_ = std::make_shared<TpCommunicator<T>>();
 
   cla_ = std::make_shared<CrossLayerAttention<T>>(layer_idx, cla_share_factor, cla_buffers, creation_context,
                                                   model_creation_config);
 
-  shared_mlps_ = std::make_shared<TwoLayeredFFN<T>>(layer_idx, creation_context, model_creation_config,
-                                                    ".mlp.shared_expert.{}.weight");
+  shared_mlps_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
+                                                 ".mlp.shared_expert.{}.weight");
 
   // MoE related blocks
-  expert_gates_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate.weight", creation_context,
-                                              model_creation_config.attn_config.model_config.quant_config.backend);
-  moes_ = std::make_shared<MoE<T>>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
-                                   layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
-                                   MoeScaleNormMode::NO_NORM);
+  expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
+                                           model_creation_config.attn_config.model_config.quant_config.backend);
+  moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+                                layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
+                                MoeScaleNormMode::NO_NORM);
 }
 
 template <typename T>
@@ -104,10 +104,10 @@ template <typename T>
 HunyuanLargeModel<T>::HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                         const int rank, std::shared_ptr<Context> context,
                                         std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

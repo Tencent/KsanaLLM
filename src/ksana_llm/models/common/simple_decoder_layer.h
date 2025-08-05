@@ -29,13 +29,13 @@ class SimpleDecoderLayer {
  private:
   int layer_idx_;
   std::shared_ptr<MultiHeadAttention<T>> mha_;
-  std::shared_ptr<TwoLayeredFFN<T>> mlps_;
+  std::shared_ptr<TwoLayeredFFN> mlps_;
   std::shared_ptr<TpCommunicator<T>> tp_comm_;
 
-  std::shared_ptr<Add<T>> adds_;
+  std::shared_ptr<Add> adds_;
 
-  std::shared_ptr<Layernorm<T>> input_layernorms_;
-  std::shared_ptr<Layernorm<T>> post_attention_layernorms_;
+  std::shared_ptr<Layernorm> input_layernorms_;
+  std::shared_ptr<Layernorm> post_attention_layernorms_;
 };
 
 }  // namespace ksana_llm

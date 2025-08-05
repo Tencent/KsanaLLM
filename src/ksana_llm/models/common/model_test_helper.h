@@ -65,7 +65,7 @@ class FakeModel {
 
     model_->CreateLayers(layer_creation_context_, model_creation_config);
 
-    cast_layer_ = std::make_shared<CastLayer<T>>();
+    cast_layer_ = std::make_shared<CastLayer>();
     cast_layer_->Init({}, runtime_config, context_, rank_);
   }
 

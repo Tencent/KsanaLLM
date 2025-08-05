@@ -9,7 +9,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Linear {
  public:
   // Disable a default constructor

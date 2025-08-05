@@ -31,7 +31,7 @@ class CommonAttention {
   Tensor query_layernorm_weight_;
   Tensor key_layernorm_weight_;
 
-  std::shared_ptr<Linear<T>> attn_o_projs_;
+  std::shared_ptr<Linear> attn_o_projs_;
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;
 #endif

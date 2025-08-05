@@ -89,15 +89,15 @@ class MultiHeadLatentAttention {
   // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
   bool use_fused_lora_a_ = false;
 
-  std::shared_ptr<Linear<T>> attn_fused_lora_a_projs_;
-  std::shared_ptr<Linear<T>> attn_q_a_projs_;
-  std::shared_ptr<Linear<T>> attn_kv_a_lora_projs_;
-  std::shared_ptr<Linear<T>> attn_kv_a_ropes_;
-  std::shared_ptr<Linear<T>> attn_q_b_lora_projs_;
-  std::shared_ptr<Linear<T>> attn_q_b_rope_projs_;
-  std::shared_ptr<Linear<T>> attn_o_proj_;
-  std::shared_ptr<Split<T>> split_;
-  std::shared_ptr<Bmm<T>> attn_w_uk_t_bmm_;
+  std::shared_ptr<Linear> attn_fused_lora_a_projs_;
+  std::shared_ptr<Linear> attn_q_a_projs_;
+  std::shared_ptr<Linear> attn_kv_a_lora_projs_;
+  std::shared_ptr<Linear> attn_kv_a_ropes_;
+  std::shared_ptr<Linear> attn_q_b_lora_projs_;
+  std::shared_ptr<Linear> attn_q_b_rope_projs_;
+  std::shared_ptr<Linear> attn_o_proj_;
+  std::shared_ptr<Split> split_;
+  std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
   std::shared_ptr<FlashMlaAttention<T>> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention<T>> paged_mla_attention_layers_;
   inline static uint32_t qk_nope_head_dim_ = 0;
@@ -107,8 +107,8 @@ class MultiHeadLatentAttention {
   inline static int head_num_per_tp_ = 0;
   size_t o_proj_k_dim_ = 0;
 
-  std::shared_ptr<Layernorm<T>> kv_a_layernorms_;
-  std::shared_ptr<Layernorm<T>> q_a_layernorms_;
+  std::shared_ptr<Layernorm> kv_a_layernorms_;
+  std::shared_ptr<Layernorm> q_a_layernorms_;
 
   AbsorbWeightsType absorb_type_ = AbsorbWeightsType::kAbsorbDisabled;
 };

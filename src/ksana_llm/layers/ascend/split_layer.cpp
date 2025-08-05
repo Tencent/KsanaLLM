@@ -6,19 +6,14 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status SplitLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                           std::shared_ptr<Context> context, int rank) {
+Status SplitLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                        std::shared_ptr<Context> context, int rank) {
   KLLM_THROW("SplitLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "SplitLayer not supported.");
 }
 
-template <typename T>
-Status SplitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SplitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_THROW("SplitLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "SplitLayer not supported.");
 }
-template class SplitLayer<float>;
-template class SplitLayer<float16>;
-template class SplitLayer<bfloat16>;
 }  // namespace ksana_llm

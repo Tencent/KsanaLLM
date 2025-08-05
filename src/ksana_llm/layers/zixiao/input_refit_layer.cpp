@@ -6,11 +6,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status InputRefitLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status InputRefitLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   return Status(RET_UNDEFINED_REFERENCE, "InputRefitLayer not supported.");
 }
-template class InputRefitLayer<float>;
-template class InputRefitLayer<float16>;
-template class InputRefitLayer<bfloat16>;
 }  // namespace ksana_llm

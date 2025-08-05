@@ -9,7 +9,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Sigmoid {
  public:
   // Disable a default constructor

@@ -38,10 +38,10 @@ class DeepSeekV3DecoderLayer {
  private:
   bool is_moe_;
 
-  std::shared_ptr<Layernorm<T>> input_layernorm_;
-  std::shared_ptr<AddNorm<T>> pre_attention_add_norm_;
-  std::shared_ptr<AddNorm<T>> post_attention_add_norm_;
-  std::shared_ptr<Add<T>> add_;
+  std::shared_ptr<Layernorm> input_layernorm_;
+  std::shared_ptr<AddNorm> pre_attention_add_norm_;
+  std::shared_ptr<AddNorm> post_attention_add_norm_;
+  std::shared_ptr<Add> add_;
   std::shared_ptr<TpCommunicator<T>> tp_comm_;
 
   std::shared_ptr<MultiHeadLatentAttention<T>> mla_;
@@ -50,10 +50,10 @@ class DeepSeekV3DecoderLayer {
   int layer_idx_;
   int rank_;
 
-  std::shared_ptr<TwoLayeredFFN<T>> mlp_;
-  std::shared_ptr<TwoLayeredFFN<T>> shared_mlp_;
-  std::shared_ptr<Linear<T>> expert_gate_;
-  std::shared_ptr<MoE<T>> moe_;
+  std::shared_ptr<TwoLayeredFFN> mlp_;
+  std::shared_ptr<TwoLayeredFFN> shared_mlp_;
+  std::shared_ptr<Linear> expert_gate_;
+  std::shared_ptr<MoE> moe_;
 
   MlaBuffers& mla_buffers_;
   TensorBuffer* moe_buffer_;
@@ -81,10 +81,10 @@ class DeepSeekV3MtpLayer {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context);
 
  private:
-  std::shared_ptr<Layernorm<T>> enorm_;
-  std::shared_ptr<Layernorm<T>> hnorm_;
+  std::shared_ptr<Layernorm> enorm_;
+  std::shared_ptr<Layernorm> hnorm_;
   std::shared_ptr<BaseLayer> concat_layer_;
-  std::shared_ptr<Linear<T>> eh_proj_;
+  std::shared_ptr<Linear> eh_proj_;
   std::shared_ptr<BaseLayer> gather_layer_;
   std::shared_ptr<BaseLayer> emb_lookup_layer_;
   std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer_;
@@ -93,7 +93,7 @@ class DeepSeekV3MtpLayer {
 };
 
 template <typename T>
-class DeepSeekV3Model : public CommonModel<T> {
+class DeepSeekV3Model : public CommonModel {
  public:
   DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                   std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
@@ -103,8 +103,8 @@ class DeepSeekV3Model : public CommonModel<T> {
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
-  using CommonModel<T>::GetHiddenUnitBuffer;
-  using CommonModel<T>::SetHiddenUnitBuffer;
+  using CommonModel::GetHiddenUnitBuffer;
+  using CommonModel::SetHiddenUnitBuffer;
 
   std::map<int, std::shared_ptr<DeepSeekV3DecoderLayer<T>>> layers_;
   std::map<int, std::shared_ptr<DeepSeekV3MtpLayer<T>>> nextn_layers_;

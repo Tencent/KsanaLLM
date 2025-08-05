@@ -7,7 +7,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Split {
  public:
   explicit Split(const LayerCreationContext& creation_context);

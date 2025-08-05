@@ -8,8 +8,12 @@
 
 namespace ksana_llm {
 
+Status CastLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename SRC_DTYPE>
-Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CastLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   void* output_ptr = output_tensors[0].GetPtr<void>();
   // When the number of input_tensors is greater than 1, perform a cast operation with an offset.
   // Set output_offset to the value of the first dimension of input_tensors[1].
@@ -22,9 +26,5 @@ Status CastLayer<SRC_DTYPE>::Forward(const std::vector<Tensor>& input_tensors, s
   output_tensors[0].shape = input_tensors[0].shape;
   return Status();
 }
-
-template class CastLayer<float>;
-template class CastLayer<half>;
-template class CastLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

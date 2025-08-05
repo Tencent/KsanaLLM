@@ -26,37 +26,37 @@ GPTDecoderLayer<T>::GPTDecoderLayer(int layer_idx, LayerCreationContext& creatio
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   if (model_creation_config.layernorm_config.activation_function == "gelu" ||
       model_creation_config.layernorm_config.activation_function == "gelu_new") {
-    activation_layer_ = std::make_shared<Activation<T>>("gelu", creation_context);
+    activation_layer_ = std::make_shared<Activation>("gelu", creation_context);
   } else {
-    activation_layer_ = std::make_shared<Activation<T>>("relu", creation_context);
+    activation_layer_ = std::make_shared<Activation>("relu", creation_context);
   }
 
   std::string input_layernorm_name = layer_prefix + ".input_layernorm.weight";
   std::string input_layernorm_bias_name =
       input_layernorm_name.substr(0, input_layernorm_name.size() - strlen("weight")) + "bias";
   input_layernorms_ =
-      std::make_shared<Layernorm<T>>(input_layernorm_name, model_creation_config.layernorm_config.layernorm_eps,
-                                     creation_context, input_layernorm_bias_name);
+      std::make_shared<Layernorm>(input_layernorm_name, model_creation_config.layernorm_config.layernorm_eps,
+                                  creation_context, input_layernorm_bias_name);
 
   std::string post_attention_layernorm_name = layer_prefix + ".post_attention_layernorm.weight";
   std::string post_attention_layernorm_bias_name =
       post_attention_layernorm_name.substr(0, post_attention_layernorm_name.size() - strlen("weight")) + "bias";
-  post_attention_layernorms_ = std::make_shared<Layernorm<T>>(post_attention_layernorm_name,
-                                                              model_creation_config.layernorm_config.layernorm_eps,
-                                                              creation_context, post_attention_layernorm_bias_name);
+  post_attention_layernorms_ =
+      std::make_shared<Layernorm>(post_attention_layernorm_name, model_creation_config.layernorm_config.layernorm_eps,
+                                  creation_context, post_attention_layernorm_bias_name);
 
-  adds_ = std::make_shared<Add<T>>(creation_context);
-  attn_proj_bias_add_ = std::make_shared<Add<T>>(creation_context, layer_prefix + ".self_attn.o_proj.bias");
-  mlp_gate_bias_add_ = std::make_shared<Add<T>>(creation_context, layer_prefix + ".mlp.gate_proj.bias");
-  mlp_down_proj_bias_add_ = std::make_shared<Add<T>>(creation_context, layer_prefix + ".mlp.down_proj.bias");
+  adds_ = std::make_shared<Add>(creation_context);
+  attn_proj_bias_add_ = std::make_shared<Add>(creation_context, layer_prefix + ".self_attn.o_proj.bias");
+  mlp_gate_bias_add_ = std::make_shared<Add>(creation_context, layer_prefix + ".mlp.gate_proj.bias");
+  mlp_down_proj_bias_add_ = std::make_shared<Add>(creation_context, layer_prefix + ".mlp.down_proj.bias");
 
-  mlp_gate_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate_proj.weight", creation_context,
-                                               model_creation_config.attn_config.model_config.quant_config.backend);
-  mlp_down_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.down_proj.weight", creation_context,
-                                               model_creation_config.attn_config.model_config.quant_config.backend);
+  mlp_gate_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate_proj.weight", creation_context,
+                                            model_creation_config.attn_config.model_config.quant_config.backend);
+  mlp_down_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.down_proj.weight", creation_context,
+                                            model_creation_config.attn_config.model_config.quant_config.backend);
 
-  attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
-                                                model_creation_config.attn_config.model_config.quant_config.backend);
+  attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
+                                             model_creation_config.attn_config.model_config.quant_config.backend);
 
   bool is_neox = true;
   bool use_qk_norm = false;
@@ -202,10 +202,10 @@ template class Gpt<bfloat16>;
 template <typename T>
 GptModel<T>::GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                       std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   gpt_.GetModelRunConfig(model_run_config, model_config);
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

@@ -66,8 +66,7 @@ struct ModelRunConfig {
   bool emb_lookup_use_rotary_embedding_pos = false;
 };
 
-// A common implement of transformer based model.
-template <typename T>
+// A common implement
 class CommonModel : public BaseModel {
  public:
   CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -151,8 +150,8 @@ class CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;
 #endif
 
-  std::shared_ptr<Linear<T>> lm_head_;
-  std::shared_ptr<Layernorm<T>> lm_head_prenorm_{nullptr};
+  std::shared_ptr<Linear> lm_head_;
+  std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};
 
   // The layer number of the model on current node.
   int layer_num_on_node_;

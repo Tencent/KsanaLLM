@@ -9,7 +9,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Activation {
  public:
   // Disable a default constructor

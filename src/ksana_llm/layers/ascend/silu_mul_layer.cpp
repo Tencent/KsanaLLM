@@ -10,9 +10,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                             std::shared_ptr<Context> context, int rank) {
+Status SiluMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                          std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
 
   // NOTE(karlluo): input and weight
@@ -58,8 +57,7 @@ Status SiluMulLayer<T>::Init(const std::vector<std::any>& parameters, const Runt
   return Status();
 }
 
-template <typename T>
-Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status SiluMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (input_tensors.size() != 2) {
     KLLM_THROW(fmt::format("SiluMulLayer only support 2 input tensors, but got {}", input_tensors.size()));
   }
@@ -80,8 +78,5 @@ Status SiluMulLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
-template class SiluMulLayer<float>;
-template class SiluMulLayer<float16>;
-template class SiluMulLayer<bfloat16>;
 
 }  // namespace ksana_llm

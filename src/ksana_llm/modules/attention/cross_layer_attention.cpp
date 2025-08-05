@@ -15,12 +15,12 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
 
   // Attention related blocks
   if (cla_share_factor_ != 0 && (layer_idx % cla_share_factor_ != 0)) {
-    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_proj.weight", creation_context,
-                                                  model_creation_config.attn_config.model_config.quant_config.backend);
+    attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_proj.weight", creation_context,
+                                               model_creation_config.attn_config.model_config.quant_config.backend);
   } else {
     // Cla only do q_proj for odd layers when cla_share_factor=2
-    attn_qkv_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
-                                                  model_creation_config.attn_config.model_config.quant_config.backend);
+    attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
+                                               model_creation_config.attn_config.model_config.quant_config.backend);
   }
 
   bool is_neox = true;
@@ -29,7 +29,7 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
       std::make_shared<CommonAttention<T>>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
-  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer<T>>();
+  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
 

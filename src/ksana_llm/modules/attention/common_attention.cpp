@@ -11,8 +11,8 @@ CommonAttention<T>::CommonAttention(int layer_idx, bool is_neox, bool use_qk_nor
                                     LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
-  attn_o_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
-                                              model_creation_config.attn_config.model_config.quant_config.backend);
+  attn_o_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
+                                           model_creation_config.attn_config.model_config.quant_config.backend);
 
   if (use_qk_norm || model_creation_config.attn_config.model_config.enable_qk_pre_norm_before_rotary_pos) {
     query_layernorm_weight_ =

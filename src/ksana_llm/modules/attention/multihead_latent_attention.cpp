@@ -46,11 +46,10 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
 
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   kv_a_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".self_attn.kv_a_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
-  q_a_layernorms_ =
-      std::make_shared<Layernorm<T>>(layer_prefix + ".self_attn.q_a_layernorm.weight",
-                                     model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<Layernorm>(layer_prefix + ".self_attn.kv_a_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
+  q_a_layernorms_ = std::make_shared<Layernorm>(layer_prefix + ".self_attn.q_a_layernorm.weight",
+                                                model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
   const auto& linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
 
@@ -59,38 +58,38 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
   if (creation_context.base_weight->GetModelWeights(fused_lora_a_projs_weight_name).GetElementNumber() > 0) {
     use_fused_lora_a_ = true;
     attn_fused_lora_a_projs_ =
-        std::make_shared<Linear<T>>(fused_lora_a_projs_weight_name, creation_context, linear_group_quant_backend);
-    split_ = std::make_shared<Split<T>>(creation_context);
+        std::make_shared<Linear>(fused_lora_a_projs_weight_name, creation_context, linear_group_quant_backend);
+    split_ = std::make_shared<Split>(creation_context);
   } else {
     use_fused_lora_a_ = false;
-    attn_q_a_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_a_proj.weight", creation_context,
-                                                  linear_group_quant_backend);
-    attn_kv_a_lora_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.kv_a_lora_proj.weight",
-                                                        creation_context, linear_group_quant_backend);
-    attn_kv_a_ropes_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.kv_a_rope_proj.weight", creation_context,
-                                                   linear_group_quant_backend);
+    attn_q_a_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_a_proj.weight", creation_context,
+                                               linear_group_quant_backend);
+    attn_kv_a_lora_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.kv_a_lora_proj.weight",
+                                                     creation_context, linear_group_quant_backend);
+    attn_kv_a_ropes_ = std::make_shared<Linear>(layer_prefix + ".self_attn.kv_a_rope_proj.weight", creation_context,
+                                                linear_group_quant_backend);
   }
 
-  attn_q_b_lora_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_b_nope_proj.weight", creation_context,
-                                                     linear_group_quant_backend);
-  attn_q_b_rope_projs_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.q_b_rope_proj.weight", creation_context,
-                                                     linear_group_quant_backend);
+  attn_q_b_lora_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_b_nope_proj.weight", creation_context,
+                                                  linear_group_quant_backend);
+  attn_q_b_rope_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_b_rope_proj.weight", creation_context,
+                                                  linear_group_quant_backend);
 
   if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-    attn_o_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
-                                               linear_group_quant_backend);
-    attn_w_uk_t_bmm_ = std::make_shared<Bmm<T>>(layer_prefix + ".self_attn.w_uk_t.weight", creation_context,
-                                                linear_group_quant_backend);
+    attn_o_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
+                                            linear_group_quant_backend);
+    attn_w_uk_t_bmm_ =
+        std::make_shared<Bmm>(layer_prefix + ".self_attn.w_uk_t.weight", creation_context, linear_group_quant_backend);
   } else if (absorb_type_ == AbsorbWeightsType::kAbsorbDisabled) {
-    attn_o_proj_ = std::make_shared<Linear<T>>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
-                                               linear_group_quant_backend);
+    attn_o_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
+                                            linear_group_quant_backend);
   } else {
     KLLM_THROW(fmt::format("Unsupported absorb type {}", absorb_type_));
     return;
   }
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
-  set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer<T>>();
+  set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layers_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
 }

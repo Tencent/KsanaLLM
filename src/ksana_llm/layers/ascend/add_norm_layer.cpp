@@ -6,19 +6,14 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AddNormLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                             std::shared_ptr<Context> context, int rank) {
+Status AddNormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                          std::shared_ptr<Context> context, int rank) {
   KLLM_THROW("AddNormLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "AddNormLayer not supported.");
 }
 
-template <typename T>
-Status AddNormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_THROW("AddNormLayer not implement in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "AddNormLayer not supported.");
 }
-template class AddNormLayer<float>;
-template class AddNormLayer<float16>;
-template class AddNormLayer<bfloat16>;
 }  // namespace ksana_llm

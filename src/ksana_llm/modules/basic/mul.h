@@ -9,7 +9,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
+// Pointwise multiplication of two tensors
 class Mul {
  public:
   // Disable a default constructor

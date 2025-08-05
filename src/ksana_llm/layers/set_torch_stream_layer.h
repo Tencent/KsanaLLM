@@ -9,7 +9,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class SetTorchStreamLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,

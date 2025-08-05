@@ -49,38 +49,38 @@ class InternlmxComposer2DecoderLayer {
  private:
   int layer_idx_;
   std::shared_ptr<TpCommunicator<T>> tp_comm_;
-  std::shared_ptr<Layernorm<T>> input_layernorms_;
-  std::shared_ptr<Layernorm<T>> post_attention_layernorms_;
+  std::shared_ptr<Layernorm> input_layernorms_;
+  std::shared_ptr<Layernorm> post_attention_layernorms_;
 
   // PLora
-  std::shared_ptr<Add<T>> adds_;
-  std::shared_ptr<Linear<T>> gate_proj_plora_a_;
-  std::shared_ptr<Linear<T>> gate_proj_plora_b_;
-  std::shared_ptr<Linear<T>> up_proj_plora_a_;
-  std::shared_ptr<Linear<T>> up_proj_plora_b_;
-  std::shared_ptr<Linear<T>> down_proj_plora_a_;
-  std::shared_ptr<Linear<T>> down_proj_plora_b_;
-  std::shared_ptr<Linear<T>> qkv_lora_a_proj_;
-  std::shared_ptr<Linear<T>> qkv_lora_b_proj_;
-  std::shared_ptr<Linear<T>> o_lora_a_proj_;
-  std::shared_ptr<Linear<T>> o_lora_b_proj_;
-  std::shared_ptr<Mul<T>> mask_muls_;
+  std::shared_ptr<Add> adds_;
+  std::shared_ptr<Linear> gate_proj_plora_a_;
+  std::shared_ptr<Linear> gate_proj_plora_b_;
+  std::shared_ptr<Linear> up_proj_plora_a_;
+  std::shared_ptr<Linear> up_proj_plora_b_;
+  std::shared_ptr<Linear> down_proj_plora_a_;
+  std::shared_ptr<Linear> down_proj_plora_b_;
+  std::shared_ptr<Linear> qkv_lora_a_proj_;
+  std::shared_ptr<Linear> qkv_lora_b_proj_;
+  std::shared_ptr<Linear> o_lora_a_proj_;
+  std::shared_ptr<Linear> o_lora_b_proj_;
+  std::shared_ptr<Mul> mask_muls_;
 
   // buffer
   TensorBuffer* plora_a_buffer_;
   TensorBuffer* plora_b_buffer_;
 
   // attention
-  std::shared_ptr<Linear<T>> attn_qkv_projs_;
-  std::shared_ptr<Linear<T>> attn_o_projs_;
+  std::shared_ptr<Linear> attn_qkv_projs_;
+  std::shared_ptr<Linear> attn_o_projs_;
   std::shared_ptr<FlashAttention<T>> flash_attentions_;
   std::shared_ptr<PagedAttention<T>> paged_attentions_;
 
   // ffn related
-  std::shared_ptr<Linear<T>> mlp_gate_projs_;
-  std::shared_ptr<Linear<T>> mlp_up_projs_;
-  std::shared_ptr<Linear<T>> mlp_down_projs_;
-  std::shared_ptr<SiluMul<T>> silu_muls_;
+  std::shared_ptr<Linear> mlp_gate_projs_;
+  std::shared_ptr<Linear> mlp_up_projs_;
+  std::shared_ptr<Linear> mlp_down_projs_;
+  std::shared_ptr<SiluMul> silu_muls_;
 
   Tensor query_layernorm_weight_;
   Tensor key_layernorm_weight_;
@@ -102,7 +102,7 @@ class InternlmxComposer2 : public ModelInterface<T> {
 };
 
 template <typename T>
-class InternlmxComposer2Model : public CommonModel<T> {
+class InternlmxComposer2Model : public CommonModel {
  public:
   InternlmxComposer2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
@@ -115,8 +115,8 @@ class InternlmxComposer2Model : public CommonModel<T> {
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
  protected:
-  using CommonModel<T>::GetHiddenUnitBuffer;
-  using CommonModel<T>::SetHiddenUnitBuffer;
+  using CommonModel::GetHiddenUnitBuffer;
+  using CommonModel::SetHiddenUnitBuffer;
 
  private:
   ModelConfig model_config_;

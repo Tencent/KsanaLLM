@@ -62,13 +62,13 @@ void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector) {
 }
 
 template <typename T>
-class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
+class MultiHeadLatentAttentionTestModel : public CommonModel {
  public:
-  using CommonModel<T>::model_config_;
+  using CommonModel::model_config_;
 
   ForwardingContext* forwarding_context_;
 
-  using CommonModel<T>::cast_layer_;
+  using CommonModel::cast_layer_;
 
   std::shared_ptr<MultiHeadLatentAttention<T>> mla_;
   MlaBuffers mla_buffers_;
@@ -76,18 +76,18 @@ class MultiHeadLatentAttentionTestModel : public CommonModel<T> {
   MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                     const int rank, std::shared_ptr<Context> context,
                                     std::shared_ptr<BaseWeight> base_weight)
-      : CommonModel<T>(model_config, runtime_config, rank, context) {
+      : CommonModel(model_config, runtime_config, rank, context) {
     ModelRunConfig model_run_config;
     model_run_config.position_encoding = PositionEncoding::ROPE;
-    CommonModel<T>::InitRunConfig(model_run_config, base_weight);
-    CommonModel<T>::AllocResources(schedule_id);
-    forwarding_context_ = CommonModel<T>::GetForwardingContext(schedule_id);
+    CommonModel::InitRunConfig(model_run_config, base_weight);
+    CommonModel::AllocResources(schedule_id);
+    forwarding_context_ = CommonModel::GetForwardingContext(schedule_id);
   }
 
-  ~MultiHeadLatentAttentionTestModel() { CommonModel<T>::FreeResources(schedule_id); }
+  ~MultiHeadLatentAttentionTestModel() { CommonModel::FreeResources(schedule_id); }
 
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
-    MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
+    MultiHeadLatentAttention<T>::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                                creation_context.runtime_config, mla_buffers_);
     bool is_neox = true;
     int layer_idx = 0;

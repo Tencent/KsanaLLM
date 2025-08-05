@@ -50,17 +50,17 @@ class GPTDecoderLayer {
  private:
   int layer_idx_;
   std::shared_ptr<TpCommunicator<T>> tp_comm_;
-  std::shared_ptr<Layernorm<T>> input_layernorms_;
-  std::shared_ptr<Layernorm<T>> post_attention_layernorms_;
-  std::shared_ptr<Add<T>> adds_;
-  std::shared_ptr<Add<T>> attn_proj_bias_add_;
-  std::shared_ptr<Add<T>> mlp_gate_bias_add_;
-  std::shared_ptr<Add<T>> mlp_down_proj_bias_add_;
+  std::shared_ptr<Layernorm> input_layernorms_;
+  std::shared_ptr<Layernorm> post_attention_layernorms_;
+  std::shared_ptr<Add> adds_;
+  std::shared_ptr<Add> attn_proj_bias_add_;
+  std::shared_ptr<Add> mlp_gate_bias_add_;
+  std::shared_ptr<Add> mlp_down_proj_bias_add_;
 
   // ffn related
-  std::shared_ptr<Linear<T>> mlp_gate_proj_;
-  std::shared_ptr<Linear<T>> mlp_down_proj_;
-  std::shared_ptr<Activation<T>> activation_layer_;
+  std::shared_ptr<Linear> mlp_gate_proj_;
+  std::shared_ptr<Linear> mlp_down_proj_;
+  std::shared_ptr<Activation> activation_layer_;
 
   // buffer
   TensorBuffer* mlp_temp_buffer_;
@@ -68,7 +68,7 @@ class GPTDecoderLayer {
   // attention
   std::shared_ptr<CommonAttention<T>> attentions_;
   Tensor qkv_bias_;
-  std::shared_ptr<Linear<T>> attn_qkv_projs_;
+  std::shared_ptr<Linear> attn_qkv_projs_;
 };
 
 template <typename T>
@@ -82,12 +82,12 @@ class Gpt : public ModelInterface<T> {
 
  private:
   std::map<int, std::shared_ptr<GPTDecoderLayer<T>>> decoder_layers_;
-  std::shared_ptr<Activation<T>> activation_layer_;
+  std::shared_ptr<Activation> activation_layer_;
   TensorBuffer* mlp_temp_buffer_;
 };
 
 template <typename T>
-class GptModel : public CommonModel<T> {
+class GptModel : public CommonModel {
  public:
   GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
            std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight);
@@ -102,8 +102,8 @@ class GptModel : public CommonModel<T> {
   void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
 
  protected:
-  using CommonModel<T>::GetHiddenUnitBuffer;
-  using CommonModel<T>::SetHiddenUnitBuffer;
+  using CommonModel::GetHiddenUnitBuffer;
+  using CommonModel::SetHiddenUnitBuffer;
 
  private:
   ModelConfig model_config_;

@@ -11,11 +11,11 @@ namespace ksana_llm {
 template <typename T>
 ChatglmModel<T>::ChatglmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                               std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
   model_run_config.layernorm_position = LayerNormPosition::PRE_NORM;
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>

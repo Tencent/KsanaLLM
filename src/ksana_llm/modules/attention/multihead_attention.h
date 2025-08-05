@@ -33,11 +33,11 @@ class MultiHeadAttention {
  private:
   std::shared_ptr<CommonAttention<T>> attentions_;
 
-  std::shared_ptr<Add<T>> adds_;
+  std::shared_ptr<Add> adds_;
 
   bool add_qkv_bias_;
   Tensor qkv_bais_;
-  std::shared_ptr<Linear<T>> attn_qkv_projs_;
+  std::shared_ptr<Linear> attn_qkv_projs_;
 };
 
 }  // namespace ksana_llm

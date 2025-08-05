@@ -35,31 +35,31 @@ DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, La
 
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  pre_attention_add_norm_ = std::make_shared<AddNorm<T>>(
+  pre_attention_add_norm_ = std::make_shared<AddNorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
-  input_layernorm_ = std::make_shared<Layernorm<T>>(
+  input_layernorm_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
-  add_ = std::make_shared<Add<T>>(creation_context);
+  add_ = std::make_shared<Add>(creation_context);
 
   post_attention_add_norm_ =
-      std::make_shared<AddNorm<T>>(layer_prefix + ".post_attention_layernorm.weight",
-                                   model_creation_config.layernorm_config.layernorm_eps, creation_context);
+      std::make_shared<AddNorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                model_creation_config.layernorm_config.layernorm_eps, creation_context);
 
   if (is_moe) {
-    shared_mlp_ = std::make_shared<TwoLayeredFFN<T>>(layer_idx, creation_context, model_creation_config,
-                                                     ".mlp.shared_expert.{}.weight");
-    expert_gate_ = std::make_shared<Linear<T>>(layer_prefix + ".mlp.gate.weight", creation_context,
-                                               model_creation_config.attn_config.model_config.quant_config.backend);
+    shared_mlp_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
+                                                  ".mlp.shared_expert.{}.weight");
+    expert_gate_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
+                                            model_creation_config.attn_config.model_config.quant_config.backend);
     if (model_creation_config.attn_config.model_config.moe_config.use_e_score_correction_bias) {
-      moe_ = std::make_shared<MoE<T>>(
+      moe_ = std::make_shared<MoE>(
           layer_prefix + ".mlp.experts.up_gate_proj.weight", layer_prefix + ".mlp.experts.down_proj.weight",
           layer_prefix + ".mlp.gate.e_score_correction_bias", creation_context, moe_scale_norm_mode);
     } else {
-      moe_ = std::make_shared<MoE<T>>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
-                                      layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
-                                      moe_scale_norm_mode);
+      moe_ =
+          std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+                                layer_prefix + ".mlp.experts.down_proj.weight", creation_context, moe_scale_norm_mode);
     }
     // Expert parallel.
     ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer<T>>();
@@ -69,7 +69,7 @@ DeepSeekV3DecoderLayer<T>::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, La
       KLLM_LOG_INFO << "Create ExpertParallelDataTransfer object( ep_data_transfer_ ) succeed ";
 
   } else {
-    mlp_ = std::make_shared<TwoLayeredFFN<T>>(layer_idx, creation_context, model_creation_config);
+    mlp_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   }
 
   // mla should be init after linear, because mla will reuse workspace buffer which is created by linear layers
@@ -293,24 +293,22 @@ template <typename T>
 DeepSeekV3MtpLayer<T>::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,
                                           ModelCreationConfig& model_creation_config,
                                           std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer) {
-  enorm_ =
-      std::make_shared<Layernorm<T>>(fmt::format("model.layers.{}.enorm.weight", layer_idx),
-                                     model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
-  hnorm_ =
-      std::make_shared<Layernorm<T>>(fmt::format("model.layers.{}.hnorm.weight", layer_idx),
-                                     model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+  enorm_ = std::make_shared<Layernorm>(fmt::format("model.layers.{}.enorm.weight", layer_idx),
+                                       model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+  hnorm_ = std::make_shared<Layernorm>(fmt::format("model.layers.{}.hnorm.weight", layer_idx),
+                                       model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
 
   concat_layer_ = std::make_shared<ConcatLayer<T>>();
   concat_layer_->Init({size_t{1}}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
-  gather_layer_ = std::make_shared<AssembleTokensHiddenLayer<T>>();
+  gather_layer_ = std::make_shared<AssembleTokensHiddenLayer>();
   gather_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
-  emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
+  emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   emb_lookup_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 
-  eh_proj_ = std::make_shared<Linear<T>>(fmt::format("model.layers.{}.eh_proj.weight", layer_idx), creation_context,
-                                         model_creation_config.attn_config.model_config.quant_config.backend);
+  eh_proj_ = std::make_shared<Linear>(fmt::format("model.layers.{}.eh_proj.weight", layer_idx), creation_context,
+                                      model_creation_config.attn_config.model_config.quant_config.backend);
 
   decoder_layer_ = decoder_layer;
 
@@ -362,18 +360,18 @@ template <typename T>
 DeepSeekV3Model<T>::DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                     const int rank, std::shared_ptr<Context> context,
                                     std::shared_ptr<BaseWeight> base_weight)
-    : CommonModel<T>(model_config, runtime_config, rank, context),
+    : CommonModel(model_config, runtime_config, rank, context),
       first_k_dense_replace_(model_config.moe_config.first_k_dense_replace) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
 
-  CommonModel<T>::InitRunConfig(model_run_config, base_weight);
+  CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
 template <typename T>
 Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext& creation_context,
                                         ModelCreationConfig& model_creation_config) {
-  MultiHeadLatentAttention<T>::CreateBuffers(CommonModel<T>::GetBufferManager(), model_creation_config.attn_config,
+  MultiHeadLatentAttention<T>::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                              creation_context.runtime_config, mla_buffers_);
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
   const size_t max_token_num = creation_context.runtime_config.max_step_token_num;
@@ -390,7 +388,7 @@ Status DeepSeekV3Model<T>::CreateLayers(LayerCreationContext& creation_context,
                                   model_creation_config.attn_config.model_config.moe_config.moe_inter_size,
                                   model_creation_config.attn_config.model_config.moe_config.num_shared_experts);
   }
-  moe_buffer_ = CommonModel<T>::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
+  moe_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
 
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; ++layer_idx) {

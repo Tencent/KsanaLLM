@@ -7,9 +7,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AddNormLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                             std::shared_ptr<Context> context, int rank) {
+Status AddNormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                          std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
@@ -17,8 +16,12 @@ Status AddNormLayer<T>::Init(const std::vector<std::any>& parameters, const Runt
   return Status();
 }
 
+Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status AddNormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddNormLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   if (input_tensors[0].GetPtr<void>() != output_tensors[0].GetPtr<void>()) {
     KLLM_THROW("AddNormLayer input[0] and output[0] tensors must be the same because it is an inplace operation.");
   }
@@ -36,9 +39,5 @@ Status AddNormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::v
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class AddNormLayer<float>;
-template class AddNormLayer<half>;
-template class AddNormLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

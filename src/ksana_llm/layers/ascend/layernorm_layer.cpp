@@ -13,9 +13,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status LayernormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   int parameter_index = 0;
   context_ = context;
   rank_ = rank;
@@ -30,8 +29,7 @@ Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
-template <typename T>
-Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   void* lm_input_tensor_buf_ptr = input_tensors[0].GetPtr<void>();
   void* lm_weight_tensor_buf_ptr = input_tensors[1].GetPtr<void>();
   void* lm_output_tensor_buf_ptr = output_tensors[0].GetPtr<void>();
@@ -49,8 +47,5 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   atb_op_executor_.Run(reinterpret_cast<atb::Context*>(GetRuntimeContext(rank_)), GetWorkSpaceFunc());
   return Status();
 }
-template class LayernormLayer<float>;
-template class LayernormLayer<float16>;
-template class LayernormLayer<bfloat16>;
 
 }  // namespace ksana_llm

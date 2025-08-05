@@ -27,9 +27,8 @@ void RecordRequestSchedEventWithFContext(ForwardingContext& forwarding_context, 
                            forwarding_context.GetModelInput()->attn_dp_group_id_, type, phase);
 }
 
-template <typename T>
-CommonModel<T>::CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                            std::shared_ptr<Context> context) {
+CommonModel::CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                         std::shared_ptr<Context> context) {
   model_config_ = model_config;
   runtime_config_ = runtime_config;
   context_ = context;
@@ -40,11 +39,9 @@ CommonModel<T>::CommonModel(const ModelConfig& model_config, const RuntimeConfig
                  << ", is_chief:" << context_->IsChief();
 }
 
-template <typename T>
-CommonModel<T>::~CommonModel() {}
+CommonModel::~CommonModel() {}
 
-template <typename T>
-void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
+void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   SetDevice(rank_);
 
   prefix_caching_enabled_ = runtime_config_.enable_prefix_caching;
@@ -106,29 +103,29 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   layer_creation_context_.Init(base_weight, context_, rank_, pipeline_config_, model_config_, runtime_config_,
                                GetBufferManager());
 
-  emb_lookup_layer_ = std::make_shared<EmbLookupLayer<T>>();
+  emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
     Tensor position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
-    emb_lookup_layer_->Init({static_cast<T>(model_run_config_.emb_scale), position_weight.GetPtr<void>()},
-                            runtime_config_, context_, rank_);
+    emb_lookup_layer_->Init({model_run_config_.emb_scale, position_weight.GetPtr<void>()}, runtime_config_, context_,
+                            rank_);
   } else {
     emb_lookup_layer_->Init({}, runtime_config_, context_, rank_);
   }
 
-  cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer<T>>();
+  cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer>();
   cpu_emb_lookup_layer_->Init({}, runtime_config_, context_, rank_);
 
-  assemble_tokens_hidden_layer_ = std::make_shared<AssembleTokensHiddenLayer<T>>();
+  assemble_tokens_hidden_layer_ = std::make_shared<AssembleTokensHiddenLayer>();
   assemble_tokens_hidden_layer_->Init({}, runtime_config_, context_, rank_);
 
-  cast_layer_ = std::make_shared<CastLayer<T>>();
+  cast_layer_ = std::make_shared<CastLayer>();
   cast_layer_->Init({}, runtime_config_, context_, rank_);
 
-  input_refit_layer_ = std::make_shared<InputRefitLayer<T>>();
+  input_refit_layer_ = std::make_shared<InputRefitLayer>();
   input_refit_layer_->Init({}, runtime_config_, context_, rank_);
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
-  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer<T>>();
+  set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layer_->Init({}, runtime_config_, context_, rank_);
 #endif
 
@@ -163,11 +160,11 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
   CreateLayers(layer_creation_context_, model_creation_config);
 
   if (context_->IsChief()) {
-    lm_head_ = std::make_shared<Linear<T>>("lm_head.weight", layer_creation_context_,
-                                           model_creation_config.attn_config.model_config.quant_config.backend);
+    lm_head_ = std::make_shared<Linear>("lm_head.weight", layer_creation_context_,
+                                        model_creation_config.attn_config.model_config.quant_config.backend);
     if (model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM) {
       lm_head_prenorm_ =
-          std::make_shared<Layernorm<T>>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_);
+          std::make_shared<Layernorm>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_);
     }
   }
 
@@ -179,16 +176,14 @@ void CommonModel<T>::InitRunConfig(const ModelRunConfig& model_run_config, std::
                 << "MB, free_device_mem_after_init=" << free_device_mem_after_init / (1024 * 1024) << "MB";
 }
 
-template <typename T>
-float* CommonModel<T>::GetLogitsPtr(size_t multi_batch_id) {
+float* CommonModel::GetLogitsPtr(size_t multi_batch_id) {
   SetDevice(rank_);
   ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
   return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>();
 }
 
-template <typename T>
-Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
-                                         ForwardingContext& forwarding_context) {
+Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+                                      ForwardingContext& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
   memcpy(input_tokens_ptr, forwarding_context.GetModelInput()->input_ids_cpu.data(),
          forwarding_context.GetModelInput()->input_ids_cpu.size() * sizeof(int));
@@ -199,8 +194,7 @@ Status CommonModel<T>::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<F
   return Status();
 }
 
-template <typename T>
-Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context) {
+Status CommonModel::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context) {
   // Wait the computation of input_ids.
   StreamWaitEvent(context_->GetComputeStreams()[rank_], forwarding_context.GetModelInput()->input_ids_event);
   if (model_run_config_.emb_lookup_use_rotary_embedding_pos) {
@@ -236,9 +230,7 @@ Status CommonModel<T>::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingCon
   return Status();
 }
 
-template <typename T>
-bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output,
-                                    const std::string& stage) {
+bool CommonModel::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage) {
   bool ret = true;
   int req_offset = 0;
   for (ForwardRequest& req : forward_reqs) {
@@ -300,8 +292,7 @@ bool CommonModel<T>::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, T
   return ret;
 }
 
-template <typename T>
-std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext& forwarding_context) {
+std::vector<Tensor>& CommonModel::GetHiddenUnitBufferRef(ForwardingContext& forwarding_context) {
   if (context_->IsStandalone()) {
     return model_buffers_.local_residual_buffer_tensors_;
   }
@@ -341,8 +332,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBufferRef(ForwardingContext& f
 #endif
 }
 
-template <typename T>
-std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext& forwarding_context, bool do_recv) {
+std::vector<Tensor>& CommonModel::GetHiddenUnitBuffer(ForwardingContext& forwarding_context, bool do_recv) {
   if (do_recv) {
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::Begin);
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
@@ -363,8 +353,7 @@ std::vector<Tensor>& CommonModel<T>::GetHiddenUnitBuffer(ForwardingContext& forw
   }
 }
 
-template <typename T>
-Status CommonModel<T>::AllocResources(size_t multi_batch_id) {
+Status CommonModel::AllocResources(size_t multi_batch_id) {
   std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
 
   // Check if this multi_batch_id already has an allocated context
@@ -397,8 +386,7 @@ Status CommonModel<T>::AllocResources(size_t multi_batch_id) {
   return Status(RET_RUNTIME_FAILED, "No available ForwardingContext");
 }
 
-template <typename T>
-Status CommonModel<T>::FreeResources(size_t multi_batch_id) {
+Status CommonModel::FreeResources(size_t multi_batch_id) {
   std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
 
   // Check if this multi_batch_id has an allocated context
@@ -413,8 +401,7 @@ Status CommonModel<T>::FreeResources(size_t multi_batch_id) {
   return Status();
 }
 
-template <typename T>
-void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
+void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   if (forwarding_context.IsForwardingLayers()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "ForwardingLayers", RequestEventPhase::End);
   }
@@ -431,8 +418,7 @@ void CommonModel<T>::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, F
   }
 }
 
-template <typename T>
-ForwardingContext* CommonModel<T>::GetForwardingContext(size_t multi_batch_id) {
+ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
   {
     std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
     auto it = schedule_to_context_map_.find(multi_batch_id);
@@ -444,9 +430,8 @@ ForwardingContext* CommonModel<T>::GetForwardingContext(size_t multi_batch_id) {
   }
 }
 
-template <typename T>
-Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                               std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
+Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                            std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
   // Get the forwarding context for this multi_batch_id
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
@@ -491,10 +476,9 @@ Status CommonModel<T>::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm:
   return Status();
 }
 
-template <typename T>
-Status CommonModel<T>::LookupEmbedding(ForwardingContext& forwarding_context,
-                                       std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                       std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+Status CommonModel::LookupEmbedding(ForwardingContext& forwarding_context,
+                                    std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                                    std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   KLLM_LOG_DEBUG << "start lookup embedding multi_batch_id=" << forwarding_context.GetMultiBatchId()
                  << ", rank=" << rank_ << "";
   PROFILE_EVENT_SCOPE(CommonModel_LookupEmbedding, "CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
@@ -529,10 +513,8 @@ Status CommonModel<T>::LookupEmbedding(ForwardingContext& forwarding_context,
   return Status();
 }
 
-template <typename T>
-Status CommonModel<T>::LmHead(ForwardingContext& forwarding_context,
-                              std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                              std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
+Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                           std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(
       forwarding_context, !context_->IsStandalone() && context_->IsChief() && run_mode == RunMode::kMain);
@@ -620,9 +602,5 @@ Status CommonModel<T>::LmHead(ForwardingContext& forwarding_context,
   input_refit_layer_->Clear();
   return Status();
 }
-
-template class CommonModel<float>;
-template class CommonModel<float16>;
-template class CommonModel<bfloat16>;
 
 }  // namespace ksana_llm

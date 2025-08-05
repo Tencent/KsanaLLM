@@ -9,9 +9,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Bmm<T>::Bmm(const std::string& weight_name, const LayerCreationContext& creation_context,
-            const GroupQuantBackend& group_quant_backend) {
+Bmm::Bmm(const std::string& weight_name, const LayerCreationContext& creation_context,
+         const GroupQuantBackend& group_quant_backend) {
   bmm_layer_ = creation_context.matmul_layer_factory->AutoCreateLayer(
       creation_context.base_weight, "", TYPE_VOID, creation_context.input_type, creation_context.output_type,
       group_quant_backend, {});
@@ -25,8 +24,7 @@ Bmm<T>::Bmm(const std::string& weight_name, const LayerCreationContext& creation
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
 }
 
-template <typename T>
-Status Bmm<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Bmm::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // weight shape = [heads_num_per_tp:16, qk_nope_head_dim:128, kv_lora_rank:512]
   auto heads_num_per_tp = weight_.shape[0];
   auto qk_nope_head_dim = weight_.shape[1];
@@ -57,9 +55,5 @@ Status Bmm<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Ten
              Vector2Str(std::vector<size_t>(weight_.shape)) + " of bmm that have not been implemented yet.");
   return Status();
 }
-
-template class Bmm<float>;
-template class Bmm<float16>;
-template class Bmm<bfloat16>;
 
 }  // namespace ksana_llm

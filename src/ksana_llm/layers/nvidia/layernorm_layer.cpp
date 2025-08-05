@@ -7,9 +7,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status LayernormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
@@ -17,8 +16,12 @@ Status LayernormLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
+Status LayernormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status LayernormLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // input_tensors:
   //   0: input [token_num, hidden_size]
   //   1: weight [hidden_size]
@@ -34,9 +37,5 @@ Status LayernormLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std:
   output_tensors[0].dtype = input_tensors[0].dtype;
   return Status();
 }
-
-template class LayernormLayer<float>;
-template class LayernormLayer<half>;
-template class LayernormLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

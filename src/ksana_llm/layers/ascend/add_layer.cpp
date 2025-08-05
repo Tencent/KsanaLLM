@@ -11,9 +11,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AddLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                         std::shared_ptr<Context> context, int rank) {
+Status AddLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
 
   atb::infer::ElewiseParam elewise_param;
@@ -22,8 +21,7 @@ Status AddLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-template <typename T>
-Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status AddLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   const auto& a = input_tensors[0];
   const auto& b = input_tensors[1];
   auto& output = output_tensors[0];
@@ -51,7 +49,4 @@ Status AddLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 
   return Status();
 }
-template class AddLayer<float>;
-template class AddLayer<float16>;
-template class AddLayer<bfloat16>;
 }  // namespace ksana_llm

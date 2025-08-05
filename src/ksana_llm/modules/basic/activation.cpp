@@ -8,33 +8,29 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Activation<T>::Activation(const std::string& activation_type, const LayerCreationContext& creation_context) {
-  if (activation_type == "gelu") {
-    activation_layer_ = std::make_shared<ActivationLayer<ActivationType::Gelu, T>>();
-  } else if (activation_type == "relu") {
-    activation_layer_ = std::make_shared<ActivationLayer<ActivationType::Relu, T>>();
-  } else if (activation_type == "geglu") {
-    activation_layer_ = std::make_shared<ActivationLayer<ActivationType::Geglu, T>>();
-  } else if (activation_type == "swiglu") {
-    activation_layer_ = std::make_shared<ActivationLayer<ActivationType::Swiglu, T>>();
+Activation::Activation(const std::string& activation_type_str, const LayerCreationContext& creation_context) {
+  ActivationType activation_type;
+  if (activation_type_str == "gelu") {
+    activation_type = ActivationType::Gelu;
+  } else if (activation_type_str == "relu") {
+    activation_type = ActivationType::Relu;
+  } else if (activation_type_str == "geglu") {
+    activation_type = ActivationType::Geglu;
+  } else if (activation_type_str == "swiglu") {
+    activation_type = ActivationType::Swiglu;
   } else {
-    KLLM_THROW(fmt::format("Unsupport activation function: {}", activation_type));
+    KLLM_THROW(fmt::format("Unsupport activation function: {}", activation_type_str));
   }
-  activation_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
+  activation_layer_ = std::make_shared<ActivationLayer>();
+  activation_layer_->Init({activation_type}, creation_context.runtime_config, creation_context.context,
+                          creation_context.rank);
 }
 
-template <typename T>
-Activation<T>::~Activation() {}
+Activation::~Activation() {}
 
-template <typename T>
-Status Activation<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Activation::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(activation_layer_->Forward(input_tensors, output_tensors));
   return Status();
 }
-
-template class Activation<float>;
-template class Activation<float16>;
-template class Activation<bfloat16>;
 
 }  // namespace ksana_llm
