@@ -128,28 +128,23 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
           weight_tensor.dtype == DataType::TYPE_BF16)) {
       continue;
     }
+
+    // NOTE: `e_score_correction_bias` need to cast into fp32 for better performance
+    if (weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, from {} to {}\n", dev_rank, weight_name,
+                                    weight_tensor.dtype, TYPE_FP32);
+      CastDeviceTensorType(weight_tensor, TYPE_FP32, dev_rank);
+      continue;
+    }
     if (weight_tensor.dtype != new_deepseek_v3_config->weight_data_type) {
-      DataType target_dtype = new_deepseek_v3_config->weight_data_type;
-      if (weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
-        // NOTE: For compatible with old model loader, may remove this in the future
-        if (new_deepseek_v3_config->ContainGptqWeights()) {
-          CastDeviceTensorType(weight_tensor, TYPE_BF16, dev_rank);
-          CastDeviceTensorType(weight_tensor, TYPE_FP32, dev_rank);
-        } else {
-          CastDeviceTensorType(weight_tensor, TYPE_FP32, dev_rank);
-        }
-        target_dtype = TYPE_FP32;
-      } else {
-        CastDeviceTensorType(weight_tensor, new_deepseek_v3_config->weight_data_type, dev_rank);
-      }
-      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, ptr {}, from {} to {}, stream {}\n", dev_rank,
-                                    weight_name, weight_tensor.GetPtr<void>(), weight_tensor.dtype, target_dtype,
-                                    reinterpret_cast<void*>(context_->GetMemoryManageStreams()[dev_rank].Get()));
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, ptr {}, from {} to {}\n", dev_rank, weight_name,
+                                    weight_tensor.dtype, new_deepseek_v3_config->weight_data_type);
+      CastDeviceTensorType(weight_tensor, new_deepseek_v3_config->weight_data_type, dev_rank);
     }
   }
 
   if (new_deepseek_v3_config->ContainGptqWeights()) {
-    KLLM_LOG_DEBUG << "Implements gptq post process here";
+    KLLM_LOG_DEBUG << "Start gptq post process";
     weight_impl_->PostProcessInt4QuantWeights(dev_weights_map, dev_rank, new_deepseek_v3_config);
   }
   return Status();
