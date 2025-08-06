@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -29,7 +30,7 @@ enum Level {
   SCHEDULER = 9
 };
 
-extern std::vector<std::string> g_categories;
+extern std::vector<std::string> g_detail_levels;
 
 
 // Get log level from environment, this function called only once.
@@ -38,14 +39,12 @@ static std::vector<std::string> GetLogLevels() {
   const char* env_log_level = std::getenv("KLLM_LOG_LEVEL");
   std::string log_level_str = env_log_level ? env_log_level : default_log_level;
 
-  // Split the categories by comma (',') and store in a vector
-  std::stringstream ss(log_level_str);  // Create a stringstream from the categories string
-  std::string category;
-
-  // Split the string at each comma
-  std::vector<std::string> categories;
-  while (std::getline(ss, category, ',')) {
-    categories.push_back(category);
+  // Split the input levels by comma (',') and store in a vector
+  std::stringstream ss(log_level_str);
+  std::vector<std::string> input_levels;
+  std::string str;
+  while (std::getline(ss, str, ',')) {
+    input_levels.push_back(str);
   }
 
   const std::unordered_map<std::string, Level> log_name_to_level = {{"DEBUG", Level::DEBUG},
@@ -58,19 +57,19 @@ static std::vector<std::string> GetLogLevels() {
                                                                     {"MOE", Level::MOE},
                                                                     {"MODEL", Level::MODEL},
                                                                     {"SCHEDULER", Level::SCHEDULER}};
-  std::vector<std::string> levels;
-  for (auto& category : categories) {
-    auto it = log_name_to_level.find(category);
+  std::vector<std::string> valid_levels;
+  for (auto& lvl : input_levels) {
+    auto it = log_name_to_level.find(lvl);
     if (it != log_name_to_level.end()) {
-      levels.push_back(it->first);
+      valid_levels.push_back(it->first);
     } else {
-      std::cerr << "Warning: Unkown log category " << category << std::endl;
+      std::cerr << "Warning: Unkown log level " << lvl << ", skip this level." << std::endl;
     }
   }
-  if (levels.empty()) {
-    levels.push_back("INFO");
+  if (valid_levels.empty()) {
+    valid_levels.push_back("INFO");
   }
-  return levels;
+  return valid_levels;
 }
 
 // Get log filename from environment, called once.
@@ -80,23 +79,37 @@ static std::string GetLogFile() {
   return env_log_file ? env_log_file : default_log_file;
 }
 
-void category_log_handler(void* user_data, const loguru::Message& message);
+void details_log_handler(void* user_data, const loguru::Message& message);
 
 // Init logrun instance.
+// base log level: INFO, DEBUG, WARNING, ERROR, FATAL
+// details log level: ATTENTION, COMMUNICATION, MOE, MODEL, SCHEDULER
+//   if debug is set, all details category will be set
 inline void InitLoguru(bool force = false) {
-  const std::vector<std::string> log_levels = GetLogLevels();
+  const std::vector<std::string> input_log_levels = GetLogLevels();
   loguru::Verbosity verbosity = loguru::Verbosity_INVALID;
-  // check if have debug category firstly
-  for (const auto& level : log_levels) {
-    if (level == "DEBUG" || level == "ATTENTION" || level == "COMMUNICATION" ||
-      level == "MOE" || level == "MODEL" || level == "SCHEDULER") {
+  // 1. check if have debug
+  bool has_debug = std::any_of(input_log_levels.begin(), input_log_levels.end(), [](const std::string& str) {
+    return str == "DEBUG";
+  });
+  if (has_debug) {
+    verbosity = loguru::Verbosity_MAX;
+  }
+
+  // 2. check if have details category
+  const std::vector<std::string> all_details_levels = {"ATTENTION", "COMMUNICATION", "MOE", "MODEL", "SCHEDULER"};
+  for (const auto& level : input_log_levels) {
+    bool has_details = std::any_of(all_details_levels.begin(), all_details_levels.end(),
+                                   [&level](const std::string& str) { return level == str; });
+    if (has_details) {
       verbosity = loguru::Verbosity_MAX;
       break;
     }
   }
 
+  // 3. check if have base
   if (verbosity != loguru::Verbosity_MAX) {
-    for (const auto& level : log_levels) {
+    for (const auto& level : input_log_levels) {
       if (level == "INFO") {
         verbosity = loguru::Verbosity_INFO;
       } else if (level == "WARNING") {
@@ -113,11 +126,19 @@ inline void InitLoguru(bool force = false) {
   static bool kIsLoggerInitialized = false;
   if (!kIsLoggerInitialized || force) {
     if (verbosity == loguru::Verbosity_MAX) {
-      g_categories.clear();
-      for (auto& level : log_levels) {
-        g_categories.push_back(level);
+      g_detail_levels.clear();
+      if (has_debug) {
+        g_detail_levels.push_back("DEBUG");
+        for (auto& level : all_details_levels) {
+          g_detail_levels.push_back(level);
+        }
+      } else {
+        for (auto& level : input_log_levels) {
+          g_detail_levels.push_back(level);
+        }
       }
-      loguru::add_callback("CATEGORY", category_log_handler, nullptr, verbosity);
+      loguru::add_file(GetLogFile().c_str(), loguru::Append, loguru::Verbosity_INFO);
+      loguru::add_callback("CATEGORY", details_log_handler, nullptr, verbosity);
     } else {
       loguru::add_file(GetLogFile().c_str(), loguru::Append, verbosity);
     }

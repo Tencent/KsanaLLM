@@ -102,6 +102,13 @@ TEST_F(LoggerTest, TestLoggingDEBUGLevel) {
   setenv("KLLM_LOG_LEVEL", "DEBUG", 1);
   ksana_llm::InitLoguru(true);
   KLLM_LOG_DEBUG << "This is a DEBUG level log";
+  KLLM_LOG_INFO << "This is an INFO level log";
+
+  KLLM_LOG_MOE << "This is a MOE level log";
+  KLLM_LOG_MODEL << "This is a MODEL level log";
+  KLLM_LOG_SCHEDULER << "This is an SCHEDULER level log";
+  KLLM_LOG_ATTENTION << "This is an ATTENTION level log";
+  KLLM_LOG_COMMUNICATION << "This is an COMMUNICATION level log";
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -109,6 +116,18 @@ TEST_F(LoggerTest, TestLoggingDEBUGLevel) {
   std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   EXPECT_TRUE(log_contents.find("DEBUG") != std::string::npos);
   EXPECT_TRUE(log_contents.find("This is a DEBUG level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("INFO") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an INFO level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("MOE") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is a MOE level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("MODEL") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is a MODEL level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("SCHEDULER") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an SCHEDULER level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("ATTENTION") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an ATTENTION level log") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("COMMUNICATION") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an COMMUNICATION level log") != std::string::npos);
 }
 
 TEST_F(LoggerTest, TestLoggingMultiLevels) {

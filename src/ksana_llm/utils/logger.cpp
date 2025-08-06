@@ -6,14 +6,13 @@
 
 namespace ksana_llm {
 
-std::vector<std::string> g_categories;
+std::vector<std::string> g_detail_levels;
 
-// Function definition moved here
-void category_log_handler(void* user_data, const loguru::Message& message) {
+void details_log_handler(void* user_data, const loguru::Message& message) {
   const std::string output_file = GetLogFile();
 
-  for (const auto& category : g_categories) {
-    if (message.message && std::string_view(message.message).find(category) != std::string_view::npos) {
+  for (const auto& log_level : g_detail_levels) {
+    if (message.message && std::string_view(message.message).find(log_level) != std::string_view::npos) {
       std::ofstream out(output_file, std::ios::app);  // Open file in append mode
       if (out.is_open()) {
         out << message.preamble
