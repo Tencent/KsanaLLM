@@ -37,17 +37,14 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   KLLM_LOG_DEBUG << fmt::format("inter_size_per_tp = {}", inter_size_per_tp);
 
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
-  size_t max_dim = std::max(std::max((head_num_per_tp + 2 * num_kv_heads_per_tp) * size_per_head, hidden_units),
-                            inter_size_per_tp * 2);
+  const size_t qkv_head_num = model_config.use_mla ? head_num_per_tp : head_num_per_tp + 2 * num_kv_heads_per_tp;
+  size_t max_dim = std::max(std::max(qkv_head_num * size_per_head, hidden_units), inter_size_per_tp * 2);
 
   if (model_config.use_mla) {
     size_t qk_nope_head_dim = model_config.mla_config.qk_nope_head_dim;
     size_t qk_rope_head_dim = model_config.mla_config.qk_rope_head_dim;
     size_t v_head_dim = model_config.mla_config.v_head_dim;
     size_t kv_lora_rank = model_config.mla_config.kv_lora_rank;
-    KLLM_LOG_DEBUG << fmt::format(
-        "head_num_per_tp = {}, qk_nope_head_dim = {}, qk_rope_head_dim = {}, v_head_dim = {}, kv_lora_rank = {}",
-        head_num_per_tp, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, kv_lora_rank);
 
     max_dim = std::max(std::max(max_dim, head_num_per_tp * v_head_dim), head_num_per_tp * qk_nope_head_dim);
 
@@ -60,6 +57,11 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
     size_t mla_page_attn_size = kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1);
     mla_page_attn_size = std::max(mla_page_attn_size, head_num_per_tp * mla_flash_attn_size);
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
+    KLLM_LOG_DEBUG << fmt::format(
+        "head_num_per_tp = {}, qk_nope_head_dim = {}, qk_rope_head_dim = {}, v_head_dim = {}, kv_lora_rank = {}, "
+        "mla_page_attn_size = {}, vocab_size_pad = {}, max_dim = {}, mla_flash_attn_size = {}",
+        head_num_per_tp, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, kv_lora_rank, mla_page_attn_size,
+        vocab_size_pad, max_dim, mla_flash_attn_size);
   }
 
   KLLM_LOG_DEBUG << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
@@ -85,7 +87,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   }
 
   if (use_mtp) {
-    buffers_shape_map["mtp_hidden_buffer_tensors"] = {residual_buffer_size};
+    buffers_shape_map["mtp_hidden_buffer_tensors"] = {token_num * model_config.hidden_units};
   }
 }
 
