@@ -11,7 +11,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class MixtralDecoderLayer {
  public:
   MixtralDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
@@ -26,15 +25,14 @@ class MixtralDecoderLayer {
   std::shared_ptr<Add> adds_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
-  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MultiHeadAttention> mha_;
   std::shared_ptr<MoE> moes_;
   std::shared_ptr<Linear> expert_gates_;
 };
 
-template <typename T>
-class Mixtral : public ModelInterface<T> {
+class Mixtral : public ModelInterface {
  public:
   Mixtral() {}
   ~Mixtral() = default;
@@ -44,10 +42,9 @@ class Mixtral : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<MixtralDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<MixtralDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class MixtralModel : public CommonModel {
  public:
   MixtralModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -63,7 +60,7 @@ class MixtralModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Mixtral<T> mixtral_;
+  Mixtral mixtral_;
 };
 
 }  // namespace ksana_llm

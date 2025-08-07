@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Qwen3MoeDecoderLayer {
  public:
   Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, LayerCreationContext& creation_context,
@@ -29,17 +28,16 @@ class Qwen3MoeDecoderLayer {
   std::shared_ptr<Add> adds_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
-  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MultiHeadAttention> mha_;
   std::shared_ptr<MoE> moes_;
   std::shared_ptr<Linear> expert_gates_;
 
   TensorBuffer* moe_buffer_;
 };
 
-template <typename T>
-class Qwen3Moe : public ModelInterface<T> {
+class Qwen3Moe : public ModelInterface {
  public:
   Qwen3Moe() {}
   ~Qwen3Moe() = default;
@@ -51,10 +49,9 @@ class Qwen3Moe : public ModelInterface<T> {
  private:
   TensorBuffer* moe_buffer_;
 
-  std::map<int, std::shared_ptr<Qwen3MoeDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<Qwen3MoeDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class Qwen3MoeModel : public CommonModel {
  public:
   Qwen3MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -70,7 +67,7 @@ class Qwen3MoeModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Qwen3Moe<T> qwen3moe_;
+  Qwen3Moe qwen3moe_;
 };
 
 }  // namespace ksana_llm

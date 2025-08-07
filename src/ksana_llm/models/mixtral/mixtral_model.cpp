@@ -6,15 +6,14 @@
 
 namespace ksana_llm {
 
-template <typename T>
-MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
-                                            ModelCreationConfig& model_creation_config)
+MixtralDecoderLayer::MixtralDecoderLayer(int layer_idx, LayerCreationContext& creation_context,
+                                         ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   // Common blocks
   adds_ = std::make_shared<Add>(creation_context);
-  tp_comm_ = std::make_shared<TpCommunicator<T>>();
+  tp_comm_ = std::make_shared<TpCommunicator>();
 
   input_layernorms_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
@@ -25,8 +24,8 @@ MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext&
   bool is_neox = true;
   bool add_qkv_bias = false;
   bool use_qk_norm = false;
-  mha_ = std::make_shared<MultiHeadAttention<T>>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
-                                                 model_creation_config);
+  mha_ = std::make_shared<MultiHeadAttention>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
+                                              model_creation_config);
 
   // MoE related blocks
   expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
@@ -36,9 +35,8 @@ MixtralDecoderLayer<T>::MixtralDecoderLayer(int layer_idx, LayerCreationContext&
                                 MoeScaleNormMode::RE_NORM);
 }
 
-template <typename T>
-Status MixtralDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                       ForwardingContext& forwarding_context) {
+Status MixtralDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
+                                    ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
   auto& gated_buffer_ = reduce_buffer_tensors;
@@ -76,25 +74,22 @@ Status MixtralDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, con
   return Status();
 }
 
-template <typename T>
-Status Mixtral<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
+Status Mixtral::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
   model_run_config.position_encoding = PositionEncoding::ROPE;
   model_run_config.layernorm_position = LayerNormPosition::PRE_NORM;
   return Status();
 }
 
-template <typename T>
-Status Mixtral<T>::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
+Status Mixtral::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
     decoder_layers_[layer_idx] =
-        std::make_shared<MixtralDecoderLayer<T>>(layer_idx, creation_context, model_creation_config);
+        std::make_shared<MixtralDecoderLayer>(layer_idx, creation_context, model_creation_config);
   }
   return Status();
 }
 
-template <typename T>
-Status Mixtral<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
+Status Mixtral::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -104,30 +99,23 @@ Status Mixtral<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingConte
   return Status();
 }
 
-template class Mixtral<float>;
-template class Mixtral<float16>;
-template class Mixtral<bfloat16>;
 
 /* **************************************
  * MixtralModel
  */
-template <typename T>
-MixtralModel<T>::MixtralModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+MixtralModel::MixtralModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   mixtral_.GetModelRunConfig(model_run_config, model_config);
   CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
-template <typename T>
-Status MixtralModel<T>::CreateLayers(LayerCreationContext& creation_context,
-                                     ModelCreationConfig& model_creation_config) {
+Status MixtralModel::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   return mixtral_.CreateLayers(creation_context, model_creation_config);
 }
 
-template <typename T>
-Status MixtralModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
+Status MixtralModel::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(mixtral_.Forward(residual_buffer, forwarding_context));
@@ -136,8 +124,5 @@ Status MixtralModel<T>::LayerForward(ForwardingContext& forwarding_context, cons
   return Status();
 }
 
-template class MixtralModel<float>;
-template class MixtralModel<float16>;
-template class MixtralModel<bfloat16>;
 
 }  // namespace ksana_llm

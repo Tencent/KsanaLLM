@@ -15,7 +15,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class ExpertParallelDataTransfer {
  public:
   ExpertParallelDataTransfer();

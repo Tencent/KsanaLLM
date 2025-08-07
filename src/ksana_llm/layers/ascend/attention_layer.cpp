@@ -8,9 +8,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status AttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   int parameter_index = 0;
   mm_quant_mode_ = std::any_cast<const QuantMode>(parameters[parameter_index++]);
@@ -59,9 +58,5 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   block_token_num_ = runtime_config.attn_backend_config.block_token_num;
   return Status();
 }
-
-template class AttentionLayer<float>;
-template class AttentionLayer<float16>;
-template class AttentionLayer<bfloat16>;
 
 }  // namespace ksana_llm

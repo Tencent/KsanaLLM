@@ -8,10 +8,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
-                                        const LayerCreationContext& creation_context,
-                                        const AttentionCreationConfig& attn_config)
+FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
+                                     const AttentionCreationConfig& attn_config)
     : context_(creation_context.context), rank_(creation_context.rank) {
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
@@ -19,8 +17,8 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
   uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
-  flash_mla_attention_layer_ = CreateAttentionLayer<T, FlashMlaAttentionLayer>(
-      creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
+  flash_mla_attention_layer_ = std::make_shared<FlashMlaAttentionLayer>();
+
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
   // we use push back to make it work.
@@ -36,7 +34,7 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
   attention_param.push_back(attn_config.size_per_head);
   attention_param.push_back(attn_config.stride_size);
   attention_param.push_back(attn_config.tensor_para_size);
-  attention_param.push_back(attn_config.data_type);
+  attention_param.push_back(attn_config.kv_cache_dtype);
   attention_param.push_back(attn_config.model_config.k_scales[layer_idx]);
   attention_param.push_back(attn_config.model_config.v_scales[layer_idx]);
   attention_param.push_back(attn_config.rotary_embedding);
@@ -77,15 +75,13 @@ FlashMlaAttention<T>::FlashMlaAttention(const size_t layer_idx, bool is_neox,
       creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
 }
 
-template <typename T>
-Status FlashMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                     std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& workspace_buffer,
-                                     const AttentionForwardContext& attn_ctx, Tensor& q_nope_tensor,
-                                     Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
-                                     Tensor& k_rope_buffer_tensor, Tensor& prefix_k_buffer_tensor,
-                                     Tensor& prefix_v_buffer_tensor, Tensor& prefix_kv_buffer_tensor,
-                                     Tensor& prefix_k_up_buffer_tensor, Tensor& prefix_v_up_buffer_tensor,
-                                     std::vector<Tensor>& output_tensors) {
+Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                  std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& workspace_buffer,
+                                  const AttentionForwardContext& attn_ctx, Tensor& q_nope_tensor,
+                                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+                                  Tensor& prefix_k_buffer_tensor, Tensor& prefix_v_buffer_tensor,
+                                  Tensor& prefix_kv_buffer_tensor, Tensor& prefix_k_up_buffer_tensor,
+                                  Tensor& prefix_v_up_buffer_tensor, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({hidden_buffer_tensors_0[0],
                                                            model_input->dp_input_offset_uint64_tensor,
                                                            model_input->flash_input.kv_list,
@@ -120,9 +116,4 @@ Status FlashMlaAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_
                                                           output_tensors));
   return Status();
 }
-
-template class FlashMlaAttention<float>;
-template class FlashMlaAttention<float16>;
-template class FlashMlaAttention<bfloat16>;
-
 }  // namespace ksana_llm

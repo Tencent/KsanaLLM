@@ -6,13 +6,12 @@
 
 namespace ksana_llm {
 
-template <typename T>
-CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,
-                                            LayerCreationContext& creation_context,
-                                            ModelCreationConfig& model_creation_config)
+CrossLayerAttention::CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,
+                                         LayerCreationContext& creation_context,
+                                         ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx), cla_share_factor_(cla_share_factor), cla_buffers_(cla_buffers) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
-
+  inter_data_size_ = GetTypeSize(creation_context.runtime_config.inter_data_type);
   // Attention related blocks
   if (cla_share_factor_ != 0 && (layer_idx % cla_share_factor_ != 0)) {
     attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_proj.weight", creation_context,
@@ -26,7 +25,7 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
   bool is_neox = true;
   bool use_qk_norm = true;
   attentions_ =
-      std::make_shared<CommonAttention<T>>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
+      std::make_shared<CommonAttention>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
@@ -40,16 +39,15 @@ CrossLayerAttention<T>::CrossLayerAttention(int layer_idx, int cla_share_factor,
     size_t tensor_para_size = creation_context.runtime_config.parallel_basic_config.tensor_parallel_size;
     int num_kv_heads_per_tp = model_config.num_key_value_heads / tensor_para_size;
     int head_num_per_tp = model_creation_config.attn_config.head_num_per_tp;
-    qkv_pitch_ = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head * sizeof(T);
-    q_pitch_ = head_num_per_tp * size_per_head * sizeof(T);
-    kv_pitch_ = num_kv_heads_per_tp * size_per_head * sizeof(T);
+    qkv_pitch_ = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head * inter_data_size_;
+    q_pitch_ = head_num_per_tp * size_per_head * inter_data_size_;
+    kv_pitch_ = num_kv_heads_per_tp * size_per_head * inter_data_size_;
   }
 }
 
-template <typename T>
-Status CrossLayerAttention<T>::QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                ForwardingContext& forwarding_context) {
+Status CrossLayerAttention::QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                             std::vector<Tensor>& hidden_buffer_tensors_1,
+                                             ForwardingContext& forwarding_context) {
   if (cla_share_factor_ == 0) {
     return Status();
   }
@@ -77,16 +75,15 @@ Status CrossLayerAttention<T>::QKVClaBufferCopy(std::vector<Tensor>& hidden_buff
     Memcpy2DAsync(hidden_tensor_1.GetPtr<void>() + q_pitch_ + kv_pitch_, qkv_pitch_, cla_v_tensor.GetPtr<void>(),
                   kv_pitch_, kv_pitch_, total_tokens, MEMCPY_DEVICE_TO_DEVICE,
                   forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
-    hidden_tensor_1.shape = {total_tokens, qkv_pitch_ / sizeof(T)};
+    hidden_tensor_1.shape = {total_tokens, qkv_pitch_ / inter_data_size_};
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
   return Status();
 }
 
-template <typename T>
-Status CrossLayerAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                       std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                       ForwardingContext& forwarding_context) {
+Status CrossLayerAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                    std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
+                                    ForwardingContext& forwarding_context) {
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);
@@ -107,9 +104,8 @@ Status CrossLayerAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensor
   return Status();
 }
 
-template <typename T>
-Status CrossLayerAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const RuntimeConfig& runtime_config,
-                                             const AttentionCreationConfig& attn_config, ClaBuffers& cla_buffers) {
+Status CrossLayerAttention::CreateBuffers(BufferManager* buffer_mgr, const RuntimeConfig& runtime_config,
+                                          const AttentionCreationConfig& attn_config, ClaBuffers& cla_buffers) {
   auto& model_config = attn_config.model_config;
   DataType weight_type = model_config.weight_data_type;
 
@@ -130,9 +126,5 @@ Status CrossLayerAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const Ru
 
   return Status();
 }
-
-template class CrossLayerAttention<float>;
-template class CrossLayerAttention<float16>;
-template class CrossLayerAttention<bfloat16>;
 
 }  // namespace ksana_llm

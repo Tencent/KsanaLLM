@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Qwen2MoeDecoderLayer {
  public:
   Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, TensorBuffer* share_gating_buffer,
@@ -33,9 +32,9 @@ class Qwen2MoeDecoderLayer {
   std::shared_ptr<Add> adds_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
-  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MultiHeadAttention> mha_;
   std::shared_ptr<MoE> moes_;
   std::shared_ptr<Linear> expert_gates_;
   std::shared_ptr<TwoLayeredFFN> shared_mlps_;
@@ -48,8 +47,7 @@ class Qwen2MoeDecoderLayer {
   TensorBuffer* share_gating_buffer_;
 };
 
-template <typename T>
-class Qwen2Moe : public ModelInterface<T> {
+class Qwen2Moe : public ModelInterface {
  public:
   Qwen2Moe() {}
   ~Qwen2Moe() = default;
@@ -62,10 +60,9 @@ class Qwen2Moe : public ModelInterface<T> {
   TensorBuffer* moe_buffer_;
   TensorBuffer* share_gating_buffer_;
 
-  std::map<int, std::shared_ptr<Qwen2MoeDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<Qwen2MoeDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class Qwen2MoeModel : public CommonModel {
  public:
   Qwen2MoeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -81,7 +78,7 @@ class Qwen2MoeModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Qwen2Moe<T> qwen2moe_;
+  Qwen2Moe qwen2moe_;
 };
 
 }  // namespace ksana_llm

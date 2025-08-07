@@ -135,9 +135,8 @@ class DeepSeekV3Test : public testing::Test {
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
     std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(/*rank*/ 0);
-    std::shared_ptr<DeepSeekV3Model<weight_data_type>> deepseek_v3 =
-        std::make_shared<DeepSeekV3Model<weight_data_type>>(model_config, runtime_config, device_id, context,
-                                                            deepseek_v3_weight);
+    std::shared_ptr<DeepSeekV3Model> deepseek_v3 =
+        std::make_shared<DeepSeekV3Model>(model_config, runtime_config, device_id, context, deepseek_v3_weight);
     deepseek_v3->AllocResources(multi_batch_id);
 
     // ContextDecode

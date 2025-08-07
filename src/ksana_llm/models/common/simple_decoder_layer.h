@@ -17,7 +17,7 @@ namespace ksana_llm {
  * is_neox, add_qkv_bias
  * layernorm_position = LayerNormPosition::PRE_NORM
  * */
-template <typename T>
+
 class SimpleDecoderLayer {
  public:
   SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias, LayerCreationContext& creation_context,
@@ -28,9 +28,9 @@ class SimpleDecoderLayer {
 
  private:
   int layer_idx_;
-  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MultiHeadAttention> mha_;
   std::shared_ptr<TwoLayeredFFN> mlps_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
   std::shared_ptr<Add> adds_;
 

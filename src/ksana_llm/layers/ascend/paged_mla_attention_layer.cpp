@@ -7,31 +7,15 @@
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
-                                                                 const RuntimeConfig& runtime_config,
-                                                                 std::shared_ptr<Context> context, int rank) {
-  return AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
+Status PagedMlaAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                    std::shared_ptr<Context> context, int rank) {
+  return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
-                                                                    std::vector<Tensor>& output_tensors) {
+Status PagedMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_THROW("PagedMlaAttentionLayer not implement in Ascend.");
   return Status();
 }
 
-using llm_kernels::utils::KVCacheType;
-template class PagedMlaAttentionLayer<float, float, KVCacheType::kAuto>;
-template class PagedMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedMlaAttentionLayer<float16, float16, KVCacheType::kAuto>;
-template class PagedMlaAttentionLayer<float16, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<float16, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedMlaAttentionLayer<bfloat16, bfloat16, KVCacheType::kAuto>;
-#if defined(ENABLE_FP8)
-template class PagedMlaAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
-#endif
 
 }  // namespace ksana_llm

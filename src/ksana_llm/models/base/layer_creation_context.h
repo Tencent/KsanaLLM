@@ -47,7 +47,7 @@ struct AttentionCreationConfig {
   bool use_qk_norm;
   size_t tensor_para_size;
   size_t data_para_size;
-  DataType data_type;
+  DataType kv_cache_dtype;  // kv cache data type
   int rotary_embedding;
   float rope_theta;
   PositionEncoding position_encoding;

@@ -6,7 +6,6 @@
 #include "ksana_llm/models/common/common_model.h"
 
 namespace ksana_llm {
-template <typename T>
 class ModelInterface {
  public:
   ModelInterface() {}

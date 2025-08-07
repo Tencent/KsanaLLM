@@ -9,11 +9,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neox,
-                                                      LayerCreationContext& creation_context,
-                                                      ModelCreationConfig& model_creation_config,
-                                                      MlaBuffers& mla_buffers)
+MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
+                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers)
     : layer_idx_(layer_idx), mla_buffers_(mla_buffers) {
   auto& attn_config = model_creation_config.attn_config;
   rank_ = creation_context.rank;
@@ -39,10 +36,9 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
                       model_creation_config.attn_config.model_config.num_layer + 1;
   }
 
-  flash_mla_attention_layers_ =
-      std::make_shared<FlashMlaAttention<T>>(layer_idx, is_neox, creation_context, attn_config);
+  flash_mla_attention_layers_ = std::make_shared<FlashMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
   paged_mla_attention_layers_ =
-      std::make_shared<PagedMlaAttention<T>>(layer_idx, is_neox, absorb_type_, creation_context, attn_config);
+      std::make_shared<PagedMlaAttention>(layer_idx, is_neox, absorb_type_, creation_context, attn_config);
 
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   kv_a_layernorms_ =
@@ -94,9 +90,8 @@ MultiHeadLatentAttention<T>::MultiHeadLatentAttention(int layer_idx, bool is_neo
 #endif
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                                                  const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers) {
+Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
+                                               const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers) {
   const DataType weight_type = attn_config.model_config.weight_data_type;
   const size_t max_token_num = runtime_config.max_step_token_num;
   const size_t head_num = attn_config.model_config.head_num;
@@ -165,11 +160,10 @@ Status MultiHeadLatentAttention<T>::CreateBuffers(BufferManager* buffer_mgr, con
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                            std::vector<Tensor>& reduce_buffer_tensors,
-                                            std::vector<Tensor>& paged_buffer_tensors,
-                                            ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                         std::vector<Tensor>& reduce_buffer_tensors,
+                                         std::vector<Tensor>& paged_buffer_tensors,
+                                         ForwardingContext& forwarding_context) {
   reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
 
   const int rank = forwarding_context.GetCurrentRank();
@@ -308,11 +302,10 @@ Status MultiHeadLatentAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_t
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::DataParallelForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                        std::vector<Tensor>& reduce_buffer_tensors,
-                                                        std::vector<Tensor>& extra_buffer_tensors,
-                                                        ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::DataParallelForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                     std::vector<Tensor>& reduce_buffer_tensors,
+                                                     std::vector<Tensor>& extra_buffer_tensors,
+                                                     ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
 
   const size_t org_token_size = hidden_buffer_tensors_0[0].shape[0];
@@ -419,12 +412,11 @@ Status MultiHeadLatentAttention<T>::DataParallelForward(std::vector<Tensor>& hid
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                   std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                   std::vector<Tensor>& reduce_buffer_tensors,
-                                                   std::vector<Tensor>& prefill_buffer_tensors,
-                                                   ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                std::vector<Tensor>& reduce_buffer_tensors,
+                                                std::vector<Tensor>& prefill_buffer_tensors,
+                                                ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(kv_buffer_tensors, mla_buffers_.kv_buffer);
   CREATE_BUFFER_SCOPE(k_rope_buffer_tensors, mla_buffers_.k_rope_buffer);
   CREATE_BUFFER_SCOPE(q_buffer_tensors, mla_buffers_.q_buffer);
@@ -544,12 +536,11 @@ Status MultiHeadLatentAttention<T>::ContextForward(std::vector<Tensor>& hidden_b
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                  std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                  std::vector<Tensor>& reduce_buffer_tensors,
-                                                  std::vector<Tensor>& paged_buffer_tensors,
-                                                  ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                               std::vector<Tensor>& hidden_buffer_tensors_1,
+                                               std::vector<Tensor>& reduce_buffer_tensors,
+                                               std::vector<Tensor>& paged_buffer_tensors,
+                                               ForwardingContext& forwarding_context) {
   const int rank = forwarding_context.GetCurrentRank();
   const Tensor& input = hidden_buffer_tensors_0[0];
   const size_t seq_len = input.shape[0];
@@ -701,14 +692,13 @@ Status MultiHeadLatentAttention<T>::DecodeForward(std::vector<Tensor>& hidden_bu
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                          std::vector<Tensor>& workspace_buffer,
-                                                          std::vector<Tensor>& reduce_buffer_tensors,
-                                                          std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor,
-                                                          Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
-                                                          Tensor& k_rope_buffer_tensor,
-                                                          ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                       std::vector<Tensor>& workspace_buffer,
+                                                       std::vector<Tensor>& reduce_buffer_tensors,
+                                                       std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor,
+                                                       Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
+                                                       Tensor& k_rope_buffer_tensor,
+                                                       ForwardingContext& forwarding_context) {
   PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(prefix_k_up_buffer_tensors, mla_buffers_.prefix_k_up_buffer);
@@ -732,13 +722,12 @@ Status MultiHeadLatentAttention<T>::FlashAttentionForward(std::vector<Tensor>& h
   return Status();
 }
 
-template <typename T>
-Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& output_tensor,
-                                                          std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                          std::vector<Tensor>& workspace_buffer,
-                                                          Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
-                                                          Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
-                                                          ForwardingContext& forwarding_context) {
+Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& output_tensor,
+                                                       std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                       std::vector<Tensor>& workspace_buffer,
+                                                       Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
+                                                       Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+                                                       ForwardingContext& forwarding_context) {
   PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
@@ -766,9 +755,5 @@ Status MultiHeadLatentAttention<T>::PagedAttentionForward(std::vector<Tensor>& o
   }
   return Status();
 }
-
-template class MultiHeadLatentAttention<float>;
-template class MultiHeadLatentAttention<float16>;
-template class MultiHeadLatentAttention<bfloat16>;
 
 }  // namespace ksana_llm

@@ -8,18 +8,17 @@
 
 namespace ksana_llm {
 
-template <typename T>
-PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
-                                        const LayerCreationContext& creation_context,
-                                        const AttentionCreationConfig& attn_config) {
+PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
+                                     const LayerCreationContext& creation_context,
+                                     const AttentionCreationConfig& attn_config) {
   const uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   const uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   const uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
   const uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
-  paged_mla_attention_layer_ = CreateAttentionLayer<T, PagedMlaAttentionLayer>(
-      creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
+  paged_mla_attention_layer_ = std::make_shared<PagedMlaAttentionLayer>();
+
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
   // we use push back to make it work.
@@ -35,7 +34,7 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
   attention_param.push_back(attn_config.size_per_head);
   attention_param.push_back(attn_config.stride_size);
   attention_param.push_back(attn_config.tensor_para_size);
-  attention_param.push_back(attn_config.data_type);
+  attention_param.push_back(attn_config.kv_cache_dtype);
   attention_param.push_back(attn_config.model_config.k_scales[layer_idx]);
   attention_param.push_back(attn_config.model_config.v_scales[layer_idx]);
   attention_param.push_back(attn_config.rotary_embedding);
@@ -79,12 +78,11 @@ PagedMlaAttention<T>::PagedMlaAttention(const size_t layer_idx, bool is_neox, Ab
   }
 }
 
-template <typename T>
-Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& output_tensor, ModelInput::input_info& page_input,
-                                     std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
-                                     const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer,
-                                     Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
-                                     Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor) {
+Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensor, ModelInput::input_info& page_input,
+                                  std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
+                                  const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer,
+                                  Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
+                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor) {
   Tensor query_layernorm_weight, key_layernorm_weight;  // qk_norm not supported, use dummy tensor
   STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward({hidden_buffer_tensors_1[0],
                                                            page_input.input_length,
@@ -114,9 +112,5 @@ Status PagedMlaAttention<T>::Forward(std::vector<Tensor>& output_tensor, ModelIn
 
   return Status();
 }
-
-template class PagedMlaAttention<float>;
-template class PagedMlaAttention<float16>;
-template class PagedMlaAttention<bfloat16>;
 
 }  // namespace ksana_llm

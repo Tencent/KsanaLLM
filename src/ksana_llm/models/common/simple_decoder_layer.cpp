@@ -19,10 +19,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
-SimpleDecoderLayer<T>::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias,
-                                          LayerCreationContext& creation_context,
-                                          ModelCreationConfig& model_creation_config)
+SimpleDecoderLayer::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv_bias,
+                                       LayerCreationContext& creation_context,
+                                       ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
@@ -35,15 +34,14 @@ SimpleDecoderLayer<T>::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_
   adds_ = std::make_shared<Add>(creation_context);
 
   bool use_qk_norm = model_creation_config.attn_config.use_qk_norm;
-  mha_ = std::make_shared<MultiHeadAttention<T>>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
-                                                 model_creation_config);
+  mha_ = std::make_shared<MultiHeadAttention>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,
+                                              model_creation_config);
   mlps_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
-  tp_comm_ = std::make_shared<TpCommunicator<T>>();
+  tp_comm_ = std::make_shared<TpCommunicator>();
 }
 
-template <typename T>
-Status SimpleDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
-                                      ForwardingContext& forwarding_context) {
+Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
+                                   ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
@@ -73,9 +71,5 @@ Status SimpleDecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer, cons
   STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
   return Status();
 }
-
-template class SimpleDecoderLayer<float>;
-template class SimpleDecoderLayer<float16>;
-template class SimpleDecoderLayer<bfloat16>;
 
 }  // namespace ksana_llm

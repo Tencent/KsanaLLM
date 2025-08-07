@@ -13,7 +13,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class HunyuanDecoderLayer {
  public:
   HunyuanDecoderLayer(int layer_idx, TensorBuffer* moe_buffer, int cla_share_factor, ClaBuffers& cla_buffers,
@@ -33,18 +32,17 @@ class HunyuanDecoderLayer {
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
 
-  std::shared_ptr<CrossLayerAttention<T>> cla_;
+  std::shared_ptr<CrossLayerAttention> cla_;
 
   std::shared_ptr<TwoLayeredFFN> shared_mlps_;
   std::shared_ptr<MoE> moes_;
   std::shared_ptr<Linear> expert_gates_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
   TensorBuffer* moe_buffer_;
 };
 
-template <typename T>
-class HunyuanLarge : public ModelInterface<T> {
+class HunyuanLarge : public ModelInterface {
  public:
   HunyuanLarge() {}
   ~HunyuanLarge() = default;
@@ -59,10 +57,9 @@ class HunyuanLarge : public ModelInterface<T> {
   ClaBuffers cla_buffers_;
   TensorBuffer* moe_buffer_;
 
-  std::map<int, std::shared_ptr<HunyuanDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<HunyuanDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class HunyuanLargeModel : public CommonModel {
  public:
   HunyuanLargeModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -79,7 +76,7 @@ class HunyuanLargeModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  HunyuanLarge<T> hunyuan_large_;
+  HunyuanLarge hunyuan_large_;
 };
 
 }  // namespace ksana_llm

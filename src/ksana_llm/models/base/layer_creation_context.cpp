@@ -51,7 +51,7 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeCo
   attn_config.stride_size = (head_num_per_tp + num_kv_heads_per_tp * 2) * size_per_head;
   attn_config.tensor_para_size = runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   attn_config.data_para_size = runtime_config.parallel_basic_config.attn_data_parallel_size;
-  attn_config.data_type = model_config_.weight_data_type;
+  attn_config.kv_cache_dtype = runtime_config.attn_backend_config.kv_cache_dtype;
   attn_config.rotary_embedding = model_config_.rotary_embedding;
   attn_config.rope_theta = model_config_.rope_theta;
   attn_config.position_encoding = position_encoding;

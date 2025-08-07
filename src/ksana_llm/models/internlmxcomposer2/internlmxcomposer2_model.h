@@ -19,7 +19,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class InternlmxComposer2DecoderLayer {
  public:
   InternlmxComposer2DecoderLayer(int layer_idx, LayerCreationContext& creation_context,
@@ -48,7 +47,7 @@ class InternlmxComposer2DecoderLayer {
 
  private:
   int layer_idx_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
 
@@ -73,8 +72,8 @@ class InternlmxComposer2DecoderLayer {
   // attention
   std::shared_ptr<Linear> attn_qkv_projs_;
   std::shared_ptr<Linear> attn_o_projs_;
-  std::shared_ptr<FlashAttention<T>> flash_attentions_;
-  std::shared_ptr<PagedAttention<T>> paged_attentions_;
+  std::shared_ptr<FlashAttention> flash_attentions_;
+  std::shared_ptr<PagedAttention> paged_attentions_;
 
   // ffn related
   std::shared_ptr<Linear> mlp_gate_projs_;
@@ -86,8 +85,7 @@ class InternlmxComposer2DecoderLayer {
   Tensor key_layernorm_weight_;
 };
 
-template <typename T>
-class InternlmxComposer2 : public ModelInterface<T> {
+class InternlmxComposer2 : public ModelInterface {
  public:
   InternlmxComposer2() {}
   ~InternlmxComposer2() = default;
@@ -96,12 +94,11 @@ class InternlmxComposer2 : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<InternlmxComposer2DecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<InternlmxComposer2DecoderLayer>> decoder_layers_;
   TensorBuffer* plora_a_buffer_;
   TensorBuffer* plora_b_buffer_;
 };
 
-template <typename T>
 class InternlmxComposer2Model : public CommonModel {
  public:
   InternlmxComposer2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -122,7 +119,7 @@ class InternlmxComposer2Model : public CommonModel {
   ModelConfig model_config_;
 
  private:
-  InternlmxComposer2<T> internlmx_composer2_;
+  InternlmxComposer2 internlmx_composer2_;
 };
 
 }  // namespace ksana_llm

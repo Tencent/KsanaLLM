@@ -22,7 +22,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class GPTDecoderLayer {
  public:
   GPTDecoderLayer(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
@@ -49,7 +48,7 @@ class GPTDecoderLayer {
 
  private:
   int layer_idx_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
   std::shared_ptr<Add> adds_;
@@ -66,13 +65,12 @@ class GPTDecoderLayer {
   TensorBuffer* mlp_temp_buffer_;
 
   // attention
-  std::shared_ptr<CommonAttention<T>> attentions_;
+  std::shared_ptr<CommonAttention> attentions_;
   Tensor qkv_bias_;
   std::shared_ptr<Linear> attn_qkv_projs_;
 };
 
-template <typename T>
-class Gpt : public ModelInterface<T> {
+class Gpt : public ModelInterface {
  public:
   Gpt() {}
   ~Gpt() = default;
@@ -81,12 +79,11 @@ class Gpt : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<GPTDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<GPTDecoderLayer>> decoder_layers_;
   std::shared_ptr<Activation> activation_layer_;
   TensorBuffer* mlp_temp_buffer_;
 };
 
-template <typename T>
 class GptModel : public CommonModel {
  public:
   GptModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -109,7 +106,7 @@ class GptModel : public CommonModel {
   ModelConfig model_config_;
 
  private:
-  Gpt<T> gpt_;
+  Gpt gpt_;
 };
 
 }  // namespace ksana_llm

@@ -32,36 +32,15 @@
 
 namespace ksana_llm {
 
-// Create the object and return a shared pointer.
-template <template <class> class ClassT>
-std::shared_ptr<BaseModel> CreateModel(int rank, std::shared_ptr<BaseWeight> base_weight, ModelConfig& model_config,
-                                       RuntimeConfig& runtime_config, std::shared_ptr<Context>& context) {
-  std::shared_ptr<BaseModel> model_obj = nullptr;
-  switch (model_config.weight_data_type) {
-    case DataType::TYPE_FP16:
-      model_obj = std::make_shared<ClassT<float16>>(model_config, runtime_config, rank, context, base_weight);
-      break;
-    case DataType::TYPE_BF16:
-      model_obj = std::make_shared<ClassT<bfloat16>>(model_config, runtime_config, rank, context, base_weight);
-      break;
-    case DataType::TYPE_FP32:
-      model_obj = std::make_shared<ClassT<float>>(model_config, runtime_config, rank, context, base_weight);
-      break;
-    default:
-      KLLM_THROW(fmt::format("Unsupported Tensor type: {}.", model_config.weight_data_type));
-  }
-  return model_obj;
-}
-
-template <template <class> class ModelType>
+template <class ModelType>
 void CreateModelInstance(const std::string model_name, ModelConfig& model_config, RuntimeConfig& runtime_config,
                          std::shared_ptr<Context>& context, std::vector<std::shared_ptr<BaseModel>>& models,
                          std::shared_ptr<WeightInstanceInterface>& weight_instance) {
   KLLM_LOG_INFO << "Start to init model instance " << model_name;
   for (int worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
     KLLM_LOG_INFO << "Start to create model on device " << worker_id;
-    models.push_back(CreateModel<ModelType>(worker_id, weight_instance->GetWeight(worker_id), model_config,
-                                            runtime_config, context));
+    models.push_back(std::make_shared<ModelType>(model_config, runtime_config, worker_id, context,
+                                                 weight_instance->GetWeight(worker_id)));
   }
 }
 

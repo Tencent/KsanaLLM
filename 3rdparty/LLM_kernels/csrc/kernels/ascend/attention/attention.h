@@ -16,7 +16,6 @@ namespace ascend {
 
 enum RotaryEmbeddingType { DEFAULT, LINEAR_SCALING, DYNAMIC_NTK_SCALING };
 
-template <typename DTYPE>
 class ATBAttention {
  public:
   ~ATBAttention();
@@ -29,15 +28,17 @@ class ATBAttention {
                void (*ws_func)(size_t, void**));
 
   // Initialize some necessary information.
-  void Initialize(uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
-                  uint32_t layer_num, uint32_t layer_idx, uint32_t block_token_num, aclrtStream& stream, const int rank,
-                  const bool is_multi_token_forward, const size_t max_position_embeddings, const float rope_base,
+  void Initialize(aclDataType inter_data_type, uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size,
+                  uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx, uint32_t block_token_num,
+                  aclrtStream& stream, const int rank, const bool is_multi_token_forward,
+                  const size_t max_position_embeddings, const float rope_base,
                   const RotaryEmbeddingType scaling_type = RotaryEmbeddingType::DEFAULT,
                   const float scaling_factor = 1.0f);
 
   bool IsMultiTokenForwardOp() { return is_multi_token_forward_; }
 
  private:
+  aclDataType inter_data_type_;
   bool is_multi_token_forward_{true};
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 
@@ -56,10 +57,18 @@ class ATBAttention {
   void* attn_mask_ptr_{nullptr};
 
  private:
-  void InitRopeCosSinWorkspace(const size_t max_position_embeddings, const float rope_base, const uint32_t head_dim,
+  bool InitRopeCosSinWorkspace(const size_t max_position_embeddings, const float rope_base, const uint32_t head_dim,
                                const float scaling_factor, const RotaryEmbeddingType scaling_type, aclrtStream& stream);
 
-  void InitAttnMask();
+  template <typename DTYPE>
+  bool InitRopeCosSinWorkspaceT(const size_t max_position_embeddings, const float rope_base, const uint32_t head_dim,
+                                const float scaling_factor, const RotaryEmbeddingType scaling_type,
+                                aclrtStream& stream);
+
+  bool InitAttnMask();
+
+  template <typename DTYPE>
+  bool InitAttnMaskT();
 
   // Create Split QKV subgraph
   void CreateSplitQKVOperation(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,

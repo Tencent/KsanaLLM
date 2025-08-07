@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class CommonAttention {
  public:
   CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, LayerCreationContext& creation_context,
@@ -25,8 +24,8 @@ class CommonAttention {
 
  private:
   int layer_idx_;
-  std::shared_ptr<FlashAttention<T>> flash_attentions_;
-  std::shared_ptr<PagedAttention<T>> paged_attentions_;
+  std::shared_ptr<FlashAttention> flash_attentions_;
+  std::shared_ptr<PagedAttention> paged_attentions_;
 
   Tensor query_layernorm_weight_;
   Tensor key_layernorm_weight_;

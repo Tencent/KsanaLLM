@@ -65,14 +65,14 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
                     void* v_head_weight_scale, void* gemm_workspace, cublasHandle_t& cublas_handles,
                     cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos, void* rotary_embedding_mask,
                     void* mla_workspace, void* seqlens_with_prefix_ptr, float attn_scale,
-                    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
-                    int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim,
-                    int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale,
-                    float v_scale, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
-                    void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
-                    cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
-                    int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens, int total_prefix_len,
-                    void* seqlens_without_prefix_ptr, QuantMode mm_quant_mode) {
+                    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
+                    int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,
+                    int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal,
+                    int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
+                    const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,
+                    int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
+                    int max_forwarding_tokens, int total_prefix_len, void* seqlens_without_prefix_ptr,
+                    QuantMode mm_quant_mode) {
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
 
@@ -164,10 +164,10 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   }
 
   if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
+                                    stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
   /*
@@ -307,7 +307,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
-      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,     \
+      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,               \
       int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,         \
       int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank,     \
       int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                        \
@@ -333,14 +333,14 @@ void MlaAttenVarlenAbsorb(
     void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale,
     void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
     void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,
-    float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
-    int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,
-    int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank,
-    int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
-    const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,
-    int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens,
-    int total_prefix_len, void* seqlens_without_prefix_ptr, void* prefix_k_buffer, void* prefix_v_buffer,
-    void* prefix_kv_buffer, void* prefix_k_up_buffer, void* prefix_v_up_buffer, QuantMode mm_quant_mode) {
+    float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
+    int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
+    int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank, int block_size,
+    void** k_list, void** v_list, void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
+    cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,
+    int max_blocks_per_seq, int max_forwarding_tokens, int total_prefix_len, void* seqlens_without_prefix_ptr,
+    void* prefix_k_buffer, void* prefix_v_buffer, void* prefix_kv_buffer, void* prefix_k_up_buffer,
+    void* prefix_v_up_buffer, QuantMode mm_quant_mode) {
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
 
@@ -432,10 +432,10 @@ void MlaAttenVarlenAbsorb(
   }
 
   if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
+                                    stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
   /*
@@ -682,7 +682,7 @@ void MlaAttenVarlenAbsorb(
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
-      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,     \
+      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,               \
       int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,         \
       int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank,     \
       int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                        \
@@ -703,10 +703,8 @@ MLA_ATTEN_VARLEN_ABSORB(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType:
 #endif
 #undef MLA_ATTEN_VARLEN_ABSORB
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
-                                                                 const RuntimeConfig& runtime_config,
-                                                                 std::shared_ptr<Context> context, int rank) {
+Status FlashMlaAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                    std::shared_ptr<Context> context, int rank) {
 #ifndef ENABLE_FLASH_ATTN_WITH_CACHE
   KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_WITH_CACHE.");
 #endif
@@ -720,12 +718,15 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vect
   KLLM_THROW("MLA Only support ENABLE_VLLM_FLASH_ATTN_MINOR_6 or ENABLE_VLLM_FLASH_ATTN_MINOR_7");
 #endif
 
-  return AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
+  return AttentionLayer::Init(parameters, runtime_config, context, rank);
+}
+
+Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
-                                                                    std::vector<Tensor>& output_tensors) {
+Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   auto input_iter = input_tensors.cbegin();
   const Tensor& hidden_buffer = *input_iter++;
   const Tensor& dp_input_offset = *input_iter++;
@@ -835,18 +836,5 @@ Status FlashMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
   out.dtype = hidden_buffer.dtype;
   return Status();
 }
-
-using llm_kernels::utils::KVCacheType;
-template class FlashMlaAttentionLayer<float, float, KVCacheType::kAuto>;
-template class FlashMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
-template class FlashMlaAttentionLayer<half, half, KVCacheType::kAuto>;
-template class FlashMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
-template class FlashMlaAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
-#if defined(ENABLE_FP8)
-template class FlashMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
-#endif
 
 }  // namespace ksana_llm

@@ -87,10 +87,10 @@ INVOKE_QK_LAYER_NORM(__nv_bfloat16);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
-                 std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
-                 int total_tokens, int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size,
-                 int stride_size, float k_scale, float v_scale, size_t tensor_para_size, bool is_causal, int rank,
-                 int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
+                 std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
+                 int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size,
+                 float k_scale, float v_scale, size_t tensor_para_size, bool is_causal, int rank, int block_size,
+                 void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
                  const std::optional<void*>& alibi_slopes, int layer_index, void* flexible_rotary_embedding_pos_ptr,
                  void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
                  void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr, void* src_flexible_token_idx_ptr,
@@ -139,15 +139,14 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     if (flexible_len != 0) {
       rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(flexible_rotary_embedding_pos_ptr),
                                       reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
-                                      reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), total_tokens, stream);
-      CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+                                      k_tensor.data_ptr(), total_tokens, stream);
+      CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
     }
 
     rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                    reinterpret_cast<int64_t*>(rotary_embedding_mask),
-                                    reinterpret_cast<SCALAR_T*>(q_tensor.data_ptr()),
-                                    reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_tensor.data_ptr(),
+                                    k_tensor.data_ptr(), total_tokens, stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
   if (!no_rope && use_qk_norm) {
@@ -282,7 +281,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 #define ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                     \
   template void AttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                             \
       void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,                \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, int total_tokens,     \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,               \
       int max_tokens, int batch, int num_heads, int num_kv_heads, int head_size, int stride_size, float k_scale,      \
       float v_scale, size_t tensor_para_size, bool is_causal, int rank, int block_size, void** k_list, void** v_list, \
       void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, int layer_index,           \
@@ -339,7 +338,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           int seqs_num, int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size,
                           float k_scale, float v_scale, int batch, void* rotary_embedding_pos,
                           void* rotary_embedding_mask, int total_tokens,
-                          std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
+                          std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
                           void* workspace_ptr, float layernorm_eps, bool use_qk_norm, void* q_norm_weight,
                           void* k_norm_weight, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
                           void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
@@ -366,10 +365,10 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
   void* v_tensor_ptr = v_tensor.data_ptr();
 
   if (!no_rope && rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_tensor_ptr), reinterpret_cast<SCALAR_T*>(k_tensor_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_tensor_ptr, k_tensor_ptr,
+                                    total_tokens, stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
   if (!no_rope && use_qk_norm) {
     InvokeQKRmsNorm<SCALAR_T>(query_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
@@ -490,7 +489,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
       int max_context_len, cudaStream_t stream, void* cache_offsets_ptr, int seqs_num, int num_heads, int head_size, \
       int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale, int batch,                    \
       void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,                                     \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr, \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* workspace_ptr,           \
       float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,   \
       const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,           \
       int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,                                  \

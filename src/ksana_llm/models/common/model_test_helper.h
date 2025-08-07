@@ -18,7 +18,7 @@ namespace ksana_llm {
 template <typename T>
 class FakeModel {
  public:
-  FakeModel(std::shared_ptr<ModelInterface<T>> model, std::shared_ptr<Context> context, const int rank,
+  FakeModel(std::shared_ptr<ModelInterface> model, std::shared_ptr<Context> context, const int rank,
             ModelConfig& model_config, RuntimeConfig& runtime_config, PipelineConfig pipeline_config,
             std::shared_ptr<BaseWeight> base_weight,
             bool reuse_prefix_config)  // TODO(robertyuan): reuse_prefix_config is a weird param
@@ -137,7 +137,7 @@ class FakeModel {
   }
 
  private:
-  std::shared_ptr<ModelInterface<T>> model_;
+  std::shared_ptr<ModelInterface> model_;
   std::shared_ptr<Context> context_;
   int rank_;
 

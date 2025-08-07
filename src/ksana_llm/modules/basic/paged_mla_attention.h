@@ -9,8 +9,6 @@
 #include "ksana_llm/utils/absorb_weights_type.h"
 
 namespace ksana_llm {
-
-template <typename T>
 class PagedMlaAttention {
  public:
   // Disable a default constructor

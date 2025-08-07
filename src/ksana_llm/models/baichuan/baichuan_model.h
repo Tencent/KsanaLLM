@@ -8,8 +8,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-class Baichuan : public ModelInterface<T> {
+class Baichuan : public ModelInterface {
  public:
   Baichuan() {}
   ~Baichuan() = default;
@@ -19,10 +18,9 @@ class Baichuan : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<SimpleDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class BaichuanModel : public CommonModel {
  public:
   BaichuanModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -38,7 +36,7 @@ class BaichuanModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Baichuan<T> baichuan_;
+  Baichuan baichuan_;
 };
 
 }  // namespace ksana_llm

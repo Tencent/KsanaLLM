@@ -8,9 +8,8 @@
 #include <vector>
 namespace ksana_llm {
 
-template <typename T>
-ChatglmModel<T>::ChatglmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                              std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
+ChatglmModel::ChatglmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
+                           std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
@@ -18,21 +17,18 @@ ChatglmModel<T>::ChatglmModel(const ModelConfig& model_config, const RuntimeConf
   CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
-template <typename T>
-Status ChatglmModel<T>::CreateLayers(LayerCreationContext& creation_context,
-                                     ModelCreationConfig& model_creation_config) {
+Status ChatglmModel::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
   bool is_neox = false;
   bool add_qkv_bias = true;
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
-    decoder_layers_[layer_idx] = std::make_shared<SimpleDecoderLayer<T>>(layer_idx, is_neox, add_qkv_bias,
-                                                                         creation_context, model_creation_config);
+    decoder_layers_[layer_idx] =
+        std::make_shared<SimpleDecoderLayer>(layer_idx, is_neox, add_qkv_bias, creation_context, model_creation_config);
   }
   return Status();
 }
 
-template <typename T>
-Status ChatglmModel<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
+Status ChatglmModel::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
 
   std::vector<Tensor>& residual_buffer =
@@ -46,9 +42,5 @@ Status ChatglmModel<T>::LayerForward(ForwardingContext& forwarding_context, cons
 
   return Status();
 }
-
-template class ChatglmModel<float>;
-template class ChatglmModel<float16>;
-template class ChatglmModel<bfloat16>;
 
 }  // namespace ksana_llm

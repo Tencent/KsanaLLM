@@ -18,10 +18,9 @@
 
 namespace ksana_llm {
 
-template <typename T>
-MultiHeadAttention<T>::MultiHeadAttention(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_norm,
-                                          LayerCreationContext& creation_context,
-                                          ModelCreationConfig& model_creation_config)
+MultiHeadAttention::MultiHeadAttention(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_norm,
+                                       LayerCreationContext& creation_context,
+                                       ModelCreationConfig& model_creation_config)
     : add_qkv_bias_(add_qkv_bias) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
@@ -34,13 +33,12 @@ MultiHeadAttention<T>::MultiHeadAttention(int layer_idx, bool is_neox, bool add_
   adds_ = std::make_shared<Add>(creation_context);
 
   attentions_ =
-      std::make_shared<CommonAttention<T>>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
+      std::make_shared<CommonAttention>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
 }
 
-template <typename T>
-Status MultiHeadAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                      std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                      ForwardingContext& forwarding_context) {
+Status MultiHeadAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                   std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
+                                   ForwardingContext& forwarding_context) {
   {
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
     // Attn proj MatMul
@@ -58,9 +56,5 @@ Status MultiHeadAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors
 
   return Status();
 }
-
-template class MultiHeadAttention<float>;
-template class MultiHeadAttention<float16>;
-template class MultiHeadAttention<bfloat16>;
 
 }  // namespace ksana_llm

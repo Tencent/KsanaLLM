@@ -7,10 +7,15 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status AttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                            std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
+}
+
+template <typename T>
+Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                             std::shared_ptr<Context> context, int rank) {
   int parameter_index = 0;
   mm_quant_mode_ = std::any_cast<const QuantMode>(parameters[parameter_index++]);
   layernorm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
@@ -40,7 +45,8 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   block_size_ = runtime_config.attn_backend_config.block_size;
   block_token_num_ = runtime_config.attn_backend_config.block_token_num;
   // +7 is because there are 6 more elements down:
-  // attn_temperature_tuning_, attn_scale_, floor_scale_, RoPEScalingFactor, is_multi_token_forward, mrope_section_ptr
+  // attn_temperature_tuning_, attn_scale_, floor_scale_, RoPEScalingFactor,
+  // is_multi_token_forward, mrope_section_ptr
   enable_qk_pre_norm_before_rotary_pos_ = std::any_cast<const bool>(parameters[parameter_index + 7]);
 
   // setting scaling factor and mode
@@ -111,11 +117,11 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
       KLLM_THROW(fmt::format("Unsupport rope scaling type: {}.", rope_scaling_factor_config.type));
     }
     rotary_embedding_cuda_.emplace();
-    rotary_embedding_cuda_->SetConfig(
-        static_cast<T*>(cos_sin_cache_ptr), rotary_dim, max_position_embeddings, base, head_size_, num_heads_,
-        num_kv_heads_, stride_size_, is_neox, context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type,
-        scaling_factor, low_freq_factor, high_freq_factor, original_max_position_embeddings, scaling_alpha,
-        mrope_section_ptr, beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_yarn);
+    rotary_embedding_cuda_->SetConfig<T>(
+        cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, num_heads_, num_kv_heads_,
+        stride_size_, is_neox, context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor,
+        low_freq_factor, high_freq_factor, original_max_position_embeddings, scaling_alpha, mrope_section_ptr,
+        beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_yarn);
   } else if (position_encoding == PositionEncoding::ALIBI) {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr),
                                                                   num_heads_ * tensor_para_size_,
@@ -131,24 +137,18 @@ Status AttentionLayer<T>::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
-template <typename T>
-float AttentionLayer<T>::deepseek_yarn_get_mscale(const float scale, const float mscale) {
+float AttentionLayer::deepseek_yarn_get_mscale(const float scale, const float mscale) {
   if (scale <= 1.0f) {
     return 1.0f;
   }
   return 0.1f * mscale * std::log(scale) + 1.0f;
 }
 
-template <typename T>
-float AttentionLayer<T>::common_yarn_get_mscale(const float scale) {
+float AttentionLayer::common_yarn_get_mscale(const float scale) {
   if (scale <= 1.0f) {
     return 1.0f;
   }
   return 0.1f * std::log(scale) + 1.0f;
 }
-
-template class AttentionLayer<float>;
-template class AttentionLayer<half>;
-template class AttentionLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

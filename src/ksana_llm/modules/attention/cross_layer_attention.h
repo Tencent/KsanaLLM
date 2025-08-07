@@ -17,7 +17,6 @@ struct ClaBuffers {
   std::vector<Tensor> cla_v_buffer_{1};
 };
 
-template <typename T>
 class CrossLayerAttention {
  public:
   CrossLayerAttention(int layer_idx, int cla_share_factor, ClaBuffers& cla_buffers,
@@ -39,8 +38,9 @@ class CrossLayerAttention {
 
  private:
   int layer_idx_;
+  size_t inter_data_size_;
   std::shared_ptr<Linear> attn_qkv_projs_;
-  std::shared_ptr<CommonAttention<T>> attentions_;
+  std::shared_ptr<CommonAttention> attentions_;
 
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;

@@ -7,8 +7,8 @@
 #include "ksana_llm/models/common/simple_decoder_layer.h"
 
 namespace ksana_llm {
-template <typename T>
-class Internlm2 : public ModelInterface<T> {
+
+class Internlm2 : public ModelInterface {
  public:
   Internlm2() {}
   ~Internlm2() = default;
@@ -18,10 +18,9 @@ class Internlm2 : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<SimpleDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class Internlm2Model : public CommonModel {
  public:
   Internlm2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -37,7 +36,7 @@ class Internlm2Model : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Internlm2<T> internlm2_;
+  Internlm2 internlm2_;
 };
 
 }  // namespace ksana_llm

@@ -6,20 +6,15 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status ConcatLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                            std::shared_ptr<Context> context, int rank) {
+Status ConcatLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   concat_dim = std::any_cast<const size_t>(parameters[0]);
   return Status();
 }
 
-template <typename T>
-Status ConcatLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ConcatLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   KLLM_THROW("ConcatLayer not implement in Ascend.");
   return Status(RET_INFER_FAILED);
 }
-template class ConcatLayer<float>;
-template class ConcatLayer<float16>;
-template class ConcatLayer<bfloat16>;
 }  // namespace ksana_llm

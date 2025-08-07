@@ -20,7 +20,6 @@
 #include "ksana_llm/modules/ffn/two_layered_ffn.h"
 
 namespace ksana_llm {
-template <typename T>
 class DeepSeekV3DecoderLayer {
  public:
   DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
@@ -42,9 +41,9 @@ class DeepSeekV3DecoderLayer {
   std::shared_ptr<AddNorm> pre_attention_add_norm_;
   std::shared_ptr<AddNorm> post_attention_add_norm_;
   std::shared_ptr<Add> add_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
-  std::shared_ptr<MultiHeadLatentAttention<T>> mla_;
+  std::shared_ptr<MultiHeadLatentAttention> mla_;
 
   bool enable_full_shared_expert_;
   int layer_idx_;
@@ -64,17 +63,15 @@ class DeepSeekV3DecoderLayer {
   std::vector<Tensor> distributed_device_buffer_prefill_;
 
   // Used to send and recive moe input/output among expert parallel nodes.
-  std::shared_ptr<ExpertParallelDataTransfer<T>> ep_data_transfer_;
+  std::shared_ptr<ExpertParallelDataTransfer> ep_data_transfer_;
   // Store the moe-computing-tasks from remote expert parallel nodes.
   std::vector<std::vector<Tensor>> moe_queue_in_;
 };
 
-template <typename T>
 class DeepSeekV3MtpLayer {
  public:
   DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,
-                     ModelCreationConfig& model_creation_config,
-                     std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer);
+                     ModelCreationConfig& model_creation_config, std::shared_ptr<DeepSeekV3DecoderLayer> decoder_layer);
 
   ~DeepSeekV3MtpLayer() = default;
 
@@ -87,12 +84,11 @@ class DeepSeekV3MtpLayer {
   std::shared_ptr<Linear> eh_proj_;
   std::shared_ptr<BaseLayer> gather_layer_;
   std::shared_ptr<BaseLayer> emb_lookup_layer_;
-  std::shared_ptr<DeepSeekV3DecoderLayer<T>> decoder_layer_;
+  std::shared_ptr<DeepSeekV3DecoderLayer> decoder_layer_;
 
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 };
 
-template <typename T>
 class DeepSeekV3Model : public CommonModel {
  public:
   DeepSeekV3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -106,8 +102,8 @@ class DeepSeekV3Model : public CommonModel {
   using CommonModel::GetHiddenUnitBuffer;
   using CommonModel::SetHiddenUnitBuffer;
 
-  std::map<int, std::shared_ptr<DeepSeekV3DecoderLayer<T>>> layers_;
-  std::map<int, std::shared_ptr<DeepSeekV3MtpLayer<T>>> nextn_layers_;
+  std::map<int, std::shared_ptr<DeepSeekV3DecoderLayer>> layers_;
+  std::map<int, std::shared_ptr<DeepSeekV3MtpLayer>> nextn_layers_;
 
   int first_k_dense_replace_;
   MlaBuffers mla_buffers_;

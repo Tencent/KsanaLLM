@@ -38,7 +38,6 @@ struct MlaBuffers {
   size_t prefix_v_buffer_size;
 };
 
-template <typename T>
 class MultiHeadLatentAttention {
  public:
   MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
@@ -98,8 +97,8 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Linear> attn_o_proj_;
   std::shared_ptr<Split> split_;
   std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
-  std::shared_ptr<FlashMlaAttention<T>> flash_mla_attention_layers_;
-  std::shared_ptr<PagedMlaAttention<T>> paged_mla_attention_layers_;
+  std::shared_ptr<FlashMlaAttention> flash_mla_attention_layers_;
+  std::shared_ptr<PagedMlaAttention> paged_mla_attention_layers_;
   inline static uint32_t qk_nope_head_dim_ = 0;
   inline static uint32_t qk_rope_head_dim_ = 0;
   inline static uint32_t kv_lora_rank_ = 0;

@@ -92,7 +92,7 @@ class ForwardTest : public testing::Test {
   // 加载模型权重
   // 加载模型权重，返回模型和权重
   template <typename weight_data_type>
-  std::pair<std::shared_ptr<LlamaModel<weight_data_type>>, std::shared_ptr<BaseWeight>> LoadModel() {
+  std::pair<std::shared_ptr<LlamaModel>, std::shared_ptr<BaseWeight>> LoadModel() {
     int device_id = 0;
     SetDevice(device_id);
     std::filesystem::path model_path(model_config.path);
@@ -125,8 +125,8 @@ class ForwardTest : public testing::Test {
       StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
     }
     llama_weight->ProcessWeights();  // End Loader Weight
-    std::shared_ptr<LlamaModel<weight_data_type>> llama =
-        std::make_shared<LlamaModel<weight_data_type>>(model_config, runtime_config, 0, context_, llama_weight);
+    std::shared_ptr<LlamaModel> llama =
+        std::make_shared<LlamaModel>(model_config, runtime_config, 0, context_, llama_weight);
     llama->AllocResources(multi_batch_id);
 
     return {llama, llama_weight};

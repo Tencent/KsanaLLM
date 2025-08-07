@@ -36,13 +36,17 @@ std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
   }
 }
 
-template <typename T>
 class AttentionLayer : public BaseLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
+
+ private:
+  template <typename T>
+  Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+               std::shared_ptr<Context> context, int rank);
 
  protected:
   int layer_num_;
@@ -81,7 +85,7 @@ class AttentionLayer : public BaseLayer {
 
   float common_yarn_get_mscale(const float scale);
 
-  std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<T>> rotary_embedding_cuda_;
+  std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda> rotary_embedding_cuda_;
   std::optional<void*> alibi_slopes_;
 #endif
 
@@ -94,5 +98,34 @@ class AttentionLayer : public BaseLayer {
   size_t attn_temperature_tuning_;
   size_t floor_scale_;
 };
+
+// Dispatch function by kv cache type
+#ifdef ENABLE_CUDA
+#  define DISPATCH_BY_KVTYPE(dtype, kv_cache_dtype, func, ...)                               \
+    switch (kv_cache_dtype) {                                                                \
+      case TYPE_FP8_E5M2:                                                                    \
+        return func<dtype, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2>(__VA_ARGS__); \
+      case TYPE_FP8_E4M3:                                                                    \
+        return func<dtype, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(__VA_ARGS__); \
+      default:                                                                               \
+        return func<dtype, dtype, llm_kernels::utils::KVCacheType::kAuto>(__VA_ARGS__);      \
+    }
+#else
+#  define DISPATCH_BY_KVTYPE(dtype, kv_cache_dtype, func, ...) \
+    return func<dtype, dtype, llm_kernels::utils::KVCacheType::kAuto>(__VA_ARGS__);
+#endif
+
+// Dispatch function by dtype(float16/bfloat16/float) and kv cache dtype(dtype/fp8)
+#define DISPATCH_BY_DTYPE_AND_KVTYPE(dtype, kv_cache_dtype, func, ...)                        \
+  switch (dtype) {                                                                            \
+    case DataType::TYPE_FP16:                                                                 \
+      DISPATCH_BY_KVTYPE(float16, kv_cache_dtype, func, __VA_ARGS__);                         \
+    case DataType::TYPE_BF16:                                                                 \
+      DISPATCH_BY_KVTYPE(bfloat16, kv_cache_dtype, func, __VA_ARGS__);                        \
+    case DataType::TYPE_FP32:                                                                 \
+      DISPATCH_BY_KVTYPE(float, kv_cache_dtype, func, __VA_ARGS__);                           \
+    default:                                                                                  \
+      KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, dtype)); \
+  }
 
 }  // namespace ksana_llm

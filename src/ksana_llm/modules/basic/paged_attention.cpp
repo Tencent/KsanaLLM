@@ -8,11 +8,10 @@
 
 namespace ksana_llm {
 
-template <typename T>
-PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext& creation_context,
-                                  const AttentionCreationConfig& attn_config) {
-  paged_attention_layer_ =
-      CreateAttentionLayer<T, PagedAttentionLayer>(creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
+PagedAttention::PagedAttention(bool is_neox, const LayerCreationContext& creation_context,
+                               const AttentionCreationConfig& attn_config) {
+  paged_attention_layer_ = std::make_shared<PagedAttentionLayer>();
+
   uint32_t zero = 0;
   std::vector<std::any> attention_param;
   attention_param.push_back(attn_config.model_config.quant_config.method);
@@ -26,7 +25,7 @@ PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext& crea
   attention_param.push_back(attn_config.size_per_head);
   attention_param.push_back(attn_config.stride_size);
   attention_param.push_back(attn_config.tensor_para_size);
-  attention_param.push_back(attn_config.data_type);
+  attention_param.push_back(attn_config.kv_cache_dtype);
   attention_param.push_back(
       attn_config.model_config.k_scales[attn_config.idx + creation_context.pipeline_config.lower_layer_idx]);
   attention_param.push_back(
@@ -60,16 +59,12 @@ PagedAttention<T>::PagedAttention(bool is_neox, const LayerCreationContext& crea
                                creation_context.rank);
 }
 
-template <typename T>
-PagedAttention<T>::~PagedAttention() {}
+PagedAttention::~PagedAttention() {}
 
-template <typename T>
-Status PagedAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                  std::shared_ptr<ModelInput>& model_input,
-                                  std::vector<Tensor>& hidden_buffer_tensors_1,
-                                  std::vector<Tensor>& paged_buffer_tensors, Tensor& kv_cache_buffer_tensor,
-                                  const AttentionForwardContext& forward_context, Tensor query_layernorm_weight,
-                                  Tensor key_layernorm_weight) {
+Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::shared_ptr<ModelInput>& model_input,
+                               std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& paged_buffer_tensors,
+                               Tensor& kv_cache_buffer_tensor, const AttentionForwardContext& forward_context,
+                               Tensor query_layernorm_weight, Tensor key_layernorm_weight) {
   // normal page attention only has one input (page_single_input)
   auto& input_info = model_input->page_single_input;
 
@@ -95,9 +90,5 @@ Status PagedAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 #endif
   return Status();
 }
-
-template class PagedAttention<float>;
-template class PagedAttention<float16>;
-template class PagedAttention<bfloat16>;
 
 }  // namespace ksana_llm

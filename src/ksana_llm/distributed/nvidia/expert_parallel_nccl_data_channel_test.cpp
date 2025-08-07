@@ -88,7 +88,7 @@ class ExpertParallelNcclDataChannelTest : public testing::Test {
   ExpertParallelConfig expert_parallel_config_;
   ModelConfig model_config_;
   RuntimeConfig runtime_config_;
-  std::shared_ptr<ExpertParallelDataTransfer<float>> ep_data_transfer_;
+  std::shared_ptr<ExpertParallelDataTransfer> ep_data_transfer_;
   // The model input information.
   std::shared_ptr<ModelInput> model_input_;
 };
@@ -137,7 +137,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     InitializeExpertHiddenUnitBufferPool();
     expert_hidden_unit_buffer_pool_ = GetExpertHiddenUnitBufferPool();
     GetExpertHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
-    ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer<float>>();
+    ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer>();
 
     nccl_data_channel_ =
         std::make_shared<ExpertParallelNcclDataChannel>(expert_hidden_unit_buffer_pool_, env_, context_);
@@ -217,7 +217,7 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
     InitializeExpertHiddenUnitBufferPool();
     expert_hidden_unit_buffer_pool_ = GetExpertHiddenUnitBufferPool();
     GetExpertHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
-    ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer<float>>();
+    ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer>();
 
     // Recv nccl unique_id from parent process.
     memset(unique_id_1, 0, 128);

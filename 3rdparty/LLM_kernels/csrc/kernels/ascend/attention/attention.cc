@@ -24,29 +24,30 @@ https://github.com/PaddlePaddle/PaddleCustomDevice/blob/develop/backends/npu/cus
 namespace llm_kernels {
 namespace ascend {
 
+#define DISPATCH_BY_3_ACLTYPE(dtype, func, ...)                                                     \
+  switch (dtype) {                                                                                  \
+    case aclDataType::ACL_FLOAT16:                                                                  \
+      return func<aclFloat16>(__VA_ARGS__);                                                         \
+    case aclDataType::ACL_BF16:                                                                     \
+      return func<int16_t>(__VA_ARGS__);                                                            \
+    case aclDataType::ACL_FLOAT:                                                                    \
+      return func<float>(__VA_ARGS__);                                                              \
+    default:                                                                                        \
+   throw std::invalid_argument("Invalid type, only support float16 or float32."); \
+  }
+
 // The max seq_len
 static constexpr size_t kMaxSeqLen = 4096;
 
-template <typename DTYPE>
-ATBAttention<DTYPE>::~ATBAttention() {}
+ATBAttention::~ATBAttention() {}
 
-template <typename DTYPE>
-void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache,
-                                  void* v_cache, void* block_tables, const uint32_t max_num_blocks_per_query,
-                                  const uint32_t batch_size, const uint32_t total_token_num,
-                                  const uint32_t total_block_num, const uint32_t block_token_num,
-                                  const uint32_t layer_index, void* seq_len, const bool is_multi_token_forward,
-                                  atb::Context* atb_context, void (*ws_func)(size_t, void**)) {
-  aclDataType acl_dtype;
-  if (std::is_same<DTYPE, aclFloat16>::value) {
-    acl_dtype = aclDataType::ACL_FLOAT16;
-  } else if (std::is_same<DTYPE, float>::value) {
-    acl_dtype = aclDataType::ACL_FLOAT;
-  } else if (std::is_same<DTYPE, int16_t>::value) {
-    acl_dtype = aclDataType::ACL_BF16;
-  } else {
-    throw std::invalid_argument("Invalid matmul type type, only support float16 or float32.");
-  }
+void ATBAttention::Forward(void* output, void* qkv_tensor, void* pos_ids, void* slot_mapping, void* k_cache,
+                           void* v_cache, void* block_tables, const uint32_t max_num_blocks_per_query,
+                           const uint32_t batch_size, const uint32_t total_token_num, const uint32_t total_block_num,
+                           const uint32_t block_token_num, const uint32_t layer_index, void* seq_len,
+                           const bool is_multi_token_forward, atb::Context* atb_context,
+                           void (*ws_func)(size_t, void**)) {
+  aclDataType acl_dtype = inter_data_type_;
 
   atb_op_executor_.ResetVariantPack();
   // qkv_input_tensor_id
@@ -79,13 +80,13 @@ void ATBAttention<DTYPE>::Forward(void* output, void* qkv_tensor, void* pos_ids,
   atb_op_executor_.Run(atb_context, ws_func);
 }
 
-template <typename DTYPE>
-void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size, uint32_t kv_head_size,
-                                     uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
-                                     uint32_t block_token_num, aclrtStream& stream, const int rank,
-                                     const bool is_multi_token_forward, const size_t max_position_embeddings,
-                                     const float rope_base, const RotaryEmbeddingType scaling_type,
-                                     const float scaling_factor) {
+void ATBAttention::Initialize(aclDataType inter_data_type, uint32_t max_batch_size, uint32_t head_size,
+                              uint32_t kv_head_size, uint32_t head_dim, uint32_t layer_num, uint32_t layer_idx,
+                              uint32_t block_token_num, aclrtStream& stream, const int rank,
+                              const bool is_multi_token_forward, const size_t max_position_embeddings,
+                              const float rope_base, const RotaryEmbeddingType scaling_type,
+                              const float scaling_factor) {
+  inter_data_type_ = inter_data_type;
   max_batch_size_ = max_batch_size;
   head_size_ = head_size;
   kv_head_size_ = kv_head_size;
@@ -259,10 +260,17 @@ void ATBAttention<DTYPE>::Initialize(uint32_t max_batch_size, uint32_t head_size
   atb_op_executor_.ResetVariantPack();
 }
 
+bool ATBAttention::InitRopeCosSinWorkspace(const size_t max_position_embeddings, const float rope_base,
+                                           const uint32_t head_dim, const float scaling_factor,
+                                           const RotaryEmbeddingType scaling_type, aclrtStream& stream) {
+  DISPATCH_BY_3_ACLTYPE(inter_data_type_, InitRopeCosSinWorkspaceT, max_position_embeddings, rope_base, head_dim,
+                        scaling_factor, scaling_type, stream);
+}
+
 template <typename DTYPE>
-void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embeddings, const float rope_base,
-                                                  const uint32_t head_dim, const float scaling_factor,
-                                                  const RotaryEmbeddingType scaling_type, aclrtStream& stream) {
+bool ATBAttention::InitRopeCosSinWorkspaceT(const size_t max_position_embeddings, const float rope_base,
+                                            const uint32_t head_dim, const float scaling_factor,
+                                            const RotaryEmbeddingType scaling_type, aclrtStream& stream) {
   std::vector<DTYPE> cos_workspace_host(max_position_embeddings * head_dim, 0u);
   std::vector<DTYPE> sin_workspace_host(max_position_embeddings * head_dim, 0u);
   ACL_CHECK_RET(aclrtMalloc(&rope_cos_workspace_ptr_, max_position_embeddings * head_dim * sizeof(DTYPE),
@@ -318,10 +326,15 @@ void ATBAttention<DTYPE>::InitRopeCosSinWorkspace(const size_t max_position_embe
                                  sin_workspace_host.data(), sin_workspace_host.size() * sizeof(DTYPE),
                                  ACL_MEMCPY_HOST_TO_DEVICE, stream));
   ACL_CHECK_RET(aclrtSynchronizeStream(stream));
+  return true;
+}
+
+bool ATBAttention::InitAttnMask() {
+  DISPATCH_BY_3_ACLTYPE(inter_data_type_, InitAttnMaskT);
 }
 
 template <typename DTYPE>
-void ATBAttention<DTYPE>::InitAttnMask() {
+bool ATBAttention::InitAttnMaskT() {
   constexpr uint16_t kMaskValue = 1;  // KERNELTYPE_HIGH_PRECISION: 1; KERNELTYPE_DEFAULT: -inf(0xFBFF)
   std::vector<uint16_t> mask(kMaxSeqLen * kMaxSeqLen, 0);
   for (size_t i = 0; i < kMaxSeqLen; ++i) {
@@ -331,11 +344,11 @@ void ATBAttention<DTYPE>::InitAttnMask() {
   ACL_CHECK_RET(aclrtMalloc(&attn_mask_ptr_, kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), ACL_MEM_MALLOC_HUGE_FIRST));
   ACL_CHECK_RET(aclrtMemcpy(attn_mask_ptr_, kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), mask.data(),
                             kMaxSeqLen * kMaxSeqLen * sizeof(DTYPE), aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE));
+  return true;
 }
 
-template <typename DTYPE>
-void ATBAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
-                                                  atb::Operation** operation) {
+void ATBAttention::CreateSplitQKVOperation(uint32_t head_size, uint32_t kv_head_size, uint32_t head_dim,
+                                           atb::Operation** operation) {
   uint32_t tensor_idx = 0;
   uint32_t input_qkv_tensor = tensor_idx++;  // [ntokens, 3 * head_num * head_dim] or [ntokens,
                                              // (head_num + 2 * kv_head_num) * head_dim]
@@ -432,11 +445,6 @@ void ATBAttention<DTYPE>::CreateSplitQKVOperation(uint32_t head_size, uint32_t k
   }
   atb::CreateOperation(op_graph, operation);
 }
-
-template class ATBAttention<aclFloat16>;
-template class ATBAttention<float>;
-// NOTE(karlluo): there is not bfloat16 type in cann, so we take int16_t as bfloat16 as dtype indicator
-template class ATBAttention<int16_t>;
 
 }  // namespace ascend
 }  // namespace llm_kernels

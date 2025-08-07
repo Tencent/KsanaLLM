@@ -14,7 +14,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class Llama4DecoderLayer {
  public:
   Llama4DecoderLayer(int layer_idx, TensorBuffer* moe_buffer, bool is_moe_layer_,
@@ -33,9 +32,9 @@ class Llama4DecoderLayer {
   std::shared_ptr<Add> adds_;
   std::shared_ptr<Layernorm> input_layernorms_;
   std::shared_ptr<Layernorm> post_attention_layernorms_;
-  std::shared_ptr<TpCommunicator<T>> tp_comm_;
+  std::shared_ptr<TpCommunicator> tp_comm_;
 
-  std::shared_ptr<MultiHeadAttention<T>> mha_;
+  std::shared_ptr<MultiHeadAttention> mha_;
   std::shared_ptr<MoE> moes_;
   std::shared_ptr<Linear> expert_gates_;
   std::shared_ptr<TwoLayeredFFN> mlps_;
@@ -45,8 +44,7 @@ class Llama4DecoderLayer {
   bool is_moe_layer_;
 };
 
-template <typename T>
-class Llama4 : public ModelInterface<T> {
+class Llama4 : public ModelInterface {
  public:
   Llama4() {}
   ~Llama4() = default;
@@ -58,10 +56,9 @@ class Llama4 : public ModelInterface<T> {
  private:
   TensorBuffer* moe_buffer_;
 
-  std::map<int, std::shared_ptr<Llama4DecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<Llama4DecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class Llama4Model : public CommonModel {
  public:
   Llama4Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -77,7 +74,7 @@ class Llama4Model : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Llama4<T> Llama4_;
+  Llama4 Llama4_;
 };
 
 }  // namespace ksana_llm

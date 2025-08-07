@@ -8,8 +8,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-class Llama : public ModelInterface<T> {
+class Llama : public ModelInterface {
  public:
   Llama() {}
   ~Llama() = default;
@@ -19,10 +18,9 @@ class Llama : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<SimpleDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class LlamaModel : public CommonModel {
  public:
   LlamaModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -38,7 +36,7 @@ class LlamaModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Llama<T> llama_;
+  Llama llama_;
 };
 
 }  // namespace ksana_llm

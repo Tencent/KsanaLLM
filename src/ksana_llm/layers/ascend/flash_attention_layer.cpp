@@ -10,26 +10,23 @@
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
-                                                              const RuntimeConfig& runtime_config,
-                                                              std::shared_ptr<Context> context, int rank) {
-  AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
+Status FlashAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                 std::shared_ptr<Context> context, int rank) {
+  AttentionLayer::Init(parameters, runtime_config, context, rank);
   if (atb_flash_attn_ == nullptr) {
-    atb_flash_attn_ = std::make_shared<llm_kernels::ascend::ATBAttention<SCALAR_T>>();
-    atb_flash_attn_->Initialize(static_cast<uint32_t>(this->max_batch_size_), this->num_heads_, this->num_kv_heads_,
+    atb_flash_attn_ = std::make_shared<llm_kernels::ascend::ATBAttention>();
+    atb_flash_attn_->Initialize(static_cast<aclDataType>(this->inter_data_type_),
+                                static_cast<uint32_t>(this->max_batch_size_), this->num_heads_, this->num_kv_heads_,
                                 this->head_size_, this->layer_num_, this->layer_index_, this->block_token_num_,
-                                context->GetComputeStreams()[rank].Get(), rank, /*is_multi_token_forward*/ true,
-                                this->max_position_embeddings_, this->base_);
+                                context->GetComputeStreams()[rank].Get(), rank,
+                                /*is_multi_token_forward*/ true, this->max_position_embeddings_, this->base_);
 
     KLLM_LOG_DEBUG << "FlashAttentionLayer Init, layer_num:" << this->layer_num_;
   }
   return Status();
 }
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
-                                                                 std::vector<Tensor>& output_tensors) {
+Status FlashAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // for ATB input_tensors:
   //   0: qkv_tensor shape [max_token_num, hidden_units * 3], type same as weight
   //   1: rotary_embedding_pos shape [max_token_num], type int64_t
@@ -69,18 +66,5 @@ Status FlashAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
                            reinterpret_cast<atb::Context*>(GetRuntimeContext(this->rank_)), GetWorkSpaceFunc());
   return Status();
 }
-
-using llm_kernels::utils::KVCacheType;
-template class FlashAttentionLayer<float, float, KVCacheType::kAuto>;
-template class FlashAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
-template class FlashAttentionLayer<float16, float16, KVCacheType::kAuto>;
-template class FlashAttentionLayer<float16, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashAttentionLayer<float16, uint8_t, KVCacheType::kFp8E5M2>;
-template class FlashAttentionLayer<bfloat16, bfloat16, KVCacheType::kAuto>;
-#if defined(ENABLE_FP8)
-template class FlashAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
-template class FlashAttentionLayer<bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
-#endif
 
 }  // namespace ksana_llm

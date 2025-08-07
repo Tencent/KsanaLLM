@@ -102,7 +102,7 @@ class DeepSeekV3DPTest : public testing::Test {
   std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
   std::shared_ptr<Context> context{nullptr};
   size_t multi_batch_id = 123;
-  std::vector<std::shared_ptr<DeepSeekV3Model<bfloat16>>> deepseek_v3_dps;
+  std::vector<std::shared_ptr<DeepSeekV3Model>> deepseek_v3_dps;
   std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
 
   void LoadModel(std::filesystem::path &model_path) {
@@ -112,8 +112,8 @@ class DeepSeekV3DPTest : public testing::Test {
           std::make_unique<WeightInstance>(model_config, runtime_config, context);
       weight_instance->Load();
       std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(device_id);
-      std::shared_ptr<DeepSeekV3Model<bfloat16>> deepseek_v3 = std::make_shared<DeepSeekV3Model<bfloat16>>(
-          model_config, runtime_config, device_id, context, deepseek_v3_weight);
+      std::shared_ptr<DeepSeekV3Model> deepseek_v3 =
+          std::make_shared<DeepSeekV3Model>(model_config, runtime_config, device_id, context, deepseek_v3_weight);
       deepseek_v3->AllocResources(multi_batch_id);
 
       deepseek_v3_dps.push_back(deepseek_v3);

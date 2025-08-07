@@ -6,11 +6,10 @@
 
 namespace ksana_llm {
 
-template <typename T>
-InternlmxComposer2DecoderLayer<T>::InternlmxComposer2DecoderLayer(int layer_idx, LayerCreationContext& creation_context,
-                                                                  ModelCreationConfig& model_creation_config,
-                                                                  TensorBuffer* plora_a_buffer_,
-                                                                  TensorBuffer* plora_b_buffer_)
+InternlmxComposer2DecoderLayer::InternlmxComposer2DecoderLayer(int layer_idx, LayerCreationContext& creation_context,
+                                                               ModelCreationConfig& model_creation_config,
+                                                               TensorBuffer* plora_a_buffer_,
+                                                               TensorBuffer* plora_b_buffer_)
     : layer_idx_(layer_idx), plora_a_buffer_(plora_a_buffer_), plora_b_buffer_(plora_b_buffer_) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
@@ -50,8 +49,8 @@ InternlmxComposer2DecoderLayer<T>::InternlmxComposer2DecoderLayer(int layer_idx,
   attn_o_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
   model_creation_config.attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
-  flash_attentions_ = std::make_shared<FlashAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
-  paged_attentions_ = std::make_shared<PagedAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
+  flash_attentions_ = std::make_shared<FlashAttention>(is_neox, creation_context, model_creation_config.attn_config);
+  paged_attentions_ = std::make_shared<PagedAttention>(is_neox, creation_context, model_creation_config.attn_config);
 
   // ffn related
   mlp_gate_projs_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate_proj.weight", creation_context,
@@ -60,7 +59,7 @@ InternlmxComposer2DecoderLayer<T>::InternlmxComposer2DecoderLayer(int layer_idx,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
   mlp_down_projs_ = std::make_shared<Linear>(layer_prefix + ".mlp.down_proj.weight", creation_context,
                                              model_creation_config.attn_config.model_config.quant_config.backend);
-  tp_comm_ = std::make_shared<TpCommunicator<T>>();
+  tp_comm_ = std::make_shared<TpCommunicator>();
   silu_muls_ = std::make_shared<SiluMul>(creation_context);
 
 #ifdef ENABLE_CUDA
@@ -68,21 +67,19 @@ InternlmxComposer2DecoderLayer<T>::InternlmxComposer2DecoderLayer(int layer_idx,
 #endif
 }
 
-template <typename T>
-Status InternlmxComposer2DecoderLayer<T>::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                                std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                                std::vector<Tensor>& reduce_buffer_tensors,
-                                                                ForwardingContext& forwarding_context) {
+Status InternlmxComposer2DecoderLayer::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                             std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                             std::vector<Tensor>& reduce_buffer_tensors,
+                                                             ForwardingContext& forwarding_context) {
   return flash_attentions_->Forward(
       hidden_buffer_tensors_0, forwarding_context.GetModelInput(), hidden_buffer_tensors_1, reduce_buffer_tensors,
       forwarding_context.GetAttentionForwardContext(), query_layernorm_weight_, key_layernorm_weight_);
 }
 
-template <typename T>
-Status InternlmxComposer2DecoderLayer<T>::PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                                std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                                std::vector<Tensor>& reduce_buffer_tensors,
-                                                                ForwardingContext& forwarding_context) {
+Status InternlmxComposer2DecoderLayer::PagedAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                             std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                             std::vector<Tensor>& reduce_buffer_tensors,
+                                                             ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
   return paged_attentions_->Forward(hidden_buffer_tensors_0, forwarding_context.GetModelInput(),
                                     hidden_buffer_tensors_1, reduce_buffer_tensors, kv_cache_buffer_tensors[0],
@@ -90,12 +87,11 @@ Status InternlmxComposer2DecoderLayer<T>::PagedAttentionForward(std::vector<Tens
                                     key_layernorm_weight_);
 }
 
-template <typename T>
-Status InternlmxComposer2DecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                     std::vector<Tensor>& reduce_buffer_tensors,
-                                                     std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                     const bool is_multi_token_forward,
-                                                     ForwardingContext& forwarding_context) {
+Status InternlmxComposer2DecoderLayer::ForwardMha(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                  std::vector<Tensor>& reduce_buffer_tensors,
+                                                  std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                  const bool is_multi_token_forward,
+                                                  ForwardingContext& forwarding_context) {
   // Attn proj MatMul
   STATUS_CHECK_RETURN(attn_qkv_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
 #ifdef ENABLE_CUDA
@@ -150,12 +146,11 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMha(std::vector<Tensor>& hidden
   return Status();
 }
 
-template <typename T>
-Status InternlmxComposer2DecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                     std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                     std::vector<Tensor>& reduce_buffer_tensors,
-                                                     const bool is_multi_token_forward,
-                                                     ForwardingContext& forwarding_context) {
+Status InternlmxComposer2DecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                  std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                  std::vector<Tensor>& reduce_buffer_tensors,
+                                                  const bool is_multi_token_forward,
+                                                  ForwardingContext& forwarding_context) {
   // Mlp gate_proj MatMul
   STATUS_CHECK_RETURN(mlp_gate_projs_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
   // Mlp up_proj MatMul 由于 gate_proj 与 up_proj 为并行关系,因此此处使用额外空间存储 matmul 结果
@@ -204,10 +199,8 @@ Status InternlmxComposer2DecoderLayer<T>::ForwardMlp(std::vector<Tensor>& hidden
   return Status();
 }
 
-template <typename T>
-Status InternlmxComposer2DecoderLayer<T>::Forward(std::vector<Tensor>& residual_buffer,
-                                                  const bool is_multi_token_forward,
-                                                  ForwardingContext& forwarding_context) {
+Status InternlmxComposer2DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
+                                               ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
@@ -234,16 +227,14 @@ Status InternlmxComposer2DecoderLayer<T>::Forward(std::vector<Tensor>& residual_
   return Status();
 }
 
-template <typename T>
-Status InternlmxComposer2<T>::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
+Status InternlmxComposer2::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {
   model_run_config.position_encoding = PositionEncoding::ROPE;
   model_run_config.layernorm_position = LayerNormPosition::PRE_NORM;
   return Status();
 }
 
-template <typename T>
-Status InternlmxComposer2<T>::CreateLayers(LayerCreationContext& creation_context,
-                                           ModelCreationConfig& model_creation_config) {
+Status InternlmxComposer2::CreateLayers(LayerCreationContext& creation_context,
+                                        ModelCreationConfig& model_creation_config) {
   auto& model_config = model_creation_config.attn_config.model_config;
   size_t tensor_para_size = creation_context.runtime_config.parallel_basic_config.tensor_parallel_size;
   DataType weight_type = model_config.weight_data_type;
@@ -265,14 +256,13 @@ Status InternlmxComposer2<T>::CreateLayers(LayerCreationContext& creation_contex
       creation_context.buffer_mgr_->CreateBufferTensor("plora_b_buffer", {hidden_buffer_size}, weight_type);
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; layer_idx++) {
-    decoder_layers_[layer_idx] = std::make_shared<InternlmxComposer2DecoderLayer<T>>(
+    decoder_layers_[layer_idx] = std::make_shared<InternlmxComposer2DecoderLayer>(
         layer_idx, creation_context, model_creation_config, plora_a_buffer_, plora_b_buffer_);
   }
   return Status();
 }
 
-template <typename T>
-Status InternlmxComposer2<T>::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
+Status InternlmxComposer2::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
@@ -282,29 +272,21 @@ Status InternlmxComposer2<T>::Forward(std::vector<Tensor>& residual_buffer, Forw
   return Status();
 }
 
-template class InternlmxComposer2<float>;
-template class InternlmxComposer2<float16>;
-template class InternlmxComposer2<bfloat16>;
-
-template <typename T>
-InternlmxComposer2Model<T>::InternlmxComposer2Model(const ModelConfig& model_config,
-                                                    const RuntimeConfig& runtime_config, const int rank,
-                                                    std::shared_ptr<Context> context,
-                                                    std::shared_ptr<BaseWeight> base_weight)
+InternlmxComposer2Model::InternlmxComposer2Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                                 const int rank, std::shared_ptr<Context> context,
+                                                 std::shared_ptr<BaseWeight> base_weight)
     : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   internlmx_composer2_.GetModelRunConfig(model_run_config, model_config);
   CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
-template <typename T>
-Status InternlmxComposer2Model<T>::CreateLayers(LayerCreationContext& creation_context,
-                                                ModelCreationConfig& model_creation_config) {
+Status InternlmxComposer2Model::CreateLayers(LayerCreationContext& creation_context,
+                                             ModelCreationConfig& model_creation_config) {
   return internlmx_composer2_.CreateLayers(creation_context, model_creation_config);
 }
 
-template <typename T>
-Status InternlmxComposer2Model<T>::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
+Status InternlmxComposer2Model::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer =
       GetHiddenUnitBuffer(forwarding_context, !forwarding_context.GetContext()->IsChief());
   STATUS_CHECK_RETURN(internlmx_composer2_.Forward(residual_buffer, forwarding_context));
@@ -312,9 +294,5 @@ Status InternlmxComposer2Model<T>::LayerForward(ForwardingContext& forwarding_co
 
   return Status();
 }
-
-template class InternlmxComposer2Model<float>;
-template class InternlmxComposer2Model<float16>;
-template class InternlmxComposer2Model<bfloat16>;
 
 }  // namespace ksana_llm

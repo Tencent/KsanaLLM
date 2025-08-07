@@ -59,101 +59,28 @@ class BaseLayer {
   int attn_dp_rank_id_;
 };
 
-// Init template
-// TODO(robertyuan): move to BaseLayer after all layers modified
-#define LAYER_InitT(inter_data_type, parameters, runtime_config, context, rank)             \
-  switch (inter_data_type) {                                                                \
-    case DataType::TYPE_FP16:                                                               \
-      return InitT<float16>(parameters, runtime_config, context, rank);                     \
-    case DataType::TYPE_BF16:                                                               \
-      return InitT<bfloat16>(parameters, runtime_config, context, rank);                    \
-    case DataType::TYPE_FP32:                                                               \
-      return InitT<float>(parameters, runtime_config, context, rank);                       \
-    default:                                                                                \
-      KLLM_THROW(fmt::format("Preprocess: Unsupported Tensor type: {}.", inter_data_type)); \
+// Dispatch function by float16/bfloat16/float
+#define DISPATCH_BY_3_DTYPE(dtype, func, ...)                                                 \
+  switch (dtype) {                                                                            \
+    case DataType::TYPE_FP16:                                                                 \
+      return func<float16>(__VA_ARGS__);                                                      \
+    case DataType::TYPE_BF16:                                                                 \
+      return func<bfloat16>(__VA_ARGS__);                                                     \
+    case DataType::TYPE_FP32:                                                                 \
+      return func<float>(__VA_ARGS__);                                                        \
+    default:                                                                                  \
+      KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, dtype)); \
   }
 
-// Preprocess template
-#define LAYER_PreprocessT(inter_data_type, model_config, runtime_config)                    \
-  switch (inter_data_type) {                                                                \
-    case DataType::TYPE_FP16:                                                               \
-      return PreprocessT<float16>(model_config, runtime_config);                            \
-    case DataType::TYPE_BF16:                                                               \
-      return PreprocessT<bfloat16>(model_config, runtime_config);                           \
-    case DataType::TYPE_FP32:                                                               \
-      return PreprocessT<float>(model_config, runtime_config);                              \
-    default:                                                                                \
-      KLLM_THROW(fmt::format("Preprocess: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// GetWorkSpaceSize template
-#define LAYER_GetWorkSpaceSizeT(inter_data_type)                                                  \
-  switch (inter_data_type) {                                                                      \
-    case DataType::TYPE_FP16:                                                                     \
-      return GetWorkSpaceSizeT<float16>();                                                        \
-    case DataType::TYPE_BF16:                                                                     \
-      return GetWorkSpaceSizeT<bfloat16>();                                                       \
-    case DataType::TYPE_FP32:                                                                     \
-      return GetWorkSpaceSizeT<float>();                                                          \
-    default:                                                                                      \
-      KLLM_THROW(fmt::format("GetWorkSpaceSize: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// Forward template
-#define LAYER_ForwardT(inter_data_type, input_tensors, output_tensors)                   \
-  switch (inter_data_type) {                                                             \
-    case DataType::TYPE_FP16:                                                            \
-      return ForwardT<float16>(input_tensors, output_tensors);                           \
-    case DataType::TYPE_BF16:                                                            \
-      return ForwardT<bfloat16>(input_tensors, output_tensors);                          \
-    case DataType::TYPE_FP32:                                                            \
-      return ForwardT<float>(input_tensors, output_tensors);                             \
-    default:                                                                             \
-      KLLM_THROW(fmt::format("Forward: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// Init template
-#define LAYER_InitT_WO_float(inter_data_type, parameters, runtime_config, context, rank)    \
-  switch (inter_data_type) {                                                                \
-    case DataType::TYPE_FP16:                                                               \
-      return InitT<float16>(parameters, runtime_config, context, rank);                     \
-    case DataType::TYPE_BF16:                                                               \
-      return InitT<bfloat16>(parameters, runtime_config, context, rank);                    \
-    default:                                                                                \
-      KLLM_THROW(fmt::format("Preprocess: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// Preprocess template
-#define LAYER_PreprocessT_WO_float(inter_data_type, model_config, runtime_config)           \
-  switch (inter_data_type) {                                                                \
-    case DataType::TYPE_FP16:                                                               \
-      return PreprocessT<float16>(model_config, runtime_config);                            \
-    case DataType::TYPE_BF16:                                                               \
-      return PreprocessT<bfloat16>(model_config, runtime_config);                           \
-    default:                                                                                \
-      KLLM_THROW(fmt::format("Preprocess: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// GetWorkSpaceSize template
-#define LAYER_GetWorkSpaceSizeT_WO_float(inter_data_type)                                         \
-  switch (inter_data_type) {                                                                      \
-    case DataType::TYPE_FP16:                                                                     \
-      return GetWorkSpaceSizeT<float16>();                                                        \
-    case DataType::TYPE_BF16:                                                                     \
-      return GetWorkSpaceSizeT<bfloat16>();                                                       \
-    default:                                                                                      \
-      KLLM_THROW(fmt::format("GetWorkSpaceSize: Unsupported Tensor type: {}.", inter_data_type)); \
-  }
-
-// Forward template
-#define LAYER_ForwardT_WO_float(inter_data_type, input_tensors, output_tensors)          \
-  switch (inter_data_type) {                                                             \
-    case DataType::TYPE_FP16:                                                            \
-      return ForwardT<float16>(input_tensors, output_tensors);                           \
-    case DataType::TYPE_BF16:                                                            \
-      return ForwardT<bfloat16>(input_tensors, output_tensors);                          \
-    default:                                                                             \
-      KLLM_THROW(fmt::format("Forward: Unsupported Tensor type: {}.", inter_data_type)); \
+// Dispatch function by float16/bfloat16
+#define DISPATCH_BY_2_DTYPE(dtype, func, ...)                                                 \
+  switch (dtype) {                                                                            \
+    case DataType::TYPE_FP16:                                                                 \
+      return func<float16>(__VA_ARGS__);                                                      \
+    case DataType::TYPE_BF16:                                                                 \
+      return func<bfloat16>(__VA_ARGS__);                                                     \
+    default:                                                                                  \
+      KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, dtype)); \
   }
 
 }  // namespace ksana_llm

@@ -7,13 +7,16 @@
 
 namespace ksana_llm {
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
+Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters,
                                                               const RuntimeConfig& runtime_config,
                                                               std::shared_ptr<Context> context, int rank) {
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
-  return AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
+  return AttentionLayer::Init(parameters, runtime_config, context, rank);
+}
+
+Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
 }
 
 /*
@@ -25,8 +28,8 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
-                                                                 std::vector<Tensor>& output_tensors) {
+Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
+                                                                  std::vector<Tensor>& output_tensors) {
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -109,18 +112,5 @@ Status PagedAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vect
 
   return Status();
 }
-
-using llm_kernels::utils::KVCacheType;
-template class PagedAttentionLayer<float, float, KVCacheType::kAuto>;
-template class PagedAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedAttentionLayer<half, half, KVCacheType::kAuto>;
-template class PagedAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
-#if defined(ENABLE_FP8)
-template class PagedAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
-#endif
 
 }  // namespace ksana_llm

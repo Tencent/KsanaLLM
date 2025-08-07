@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 Status NcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
 template <typename T>

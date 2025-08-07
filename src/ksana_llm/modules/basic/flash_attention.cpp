@@ -8,17 +8,16 @@
 
 namespace ksana_llm {
 
-template <typename T>
-FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext& creation_context,
-                                  const AttentionCreationConfig& attn_config)
+FlashAttention::FlashAttention(bool is_neox, const LayerCreationContext& creation_context,
+                               const AttentionCreationConfig& attn_config)
     : reuse_prefix_caching_(attn_config.reuse_prefix_caching),
       context_(creation_context.context),
       rank_(creation_context.rank),
       enable_blocked_multi_token_forwarding_kv_(
           creation_context.runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv) {
   uint32_t zero = 0;
-  flash_attention_layer_ =
-      CreateAttentionLayer<T, FlashAttentionLayer>(creation_context.runtime_config.attn_backend_config.kv_cache_dtype);
+  flash_attention_layer_ = std::make_shared<FlashAttentionLayer>();
+
   std::vector<std::any> attention_param;
   attention_param.push_back(attn_config.model_config.quant_config.method);  // for quant method
   attention_param.push_back(attn_config.model_config.layernorm_eps);        // for q k layernorm
@@ -31,7 +30,7 @@ FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext& crea
   attention_param.push_back(attn_config.size_per_head);
   attention_param.push_back(attn_config.stride_size);
   attention_param.push_back(attn_config.tensor_para_size);
-  attention_param.push_back(attn_config.data_type);
+  attention_param.push_back(attn_config.kv_cache_dtype);
   attention_param.push_back(
       attn_config.model_config.k_scales[attn_config.idx + creation_context.pipeline_config.lower_layer_idx]);
   attention_param.push_back(
@@ -66,16 +65,12 @@ FlashAttention<T>::FlashAttention(bool is_neox, const LayerCreationContext& crea
   }
 }
 
-template <typename T>
-FlashAttention<T>::~FlashAttention() {}
+FlashAttention::~FlashAttention() {}
 
-template <typename T>
-Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                  std::shared_ptr<ModelInput>& model_input,
-                                  std::vector<Tensor>& hidden_buffer_tensors_1,
-                                  std::vector<Tensor>& shared_buffer_tensors,
-                                  const AttentionForwardContext& forward_context, Tensor query_layernorm_weight,
-                                  Tensor key_layernorm_weight) {
+Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::shared_ptr<ModelInput>& model_input,
+                               std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& shared_buffer_tensors,
+                               const AttentionForwardContext& forward_context, Tensor query_layernorm_weight,
+                               Tensor key_layernorm_weight) {
   if (reuse_prefix_caching_ && !enable_blocked_multi_token_forwarding_kv_) {
     AddAttentionPrefixCache(hidden_buffer_tensors_0, model_input, hidden_buffer_tensors_1, shared_buffer_tensors);
   }
@@ -121,11 +116,10 @@ Status FlashAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
   return Status();
 }
 
-template <typename T>
-Status FlashAttention<T>::AddAttentionPrefixCache(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                  std::shared_ptr<ModelInput>& model_input,
-                                                  std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                  std::vector<Tensor>& shared_buffer_tensors) {
+Status FlashAttention::AddAttentionPrefixCache(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                               std::shared_ptr<ModelInput>& model_input,
+                                               std::vector<Tensor>& hidden_buffer_tensors_1,
+                                               std::vector<Tensor>& shared_buffer_tensors) {
   // The input shape for Flash Attention must match the actual token_num, which includes the lengths of both prefix and
   // speculative tokens
   // The mmha_prefix_input reserves space for all tokens. Here, the tokens from mmha_origin_input are copied to their
@@ -170,11 +164,10 @@ Status FlashAttention<T>::AddAttentionPrefixCache(std::vector<Tensor>& hidden_bu
   return Status();
 }
 
-template <typename T>
-Status FlashAttention<T>::RemoveAttentionPrefixCache(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                     std::shared_ptr<ModelInput>& model_input,
-                                                     std::vector<Tensor>& hidden_buffer_tensors_1,
-                                                     std::vector<Tensor>& shared_buffer_tensors) {
+Status FlashAttention::RemoveAttentionPrefixCache(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                                  std::shared_ptr<ModelInput>& model_input,
+                                                  std::vector<Tensor>& hidden_buffer_tensors_1,
+                                                  std::vector<Tensor>& shared_buffer_tensors) {
   // After the completion of MMHA inference, copy the data from the MMHA output results,
   // excluding the Prefix Cache section, and continue with the subsequent inference.
   auto& mmha_prefix_output = hidden_buffer_tensors_0[0];
@@ -216,9 +209,5 @@ Status FlashAttention<T>::RemoveAttentionPrefixCache(std::vector<Tensor>& hidden
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   return Status();
 }
-
-template class FlashAttention<float>;
-template class FlashAttention<float16>;
-template class FlashAttention<bfloat16>;
 
 }  // namespace ksana_llm

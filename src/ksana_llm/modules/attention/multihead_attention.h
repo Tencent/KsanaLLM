@@ -17,7 +17,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class MultiHeadAttention {
  public:
   MultiHeadAttention(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_norm,
@@ -31,7 +30,7 @@ class MultiHeadAttention {
                  const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
  private:
-  std::shared_ptr<CommonAttention<T>> attentions_;
+  std::shared_ptr<CommonAttention> attentions_;
 
   std::shared_ptr<Add> adds_;
 

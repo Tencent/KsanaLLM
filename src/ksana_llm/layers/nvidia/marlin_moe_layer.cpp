@@ -36,7 +36,7 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-size_t MarlinMoeLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+size_t MarlinMoeLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
 
 template <typename T>
 size_t MarlinMoeLayer::GetWorkSpaceSizeT() {

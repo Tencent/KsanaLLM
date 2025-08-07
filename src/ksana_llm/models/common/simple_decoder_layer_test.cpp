@@ -178,7 +178,7 @@ class FakeTinyWeightTest : public testing::Test {
    * This function tests forward funtion works with fake weight.
    * Other models can be tested by replace ModelType, weight_data_type and Weight
    */
-  template <template <class> class ModelType, typename weight_data_type>
+  template <class ModelType, typename weight_data_type>
   void TestModelInferfaceForward(std::shared_ptr<BaseWeight> llama_weight,
                                  const std::vector<float> &prefill_hidden_state_baseline,
                                  const std::vector<float> &decode_hidden_state_baseline,
@@ -192,7 +192,7 @@ class FakeTinyWeightTest : public testing::Test {
       return;
     }
 #endif
-    KLLM_LOG_DEBUG << "Start ModelType: " << typeid(ModelType<weight_data_type>).name()
+    KLLM_LOG_DEBUG << "Start ModelType: " << typeid(ModelType).name()
                    << ", Type: " << GetTypeString(model_config.weight_data_type) << std::endl;
     std::string log_prefix = fmt::format("[Test: {} ] ", GetTypeString(model_config.weight_data_type));
 
@@ -203,7 +203,7 @@ class FakeTinyWeightTest : public testing::Test {
     EventCreate(&start);
     EventCreate(&stop);
 
-    std::shared_ptr<ModelInterface<weight_data_type>> llama = std::make_shared<ModelType<weight_data_type>>();
+    std::shared_ptr<ModelInterface> llama = std::make_shared<ModelType>();
 
     bool reuse_prefix_config = false;
     std::shared_ptr<FakeModel<weight_data_type>> fake_model = std::make_shared<FakeModel<weight_data_type>>(
@@ -294,14 +294,14 @@ class FakeTinyWeightTest : public testing::Test {
     EventDestroy(stop);
     EventDestroy(start);
     DeviceSynchronize();
-    KLLM_LOG_DEBUG << "Finish ModelType: " << typeid(ModelType<weight_data_type>).name()
+    KLLM_LOG_DEBUG << "Finish ModelType: " << typeid(ModelType).name()
                    << ", Type: " << GetTypeString(model_config.weight_data_type) << std::endl;
   }
 
   /**
    * Tests for different models and weights
    */
-  template <template <class> class ModelType, typename weight_data_type, typename WeightType>
+  template <class ModelType, typename weight_data_type, typename WeightType>
   void DoLayerTest(const ModelTestConfig &model_test_config, const std::vector<float> &prefill_hidden_state_baseline,
                    const std::vector<float> &decode_hidden_state_baseline, const TestThresholds &thresholds) {
     DefaultWeightValueInitializer default_weight_initializer;
@@ -318,7 +318,7 @@ class FakeTinyWeightTest : public testing::Test {
    * It causes result to be all Nan
    * So we test Gpt model separately and only assert on the prefill output result as for now
    */
-  template <template <class> class ModelType, typename WeightType>
+  template <class ModelType, typename WeightType>
   void DoGptForwardTest(const ModelTestConfig &model_test_config) {
 #ifdef ENABLE_ACL
     GTEST_SKIP_("ACL not support this test temporary.");
@@ -332,7 +332,7 @@ class FakeTinyWeightTest : public testing::Test {
     std::shared_ptr<BaseWeight> gpt_weight =
         std::make_shared<WeightType>(model_config, runtime_config, rank_, model_test_config.add_qkv_bias,
                                      model_test_config.use_shared_moe, &default_weight_initializer);
-    std::shared_ptr<ModelInterface<float16>> gpt = std::make_shared<Gpt<float16>>();
+    std::shared_ptr<ModelInterface> gpt = std::make_shared<Gpt>();
     std::shared_ptr<FakeModel<float16>> fake_model = std::make_shared<FakeModel<float16>>(
         gpt, context_, rank_, model_config, runtime_config, pipeline_config_, gpt_weight, false);
     // ContextDecode
@@ -348,7 +348,7 @@ class FakeTinyWeightTest : public testing::Test {
     EXPECT_EQ(prefill_output_data.size(), input_ids.size() * hidden_state_len);
   }
 
-  template <template <class> class ModelType, typename WeightType>
+  template <class ModelType, typename WeightType>
   void DoForwardTest(const ModelTestConfig &model_test_config, const std::vector<float> &prefill_hidden_state_baseline,
                      const std::vector<float> &decode_hidden_state_baseline, const TestThresholds &thresholds) {
 #ifdef ENABLE_TOPS

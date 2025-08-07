@@ -8,16 +8,19 @@
 
 namespace ksana_llm {
 
-template <typename T>
-Status ConcatLayer<T>::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                            std::shared_ptr<Context> context, int rank) {
+Status ConcatLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                         std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
   concat_dim = std::any_cast<const size_t>(parameters[0]);
   return Status();
 }
 
+Status ConcatLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+}
+
 template <typename T>
-Status ConcatLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status ConcatLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   const auto& input_a = input_tensors[0];
   const auto& input_b = input_tensors[1];
   auto& output = output_tensors[0];
@@ -53,9 +56,5 @@ Status ConcatLayer<T>::Forward(const std::vector<Tensor>& input_tensors, std::ve
 
   return Status();
 }
-
-template class ConcatLayer<float>;
-template class ConcatLayer<half>;
-template class ConcatLayer<__nv_bfloat16>;
 
 }  // namespace ksana_llm

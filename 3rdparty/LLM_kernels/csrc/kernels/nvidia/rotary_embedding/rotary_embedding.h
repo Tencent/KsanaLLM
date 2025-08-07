@@ -37,9 +37,7 @@ enum RotaryEmbeddingType {
   INTERNLM2_DYNAMIC_NTK_SCALING
 };
 
-template <typename T>
 struct RotaryEmbeddingParam {
-  T* cos_sin_cache;  // [max_position_embeddings, rotary_dim]
   int rotary_dim;
   int max_position_embeddings;
   int head_size;
@@ -56,8 +54,6 @@ struct RotaryEmbeddingParam {
   // Due to the optimization of PrefixCaching for computation reuse, a mask is used during rotary_embedding
   // kernel forward to avoid multiple executions of rotary_embedding on the prefix portion.
   const int64_t* mask;
-  T* query_;
-  T* key_;
   int num_tokens_;
 
   RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT;
@@ -75,10 +71,10 @@ struct RotaryEmbeddingParam {
   bool use_deepseek_rope = false;
 };
 
-template <typename T>
 class RotaryEmbeddingCuda {
  public:
-  void SetConfig(T* cos_sin_cache,  // temp buffer, [max_position_embeddings, rotary_dim]
+  template <typename T>
+  void SetConfig(void* cos_sin_cache,  // temp buffer, [max_position_embeddings, rotary_dim]
                  const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
                  const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
                  cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
@@ -90,14 +86,20 @@ class RotaryEmbeddingCuda {
 
   void SetInput(const int64_t* positions,  // [batch_size, seq_len] or [num_tokens]
                 const int64_t* mask,       // [batch_size, seq_len] or [num_tokens]
-                T* query,  // [batch_size, seq_len, num_heads * head_size] or [num_tokens, num_heads * head_size]
-                T* key,    // [batch_size, seq_len, num_kv_heads * head_size] or [num_tokens, num_kv_heads * head_size]
+                void* query,               // [batch_size, seq_len, num_heads * head_size] or
+                                           // [num_tokens, num_heads * head_size]
+                void* key,                 // [batch_size, seq_len, num_kv_heads * head_size] or
+                                           // [num_tokens, num_kv_heads * head_size]
                 int num_tokens, cudaStream_t& stream);
 
+  template <typename T>
   void Forward();
 
  private:
-  RotaryEmbeddingParam<T> params_;
+  RotaryEmbeddingParam params_;
+  void* cos_sin_cache_;  // [max_position_embeddings, rotary_dim]
+  void* query_;
+  void* key_;
 };
 
 }  // namespace nvidia

@@ -65,7 +65,7 @@ void InvokeMlaPagedAttention(
     void* cache_offsets_ptr, int seqs_num, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
     int v_head_dim, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale, float v_scale,
     int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
-    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr,
+    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* workspace_ptr,
     float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,
     const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,
     int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, QuantMode mm_quant_mode,
@@ -146,10 +146,10 @@ void InvokeMlaPagedAttention(
   }
 
   if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
+                                    stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
   /*
   Input Parameters:
@@ -284,7 +284,7 @@ void InvokeMlaPagedAttention(
       int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int head_size, int num_kv_heads, \
       int stride_size, int block_size, float k_scale, float v_scale, int batch, void* rotary_embedding_pos,          \
       void* rotary_embedding_mask, int total_tokens, float attn_scale,                                               \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda, void* workspace_ptr, \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* workspace_ptr,           \
       float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,   \
       const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,           \
       int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, QuantMode mm_quant_mode,         \
@@ -313,20 +313,19 @@ void InvokeAbsorbMlaPagedAttention(
     void* cache_offsets_ptr, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
     int v_head_dim, int num_kv_heads, int block_size, float k_scale, float v_scale, int batch,
     void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
-    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,
-    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,
-    void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len,
-    int tail_offset_token, bool enable_flash_mla) {
+    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* tile_scheduler_metadata_ptr,
+    void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
+    int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, int tail_offset_token, bool enable_flash_mla) {
   // 修改stride_size 和 head_size
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
   auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
 
   if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(
-        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_tokens, stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward());
+    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
+                                    stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
   /*
   Input Parameters:
@@ -438,7 +437,7 @@ void InvokeAbsorbMlaPagedAttention(
       void* cache_offsets_ptr, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,           \
       int v_head_dim, int num_kv_heads, int block_size, float k_scale, float v_scale, int batch,                      \
       void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,                    \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda<SCALAR_T>>& rotary_embedding_cuda,                       \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                                 \
       void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,      \
       void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, \
       int tail_offset_token, bool enable_flash_mla)
@@ -459,11 +458,9 @@ void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream
   llm_kernels::nvidia::SetFlashMlaAttribute(max_batch_size, stream);
 }
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vector<std::any>& parameters,
-                                                                 const RuntimeConfig& runtime_config,
-                                                                 std::shared_ptr<Context> context, int rank) {
-  AttentionLayer<SCALAR_T>::Init(parameters, runtime_config, context, rank);
+Status PagedMlaAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                    std::shared_ptr<Context> context, int rank) {
+  AttentionLayer::Init(parameters, runtime_config, context, rank);
 
   // index 25 is max_batch_size in PagedMlaAttention, disgusting code, be careful.
   const size_t max_batch_size = std::any_cast<const size_t>(parameters[25]);
@@ -471,6 +468,10 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Init(const std::vect
   enable_flash_mla_ = runtime_config.enable_flash_mla;
 
   return Status();
+}
+
+Status PagedMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
 }
 
 /*
@@ -482,8 +483,7 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::vector<Tensor>& input_tensors,
-                                                                    std::vector<Tensor>& output_tensors) {
+Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   auto input_iter = input_tensors.cbegin();
   const Tensor& hidden_buffer1 = *input_iter++;
   const Tensor& kv_seq_len = *input_iter++;  // kv seq len (len of forwarding_tokens)
@@ -611,18 +611,5 @@ Status PagedMlaAttentionLayer<SCALAR_T, CACHE_T, KV_DTYPE>::Forward(const std::v
 
   return Status();
 }
-
-using llm_kernels::utils::KVCacheType;
-template class PagedMlaAttentionLayer<float, float, KVCacheType::kAuto>;
-template class PagedMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<float, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedMlaAttentionLayer<half, half, KVCacheType::kAuto>;
-template class PagedMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<half, uint8_t, KVCacheType::kFp8E5M2>;
-template class PagedMlaAttentionLayer<__nv_bfloat16, __nv_bfloat16, KVCacheType::kAuto>;
-#if defined(ENABLE_FP8)
-template class PagedMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E4M3>;
-template class PagedMlaAttentionLayer<__nv_bfloat16, uint8_t, KVCacheType::kFp8E5M2>;
-#endif
 
 }  // namespace ksana_llm

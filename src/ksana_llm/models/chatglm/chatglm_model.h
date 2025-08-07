@@ -7,7 +7,6 @@
 #include "ksana_llm/models/common/simple_decoder_layer.h"
 
 namespace ksana_llm {
-template <typename T>
 class ChatglmModel : public CommonModel {
  public:
   ChatglmModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -25,7 +24,7 @@ class ChatglmModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<SimpleDecoderLayer>> decoder_layers_;
 };
 
 }  // namespace ksana_llm

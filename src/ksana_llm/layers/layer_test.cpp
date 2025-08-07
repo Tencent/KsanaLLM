@@ -110,7 +110,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
 
 #ifdef ENABLE_CUDA
   std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, 1);
-  FlashAttentionLayer<half, half, llm_kernels::utils::KVCacheType::kAuto> flash_attention_layer;
+  FlashAttentionLayer flash_attention_layer;
   QuantMode quant_mode = QUANT_NONE;
   int head_num = 32;
   int kv_head_num = 32;
@@ -269,7 +269,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                       },
                       output_tensors)
                   .OK());
-  PagedAttentionLayer<half, half, llm_kernels::utils::KVCacheType::kAuto> attention_layer;
+  PagedAttentionLayer attention_layer;
   EXPECT_TRUE(attention_layer
                   .Init({quant_mode,
                          static_cast<float>(0),

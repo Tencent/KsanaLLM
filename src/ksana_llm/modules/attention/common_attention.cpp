@@ -6,9 +6,8 @@
 
 namespace ksana_llm {
 
-template <typename T>
-CommonAttention<T>::CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm,
-                                    LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config)
+CommonAttention::CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, LayerCreationContext& creation_context,
+                                 ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   attn_o_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
@@ -27,14 +26,13 @@ CommonAttention<T>::CommonAttention(int layer_idx, bool is_neox, bool use_qk_nor
                                             creation_context.pipeline_config.lower_layer_idx + layer_idx -
                                             model_creation_config.attn_config.model_config.num_layer + 1;
   }
-  flash_attentions_ = std::make_shared<FlashAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
-  paged_attentions_ = std::make_shared<PagedAttention<T>>(is_neox, creation_context, model_creation_config.attn_config);
+  flash_attentions_ = std::make_shared<FlashAttention>(is_neox, creation_context, model_creation_config.attn_config);
+  paged_attentions_ = std::make_shared<PagedAttention>(is_neox, creation_context, model_creation_config.attn_config);
 }
 
-template <typename T>
-Status CommonAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                   std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
-                                   ForwardingContext& forwarding_context) {
+Status CommonAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
+                                ForwardingContext& forwarding_context) {
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   auto& shared_buffer_tensors = reduce_buffer_tensors;
   auto& paged_buffer_tensors = reduce_buffer_tensors;
@@ -76,9 +74,5 @@ Status CommonAttention<T>::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
 
   return Status();
 }
-
-template class CommonAttention<float>;
-template class CommonAttention<float16>;
-template class CommonAttention<bfloat16>;
 
 }  // namespace ksana_llm

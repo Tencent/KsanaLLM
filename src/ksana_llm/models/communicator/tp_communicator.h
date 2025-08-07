@@ -7,7 +7,6 @@
 
 namespace ksana_llm {
 
-template <typename T>
 class TpCommunicator {
  public:
   TpCommunicator() {}

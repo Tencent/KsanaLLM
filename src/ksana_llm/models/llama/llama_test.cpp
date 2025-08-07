@@ -127,8 +127,8 @@ class LlamaTest : public testing::Test {
       StreamSynchronize(context_->GetMemoryManageStreams()[device_id]);
     }
     llama_weight->ProcessWeights();  // End Loader Weight
-    std::shared_ptr<LlamaModel<weight_data_type>> llama =
-        std::make_shared<LlamaModel<weight_data_type>>(model_config, runtime_config, 0, context_, llama_weight);
+    std::shared_ptr<LlamaModel> llama =
+        std::make_shared<LlamaModel>(model_config, runtime_config, 0, context_, llama_weight);
     llama->AllocResources(schedule_id);
 
     // Weight Name Check

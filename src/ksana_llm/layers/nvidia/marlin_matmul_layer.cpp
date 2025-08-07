@@ -31,10 +31,10 @@ Status MarlinMatMulLayer::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
-size_t MarlinMatMulLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+size_t MarlinMatMulLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
 
 Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }

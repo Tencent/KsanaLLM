@@ -70,7 +70,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
   using CommonModel::cast_layer_;
 
-  std::shared_ptr<MultiHeadLatentAttention<T>> mla_;
+  std::shared_ptr<MultiHeadLatentAttention> mla_;
   MlaBuffers mla_buffers_;
 
   MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
@@ -87,12 +87,12 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
   ~MultiHeadLatentAttentionTestModel() { CommonModel::FreeResources(schedule_id); }
 
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
-    MultiHeadLatentAttention<T>::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
-                                               creation_context.runtime_config, mla_buffers_);
+    MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
+                                            creation_context.runtime_config, mla_buffers_);
     bool is_neox = true;
     int layer_idx = 0;
-    mla_ = std::make_shared<MultiHeadLatentAttention<T>>(layer_idx, is_neox, creation_context, model_creation_config,
-                                                         mla_buffers_);
+    mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, is_neox, creation_context, model_creation_config,
+                                                      mla_buffers_);
     return Status();
   }
 

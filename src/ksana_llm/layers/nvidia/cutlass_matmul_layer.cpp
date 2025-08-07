@@ -12,17 +12,17 @@ namespace ksana_llm {
 Status CutlassMatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                 std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
-  LAYER_InitT(inter_data_type_, parameters, runtime_config, context, rank);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
-size_t CutlassMatMulLayer::GetWorkSpaceSize() { LAYER_GetWorkSpaceSizeT(inter_data_type_); }
+size_t CutlassMatMulLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
 
 Status CutlassMatMulLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
-  LAYER_PreprocessT(inter_data_type_, model_config, runtime_config);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
 }
 
 Status CutlassMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  LAYER_ForwardT(inter_data_type_, input_tensors, output_tensors);
+  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
 template <typename T>

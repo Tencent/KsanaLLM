@@ -8,8 +8,7 @@
 
 namespace ksana_llm {
 
-template <typename T>
-class Qwen : public ModelInterface<T> {
+class Qwen : public ModelInterface {
  public:
   Qwen() {}
   ~Qwen() = default;
@@ -19,10 +18,9 @@ class Qwen : public ModelInterface<T> {
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) override;
 
  private:
-  std::map<int, std::shared_ptr<SimpleDecoderLayer<T>>> decoder_layers_;
+  std::map<int, std::shared_ptr<SimpleDecoderLayer>> decoder_layers_;
 };
 
-template <typename T>
 class QwenModel : public CommonModel {
  public:
   QwenModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -38,7 +36,7 @@ class QwenModel : public CommonModel {
   using CommonModel::SetHiddenUnitBuffer;
 
  private:
-  Qwen<T> qwen_;
+  Qwen qwen_;
 };
 
 }  // namespace ksana_llm

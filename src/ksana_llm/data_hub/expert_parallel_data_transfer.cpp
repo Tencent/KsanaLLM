@@ -14,12 +14,10 @@
 
 namespace ksana_llm {
 
-template <typename T>
-ExpertParallelDataTransfer<T>::ExpertParallelDataTransfer() {}
+ExpertParallelDataTransfer::ExpertParallelDataTransfer() {}
 
-template <typename T>
-void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
-                                                              ForwardingContext& forwarding_context, bool is_sync) {
+void ExpertParallelDataTransfer::SendHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
+                                                           ForwardingContext& forwarding_context, bool is_sync) {
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) return;
 
   // Send comm meta.
@@ -65,8 +63,7 @@ void ExpertParallelDataTransfer<T>::SendHiddenUnitBufferForEP(const std::vector<
   GetExpertHiddenUnitBufferPool()->ExpertBarrier();
 }
 
-template <typename T>
-std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context) {
+std::vector<Tensor>& ExpertParallelDataTransfer::RecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context) {
   static std::vector<Tensor> empty;
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
@@ -92,9 +89,7 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::RecvHiddenUnitBufferForEP(Fo
   }
 }
 
-template <typename T>
-std::vector<Tensor>& ExpertParallelDataTransfer<T>::AsyncRecvHiddenUnitBufferForEP(
-    ForwardingContext& forwarding_context) {
+std::vector<Tensor>& ExpertParallelDataTransfer::AsyncRecvHiddenUnitBufferForEP(ForwardingContext& forwarding_context) {
   static std::vector<Tensor> empty;
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     return empty;
@@ -120,14 +115,12 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::AsyncRecvHiddenUnitBufferFor
 
 // TODO(xingjinglu): To support async mode of expert parallel, every expert node may send and receive token-hidden
 // states asynchronously.
-template <typename T>
-void ExpertParallelDataTransfer<T>::CombineHiddenUnitBufferForEP(std::vector<Tensor>& residual_buffer,
-                                                                 ForwardingContext& forwarding_context) {
+void ExpertParallelDataTransfer::CombineHiddenUnitBufferForEP(std::vector<Tensor>& residual_buffer,
+                                                              ForwardingContext& forwarding_context) {
   return;
 }
 
-template <typename T>
-std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBufferRef(
+std::vector<Tensor>& ExpertParallelDataTransfer::GetExpertRecvHiddenUnitBufferRef(
     HiddenUnitDeviceBuffer* hidden_unit, ForwardingContext& forwarding_context) {
   if (forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     // Should not execute here.
@@ -161,9 +154,8 @@ std::vector<Tensor>& ExpertParallelDataTransfer<T>::GetExpertRecvHiddenUnitBuffe
 }
 
 // Now used for expert parallel.
-template <typename T>
-HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
-    const std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
+HiddenUnitDeviceBuffer* ExpertParallelDataTransfer::SetHiddenUnitBufferForEP(const std::vector<Tensor>& residual_buffer,
+                                                                             ForwardingContext& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
     bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
@@ -184,8 +176,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetHiddenUnitBufferForEP(
   return nullptr;
 }
 
-template <typename T>
-HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBufferForEP(
+HiddenUnitDeviceBuffer* ExpertParallelDataTransfer::SetCommMetaHiddenUnitBufferForEP(
     expert_parallel_comm_meta& meta_data, DataType dtype, ForwardingContext& forwarding_context) {
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsExpertParallelStandalone()) {
@@ -210,8 +201,7 @@ HiddenUnitDeviceBuffer* ExpertParallelDataTransfer<T>::SetCommMetaHiddenUnitBuff
   return nullptr;
 }
 
-template <typename T>
-void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext& forwarding_context) {
+void ExpertParallelDataTransfer::FreeHiddenUnitDeviceBuffer(ForwardingContext& forwarding_context) {
   if (forwarding_context.GetCurrentRank() == 0) {
     while (!hidden_device_buffer_.empty()) {
       HiddenUnitDeviceBuffer* hidden_unit_buffer = hidden_device_buffer_.back();
@@ -223,9 +213,5 @@ void ExpertParallelDataTransfer<T>::FreeHiddenUnitDeviceBuffer(ForwardingContext
   GetExpertHiddenUnitBufferPool()->ExpertBarrier();
   return;
 }
-
-template class ExpertParallelDataTransfer<float>;
-template class ExpertParallelDataTransfer<float16>;
-template class ExpertParallelDataTransfer<bfloat16>;
 
 }  // namespace ksana_llm
