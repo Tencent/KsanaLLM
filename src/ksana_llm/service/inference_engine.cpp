@@ -237,7 +237,6 @@ Status InferenceEngine::Initialize() {
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
     dp_group_config.host_block_num = env->GetTotalHostBlockNum();
     dp_group_config.block_size = runtime_config.attn_backend_config.block_size;
-    dp_group_config.convert_size = env->GetConvertSize();
 
     block_allocator_manager_config[dp_id] = dp_group_config;
   }

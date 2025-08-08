@@ -21,6 +21,7 @@
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
 #include "ksana_llm/models/gpt/gpt_config.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"
@@ -28,7 +29,6 @@
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
-#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 
 DEFINE_string(config_file, "examples/ksana_llm.yaml", "The config file path");
 DEFINE_string(host, "localhost", "HTTP service hostname, default is localhost");
@@ -65,7 +65,6 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
     KLLM_LOG_ERROR << "Load yaml config error." << status.GetMessage();
     return status;
   }
-  schedule_config_parser_.ParseConfig(yaml_reader);
 
   // Read profiler config.
   profiler_config_.trace_export_url =
@@ -103,7 +102,7 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
     base_model_dir = model_dir_override;
     tokenizer_dir = model_dir_override;
   }
-  STATUS_CHECK_RETURN(ParseModelConfig(yaml_reader, base_model_dir, tokenizer_dir, model_config_filename));
+  STATUS_CHECK_RETURN(ParseModelAndScheduleConfig(yaml_reader, base_model_dir, tokenizer_dir, model_config_filename));
 
   return Status();
 }
@@ -117,11 +116,13 @@ Status Environment::UpdateModelConfig() {
   return schedule_config_parser_.UpdateModelConfig(model_config_);
 }
 
-Status Environment::ParseModelConfig(YamlReader &yaml_reader, const std::string &model_dir,
-                                     const std::string &tokenizer_dir, const std::string &model_config_filename) {
+Status Environment::ParseModelAndScheduleConfig(YamlReader &yaml_reader, const std::string &model_dir,
+                                                const std::string &tokenizer_dir,
+                                                const std::string &model_config_filename) {
   KLLM_CHECK_WITH_INFO(!model_config_initialized_, "model_config_initialized_ initialized.");
   EnvModelConfigParser model_config_parser(yaml_weight_quant_method_, yaml_gptq_backend_);
   model_config_parser.ParseModelConfig(model_dir, tokenizer_dir, model_config_filename, model_config_);
+  schedule_config_parser_.ParseScheduleConfig(yaml_reader, model_config_);
   schedule_config_parser_.UpdateModelConfig(model_config_);
 
   // TODO(robertyuan): move to ScheduleConfigParser
@@ -168,17 +169,14 @@ void Environment::SetBlockManagerConfig(const BlockManagerConfig &block_manager_
   schedule_config_parser_.SetBlockManagerConfig(block_manager_config);
 }
 
-std::tuple<size_t, size_t> Environment::GetCacheBlockSize(const ModelConfig &model_config,
-                                                          const PipelineConfig &pipeline_config,
-                                                          const BlockManagerConfig &block_manager_config) {
+size_t Environment::GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
+                                      const BlockManagerConfig &block_manager_config) {
   return schedule_config_parser_.GetCacheBlockSize(model_config, pipeline_config, block_manager_config);
 }
 
 Status Environment::CalculateBlockNumber() { return schedule_config_parser_.CalculateBlockNumber(); }
 
 Status Environment::ResetPipelineBlockNumber() { return schedule_config_parser_.ResetPipelineBlockNumber(); }
-
-size_t Environment::GetConvertSize() { return schedule_config_parser_.GetConvertSize(); }
 
 size_t Environment::GetTotalDeviceBlockNum() { return schedule_config_parser_.GetTotalDeviceBlockNum(); }
 

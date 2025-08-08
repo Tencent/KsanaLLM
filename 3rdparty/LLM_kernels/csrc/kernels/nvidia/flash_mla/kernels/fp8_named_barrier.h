@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2025 DeepSeek
- *
  * MIT License
+ *
+ * Copyright (c) 2025 DeepSeek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,18 +21,41 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Adapted from
- * [FlashMLA Project] https://github.com/deepseek-ai/FlashMLA/blob/main/csrc/kernels/splitkv_mla.h
+ * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * reference: https://github.com/deepseek-ai/FlashMLA
+ *
+ * Adapted from [TensorRT-LLM Project]
+ * https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/kernels/flashMLA/named_barrier.h
  */
 
 #pragma once
 
-#ifdef ENABLE_FLASH_MLA
-#  include "params.h"
+#include "cutlass/barrier.h"
+
 namespace llm_kernels {
 namespace nvidia {
-template <typename InputT>
-void run_flash_splitkv_mla_kernel(Flash_fwd_mla_params &params, cudaStream_t stream);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Enumerates the reserved named barriers to avoid potential conflicts
+
+enum class FP8NamedBarriers {
+  SReady = 1,
+  SoftmaxReady = 2,
+  TransVReady = 3,
+};
+
 }  // namespace nvidia
 }  // namespace llm_kernels
-#endif

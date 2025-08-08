@@ -70,6 +70,15 @@ struct Flash_fwd_mla_params {
   int total_num_splits;
   void *__restrict__ softmax_lseaccum_ptr;
   void *__restrict__ oaccum_ptr;
+
+  // FP8 parameters
+  int h; // The number of heads, = h_k
+  int h_h_k_ratio; // The ratio of h and h_k
+  int ngroups; // The number of q_head(s) per KV head, = h_q / h_k
+  int seqlen_q; // The number of q(s) per KV head, = ngroups * s_q
+  int* __restrict__ cu_seqlens_k; // K seqlens
+  float descale_q = 1.0f;
+  float descale_k = 1.0f;
 };
 
 static constexpr int TileSchedulerMetaDataSize = 8;

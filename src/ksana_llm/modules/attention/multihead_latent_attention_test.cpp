@@ -155,7 +155,11 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
       output = {-1977, 2088, -3386, 772.5, 125.68, -575.5};
     } else {
       if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
-        output = {1029, 483.5, -513.5, -1341, 388.25, -719};
+        if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
+          output = {787, 706.5, -280.75, -818, 218.375, -641.5};
+        } else {
+          output = {1029, 483.5, -513.5, -1341, 388.25, -719};
+        }
       } else {
         output = {-133.75, 824, -1569, 678.5, -360.25, 518.5};
       }
@@ -227,7 +231,6 @@ class MlaTest : public testing::Test {
     const std::string test_name = test_info->name();
     if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
       SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-      setenv("ENABLE_FLASH_MLA", "1", 1);
       KLLM_LOG_INFO << "Exec Test ForwardNewAbsorbWithFlashMla*";
     }
 
@@ -263,7 +266,6 @@ class MlaTest : public testing::Test {
     group_1_config.device_block_num = block_manager_config.device_allocator_config.blocks_num;
     group_1_config.host_block_num = block_manager_config.host_allocator_config.blocks_num;
     group_1_config.block_size = block_manager_config.device_allocator_config.block_size;
-    group_1_config.convert_size = block_manager_config.device_allocator_config.convert_size;
 
     BlockAllocatorManagerConfig block_allocator_manager_config;
     block_allocator_manager_config[1] = group_1_config;
@@ -346,7 +348,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
 #endif
 // TODO(zakwang): 支持更多类型
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
-  setenv("ENABLE_FLASH_MLA", "1", 1);
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;
@@ -356,7 +357,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
-  unsetenv("ENABLE_FLASH_MLA");
 #endif
   return;
 }
@@ -383,17 +383,16 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
 #ifdef ENABLE_VLLM_FLASH_ATTN_2
-  setenv("ENABLE_FLASH_MLA", "1", 1);
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
+  runtime_config.attn_backend_config.kv_cache_dtype = TYPE_FP8_E4M3;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
-  unsetenv("ENABLE_FLASH_MLA");
 #endif
   return;
 }

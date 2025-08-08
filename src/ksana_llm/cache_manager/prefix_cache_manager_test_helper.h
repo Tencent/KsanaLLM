@@ -45,11 +45,10 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
  public:
   FakedBlockAllocator(MemoryLocation location, size_t block_num, size_t block_size, int rank = 0,
                       std::shared_ptr<MemoryAllocatorInterface> memory_allocator = nullptr,
-                      std::shared_ptr<Context> context = nullptr, size_t convert_size = 0) {
+                      std::shared_ptr<Context> context = nullptr) {
     location_ = location;
     block_num_ = block_num;
     block_size_ = block_size;
-    convert_size_ = convert_size;
     rank_ = rank;
     memory_allocator_ = memory_allocator;
     context_ = context;
@@ -115,7 +114,6 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
 
   size_t block_num_;
   size_t block_size_;
-  size_t convert_size_ = 0;
 
   int rank_ = -1;
 

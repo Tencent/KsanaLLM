@@ -29,16 +29,14 @@ class PrefixCacheManagerTest : public testing::Test {
     group_1_config.device_block_num = device_block_num;
     group_1_config.host_block_num = host_block_num;
     group_1_config.block_size = block_token_num * 1024 * 1024;
-    group_1_config.convert_size = 0;  // 添加convert_size参数
 
     BlockAllocatorManagerConfig block_allocator_manager_config;
     block_allocator_manager_config[1] = group_1_config;
 
     block_allocator_creation_fn_ = [](MemoryLocation location, size_t block_num, size_t block_size, int rank,
                                       std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
-                                      std::shared_ptr<Context> context, size_t convert_size) {
-      return std::make_shared<FakedBlockAllocator>(location, block_num, block_size, rank, memory_allocator, context,
-                                                   convert_size);
+                                      std::shared_ptr<Context> context) {
+      return std::make_shared<FakedBlockAllocator>(location, block_num, block_size, rank, memory_allocator, context);
     };
 
     context_ = std::make_shared<Context>(tensor_para_size, attn_data_parallel_size, 1);

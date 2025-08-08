@@ -206,7 +206,6 @@ class ModelInput {
 
   const int rank_;
   std::shared_ptr<Context> context_;
-  bool enable_flash_mla_;
 
   int block_size_;
   int layer_num_on_node_;

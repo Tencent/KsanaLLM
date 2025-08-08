@@ -27,6 +27,7 @@
 
 #include <cuda_runtime.h>
 #include <cstdint>
+#include "csrc/utils/quant_type.h"
 
 #pragma once
 
@@ -47,11 +48,13 @@ void InvokeGetMlaMetadata(int *b_seqlen, FlashMlaWorkspaceMap &workspace_param, 
 void GetNumSmParts(FlashMlaWorkspaceMap &workspace_param, const int num_heads_per_head_k, const int num_heads_k,
                    int rank, cudaStream_t stream);
 
-template <typename T>
-void InvokeFlashMla(T *q, T *k_buffer, const int seqlen_q_ori, float sm_scale, void *block_table_ptr, void *b_seqlen,
-                    void *tile_scheduler_metadata_ptr, void *num_splits_ptr, void *workspace, void *att_out,
-                    int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
-                    int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream);
+// FlashMLA inference type follows KV cache type, so the input type is CACHE_T
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void InvokeFlashMla(CACHE_T *q, CACHE_T *k_buffer, const int seqlen_q_ori, float sm_scale, void *block_table_ptr,
+                    void *b_seqlen, void *tile_scheduler_metadata_ptr, void *num_splits_ptr, void *workspace,
+                    void *att_out, int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
+                    float k_scale, float v_scale, int max_blocks_per_seq, int rank, size_t block_num,
+                    cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

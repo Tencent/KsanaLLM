@@ -272,7 +272,6 @@ export MASTER_HOST=master_node_ip
 export MASTER_PORT=master_node_port
 # 最优环境变量配置
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 export USE_TCP_DATA_CHANNEL=1
@@ -292,7 +291,6 @@ export MASTER_HOST=master_node_ip
 export MASTER_PORT=master_node_port
 # 最优环境变量配置
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 export USE_TCP_DATA_CHANNEL=1
@@ -317,7 +315,6 @@ export MODEL_CACHE_PATH=/xxx_cache_model_dir/
 ```bash
 # 最优环境变量配置
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 #（可选）进一步提升性能，略有精度损失

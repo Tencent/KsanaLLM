@@ -104,9 +104,6 @@ struct AllocatorConfig {
   // The block size, in bytes.
   size_t block_size = 0;
 
-  // The buffer size required for dequantization operations, in bytes.
-  size_t convert_size = 0;
-
   // kv_cache storage type
   DataType kv_cache_dtype;
 
@@ -264,7 +261,7 @@ struct ExpertParallelConfig {
 // The config of attention backend.
 struct AttnBackendConfig {
   bool enable_blocked_multi_token_forwarding_kv = false;
-  DataType kv_cache_dtype;  // kv_cache storage type
+  DataType kv_cache_dtype;    // kv_cache storage type
   size_t block_token_num{0};  // The max token number of one block.
   size_t block_size{0};       // The block size, in bytes.
 
@@ -290,7 +287,6 @@ struct RuntimeConfig {
   // Group 2: execution graph config
   // For attention backend.
   AttnBackendConfig attn_backend_config;
-  bool enable_flash_mla = false;
   bool enable_full_shared_expert = false;
   bool separate_prefill_decode = false;
 
@@ -322,7 +318,7 @@ class ScheduleConfigParser {
   ScheduleConfigParser();
 
   // Parse environment from YAML reader.
-  Status ParseConfig(YamlReader &yaml_reader);
+  Status ParseScheduleConfig(YamlReader &yaml_reader, ModelConfig &model_config);
 
   void Reset();
 
@@ -355,7 +351,6 @@ class ScheduleConfigParser {
   void SetBlockManagerConfig(const BlockManagerConfig &block_manager_config);
   Status CalculateBlockNumber();
   Status ResetPipelineBlockNumber();
-  size_t GetConvertSize();
   size_t GetTotalDeviceBlockNum();
   size_t GetTotalHostBlockNum();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
@@ -425,19 +420,16 @@ class ScheduleConfigParser {
   // Init Expert-Parallel Config from env.
   void InitializeExpertParallelConfig();
 
-  // Get {block size, convert_size} in bytes.
-  std::tuple<size_t, size_t> GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                               const BlockManagerConfig &block_manager_config);
+  // Get block size in bytes.
+  size_t GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
+                           const BlockManagerConfig &block_manager_config);
 
  private:
-  bool IsFlashMlaEnable() { return runtime_config_.enable_flash_mla; }
-
   size_t GetCommonBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
                             const BlockManagerConfig &block_manager_config);
 
-  std::tuple<size_t, size_t> GetDeepSeekV3BlockSize(const ModelConfig &model_config,
-                                                    const PipelineConfig &pipeline_config,
-                                                    const BlockManagerConfig &block_manager_config);
+  size_t GetDeepSeekV3BlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
+                                const BlockManagerConfig &block_manager_config);
 
  private:
   // The config of batch schedule.

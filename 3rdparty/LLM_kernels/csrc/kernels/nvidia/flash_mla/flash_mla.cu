@@ -33,6 +33,7 @@
 #  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 
 #  include "csrc/kernels/nvidia/flash_mla/kernels/config.h"
+#  include "csrc/kernels/nvidia/flash_mla/kernels/fp8_flash_fwd_mla.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/get_mla_metadata.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/mla_combine.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
@@ -119,11 +120,12 @@ void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream) {
   llm_kernels::nvidia::SetMlaMetadataKernelAttribute(max_batch_size, stream);
 }
 
-template <typename T>
-void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, void* b_seqlen,
-                    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out,
-                    int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
-                    int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream) {
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr,
+                    void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace,
+                    void* att_out, int batch_size, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
+                    float k_scale, float v_scale, int max_blocks_per_seq, int rank, size_t block_num,
+                    cudaStream_t stream) {
   // q [batch_size, seqlen_q_ori, num_heads_q, head_size_k]
   const int num_heads_q = num_heads;
   const int head_size_k = kv_lora_rank + qk_rope_head_dim;  // must 576
@@ -202,25 +204,51 @@ void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, v
   params.softmax_lseaccum_ptr = workspace_param.softmax_lse_accum_ptr;
   params.oaccum_ptr = workspace_param.out_accum_ptr;
 
+  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3 || KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+    params.h = params.h_k;
+    params.h_h_k_ratio = params.h / params.h_k;
+    params.ngroups = params.q_head_per_hk;
+    params.seqlen_q = params.q_seq_per_hk;
+    params.cu_seqlens_k = params.seqlens_k_ptr;
+    // It is difficult and unnecessary to pass a float type function parameter to a pointer for storage, so we store the
+    // descales in float directly instead of pointers.
+    params.descale_q = k_scale;
+    params.descale_k = k_scale;
+  }
+
   assert(head_size == 576);
-  if constexpr (std::is_same<T, half>::value) {
-    run_flash_splitkv_mla_kernel<cutlass::half_t>(params, stream);
-    run_flash_mla_combine_kernel<cutlass::half_t>(params, stream);
-  } else if constexpr (std::is_same<T, __nv_bfloat16>::value) {
-    run_flash_splitkv_mla_kernel<cutlass::bfloat16_t>(params, stream);
-    run_flash_mla_combine_kernel<cutlass::bfloat16_t>(params, stream);
+  if constexpr (std::is_same<SCALAR_T, half>::value) {
+    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      run_mha_fwd_splitkv_mla<cutlass::float_e4m3_t, cutlass::half_t, 576>(params, stream);
+    } else {
+      run_flash_splitkv_mla_kernel<cutlass::half_t>(params, stream);
+      run_flash_mla_combine_kernel<cutlass::half_t>(params, stream);
+    }
+  } else if constexpr (std::is_same<SCALAR_T, __nv_bfloat16>::value) {
+    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      run_mha_fwd_splitkv_mla<cutlass::float_e4m3_t, cutlass::bfloat16_t, 576>(params, stream);
+    } else {
+      run_flash_splitkv_mla_kernel<cutlass::bfloat16_t>(params, stream);
+      run_flash_mla_combine_kernel<cutlass::bfloat16_t>(params, stream);
+    }
   }
 }
 
-#  define INVOKE_FLASH_MLA(T)                                                                                      \
-    template void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, \
-                                 void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr,          \
-                                 void* workspace, void* att_out, int tokens_num, int num_heads, int kv_lora_rank,  \
-                                 int qk_rope_head_dim, int page_size, int max_blocks_per_seq, int rank,            \
-                                 size_t block_num, cudaStream_t stream)
-INVOKE_FLASH_MLA(half);
-INVOKE_FLASH_MLA(float);
-INVOKE_FLASH_MLA(__nv_bfloat16);
+#  define INVOKE_FLASH_MLA(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
+    template void InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(                                                   \
+        CACHE_T * q, CACHE_T * k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr,          \
+        void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out, \
+        int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size, float k_scale,     \
+        float v_scale, int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream)
+INVOKE_FLASH_MLA(half, half, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_FLASH_MLA(float, float, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_FLASH_MLA(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #  undef INVOKE_FLASH_MLA
 }  // namespace nvidia
 }  // namespace llm_kernels
@@ -242,21 +270,28 @@ void InvokeGetMlaMetadata(int* b_seqlen, FlashMlaWorkspaceMap& workspace_param, 
 void GetNumSmParts(FlashMlaWorkspaceMap& workspace_param, const int num_heads_per_head_k, const int num_heads_k,
                    int rank, cudaStream_t stream) {}
 
-template <typename T>
-void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, void* b_seqlen,
-                    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out,
-                    int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
-                    int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream) {}
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr,
+                    void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace,
+                    void* att_out, int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size,
+                    float k_scale, float v_scale, int max_blocks_per_seq, int rank, size_t block_num,
+                    cudaStream_t stream) {}
 
-#  define INVOKE_FLASH_MLA(T)                                                                                      \
-    template void InvokeFlashMla(T* q, T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr, \
-                                 void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr,          \
-                                 void* workspace, void* att_out, int tokens_num, int num_heads, int kv_lora_rank,  \
-                                 int qk_rope_head_dim, int page_size, int max_blocks_per_seq, int rank,            \
-                                 size_t block_num, cudaStream_t stream)
-INVOKE_FLASH_MLA(half);
-INVOKE_FLASH_MLA(float);
-INVOKE_FLASH_MLA(__nv_bfloat16);
+#  define INVOKE_FLASH_MLA(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
+    template void InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(                                                   \
+        CACHE_T * q, CACHE_T * k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr,          \
+        void* b_seqlen, void* tile_scheduler_metadata_ptr, void* num_splits_ptr, void* workspace, void* att_out, \
+        int tokens_num, int num_heads, int kv_lora_rank, int qk_rope_head_dim, int page_size, float k_scale,     \
+        float v_scale, int max_blocks_per_seq, int rank, size_t block_num, cudaStream_t stream)
+INVOKE_FLASH_MLA(half, half, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_FLASH_MLA(float, float, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_FLASH_MLA(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_FLASH_MLA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_FLASH_MLA(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #  undef INVOKE_FLASH_MLA
 }  // namespace nvidia
 }  // namespace llm_kernels

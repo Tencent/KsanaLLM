@@ -61,7 +61,7 @@ class ModelInputTest : public testing::Test {
     std::srand(0);
   }
 
-  void TearDown() override { unsetenv("ENABLE_FLASH_MLA"); }
+  void TearDown() override {}
 
  protected:
   std::unique_ptr<ModelInput> model_input;
@@ -233,10 +233,6 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
 
 #ifdef ENABLE_CUDA
 TEST_F(ModelInputTest, PrepareFlashMlaTest) {
-  // 保存原始环境变量值
-  const char* original_env = std::getenv("ENABLE_FLASH_MLA");
-  std::string original_env_value = original_env ? original_env : "";
-
   // 测试用例1: 当model_config_.mla_config.kv_lora_rank为0时，PrepareFlashMla应该直接返回
   model_input->model_config_.mla_config.kv_lora_rank = 0;
   model_input->single_token_request_num = 5;
@@ -249,23 +245,7 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
   model_input->PrepareFlashMla(model_input->page_single_input);
   // 同样，这里我们只是确保方法不会崩溃
 
-  // 测试用例3: 当环境变量ENABLE_FLASH_MLA不是"1"时，PrepareFlashMla不应执行任何操作
-  model_input->model_config_.mla_config.kv_lora_rank = 10;
-  model_input->single_token_request_num = 5;
-
-  // 设置环境变量为"0"
-  setenv("ENABLE_FLASH_MLA", "0", 1);
-
-  MemsetAsync(model_input->page_single_input.num_splits.GetPtr<void>(), sizeof(int), 0,
-              model_input->context_->GetH2DStreams()[model_input->rank_]);
-
-  model_input->PrepareFlashMla(model_input->page_single_input);
-  // 这里我们只是确保方法不会崩溃
-
-  // 测试用例4: 当环境变量ENABLE_FLASH_MLA是"1"且满足其他条件时，PrepareFlashMla应该执行相应操作
-  // 设置环境变量为"1"
-  setenv("ENABLE_FLASH_MLA", "1", 1);
-
+  // 测试用例3: 当所有条件满足时，PrepareFlashMla应该执行相应操作
   // 准备测试数据
   model_input->model_config_.mla_config.kv_lora_rank = 512;
   model_input->single_token_request_num = 4;
@@ -292,12 +272,6 @@ TEST_F(ModelInputTest, PrepareFlashMlaTest) {
 
     // 同步流以确保复制完成
     StreamSynchronize(model_input->context_->GetH2DStreams()[model_input->rank_]);
-    // 恢复原始环境变量
-    if (original_env) {
-      setenv("ENABLE_FLASH_MLA", original_env_value.c_str(), 1);
-    } else {
-      unsetenv("ENABLE_FLASH_MLA");
-    }
     EXPECT_EQ(num_splits_cpu, 0);
   }
 }

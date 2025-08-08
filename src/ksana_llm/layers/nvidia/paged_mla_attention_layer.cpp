@@ -315,7 +315,7 @@ void InvokeAbsorbMlaPagedAttention(
     void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,
     std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* tile_scheduler_metadata_ptr,
     void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
-    int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, int tail_offset_token, bool enable_flash_mla) {
+    int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, int tail_offset_token) {
   // 修改stride_size 和 head_size
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
@@ -345,23 +345,23 @@ void InvokeAbsorbMlaPagedAttention(
   size_t output_head_size = std::max(kv_lora_rank + qk_rope_head_dim, v_head_dim);
   const size_t origin_size = (tail_offset_token + total_tokens) * num_heads * output_head_size * sizeof(SCALAR_T);
   const size_t q_tensor_offset = (origin_size + 1023) & ~(1023);
-  const size_t q_tensor_size = (total_tokens)*num_heads * (kv_lora_rank + qk_rope_head_dim) * sizeof(SCALAR_T);
+  const size_t q_tensor_size = total_tokens * num_heads * (kv_lora_rank + qk_rope_head_dim) * sizeof(SCALAR_T);
   const size_t k_tensor_offset = (q_tensor_offset + q_tensor_size + 1023) & ~(1023);
 
-  void* const q_tensor_ptr = output_ptr + q_tensor_offset;
+  void* q_tensor_ptr = output_ptr + q_tensor_offset;
   void* const k_tensor_ptr = output_ptr + k_tensor_offset;
 
   const size_t outer_q_dim_size = total_tokens * num_heads;
   const size_t outer_k_dim_size = total_tokens;
-  const size_t inner_dim_size = 1;
+  constexpr size_t kInnerDimSize = 1;
 
   const AbsorbWeightsType absorb_type = GetAbsorbWeightsType();
   // cat(q_nope, q_pe)
-  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_q_dim_size, inner_dim_size, q_tensor_ptr,
+  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_q_dim_size, kInnerDimSize, q_tensor_ptr,
                    stream);
 
   // cat(v, k_pe)
-  Concat<SCALAR_T>(compressed_kv_ptr, k_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_k_dim_size, inner_dim_size,
+  Concat<SCALAR_T>(compressed_kv_ptr, k_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_k_dim_size, kInnerDimSize,
                    k_tensor_ptr, stream);
 
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
@@ -369,63 +369,54 @@ void InvokeAbsorbMlaPagedAttention(
       key_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size,
       batch, q_seq_len, 1, kv_lora_rank + qk_rope_head_dim, kv_lora_rank + qk_rope_head_dim, k_scale, v_scale, stream));
   auto cache_options = options;
-  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 || KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
-    int32_t* dst_block_table_ptr = block_table_ptr + batch * max_blocks_per_seq;
-    llm_kernels::nvidia::ConvertToScalar<SCALAR_T, CACHE_T, KV_DTYPE>(
-        reinterpret_cast<CACHE_T*>(k_cache_ptr), reinterpret_cast<SCALAR_T*>(v_cache_ptr), block_table_ptr,
-        dst_block_table_ptr, batch * max_blocks_per_seq, block_size * (kv_lora_rank + qk_rope_head_dim), k_scale,
-        v_scale, stream);
-    k_cache_ptr = v_cache_ptr;
-    block_table_ptr = dst_block_table_ptr;
-    KLLM_LOG_DEBUG << "ConvertToScalar num:" << batch * max_blocks_per_seq;
+
+  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+    KLLM_THROW("Flash MLA not support fp8_e5m2 KV Cache. Please use fp8_e4m3.");
   }
 
-  if (enable_flash_mla) {
-    // Absorb has two versions
-    if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
-      llm_kernels::nvidia::InvokeFlashMla<SCALAR_T>(
-          static_cast<SCALAR_T*>(q_tensor_ptr), static_cast<SCALAR_T*>(k_cache_ptr), q_seq_len, attn_scale,
-          block_table_ptr, context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/,
-          hidden_buffer_1, batch, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, max_blocks_per_seq, rank,
-          kv_cache_block_num, stream);
-      // tp8: num_heads:16, total_tokens:256,kv_lora_rank:512,qk_rope_head_dim:64,w_uv_o_dim:7168,v_head_dim:128
-      // [256, 16, 512] => [16, 256, 512]
-      InvokePermute<SCALAR_T>(hidden_buffer_1, qkv_workspace, {total_tokens, num_heads, kv_lora_rank}, {1, 0, 2},
-                              stream);
-      // [16, 256, 512] * [16, 512, 128] => [16, 256, 128]
-      InvokeBatchedMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, num_heads, total_tokens, v_head_dim, kv_lora_rank,
-                                    qkv_workspace, w_uv_weight, hidden_buffer_1, stream, nullptr, 0, nullptr);
-      // [16, 256, 128] => [256, 16, 128];
-      InvokePermute<SCALAR_T>(hidden_buffer_1, output_ptr, {num_heads, total_tokens, v_head_dim}, {1, 0, 2}, stream);
-    } else {
-      llm_kernels::nvidia::InvokeFlashMla<SCALAR_T>(
-          static_cast<SCALAR_T*>(q_tensor_ptr), static_cast<SCALAR_T*>(k_cache_ptr), q_seq_len, attn_scale,
-          block_table_ptr, context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/,
-          output_ptr, batch, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, max_blocks_per_seq, rank,
-          kv_cache_block_num, stream);
-    }
+  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    KLLM_LOG_DEBUG << "FP8 kv cache and flash mla enabled, using FP8 inference, quanting q tensor.";
+    // hidden_buffer_1: leave storage for o [batch_size, q_seq_per_hk, num_heads, head_size_v]
+    const int num_heads_q = num_heads;
+    constexpr int kNumHeadsK = 1;
+    const int head_size_v = kv_lora_rank;  // 512
+    const int num_q_heads_per_hk = num_heads_q / kNumHeadsK;
+    const int q_seq_per_hk = q_seq_len * num_q_heads_per_hk;
 
+    const size_t o_tensor_size = batch * q_seq_per_hk * kNumHeadsK * head_size_v * sizeof(SCALAR_T);
+    const size_t quant_q_tensor_offset = (o_tensor_size + 1023) & ~(1023);
+    void* const quant_q_tensor_ptr = hidden_buffer_1 + quant_q_tensor_offset;
+
+    float q_scale = k_scale;
+    llm_kernels::nvidia::ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+        reinterpret_cast<SCALAR_T*>(q_tensor_ptr), reinterpret_cast<CACHE_T*>(quant_q_tensor_ptr), batch, q_seq_len,
+        num_heads, kv_lora_rank + qk_rope_head_dim, num_heads * (kv_lora_rank + qk_rope_head_dim), q_scale, stream);
+    q_tensor_ptr = quant_q_tensor_ptr;
+  }
+
+  // Absorb has two versions
+  if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
+    // Flash mla accepts CACHE_T type input. If KV_DTYPE is auto, SCALAR_T equals CACHE_T.
+    // If KV_DTYPE is e4m3, flash mla calculates at fp8 precision and outputs at bf16 precision.
+    llm_kernels::nvidia::InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(
+        static_cast<CACHE_T*>(q_tensor_ptr), static_cast<CACHE_T*>(k_cache_ptr), q_seq_len, attn_scale, block_table_ptr,
+        context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/, hidden_buffer_1,
+        batch, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, k_scale, v_scale, max_blocks_per_seq, rank,
+        kv_cache_block_num, stream);
+    // tp8: num_heads:16, total_tokens:256,kv_lora_rank:512,qk_rope_head_dim:64,w_uv_o_dim:7168,v_head_dim:128
+    // [256, 16, 512] => [16, 256, 512]
+    InvokePermute<SCALAR_T>(hidden_buffer_1, qkv_workspace, {total_tokens, num_heads, kv_lora_rank}, {1, 0, 2}, stream);
+    // [16, 256, 512] * [16, 512, 128] => [16, 256, 128]
+    InvokeBatchedMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, num_heads, total_tokens, v_head_dim, kv_lora_rank,
+                                  qkv_workspace, w_uv_weight, hidden_buffer_1, stream, nullptr, 0, nullptr);
+    // [16, 256, 128] => [256, 16, 128];
+    InvokePermute<SCALAR_T>(hidden_buffer_1, output_ptr, {num_heads, total_tokens, v_head_dim}, {1, 0, 2}, stream);
   } else {
-    float softmax_scale = attn_scale;
-    if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
-      Singleton<TritonWrapper>::GetInstance()->InvokeMlaAttenStage1<SCALAR_T>(
-          q_tensor_ptr, k_cache_ptr, k_cache_ptr, softmax_scale, block_table_ptr, context_lens_ptr, hidden_buffer_1,
-          total_tokens, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, max_blocks_per_seq, stream);
-      Singleton<TritonWrapper>::GetInstance()->InvokeMlaAttenStage2<SCALAR_T>(
-          hidden_buffer_1, context_lens_ptr, qkv_workspace, total_tokens, num_heads, kv_lora_rank, stream);
-
-      InvokePermute<SCALAR_T>(qkv_workspace, hidden_buffer_1, {total_tokens, num_heads, kv_lora_rank}, {1, 0, 2},
-                              stream);
-      InvokeBatchedMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, num_heads, total_tokens, v_head_dim, kv_lora_rank,
-                                    hidden_buffer_1, w_uv_weight, qkv_workspace, stream, nullptr, 0, nullptr);
-      InvokePermute<SCALAR_T>(qkv_workspace, output_ptr, {num_heads, total_tokens, v_head_dim}, {1, 0, 2}, stream);
-    } else {
-      Singleton<TritonWrapper>::GetInstance()->InvokeMlaAttenStage1<SCALAR_T>(
-          q_tensor_ptr, k_cache_ptr, k_cache_ptr, softmax_scale, block_table_ptr, context_lens_ptr, hidden_buffer_1,
-          total_tokens, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, max_blocks_per_seq, stream);
-      Singleton<TritonWrapper>::GetInstance()->InvokeMlaAttenStage2<SCALAR_T>(
-          hidden_buffer_1, context_lens_ptr, output_ptr, total_tokens, num_heads, kv_lora_rank, stream);
-    }
+    llm_kernels::nvidia::InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(
+        static_cast<CACHE_T*>(q_tensor_ptr), static_cast<CACHE_T*>(k_cache_ptr), q_seq_len, attn_scale, block_table_ptr,
+        context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/, output_ptr, batch,
+        num_heads, kv_lora_rank, qk_rope_head_dim, block_size, k_scale, v_scale, max_blocks_per_seq, rank,
+        kv_cache_block_num, stream);
   }
 }
 
@@ -440,7 +431,7 @@ void InvokeAbsorbMlaPagedAttention(
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                                 \
       void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,      \
       void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len, \
-      int tail_offset_token, bool enable_flash_mla)
+      int tail_offset_token)
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -465,7 +456,6 @@ Status PagedMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
   // index 25 is max_batch_size in PagedMlaAttention, disgusting code, be careful.
   const size_t max_batch_size = std::any_cast<const size_t>(parameters[25]);
   SetMlaMetadataKernelAttribute(max_batch_size, context->GetComputeStreams()[rank].Get());
-  enable_flash_mla_ = runtime_config.enable_flash_mla;
 
   return Status();
 }
@@ -522,12 +512,12 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const size_t layer_block_num = kv_list.shape[1] * 0.5;  // shape: [layer_num_on_node, total_block_num * 2]
   void** const k_list = k_list_base + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);
   void** const v_list = k_list + layer_block_num;
-  int64_t kv_cache_block_num = *(layer_kv_cache.GetPtr<int64_t>());
+  const int64_t kv_cache_block_num = *(layer_kv_cache.GetPtr<int64_t>());
   void** const layer_kv_cache_ptr = layer_kv_cache.GetPtr<void*>() + 1;
   void* const k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];  // block中每层layer的起始地址
-  void* v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
+  void* const v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
   int32_t* const block_table_ptr =
-      block_table.GetPtr<int32_t>();  // block id，加上layer_kv_cache_ptr后就是对应的cache block
+      block_table.GetPtr<int32_t>();                    // block id，加上layer_kv_cache_ptr后就是对应的cache block
   const int max_blocks_per_seq = block_table.shape[1];  // shape: [bs, max_num_blocks_per_query]
   // for mla
   auto skipped_q_pe_ptr =
@@ -569,16 +559,6 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   void* const w_uv_weight_ptr = w_uv_weight.GetPtr<void>();
 
   if (w_uv_weight_ptr) {  // Absorb
-    if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kAuto) {
-      // 量化时存储convert table的起始位置
-      v_cache_ptr = layer_kv_cache_ptr[0] +
-                    kv_cache_block_num * this->block_token_num_ * (this->kv_lora_rank_ + this->qk_rope_head_dim_);
-      KLLM_LOG_DEBUG << "v_cache_ptr " << v_cache_ptr << " offset = "
-                     << kv_cache_block_num * this->block_token_num_ * (this->kv_lora_rank_ + this->qk_rope_head_dim_)
-                     << " kv_size = " << (this->kv_lora_rank_ + this->qk_rope_head_dim_);
-      kv_cache_block_num = kv_cache_block_num / this->layer_num_;
-      KLLM_LOG_DEBUG << "kv_cache_block_num " << kv_cache_block_num;
-    }
     InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
         skipped_hidden_buffer1_ptr, skipped_output_ptr, q_nope_tensor.GetPtr<void>(), skipped_q_pe_ptr,
         skipped_compressed_kv_ptr, skipped_k_pe_ptr, w_uv_weight_ptr, o_proj_dim, fp8_work_buffer,
@@ -589,7 +569,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
         this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
         total_tokens, this->attn_scale_, this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(),
         num_splits_tensor.GetPtr<void>(), this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr,
-        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len, batch_tail_tokens, enable_flash_mla_);
+        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len, batch_tail_tokens);
     return Status();
   }
 

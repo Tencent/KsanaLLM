@@ -948,20 +948,16 @@ TEST_F(EnvironmentTest, GetCacheBlockSize) {
 
   // 设置环境变量
   setenv("ENABLE_COMPRESSED_KV", "1", 1);
-  setenv("ENABLE_FLASH_MLA", "1", 1);
 
   // 调用GetCacheBlockSize方法
-  auto [block_size, convert_size] = env_.GetCacheBlockSize(model_config, pipeline_config, block_manager_config);
+  auto block_size = env_.GetCacheBlockSize(model_config, pipeline_config, block_manager_config);
 
-  // 验证block_size和convert_size是否大于0
+  // 验证block_size是否大于0
   EXPECT_EQ(block_size, 155136);
-  EXPECT_EQ(convert_size, 3072);
 
   env_.GetBlockManagerConfig(block_manager_config);
   block_manager_config.device_allocator_config.block_size = block_size;
-  block_manager_config.device_allocator_config.convert_size = convert_size;
   block_manager_config.host_allocator_config.block_size = block_size;
-  block_manager_config.host_allocator_config.convert_size = convert_size;
   env_.SetBlockManagerConfig(block_manager_config);
   env_.CalculateBlockNumber();
   env_.GetBlockManagerConfig(block_manager_config);
@@ -969,7 +965,6 @@ TEST_F(EnvironmentTest, GetCacheBlockSize) {
 
   // 清理环境变量
   unsetenv("ENABLE_COMPRESSED_KV");
-  unsetenv("ENABLE_FLASH_MLA");
   SetAbsorbWeightsType(absorb_type);
 }
 

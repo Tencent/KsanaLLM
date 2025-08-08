@@ -16,9 +16,6 @@ class PagedMlaAttentionLayer : public AttentionLayer {
  private:
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
-
- private:
-  bool enable_flash_mla_;
 };
 
 }  // namespace ksana_llm

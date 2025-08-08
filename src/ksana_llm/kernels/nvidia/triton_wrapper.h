@@ -45,13 +45,6 @@ class TritonWrapper {
   template <typename T>
   void InvokePerTokenGroupQuantFP8(void* d_data, void* d_q, void* d_s, int m, int n, bool col_major_scale,
                                    cudaStream_t stream);
-  template <typename T>
-  void InvokeMlaAttenStage1(void* q, void* k_buffer, void* v_buffer, float sm_scale, void* req_to_tokens,
-                            void* b_seqlen, void* att_out, int tokens_num, int num_heads, int kv_lora_rank,
-                            int qk_rope_head_dim, int page_size, int max_tokens, cudaStream_t stream);
-  template <typename T>
-  void InvokeMlaAttenStage2(void* att_stage1, void* b_seqlen, void* output, int tokens_num, int num_heads,
-                            int kv_lora_rank, cudaStream_t stream);
 
   template <typename T>
   void InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,

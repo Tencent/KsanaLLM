@@ -26,9 +26,6 @@ struct BlockAllocatorGroupConfig {
 
   // The block size, in bytes
   size_t block_size;
-
-  // The buffer size required for dequantization operations, in bytes.
-  size_t convert_size = 0;
 };
 
 // The config of all block allocator groups.
@@ -37,7 +34,7 @@ using BlockAllocatorManagerConfig = std::unordered_map<int, BlockAllocatorGroupC
 // Function used to create block allocator, for testing.
 using BlockAllocatorCreationFunc = std::function<std::shared_ptr<BlockAllocatorInterface>(
     MemoryLocation location, size_t block_num, size_t block_size, int rank,
-    std::shared_ptr<MemoryAllocatorInterface> memory_allocator, std::shared_ptr<Context> context, size_t convert_size)>;
+    std::shared_ptr<MemoryAllocatorInterface> memory_allocator, std::shared_ptr<Context> context)>;
 
 //
 class BlockAllocatorGroupInterface {

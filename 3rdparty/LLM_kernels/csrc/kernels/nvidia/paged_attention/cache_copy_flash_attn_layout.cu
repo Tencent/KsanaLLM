@@ -93,71 +93,20 @@ __global__ void CachePosCopyFlashAttnLayoutKernel(SCALAR_T* k_src, SCALAR_T* v_s
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-__global__ void ConvertToScalarKernel(CACHE_T* src, SCALAR_T* dst, int* src_table, int* dst_table, int table_len,
-                                      int data_num, float k_scale, float v_scale) {
-  // 计算当前线程处理的块索引，考虑多维网格
-  int idx = blockIdx.x + blockIdx.y * gridDim.x;
+__global__ void ConvertQToCacheTypeKernel(SCALAR_T* q_src, CACHE_T* q_dst, int stride_size, float q_scale) {
+  const unsigned int batch_idx = blockIdx.z;
+  const unsigned int token_idx = batch_idx * gridDim.y + blockIdx.y;
+  const unsigned int num_heads = gridDim.x;
+  const unsigned int head_size = blockDim.x;
 
-  // 确保不超出表长度
-  if (idx < table_len) {
-    // 获取源数据和目标数据的起始位置
-    size_t src_offset = size_t(src_table[idx]) * data_num;
-    size_t dst_offset = size_t(dst_table[idx]) * data_num;
+  SCALAR_T* const q_src_ptr = q_src + token_idx * stride_size;
+  CACHE_T* const q_dst_ptr = q_dst + token_idx * stride_size;
 
-    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
-      // 每个线程处理一个数据元素
-      for (int i = threadIdx.x; i < data_num; i += blockDim.x) {
-        // 直接赋值
-        dst[dst_offset + i] = src[src_offset + i];
-      }
-    } else if constexpr (std::is_same<SCALAR_T, __nv_bfloat16>::value && std::is_same<CACHE_T, uint8_t>::value) {
-      if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
-        // 静态确定FP8类型为E4M3
-        constexpr __nv_fp8_interpretation_t fp8_type = __NV_E4M3;
-        constexpr int vec_size = 8;
-
-        // 计算步长，避免在循环中重复计算
-        const int stride = blockDim.x * vec_size;
-
-        // 假设数据是8的倍数，直接使用向量化处理
-        for (int i = threadIdx.x * vec_size; i < data_num; i += stride) {
-          // 直接将源数据指针强制转换为uint2*类型，避免数据拷贝
-          const uint2& src_vec = *reinterpret_cast<const uint2*>(&src[src_offset + i]);
-
-          // 使用scaled_vec_conversion一次性转换8个数据
-          *reinterpret_cast<bf16_8_t*>(&dst[dst_offset + i]) =
-              fp8::scaled_vec_conversion<bf16_8_t, uint2>(src_vec, v_scale, fp8_type);
-        }
-      } else if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
-        // 静态确定FP8类型为E5M2
-        constexpr __nv_fp8_interpretation_t fp8_type = __NV_E5M2;
-        constexpr int vec_size = 8;
-
-        // 计算步长，避免在循环中重复计算
-        const int stride = blockDim.x * vec_size;
-
-        // 假设数据是8的倍数，直接使用向量化处理
-        for (int i = threadIdx.x * vec_size; i < data_num; i += stride) {
-          // 直接将源数据指针强制转换为uint2*类型，避免数据拷贝
-          const uint2& src_vec = *reinterpret_cast<const uint2*>(&src[src_offset + i]);
-
-          // 使用scaled_vec_conversion一次性转换8个数据
-          *reinterpret_cast<bf16_8_t*>(&dst[dst_offset + i]) =
-              fp8::scaled_vec_conversion<bf16_8_t, uint2>(src_vec, v_scale, fp8_type);
-        }
-      } else {
-        // 其他KV_DTYPE情况，每个线程处理一个数据元素
-        for (int i = threadIdx.x; i < data_num; i += blockDim.x) {
-          dst[dst_offset + i] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(src[src_offset + i], v_scale);
-        }
-      }
-    } else {
-      // 其他情况，每个线程处理一个数据元素
-      for (int i = threadIdx.x; i < data_num; i += blockDim.x) {
-        // 使用scaled_convert进行转换
-        dst[dst_offset + i] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(src[src_offset + i], v_scale);
-      }
-    }
+  const unsigned int head_offset = blockIdx.x * head_size + threadIdx.x;
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+    q_dst_ptr[head_offset] = q_src_ptr[head_offset];
+  } else {
+    q_dst_ptr[head_offset] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(q_src_ptr[head_offset], q_scale);
   }
 }
 
@@ -177,27 +126,6 @@ void CacheCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, v
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void ConvertToScalar(CACHE_T* src, SCALAR_T* dst, int* src_table, int* dst_table, int table_len, int data_num,
-                     float k_scale, float v_scale, cudaStream_t stream) {
-  // 计算网格和块的大小，处理边界问题
-  int grid_x = std::min(table_len, llm_kernels::utils::DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM);
-  int grid_y = (table_len + llm_kernels::utils::DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM - 1) /
-               llm_kernels::utils::DEFAULT_CUDA_GPU_DEVICE_MAX_BLOCKS_NUM;
-  dim3 grid_shape(grid_x, grid_y);
-
-  // 计算块大小
-  int block_size = std::min(data_num, llm_kernels::utils::DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM);
-
-  // TODO(zakwang): 完全支持向量化转换, 因为block_size包含block_num目前一定为8的倍数
-  constexpr int kVecSize = 8;
-  if (block_size % kVecSize == 0) {
-    // 调用内核函数
-    ConvertToScalarKernel<SCALAR_T, CACHE_T, KV_DTYPE>
-        <<<grid_shape, block_size, 0, stream>>>(src, dst, src_table, dst_table, table_len, data_num, k_scale, v_scale);
-  }
-}
-
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, int* input_lengths,
                                  int* block_offsets, int block_size, int bs, int req_q_len, int num_heads,
                                  int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream) {
@@ -205,6 +133,15 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
   const dim3 block_shape(head_size);
   CachePosCopyFlashAttnLayoutKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, input_lengths, block_offsets, block_size, stride_size, k_scale, v_scale);
+}
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void ConvertQToCacheType(SCALAR_T* q_src, CACHE_T* q_dst, int bs, int req_q_len, int num_heads, int head_size,
+                         int stride_size, float q_scale, cudaStream_t stream) {
+  const dim3 grid_shape(num_heads, req_q_len, bs);
+  const dim3 block_shape(head_size);
+  ConvertQToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE>
+      <<<grid_shape, block_shape, 0, stream>>>(q_src, q_dst, stride_size, q_scale);
 }
 
 #define CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                 \
@@ -216,9 +153,9 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, int* input_lengths, int* block_offsets,        \
       int block_size, int bs, int req_q_len, int num_heads, int head_size, int stride_size, float k_scale,             \
       float v_scale, cudaStream_t stream);                                                                             \
-  template void ConvertToScalar<SCALAR_T, CACHE_T, KV_DTYPE>(CACHE_T * src, SCALAR_T * dst, int* src_table,            \
-                                                             int* dst_table, int table_len, int data_num,              \
-                                                             float k_scale, float v_scale, cudaStream_t stream);
+  template void ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T * q_src, CACHE_T * q_dst, int bs,            \
+                                                                 int req_q_len, int num_heads, int head_size,          \
+                                                                 int stride_size, float q_scale, cudaStream_t stream);
 
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);

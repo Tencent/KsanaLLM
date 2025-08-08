@@ -110,7 +110,6 @@ class LlmRuntime {
 
  private:
   bool mtp_forward_ = false;
-  bool enable_flash_mla_ = false;
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;

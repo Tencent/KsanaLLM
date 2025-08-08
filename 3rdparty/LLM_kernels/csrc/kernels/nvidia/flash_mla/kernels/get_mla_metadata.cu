@@ -24,8 +24,8 @@
  * Adapted from
  * [FlashMLA Project] https://github.com/deepseek-ai/FlashMLA/blob/main/csrc/kernels/get_mla_metadata.cu
  */
-#ifdef ENABLE_FLASH_MLA
 
+#ifdef ENABLE_FLASH_MLA
 #  include "get_mla_metadata.h"
 
 #  include <cuda_runtime_api.h>
@@ -104,7 +104,7 @@ __global__ void __launch_bounds__(32, 1, 1)
   for (int i = threadIdx.x; i <= batch_size; i += 32) {
     num_splits_ptr[i] = num_splits_shared[i];
   }
-}  // namespace nvidia
+}
 
 // Ksana function
 void SetMlaMetadataKernelAttribute(const int max_batch_size, cudaStream_t stream) {

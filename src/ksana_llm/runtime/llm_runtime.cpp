@@ -25,7 +25,7 @@
 namespace ksana_llm {
 LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
                        std::shared_ptr<Context> context)
-    : enable_flash_mla_(runtime_config.enable_flash_mla), context_(context) {
+    : context_(context) {
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(),
                                                 batch_scheduler_config.max_pp_batch_num, context_);
 
@@ -264,7 +264,7 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
     const int a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
     const int b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
 
-    const static size_t decode_threshold_len = IsAbsorbWeightsEnabled() && enable_flash_mla_ ? 2 : 1;
+    const static size_t decode_threshold_len = IsAbsorbWeightsEnabled() ? 2 : 1;
 
     const bool is_a_decode = a_token_num <= decode_threshold_len && a->kv_cached_token_num != 0;
     const bool is_b_decode = b_token_num <= decode_threshold_len && b->kv_cached_token_num != 0;

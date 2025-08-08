@@ -32,7 +32,6 @@ class DeepSeekV3Test : public testing::Test {
     const std::string test_name = test_info->name();
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
     std::string yaml_path = "../../../../examples/llama7b/ksana_llm.yaml";
-    setenv("ENABLE_FLASH_MLA", "1", 1);
     SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
     context = std::make_shared<Context>(1, 1, 1);
 
@@ -99,7 +98,6 @@ class DeepSeekV3Test : public testing::Test {
   }
 
   void TearDown() override {
-    setenv("ENABLE_FLASH_MLA", "0", 1);
     SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
     std::cout << "TearDown" << std::endl;
   }

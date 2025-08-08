@@ -28,7 +28,6 @@
 #pragma once
 
 #ifdef ENABLE_FLASH_MLA
-
 #  include "params.h"
 namespace llm_kernels {
 namespace nvidia {

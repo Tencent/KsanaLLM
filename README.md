@@ -282,7 +282,6 @@ export MASTER_HOST=master_node_ip
 export MASTER_PORT=master_node_port
 # Optimal environment variable configuration
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 export USE_TCP_DATA_CHANNEL=1
@@ -302,7 +301,6 @@ export MASTER_HOST=master_node_ip
 export MASTER_PORT=master_node_port
 # Optimal environment variable configuration
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 export USE_TCP_DATA_CHANNEL=1
@@ -329,7 +327,6 @@ Note: Both the generation and utilization of the cached model require the above 
 ```bash
 # Optimal environment variable configuration
 export ENABLE_COMPRESSED_KV=2
-export ENABLE_FLASH_MLA=1
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 # (Optional) Further Performance Enhancement with Slight Accuracy Degradation

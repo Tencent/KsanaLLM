@@ -96,7 +96,6 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
     dp_group_config.host_block_num = env->GetTotalHostBlockNum();
     dp_group_config.block_size = runtime_config_.attn_backend_config.block_size;
-    dp_group_config.convert_size = env->GetConvertSize();
     block_allocator_manager_config[dp_id] = dp_group_config;
   }
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();

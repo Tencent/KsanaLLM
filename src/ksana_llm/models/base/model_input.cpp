@@ -31,7 +31,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   env->GetPipelineConfig(pipeline_config);
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
-  enable_flash_mla_ = runtime_config.enable_flash_mla;
 
   block_size_ = runtime_config_.attn_backend_config.block_size;
   const size_t max_batch_size = runtime_config_.max_batch_size;
@@ -102,7 +101,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     info.layer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
     info.metadata = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {4}, rank);
-    info.block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num * 2}, rank);
+    info.block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num}, rank);
 
 #ifdef ENABLE_CUDA
     if (model_config_.mla_config.kv_lora_rank > 0 && q_len > 0) {
@@ -239,7 +238,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
     input_info* target_input = nullptr;
     if (input_ids_len == 1) {
       target_input = &page_single_input;
-    } else if (input_ids_len == 2 && IsAbsorbWeightsEnabled() && enable_flash_mla_ && req.kv_cached_token_num != 0) {
+    } else if (input_ids_len == 2 && IsAbsorbWeightsEnabled() && req.kv_cached_token_num != 0) {
       target_input = &page_dual_input;
     } else {
       target_input = &flash_input;
@@ -974,15 +973,6 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
     }
   }
   KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
-  if (runtime_config_.attn_backend_config.kv_cache_dtype == DataType::TYPE_FP8_E5M2 ||
-      runtime_config_.attn_backend_config.kv_cache_dtype == DataType::TYPE_FP8_E4M3) {
-    const size_t block_table_host_size = block_table_host.size();
-    block_table_host.resize(block_table_host.size() * 2);
-    for (size_t i = 0; i < block_table_host_size; i++) {
-      block_table_host[block_table_host_size + i] = block_table_host[i] / layer_num_on_node_;
-    }
-    KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
-  }
   info.block_table.shape = {reqs.size(), max_num_blocks_per_query};
   MemcpyAsync(info.block_table.GetPtr<void>(), block_table_host.data(),
               block_table_host.size() * sizeof(decltype(block_table_host)::value_type), MEMCPY_HOST_TO_DEVICE,
@@ -996,7 +986,7 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
 
 void ModelInput::PrepareFlashMla(input_info& input) {
 #ifdef ENABLE_CUDA
-  if (!enable_flash_mla_ || model_config_.mla_config.kv_lora_rank == 0 || input.dp_reqs.empty()) {
+  if (model_config_.mla_config.kv_lora_rank == 0 || input.dp_reqs.empty()) {
     return;
   }
   PROFILE_EVENT_SCOPE(PrepareFlashMla, "PrepareFlashMla", rank_);

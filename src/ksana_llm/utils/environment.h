@@ -92,7 +92,6 @@ class Environment {
   // TODO(yancyliu): remove from here later.
   Status CalculateBlockNumber();
   Status ResetPipelineBlockNumber();
-  size_t GetConvertSize();
   size_t GetTotalDeviceBlockNum();
   size_t GetTotalHostBlockNum();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
@@ -176,15 +175,15 @@ class Environment {
 
   void SetBlockManagerConfig(const BlockManagerConfig &block_manager_config);
 
-  std::tuple<size_t, size_t> GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                               const BlockManagerConfig &block_manager_config);
+  size_t GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
+                           const BlockManagerConfig &block_manager_config);
 
  private:
   void Reset();
 
   // Parse model config from model dir.
-  Status ParseModelConfig(YamlReader &yaml_reader, const std::string &model_dir, const std::string &tokenizer_dir,
-                          const std::string &model_config_filename);
+  Status ParseModelAndScheduleConfig(YamlReader &yaml_reader, const std::string &model_dir,
+                                     const std::string &tokenizer_dir, const std::string &model_config_filename);
 
  private:
   bool model_config_initialized_;

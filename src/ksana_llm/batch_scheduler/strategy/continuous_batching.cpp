@@ -32,7 +32,7 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
   }
 
-  if (runtime_config.enable_flash_mla && IsAbsorbWeightsEnabled()) {
+  if (IsAbsorbWeightsEnabled()) {
     decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
   }
   size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;

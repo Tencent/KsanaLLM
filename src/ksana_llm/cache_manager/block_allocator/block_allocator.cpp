@@ -14,11 +14,10 @@ namespace ksana_llm {
 
 BlockAllocator::BlockAllocator(MemoryLocation location, size_t block_num, size_t block_size, int rank,
                                std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
-                               std::shared_ptr<Context> context, size_t convert_size)
+                               std::shared_ptr<Context> context)
     : location_(location),
       block_num_(block_num),
       block_size_(block_size),
-      convert_size_(convert_size),
       rank_(rank),
       memory_allocator_(memory_allocator),
       context_(context) {
@@ -49,7 +48,7 @@ void BlockAllocator::PreAllocateBlocks() {
 #if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
     use_continuous_memory = true;
-    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), (block_num_ + 1) * (block_size_ + convert_size_));
+    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), (block_num_ + 1) * block_size_);
     blocks_base_ptr_ = base_mem_ptr;
   }
 #endif

@@ -27,13 +27,11 @@ BlockAllocatorGroup::BlockAllocatorGroup(const BlockAllocatorGroupConfig& block_
 void BlockAllocatorGroup::Initialize() {
   host_allocator =
       block_allocator_creation_fn_(MemoryLocation::LOCATION_HOST, block_allocator_group_config_.host_block_num,
-                                   block_allocator_group_config_.block_size, 0, memory_allocator_, context_,
-                                   block_allocator_group_config_.convert_size);
+                                   block_allocator_group_config_.block_size, 0, memory_allocator_, context_);
   for (int device_id : block_allocator_group_config_.devices) {
     dev_allocators[device_id] =
         block_allocator_creation_fn_(MemoryLocation::LOCATION_DEVICE, block_allocator_group_config_.device_block_num,
-                                     block_allocator_group_config_.block_size, device_id, memory_allocator_, context_,
-                                     block_allocator_group_config_.convert_size);
+                                     block_allocator_group_config_.block_size, device_id, memory_allocator_, context_);
   }
 
   std::vector<std::thread> threads;
@@ -149,9 +147,8 @@ BlockAllocatorManager::BlockAllocatorManager(const BlockAllocatorManagerConfig& 
   if (block_allocator_creation_fn_ == nullptr) {
     block_allocator_creation_fn_ = [](MemoryLocation location, size_t block_num, size_t block_size, int rank,
                                       std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
-                                      std::shared_ptr<Context> context, size_t convert_size) {
-      return std::make_shared<BlockAllocator>(location, block_num, block_size, rank, memory_allocator, context,
-                                              convert_size);
+                                      std::shared_ptr<Context> context) {
+      return std::make_shared<BlockAllocator>(location, block_num, block_size, rank, memory_allocator, context);
     };
   }
 

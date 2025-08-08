@@ -15,7 +15,7 @@ class BlockAllocator : public BlockAllocatorInterface {
  public:
   BlockAllocator(MemoryLocation location, size_t block_num, size_t block_size, int rank = 0,
                  std::shared_ptr<MemoryAllocatorInterface> memory_allocator = nullptr,
-                 std::shared_ptr<Context> context = nullptr, size_t convert_size = 0);
+                 std::shared_ptr<Context> context = nullptr);
 
   virtual ~BlockAllocator();
 
@@ -50,8 +50,6 @@ class BlockAllocator : public BlockAllocatorInterface {
 
   size_t block_num_;
   size_t block_size_;
-  // The buffer size required for dequantization operations, in bytes.
-  size_t convert_size_ = 0;
 
   // device rank, -1 for host.
   int rank_ = -1;
