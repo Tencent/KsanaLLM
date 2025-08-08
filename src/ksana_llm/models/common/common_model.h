@@ -164,10 +164,7 @@ class CommonModel : public BaseModel {
   ModelBuffers model_buffers_;
   // Buffer of forwarding contexts for parallel batch processing
   std::vector<std::unique_ptr<ForwardingContext>> forwarding_context_buffer_;
-  // Map from multi_batch_id to index in the forwarding_context_buffer_
-  std::unordered_map<size_t, size_t> schedule_to_context_map_;
-  // Mutex to protect access to the buffer and map
-  std::mutex forwarding_context_mutex_;
+  size_t forwarding_context_buffer_size_;
 
   // Be a replacement of residual_buffer_, for distributed mode only.
   std::vector<Tensor> distributed_device_buffer_;
@@ -189,3 +186,4 @@ class CommonModel : public BaseModel {
 };
 
 }  // namespace ksana_llm
+

@@ -67,16 +67,14 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
                       GetBufferManager());
 
   // Initialize the buffer of forwarding contexts based on max_pp_batch_num
-  size_t forwarding_context_buffer_size = runtime_config_.max_pp_batch_num > 0 ? runtime_config_.max_pp_batch_num : 1;
+  forwarding_context_buffer_size_ = runtime_config_.max_pp_batch_num > 0 ? runtime_config_.max_pp_batch_num : 1;
   // Clear any existing contexts in the buffer
   {
-    std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
     forwarding_context_buffer_.clear();
-    schedule_to_context_map_.clear();
 
     // Initialize all forwarding contexts in the buffer
-    forwarding_context_buffer_.reserve(forwarding_context_buffer_size);
-    for (size_t multi_batch_id = 0; multi_batch_id < forwarding_context_buffer_size; ++multi_batch_id) {
+    forwarding_context_buffer_.reserve(forwarding_context_buffer_size_);
+    for (size_t multi_batch_id = 0; multi_batch_id < forwarding_context_buffer_size_; ++multi_batch_id) {
       auto forwarding_context = std::make_unique<ForwardingContext>();
       // TODO(karlluo): each forwarding_context binding different model buffer
       forwarding_context->Init(context_, rank_, model_config_, runtime_config_, pipeline_config_,
@@ -84,7 +82,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
       forwarding_context_buffer_.push_back(std::move(forwarding_context));
     }
 
-    KLLM_LOG_DEBUG << "Initialized forwarding context buffer with " << forwarding_context_buffer_size << " contexts";
+    KLLM_LOG_DEBUG << "Initialized forwarding context buffer with " << forwarding_context_buffer_size_ << " contexts";
   }
 
   layer_num_on_node_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
@@ -354,50 +352,21 @@ std::vector<Tensor>& CommonModel::GetHiddenUnitBuffer(ForwardingContext& forward
 }
 
 Status CommonModel::AllocResources(size_t multi_batch_id) {
-  std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
+  if (context_->IsChief()) {
+    KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
+      "multi_batch_id should be smaller than max_pp");
+  }
 
-  // Check if this multi_batch_id already has an allocated context
-  if (schedule_to_context_map_.find(multi_batch_id) != schedule_to_context_map_.end()) {
+  size_t id = context_->IsChief() ? multi_batch_id : 0;
+  if (forwarding_context_buffer_.at(id)->GetMultiBatchId() == multi_batch_id) {
     KLLM_LOG_DEBUG << "ForwardingContext for multi_batch_id=" << multi_batch_id << " already allocated";
     return Status();
   }
-
-  // Find an available context in the buffer
-  for (size_t i = 0; i < forwarding_context_buffer_.size(); ++i) {
-    // Check if this context is not assigned to any multi_batch_id
-    bool is_assigned = false;
-    for (const auto& pair : schedule_to_context_map_) {
-      if (pair.second == i) {
-        is_assigned = true;
-        break;
-      }
-    }
-
-    if (!is_assigned) {
-      // Assign this context to the multi_batch_id
-      schedule_to_context_map_[multi_batch_id] = i;
-      forwarding_context_buffer_[i]->SetMultiBatchId(multi_batch_id);
-      return Status();
-    }
-  }
-
-  // If we get here, all contexts are assigned
-  KLLM_LOG_ERROR << "No available ForwardingContext for multi_batch_id=" << multi_batch_id;
-  return Status(RET_RUNTIME_FAILED, "No available ForwardingContext");
+  forwarding_context_buffer_.at(id)->SetMultiBatchId(multi_batch_id);
+  return Status();
 }
 
 Status CommonModel::FreeResources(size_t multi_batch_id) {
-  std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
-
-  // Check if this multi_batch_id has an allocated context
-  auto it = schedule_to_context_map_.find(multi_batch_id);
-  if (it == schedule_to_context_map_.end()) {
-    KLLM_LOG_ERROR << "No ForwardingContext found for multi_batch_id=" << multi_batch_id;
-    return Status(RET_RUNTIME_FAILED, "No ForwardingContext found for multi_batch_id");
-  }
-
-  // Remove the context from the map
-  schedule_to_context_map_.erase(it);
   return Status();
 }
 
@@ -419,15 +388,10 @@ void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, Forw
 }
 
 ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
-  {
-    std::lock_guard<std::mutex> lock(forwarding_context_mutex_);
-    auto it = schedule_to_context_map_.find(multi_batch_id);
-    if (it == schedule_to_context_map_.end()) {
-      KLLM_LOG_ERROR << "No ForwardingContext found for multi_batch_id=" << multi_batch_id;
-      return nullptr;
-    }
-    return forwarding_context_buffer_[it->second].get();
-  }
+  KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
+    "multi_batch_id should be smaller than max_pp");
+  size_t id = context_->IsChief() ? multi_batch_id : 0;
+  return forwarding_context_buffer_[id].get();
 }
 
 Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
@@ -604,3 +568,4 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
 }
 
 }  // namespace ksana_llm
+

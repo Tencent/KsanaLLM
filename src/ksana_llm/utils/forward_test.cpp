@@ -367,7 +367,7 @@ class ForwardTest : public testing::Test {
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
   std::shared_ptr<PrefixCacheManager> cache_manager_ = nullptr;
-  size_t multi_batch_id = 123;
+  size_t multi_batch_id = 0;
 };
 
 TEST_F(ForwardTest, LogitsGatherAllTest) {

@@ -36,7 +36,7 @@ GET_KSANA_DATA_TYPE(half, TYPE_FP16);
 GET_KSANA_DATA_TYPE(__nv_bfloat16, TYPE_BF16);
 #undef GET_KSANA_DATA_TYPE
 
-size_t schedule_id = 123;
+size_t schedule_id = 0;
 
 void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector) {
   DeviceSynchronize();

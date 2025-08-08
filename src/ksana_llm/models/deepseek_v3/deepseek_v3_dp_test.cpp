@@ -101,7 +101,7 @@ class DeepSeekV3DPTest : public testing::Test {
   std::vector<std::shared_ptr<BlockAllocatorGroupInterface>> block_allocator_groups;
   std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
   std::shared_ptr<Context> context{nullptr};
-  size_t multi_batch_id = 123;
+  size_t multi_batch_id = 0;
   std::vector<std::shared_ptr<DeepSeekV3Model>> deepseek_v3_dps;
   std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
 

@@ -108,7 +108,7 @@ class DeepSeekV3Test : public testing::Test {
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
   std::shared_ptr<PrefixCacheManager> cache_manager = nullptr;
   std::shared_ptr<Context> context{nullptr};
-  size_t multi_batch_id = 123;
+  size_t multi_batch_id = 0;
   std::vector<std::vector<int>> expected_tokens;
 
   template <typename weight_data_type>

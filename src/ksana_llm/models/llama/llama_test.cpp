@@ -79,7 +79,7 @@ class LlamaTest : public testing::Test {
   BlockAllocatorCreationFunc block_allocator_creation_fn_ = nullptr;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_ = nullptr;
   std::shared_ptr<PrefixCacheManager> cache_manager_ = nullptr;
-  size_t schedule_id = 123;
+  size_t schedule_id = 0;
 
   template <typename weight_data_type>
   void TestLlamaForward() {
