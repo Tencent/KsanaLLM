@@ -398,5 +398,10 @@ float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 1
   return cost_time / iterations;
 }
 
+// Get the next power of 2 of a number
+inline uint32_t next_pow2(uint32_t x) noexcept {
+  return x <= 1u ? 1u : 1u << (32 - __builtin_clz(x - 1));
+}
+
 }  // namespace utils
 }  // namespace llm_kernels

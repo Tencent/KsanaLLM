@@ -11,9 +11,12 @@
 #include "moe.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
+#define WARP_SIZE 32
+
 namespace llm_kernels {
 namespace nvidia {
 namespace test {
+
 class LlamaNvidiaMoeTestSuit : public NvidiaTestSuitBase {
  public:
   void SetUp() override { NvidiaTestSuitBase::SetUp(); }
@@ -157,11 +160,10 @@ TEST_F(LlamaNvidiaMoeTestSuit, bf16SiluKernelTest) {
   SiluMulKernelPerformanceTest<__nv_bfloat16>();
 }
 
-void MoeAlignBlockCpu(std::vector<int>& topk_ids, std::vector<int>& expert_ids, std::vector<int>& sorted_ids,
-                      std::vector<int>& expert_map, std::vector<int>& token_post_pad, int token_num, int topk,
-                      int expert_num, int block_size) {
+void MoeAlignBlockCpu(const int* topk_ids, int* expert_ids, int* sorted_ids, const int* expert_map, int* token_post_pad,
+                      int token_num, int topk, int expert_num, int block_size) {
   std::vector<int> cumsum(expert_num + 1);
-  std::vector<int> token_cnts(expert_num + 1);
+  std::vector<int> token_cnts(expert_num);
   size_t numel = static_cast<size_t>(token_num) * topk;
   for (size_t i = 0; i < numel; ++i) {
     int expert_id = expert_map[topk_ids[i]];
@@ -189,133 +191,184 @@ void MoeAlignBlockCpu(std::vector<int>& topk_ids, std::vector<int>& expert_ids, 
   }
 }
 
-TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelTest) {
+TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
   int token_num = 4;
-  int expert_para_size = 2;
   int topk = 6;
   int block_size = 64;
   int num_thread = 256;
 
-  // 测试不同num_experts下的性能
-  std::vector<int> expert_sizes = {8, 16, 32, 64, 128, 256};
+  std::vector<int> expert_para_sizes = {1, 2, 4, 8};
+  std::vector<int> expert_sizes = {8, 32, 64, 128, 256};
 
-  for (int num_experts : expert_sizes) {
-    std::cout << "\n===== Testing with num_experts = " << num_experts << " =====" << std::endl;
+  for (int expert_para_size : expert_para_sizes) {
+    for (int num_experts : expert_sizes) {
+      int num_experts_per_rank = num_experts / expert_para_size;
+      size_t numel = token_num * topk;
+      int max_num_tokens_padded = numel + num_experts_per_rank * (block_size - 1);
+      int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
 
-    int num_experts_per_rank = num_experts / expert_para_size;
-    size_t numel = token_num * topk;
-    int max_num_tokens_padded = numel + num_experts_per_rank * (block_size - 1);
-    int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
-    int shared_mem = ((num_thread + 2) * num_experts) * sizeof(uint16_t) + (num_experts + 1) * sizeof(int32_t);
-    std::cout << "Shared Mem = " << (shared_mem / 1024) << "KB" << std::endl;
+      // Check shared mem
+      int shared_mem = std::max(
+          /* vllm */ ((num_thread + 2) * num_experts) * sizeof(uint16_t) + (num_experts + 1) * sizeof(int32_t),
+          /* sglang */ (num_experts + (num_experts + 1) + next_pow2(num_experts) + WARP_SIZE) * sizeof(int32_t));
+      int device_max_shared_mem = getMaxSharedMemoryPerBlockOptin();
+      if (device_max_shared_mem < shared_mem) {
+        std::cout << "Current GPU Device do not support Shared Memory " << shared_mem
+                  << ", cudaDevAttrMaxSharedMemoryPerBlockOptin = " << device_max_shared_mem << std::endl;
+        continue;
+      }
 
-    int device_max_shared_mem;
-    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&device_max_shared_mem, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
-    if (device_max_shared_mem <= shared_mem) {
-      std::cout << "Current GPU Device do not support Shared Memory " << shared_mem
-                << ", cudaDevAttrMaxSharedMemoryPerBlockOptin = " << device_max_shared_mem << std::endl;
-      continue;
-    }
-
-    std::vector<int> topk_ids(token_num * topk);
-    // 生成随机的0到num_experts-1之间的整数填充topk_ids
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, num_experts - 1);
-    for (size_t i = 0; i < token_num * topk; ++i) {
-      topk_ids[i] = dist(gen);
-    }
-
-    std::vector<int> expert_map(num_experts);
-    for (int i = 0; i < num_experts; i++) {
-      if (expert_para_size == 1) {
-        expert_map[i] = i;
-      } else {
-        if (i < num_experts_per_rank) {
-          expert_map[i] = num_experts_per_rank + 1;
+      // Prepare host data
+      BufferMeta h_topk_ids =
+          CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(token_num), static_cast<size_t>(topk)},
+                            /*is_random_init*/ true, /*min_val*/ 0, /*max_val*/ num_experts - 1);
+      BufferMeta h_sorted_token_ids =
+          CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(max_num_tokens_padded)},
+                            /*is_random_init*/ false);
+      BufferMeta h_expert_ids = CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(max_num_m_blocks)},
+                                                  /*is_random_init*/ false);
+      BufferMeta h_total_tokens_post_pad = CreateBuffer<int>(MemoryType::MEMORY_CPU, {1},
+                                                             /*is_random_init*/ false);
+      BufferMeta h_expert_map = CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(num_experts)},
+                                                  /*is_random_init*/ false);
+      for (int i = 0; i < num_experts; i++) {
+        if (expert_para_size == 1) {
+          reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = i;
         } else {
-          expert_map[i] = i - num_experts_per_rank;
+          if (i < num_experts_per_rank) {
+            reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = num_experts_per_rank + 1;
+          } else {
+            reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = i - num_experts_per_rank;
+          }
         }
       }
+
+      // Invoke cpu version
+      MoeAlignBlockCpu(
+          reinterpret_cast<const int*>(h_topk_ids.data_ptr), reinterpret_cast<int*>(h_expert_ids.data_ptr),
+          reinterpret_cast<int*>(h_sorted_token_ids.data_ptr), reinterpret_cast<const int*>(h_expert_map.data_ptr),
+          reinterpret_cast<int*>(h_total_tokens_post_pad.data_ptr), token_num, topk, num_experts_per_rank, block_size);
+
+      // Prepare device data
+      BufferMeta d_topk_ids = CopyToDevice<int>(h_topk_ids);
+      BufferMeta d_sorted_token_ids = CopyToDevice<int>(h_sorted_token_ids);
+      BufferMeta d_expert_ids = CopyToDevice<int>(h_expert_ids);
+      BufferMeta d_total_tokens_post_pad = CopyToDevice<int>(h_total_tokens_post_pad);
+      BufferMeta d_expert_map = CopyToDevice<int>(h_expert_map);
+
+      // Invoke vllm version
+      if (expert_para_size == 1) {
+        InvokeMoeAlignBlockSize<int, uint16_t, false>(
+            reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
+            reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
+            reinterpret_cast<int*>(d_expert_map.data_ptr), topk, num_experts_per_rank, expert_para_size, block_size,
+            numel, 0, stream);
+      } else {
+        InvokeMoeAlignBlockSize<int, uint16_t, true>(
+            reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
+            reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
+            reinterpret_cast<int*>(d_expert_map.data_ptr), topk, num_experts_per_rank, expert_para_size, block_size,
+            numel, 0, stream);
+      }
+      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+      // Verify accuracy of vllm version
+      EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                       std::to_string(num_experts) + "_expert_ids",
+                                   h_expert_ids, d_expert_ids, 0, 0));
+      EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                       std::to_string(num_experts) + "_sorted_token_ids",
+                                   h_sorted_token_ids, d_sorted_token_ids, 0, 0));
+      EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                       std::to_string(num_experts) + "_total_tokens_post_pad",
+                                   h_total_tokens_post_pad, d_total_tokens_post_pad, 0, 0));
+
+      if (expert_para_size == 1 && num_experts >= 128) {
+        BufferMeta d_cumsum = CreateBuffer<int>(MemoryType::MEMORY_GPU, {static_cast<size_t>(num_experts + 1)},
+                                                /*is_random_init*/ false);
+
+        // Invoke sglang version
+        InvokeSglMoeAlignBlockSize<int>(
+            reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
+            reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
+            num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
+        CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+        // Verify accuracy of sglang version
+        EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                         std::to_string(num_experts) + "_expert_ids",
+                                     h_expert_ids, d_expert_ids, 0, 0));
+        EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                         std::to_string(num_experts) + "_sorted_token_ids",
+                                     h_sorted_token_ids, d_sorted_token_ids, 0, 0));
+        EXPECT_TRUE(CheckResult<int>("moe_align_block_ep_" + std::to_string(expert_para_size) + "_es_" +
+                                         std::to_string(num_experts) + "_total_tokens_post_pad",
+                                     h_total_tokens_post_pad, d_total_tokens_post_pad, 0, 0));
+
+        DeleteBuffer(d_cumsum);
+      }
+
+      // Free data
+      DeleteBuffer(h_topk_ids);
+      DeleteBuffer(h_sorted_token_ids);
+      DeleteBuffer(h_expert_ids);
+      DeleteBuffer(h_total_tokens_post_pad);
+      DeleteBuffer(h_expert_map);
+      DeleteBuffer(d_topk_ids);
+      DeleteBuffer(d_sorted_token_ids);
+      DeleteBuffer(d_expert_ids);
+      DeleteBuffer(d_total_tokens_post_pad);
+      DeleteBuffer(d_expert_map);
     }
+  }
+}
 
-    // 使用 CPU 计算理论的 MoeAlignBlock 输出
-    std::vector<int> sorted_ids(max_num_tokens_padded, num_experts_per_rank);
-    std::vector<int> expert_ids(max_num_m_blocks, -1);
-    std::vector<int> token_post_pad(1, -1);
-    MoeAlignBlockCpu(topk_ids, expert_ids, sorted_ids, expert_map, token_post_pad, token_num, topk,
-                     num_experts_per_rank, block_size);
+// Disable performance test by default
+TEST_F(LlamaNvidiaMoeTestSuit, DISABLED_MoeAlignBlockKernelPerfTest) {
+  const std::vector<int> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
+  // Config of DeepSeek-R1
+  const int topk = 8;
+  const int block_size = 64;
+  const int expert_para_size = 1;
+  const int num_experts = 256;
 
-    // Cuda 计算结果
-    std::vector<int> h_sorted_ids(max_num_tokens_padded, num_experts_per_rank);
-    std::vector<int> h_expert_ids(max_num_m_blocks, -1);
-    std::vector<int> h_token_post_pad(1, -1);
+  for (const int token_num : token_nums) {
+    const int num_experts_per_rank = num_experts / expert_para_size;
+    const size_t numel = token_num * topk;
+    const int max_num_tokens_padded = numel + num_experts_per_rank * (block_size - 1);
+    const int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
 
-    void* d_topk_ids;
-    void* d_sorted_token_ids;
-    void* d_experts_ids;
-    void* d_total_tokens_post_pad;
-    void* d_expert_map;
-    cudaMalloc(&d_topk_ids, token_num * topk * sizeof(int));
-    cudaMalloc(&d_sorted_token_ids, max_num_tokens_padded * sizeof(int));
-    cudaMalloc(&d_experts_ids, max_num_m_blocks * sizeof(int));
-    cudaMalloc(&d_total_tokens_post_pad, 1 * sizeof(int));
-    cudaMalloc(&d_expert_map, num_experts * sizeof(int));
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaMemcpy(d_topk_ids, reinterpret_cast<void*>(topk_ids.data()), numel * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_expert_map, reinterpret_cast<void*>(expert_map.data()),
-                                       num_experts * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_sorted_token_ids, reinterpret_cast<void*>(h_sorted_ids.data()),
-                                       max_num_tokens_padded * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_experts_ids, reinterpret_cast<void*>(h_expert_ids.data()),
-                                       max_num_m_blocks * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_total_tokens_post_pad, reinterpret_cast<void*>(h_token_post_pad.data()),
-                                       1 * sizeof(int), cudaMemcpyHostToDevice));
+    // Prepare device data
+    BufferMeta d_topk_ids =
+        CreateBuffer<int>(MemoryType::MEMORY_GPU, {static_cast<size_t>(token_num), static_cast<size_t>(topk)},
+                          /*is_random_init*/ true, /*min_val*/ 0, /*max_val*/ num_experts - 1);
+    BufferMeta d_sorted_token_ids =
+        CreateBuffer<int>(MemoryType::MEMORY_GPU, {static_cast<size_t>(max_num_tokens_padded)},
+                          /*is_random_init*/ false);
+    BufferMeta d_expert_ids = CreateBuffer<int>(MemoryType::MEMORY_GPU, {static_cast<size_t>(max_num_m_blocks)},
+                                                /*is_random_init*/ false);
+    BufferMeta d_total_tokens_post_pad = CreateBuffer<int>(MemoryType::MEMORY_GPU, {1},
+                                                           /*is_random_init*/ false);
+    BufferMeta d_cumsum = CreateBuffer<int>(MemoryType::MEMORY_GPU, {static_cast<size_t>(num_experts + 1)},
+                                            /*is_random_init*/ false);
 
-    InvokeMoeAlignBlockSize<int, uint16_t, true>(
-        reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
-        reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
-        reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel, 0,
-        stream);
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    // 对比正确性结果 Expert Ids
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaMemcpy(h_expert_ids.data(), d_experts_ids, max_num_m_blocks * sizeof(int), cudaMemcpyDeviceToHost));
-    for (int i = 0; i < max_num_m_blocks; ++i) {
-      EXPECT_EQ(h_expert_ids[i], expert_ids[i]);
-    }
-    // Sorted Ids
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(h_sorted_ids.data(), d_sorted_token_ids, max_num_tokens_padded * sizeof(int),
-                                       cudaMemcpyDeviceToHost));
-    for (int i = 0; i < max_num_tokens_padded; ++i) {
-      EXPECT_EQ(h_sorted_ids[i], sorted_ids[i]);
-    }
-
-    // Token Post Pad
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaMemcpy(h_token_post_pad.data(), d_total_tokens_post_pad, 1 * sizeof(int), cudaMemcpyDeviceToHost));
-    for (int i = 0; i < 1; ++i) {
-      EXPECT_EQ(h_token_post_pad[i], token_post_pad[i]);
-    }
-
-    const int num_iterations = 1;
+    const int warmups = 5;
+    const int iterations = 10;
     auto cuda_run = [&]() {
-      InvokeMoeAlignBlockSize<int, uint16_t, true>(
-          reinterpret_cast<int*>(d_topk_ids), reinterpret_cast<int*>(d_sorted_token_ids),
-          reinterpret_cast<int*>(d_experts_ids), reinterpret_cast<int*>(d_total_tokens_post_pad),
-          reinterpret_cast<int*>(d_expert_map), topk, num_experts_per_rank, expert_para_size, block_size, numel, 0,
-          stream);
+      InvokeSglMoeAlignBlockSize<int>(
+          reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
+          reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
+          num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
     };
+    float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
+    std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
 
-    float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
-    std::cout << "Kernel execution " << num_iterations << " times, average: " << milliseconds << " ms" << std::endl;
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_topk_ids));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_sorted_token_ids));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_experts_ids));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_total_tokens_post_pad));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(d_expert_map));
+    // Free data
+    DeleteBuffer(d_topk_ids);
+    DeleteBuffer(d_sorted_token_ids);
+    DeleteBuffer(d_expert_ids);
+    DeleteBuffer(d_total_tokens_post_pad);
+    DeleteBuffer(d_cumsum);
   }
 }
 

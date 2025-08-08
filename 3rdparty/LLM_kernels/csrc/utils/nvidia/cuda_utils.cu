@@ -13,47 +13,21 @@ __global__ void RunCUDARandomUniformKernel(T* buffer, const size_t size, const i
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t local_state;
   constexpr uint64_t SEED = 1337ul;
+  constexpr float EPS = 1e-10;
   curand_init(SEED, idx + seq_offset, 0, &local_state);
   for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
-    // NOTE(karlluo): some cuda's kernel has not static_cast for half
-    if (max_val == min_val) {
-      buffer[index] = (T)(max_val);
+    if constexpr (std::is_integral_v<T>) {
+      // ceil((min_val, max_val + 1] - EPS) -> [min_val, max_val]
+      buffer[index] = (T)(curand_uniform(&local_state) * (max_val - min_val + 1) + min_val - EPS);
     } else {
-      buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+      // TODO(yfnjin): consider the constraints of `min_val` and `max_val` for float type
+      // NOTE(karlluo): some cuda's kernel has not static_cast for half
+      if (max_val == min_val) {
+        buffer[index] = (T)(max_val);
+      } else {
+        buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+      }
     }
-  }
-}
-
-template <>
-__global__ void RunCUDARandomUniformKernel<int32_t>(int32_t* buffer, const size_t size, const int32_t seq_offset,
-                                                    const float max_val, const float min_val) {
-  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  curandState_t local_state;
-  curand_init(1337.0f, idx + seq_offset, 0, &local_state);
-  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
-    buffer[index] = curand(&local_state);
-  }
-}
-
-template <>
-__global__ void RunCUDARandomUniformKernel<bool>(bool* buffer, const size_t size, const int32_t seq_offset,
-                                                 const float max_val, const float min_val) {
-  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  curandState_t local_state;
-  curand_init(1337.f, idx + seq_offset, 0, &local_state);
-  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
-    buffer[index] = (curand(&local_state) % 2 == 0);
-  }
-}
-
-template <>
-__global__ void RunCUDARandomUniformKernel<char>(char* buffer, const size_t size, const int32_t seq_offset,
-                                                 const float max_val, const float min_val) {
-  const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  curandState_t local_state;
-  curand_init(1337.f, idx + seq_offset, 0, &local_state);
-  for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
-    buffer[index] = curand(&local_state) % 0xFF;
   }
 }
 

@@ -516,11 +516,11 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
       config = {{"block_size_m", 16}, {"block_size_n", 32}, {"block_size_k", 64}, {"group_size_m", 1}};
     }
   }
-  auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>());
-  // [start_offset0, length0, value0, ..., start_offsetN, lengthN, valueN]
-  std::vector<int> fill_info;
+
   // reserve for fill_info
-  const size_t fill_info_reserved_size = 24;
+  const size_t fill_info_reserved_size = 3;
+  // [start_offset0, length0, value0, ..., start_offsetN, lengthN, valueN]
+  std::vector<int> fill_info(fill_info_reserved_size);
   fill_info.reserve(fill_info_reserved_size);
   for (int i = 0; i < chunk_times; ++i) {
     // curr_hidden_states [tokens_in_chunk, hidden_size]
@@ -547,40 +547,34 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
     int numel = tokens_in_chunk * topk;
     int max_num_tokens_padded = numel + num_experts * (block_size - 1);
     // torch::Tensor sorted_ids = torch::empty({max_num_tokens_padded}, int32_options);
-    // sorted_ids.fill_(numel);
-    fill_info.insert(fill_info.end(), {id_buffer_offset, max_num_tokens_padded, numel});
+    fill_info[0] = id_buffer_offset;
+    fill_info[1] = max_num_tokens_padded;
+    fill_info[2] = numel;
     void* sorted_ids_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
+    // sorted_ids.fill_(numel);
+    llm_kernels::nvidia::InvokeFillIntToBuffer(reinterpret_cast<int32_t*>(curr_fused_id_buffer),
+                                               fill_info_buffer_on_device, reinterpret_cast<int*>(fill_info.data()),
+                                               fill_info.size(), stream);
     id_buffer_offset += max_num_tokens_padded;
 
     int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
     // torch::Tensor expert_ids = torch::empty({max_num_m_blocks}, int32_options);
-    // expert_ids.fill_(-1);
-    fill_info.insert(fill_info.end(), {id_buffer_offset, max_num_m_blocks, -1});
     void* expert_ids_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
     id_buffer_offset += max_num_m_blocks;
 
     // torch::Tensor num_tokens_post_pad = torch::empty({1}, int32_options);
-    fill_info.insert(fill_info.end(), {id_buffer_offset, 1, 0});
     void* num_tokens_post_pad_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
     id_buffer_offset += 1;
     // TODO(zezhao): SglMoe need support Expert-Parallel
     if (num_experts >= 224) {
-      // torch::Tensor cumsum = torch::zeros({num_experts + 1}, int32_options);
-      fill_info.insert(fill_info.end(), {id_buffer_offset, num_experts + 1, 0});
+      // torch::Tensor cumsum = torch::empty({num_experts + 1}, int32_options);
       void* cumsum_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
-      id_buffer_offset += num_experts + 1;
-      llm_kernels::nvidia::InvokeFillIntToBuffer(reinterpret_cast<int32_t*>(curr_fused_id_buffer),
-                                                 fill_info_buffer_on_device, reinterpret_cast<int*>(fill_info.data()),
-                                                 fill_info.size(), stream);
       llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t>(
           reinterpret_cast<int32_t*>(curr_topk_ids), reinterpret_cast<int32_t*>(sorted_ids_ptr),
           reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), num_experts,
           block_size, numel, reinterpret_cast<int32_t*>(cumsum_ptr), stream);
     } else {
       // https://github.com/vllm-project/vllm/blob/185cc19f922a29868bf62e4f2674c763df36c8b5/csrc/moe/moe_align_sum_kernels.cu#L296
-      llm_kernels::nvidia::InvokeFillIntToBuffer(reinterpret_cast<int32_t*>(curr_fused_id_buffer),
-                                                 fill_info_buffer_on_device, reinterpret_cast<int*>(fill_info.data()),
-                                                 fill_info.size(), stream);
       llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, UseExpertParallel>(
           reinterpret_cast<int32_t*>(curr_topk_ids), reinterpret_cast<int32_t*>(sorted_ids_ptr),
           reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), expert_map,
@@ -611,7 +605,6 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
     llm_kernels::nvidia::InvokeMoeSum<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,
                                                             expert_map, tokens_in_chunk, num_experts, topk, hidden_size,
                                                             stream);
-    fill_info.clear();
   }
 }
 

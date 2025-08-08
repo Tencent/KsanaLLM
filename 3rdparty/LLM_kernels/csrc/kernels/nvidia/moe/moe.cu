@@ -22,16 +22,17 @@
  * [vLLM Project]
  * https://github.com/vllm-project/vllm/blob/v0.7.1/vllm/model_executor/layers/quantization/utils/quant_utils.py#L63
  * [DeepSeek-V3 Project] https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/kernel.py#L84
- * [SGLang Project] https://github.com/sgl-project/sglang/commit/ded9fcd09a43d5e7d5bb31a2bc3e9fc21bf65d2a
+ * [SGLang Project] https://github.com/sgl-project/sglang
  */
 #include "moe.h"
 
 #include <cub/cub.cuh>
-#include "csrc/utils/nvidia/cuda_utils.h"
 #include <flashinfer/activation.cuh>
 
+#include "csrc/utils/nvidia/cuda_utils.h"
 
 #define CEILDIV(x, y) (((x) + (y)-1) / (y))
+#define WARP_SIZE 32
 
 namespace llm_kernels {
 namespace nvidia {
@@ -336,10 +337,10 @@ __global__ void moe_align_block_size_global_mem_kernel(scalar_t* __restrict__ to
 }
 
 // taken from
-// https://github.com/sgl-project/sglang/pull/3347/files
+// https://github.com/sgl-project/sglang/blame/f024795e57c3589a63df2457d3d64771989d4ed7/sgl-kernel/csrc/moe/moe_align_kernel.cu#L30
 template <typename scalar_t>
-__global__ void sgl_moe_token_sort_kernel(scalar_t* __restrict__ topk_ids, int* sorted_token_ids, int* cumsum,
-                                          size_t numel) {
+__global__ void sgl_moe_token_sort_kernel(const scalar_t* __restrict__ topk_ids, int32_t* __restrict__ sorted_token_ids,
+                                          int32_t* __restrict__ cumsum, size_t numel) {
   const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const size_t stride = blockDim.x * gridDim.x;
 
@@ -350,56 +351,130 @@ __global__ void sgl_moe_token_sort_kernel(scalar_t* __restrict__ topk_ids, int* 
   }
 }
 
+__device__ __forceinline__ int warp_exclusive_scan(int v, const unsigned mask = 0xffffffffu) {
+  int original = v;
+#pragma unroll
+  for (int offset = 1; offset < WARP_SIZE; offset <<= 1) {
+    int n = __shfl_up_sync(mask, v, offset);
+    if ((threadIdx.x & (WARP_SIZE - 1)) >= offset) {
+      v += n;
+    }
+  }
+  return v - original;
+}
+
 // taken from
-// https://github.com/sgl-project/sglang/commit/ded9fcd09a43d5e7d5bb31a2bc3e9fc21bf65d2a
+// https://github.com/sgl-project/sglang/blame/f024795e57c3589a63df2457d3d64771989d4ed7/sgl-kernel/csrc/moe/moe_align_kernel.cu#L58
 template <typename scalar_t>
-__global__ void sgl_moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int32_t* sorted_token_ids,
-                                                int32_t* expert_ids, int32_t* total_tokens_post_pad,
-                                                int32_t num_experts, int32_t block_size, size_t numel,
-                                                int32_t* cumsum) {
-  __shared__ int32_t shared_counts[32][8];
+__global__ void sgl_moe_align_block_size_kernel(const scalar_t* __restrict__ topk_ids,
+                                                int32_t* __restrict__ sorted_token_ids,
+                                                int32_t* __restrict__ expert_ids,
+                                                int32_t* __restrict__ total_tokens_post_pad, int32_t num_experts,
+                                                int32_t block_size, size_t numel, int32_t* __restrict__ cumsum,
+                                                const int32_t scan_size) {
+  extern __shared__ int32_t smem[];
+  int32_t* shared_counts = smem;                  // [num_experts]
+  int32_t* prefix = shared_counts + num_experts;  // [num_experts + 1]
+  int32_t* scan_buf = prefix + num_experts + 1;   // [scan_size]
+  __shared__ int32_t s_total_tokens_post_pad;
 
-  const int warp_id = threadIdx.x / 32;
-  const int experts_per_warp = 8;
-  const int my_expert_start = warp_id * experts_per_warp;
+  const size_t tid = threadIdx.x;
+  const size_t stride = blockDim.x;
 
-  for (int i = 0; i < experts_per_warp; ++i) {
-    if (my_expert_start + i < num_experts) {
-      shared_counts[warp_id][i] = 0;
-    }
+  if (tid < num_experts) {
+    shared_counts[tid] = 0;
   }
+  __syncthreads();
 
-  const size_t tokens_per_thread = CEILDIV(numel, blockDim.x);
-  const size_t start_idx = threadIdx.x * tokens_per_thread;
-
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
+  for (size_t i = tid; i < numel; i += stride) {
     int expert_id = topk_ids[i];
-    int warp_idx = expert_id / experts_per_warp;
-    int expert_offset = expert_id % experts_per_warp;
-    atomicAdd(&shared_counts[warp_idx][expert_offset], 1);
+    atomicAdd(&shared_counts[expert_id], 1);
   }
-
   __syncthreads();
 
-  if (threadIdx.x == 0) {
-    cumsum[0] = 0;
-    for (int i = 1; i <= num_experts; ++i) {
-      int expert_count = 0;
-      int warp_idx = (i - 1) / experts_per_warp;
-      int expert_offset = (i - 1) % experts_per_warp;
-      expert_count = shared_counts[warp_idx][expert_offset];
-
-      cumsum[i] = cumsum[i - 1] + CEILDIV(expert_count, block_size) * block_size;
-    }
-    *total_tokens_post_pad = cumsum[num_experts];
+  int32_t padded_count = 0;
+  if (tid < num_experts) {
+    int32_t count = shared_counts[tid];
+    padded_count = (count + block_size - 1) / block_size * block_size;
+    scan_buf[tid] = padded_count;
   }
 
+  // Intra warp prefix sum
+  int32_t* warp_sums = scan_buf + scan_size;  // [<= 32]
+  const int warp_id = tid / WARP_SIZE;
+  const int lane_id = tid & (WARP_SIZE - 1);
+  const int num_warps_for_scan = (scan_size + WARP_SIZE - 1) / WARP_SIZE;
+  const int warp_sum = warp_exclusive_scan(padded_count) + padded_count;
+  if (lane_id == WARP_SIZE - 1) {
+    warp_sums[warp_id] = warp_sum;
+  }
   __syncthreads();
 
-  if (threadIdx.x < num_experts) {
-    for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
-      expert_ids[i / block_size] = threadIdx.x;
+  // warp0 accumulate all the block's prefix sum
+  if (tid < WARP_SIZE) {
+    int val = (tid < num_warps_for_scan) ? warp_sums[tid] : 0;
+    int incl = warp_exclusive_scan(val) + val;
+    warp_sums[tid] = incl;
+  }
+  __syncthreads();
+
+  // Every thread obtains the whole block's sum
+  if (tid == 0) {
+    prefix[num_experts] = warp_sums[num_warps_for_scan - 1];
+    s_total_tokens_post_pad = prefix[num_experts];
+    *total_tokens_post_pad = s_total_tokens_post_pad;
+  }
+  __syncthreads();
+
+  // Fill 0 to scan_buf extended area (tid >= num_expert)
+  if (tid >= num_experts && tid < scan_size) {
+    scan_buf[tid] = 0;
+  }
+  __syncthreads();
+
+  // Perform 2 level exclusive-prefix-sum to scan_buf
+  int v = (tid < scan_size) ? scan_buf[tid] : 0;
+  int pre = warp_exclusive_scan(v);
+  if (lane_id == WARP_SIZE - 1) {
+    warp_sums[warp_id] = pre + v;
+  }
+  __syncthreads();
+
+  if (warp_id == 0) {
+    int val = (lane_id < num_warps_for_scan) ? warp_sums[lane_id] : 0;
+    warp_sums[lane_id] = warp_exclusive_scan(val);
+  }
+  __syncthreads();
+
+  int offset = warp_sums[warp_id];
+  if (tid < scan_size) {
+    scan_buf[tid] = pre + offset;
+  }
+  __syncthreads();
+
+  // Write prefix[0..num_experts - 1] and cumsum
+  if (tid < num_experts) {
+    prefix[tid] = scan_buf[tid];
+  }
+
+  if (tid <= num_experts) {
+    cumsum[tid] = prefix[tid];
+  }
+
+  // fill expert_ids
+  const int32_t num_blocks = s_total_tokens_post_pad / block_size;
+  for (int32_t i = tid; i < num_blocks; i += stride) {
+    int32_t block_start = i * block_size;
+    int left = 0, right = num_experts;
+    while (left < right) {
+      int mid = (left + right) >> 1;
+      if (prefix[mid] <= block_start) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
     }
+    expert_ids[i] = left - 1;
   }
 }
 
@@ -741,12 +816,15 @@ INVOKE_MOE_ALIGN_BLOCK_SIZE(int32_t, uint16_t);
 INVOKE_MOE_ALIGN_BLOCK_SIZE(int32_t, int32_t);
 #undef INVOKE_MOE_ALIGN_BLOCK_SIZE
 
+// `num_experts` should be greater than 64
 template <typename T>
 void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* expert_ids,
                                 int32_t* total_tokens_post_pad, int32_t num_experts, int32_t block_size, size_t numel,
                                 int32_t* cumsum, const cudaStream_t& stream) {
-  sgl_moe_align_block_size_kernel<T><<<1, 1024, 0, stream>>>(
-      topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, num_experts, block_size, numel, cumsum);
+  const size_t scan_size = llm_kernels::utils::next_pow2(num_experts);
+  const size_t shared_mem_size = (num_experts + (num_experts + 1) + scan_size + WARP_SIZE) * sizeof(int32_t);
+  sgl_moe_align_block_size_kernel<T><<<1, 1024, shared_mem_size, stream>>>(
+      topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, num_experts, block_size, numel, cumsum, scan_size);
 
   const int block_threads = 256;
   const int num_blocks = (numel + block_threads - 1) / block_threads;
