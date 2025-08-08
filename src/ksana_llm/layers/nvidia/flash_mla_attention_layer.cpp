@@ -64,14 +64,15 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
                     void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
                     void* v_head_weight_scale, void* gemm_workspace, cublasHandle_t& cublas_handles,
                     cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos, void* rotary_embedding_mask,
-                    void* mla_workspace, void* seqlens_with_prefix_ptr, float attn_scale,
-                    std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
-                    int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,
-                    int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal,
-                    int rank, int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,
-                    const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,
-                    int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
-                    int max_forwarding_tokens, int total_prefix_len, void* seqlens_without_prefix_ptr,
+                    void* mla_workspace, void* seqlens_with_prefix_ptr, void* seqlens_with_prefix_int32_ptr,
+                    float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
+                    int total_q_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim,
+                    int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale,
+                    float v_scale, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
+                    void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
+                    cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
+                    int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens,
+                    int total_prefix_tokens, void* seqlens_without_prefix_ptr, void* seqlens_without_prefix_int32_ptr,
                     QuantMode mm_quant_mode) {
   const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
   const int head_size = qk_nope_head_dim + qk_rope_head_dim;
@@ -79,23 +80,10 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   const auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   const auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
 
-  static thread_local void* seqlen_kv_int32 = nullptr;
-  static thread_local void* seqlen_q_int32 = nullptr;
-  if (seqlen_kv_int32 == nullptr) {
-    BatchSchedulerConfig batch_scheduler_config;
-    Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
-    cudaMalloc(&seqlen_kv_int32, batch_scheduler_config.max_batch_size * sizeof(int));
-    cudaMalloc(&seqlen_q_int32, batch_scheduler_config.max_batch_size * sizeof(int));
-  }
-  llm_kernels::nvidia::Int64ToInt(reinterpret_cast<const int64_t*>(seqlens_with_prefix_ptr), batch + 1,
-                                  reinterpret_cast<int*>(seqlen_kv_int32), stream);
-  llm_kernels::nvidia::Int64ToInt(reinterpret_cast<const int64_t*>(seqlens_without_prefix_ptr), batch + 1,
-                                  reinterpret_cast<int*>(seqlen_q_int32), stream);
-
   // req total sequence length (with prefix)
-  const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlen_kv_int32, {batch + 1}, int32_options);
+  const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlens_with_prefix_int32_ptr, {batch + 1}, int32_options);
   // req input_ids length (without prefix)
-  const torch::Tensor seqlen_q_tensor = torch::from_blob(seqlen_q_int32, {batch + 1}, int32_options);
+  const torch::Tensor seqlen_q_tensor = torch::from_blob(seqlens_without_prefix_int32_ptr, {batch + 1}, int32_options);
 
   // kv_b_proj升维矩阵乘
   // 1. kv_nope_proj
@@ -106,20 +94,20 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
     if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
       SCALAR_T* a = static_cast<SCALAR_T*>(compressed_kv_ptr);
       void* a_q = gemm_workspace;
-      float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_tokens * kv_lora_rank);
-      InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(a, a_q, a_s, total_tokens, kv_lora_rank, true, stream);
+      float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_q_tokens * kv_lora_rank);
+      InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(a, a_q, a_s, total_q_tokens, kv_lora_rank, true, stream);
       float* b_scale = static_cast<float*>(kv_b_nope_weight_scale);
-      InvokeBlockGemm<SCALAR_T>(a_q, a_s, kv_b_nope_proj_weight, b_scale, output_buffer, total_tokens, kv_lora_rank,
+      InvokeBlockGemm<SCALAR_T>(a_q, a_s, kv_b_nope_proj_weight, b_scale, output_buffer, total_q_tokens, kv_lora_rank,
                                 num_heads * qk_nope_head_dim, stream);
     } else if (mm_quant_mode == QUANT_GPTQ) {
       int64_t workspace_size = 0;
       std::vector<std::string> machete_schedule_map =
           Singleton<MacheteSearchStatus>::GetInstance()->GetMacheteSchedule(num_heads * qk_nope_head_dim, kv_lora_rank);
       std::optional<std::string> best_schedule = std::nullopt;
-      if (static_cast<size_t>(total_tokens) < machete_schedule_map.size()) {
-        best_schedule = std::optional<std::string>(machete_schedule_map[total_tokens]);
+      if (static_cast<size_t>(total_q_tokens) < machete_schedule_map.size()) {
+        best_schedule = std::optional<std::string>(machete_schedule_map[total_q_tokens]);
       }
-      InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_tokens, num_heads * qk_nope_head_dim,
+      InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_q_tokens, num_heads * qk_nope_head_dim,
                         kv_lora_rank, compressed_kv_ptr, kv_b_nope_proj_weight, output_buffer,
                         GetMacheteDataType<SCALAR_T>(), llm_kernels::nvidia::vllm_dtype::kU4B8, kv_b_nope_weight_scale,
                         std::optional<std::vector<size_t>>({static_cast<size_t>(kv_lora_rank / 128),
@@ -128,7 +116,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
     }
   } else {
     // 得到k_nope [token_num, head, 128]
-    InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_tokens, num_heads * qk_nope_head_dim, kv_lora_rank,
+    InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_q_tokens, num_heads * qk_nope_head_dim, kv_lora_rank,
                            reinterpret_cast<const void*>(compressed_kv_ptr),
                            reinterpret_cast<const void*>(kv_b_nope_proj_weight), output_buffer, stream, nullptr,
                            nullptr);
@@ -137,19 +125,19 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   if (v_head_weight_scale != nullptr) {
     if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
       void* a_q = gemm_workspace;
-      float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_tokens * kv_lora_rank);
+      float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_q_tokens * kv_lora_rank);
       float* b_scale = static_cast<float*>(v_head_weight_scale);
-      InvokeBlockGemm<SCALAR_T>(a_q, a_s, v_head_proj_weight, b_scale, mla_workspace, total_tokens, kv_lora_rank,
+      InvokeBlockGemm<SCALAR_T>(a_q, a_s, v_head_proj_weight, b_scale, mla_workspace, total_q_tokens, kv_lora_rank,
                                 num_heads * v_head_dim, stream);
     } else if (mm_quant_mode == QUANT_GPTQ) {
       int64_t workspace_size = 0;
       std::vector<std::string> machete_schedule_map =
           Singleton<MacheteSearchStatus>::GetInstance()->GetMacheteSchedule(num_heads * v_head_dim, kv_lora_rank);
       std::optional<std::string> best_schedule = std::nullopt;
-      if (static_cast<size_t>(total_tokens) < machete_schedule_map.size()) {
-        best_schedule = std::optional<std::string>(machete_schedule_map[total_tokens]);
+      if (static_cast<size_t>(total_q_tokens) < machete_schedule_map.size()) {
+        best_schedule = std::optional<std::string>(machete_schedule_map[total_q_tokens]);
       }
-      InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_tokens, num_heads * v_head_dim, kv_lora_rank,
+      InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_q_tokens, num_heads * v_head_dim, kv_lora_rank,
                         compressed_kv_ptr, v_head_proj_weight, mla_workspace, GetMacheteDataType<SCALAR_T>(),
                         llm_kernels::nvidia::vllm_dtype::kU4B8, v_head_weight_scale,
                         std::optional<std::vector<size_t>>(
@@ -158,44 +146,44 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
     }
   } else {
     // mla_workspace得到v [token_num, head, 128]
-    InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_tokens, num_heads * v_head_dim, kv_lora_rank,
+    InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_q_tokens, num_heads * v_head_dim, kv_lora_rank,
                            reinterpret_cast<const void*>(compressed_kv_ptr),
                            reinterpret_cast<const void*>(v_head_proj_weight), mla_workspace, stream, nullptr, nullptr);
   }
 
   if (rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
-                                    stream);
+                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr,
+                                    total_q_tokens, stream);
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
   /*
   Input Parameters:
-  q_nope : q_nope_ptr       [total_tokens, num_heads, qk_nope_head_dim]
-  k_nope : output_buffer  [total_tokens, num_heads, qk_nope_head_dim]
-  q_pe   : q_pe_ptr         [total_tokens, num_heads, qk_rope_head_dim]
-  k_pe   : k_pe_ptr         [total_tokens, 1, qk_rope_head_dim]
-  v_pe   : mla_workspace    [total_tokens, num_heads, v_head_dim]
+  q_nope : q_nope_ptr       [total_q_tokens, num_heads, qk_nope_head_dim]
+  k_nope : output_buffer  [total_q_tokens, num_heads, qk_nope_head_dim]
+  q_pe   : q_pe_ptr         [total_q_tokens, num_heads, qk_rope_head_dim]
+  k_pe   : k_pe_ptr         [total_q_tokens, 1, qk_rope_head_dim]
+  v_pe   : mla_workspace    [total_q_tokens, num_heads, v_head_dim]
 
   Intermediate Tensors:
-  k_pe_expanded : k_pe_expanded_ptr  [total_tokens, num_heads, qk_rope_head_dim]
-  v_pad         : v_pad_ptr          [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim - v_head_dim]
-  q_tensor      : q_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
-  k_tensor      : k_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
-  v_tensor      : v_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
+  k_pe_expanded : k_pe_expanded_ptr  [total_q_tokens, num_heads, qk_rope_head_dim]
+  v_pad         : v_pad_ptr          [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim - v_head_dim]
+  q_tensor      : q_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
+  k_tensor      : k_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
+  v_tensor      : v_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
 
   Memory Buffer Allocation:
   output_buffer : [k_nope][q_tensor][k_tensor]
   mla_workspace   : [v_pe][k_pe_expanded][v_pad][v_tensor]
   */
 
-  const size_t qk_combined_size = total_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim) * sizeof(SCALAR_T);
-  const size_t v_tensor_size = total_tokens * num_heads * v_head_dim * sizeof(SCALAR_T);
-  const size_t k_pe_expanded_size = total_tokens * num_heads * qk_rope_head_dim * sizeof(SCALAR_T);
+  const size_t qk_combined_size = total_q_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim) * sizeof(SCALAR_T);
+  const size_t v_tensor_size = total_q_tokens * num_heads * v_head_dim * sizeof(SCALAR_T);
+  const size_t k_pe_expanded_size = total_q_tokens * num_heads * qk_rope_head_dim * sizeof(SCALAR_T);
   const size_t v_pad_size =
-      total_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim - v_head_dim) * sizeof(SCALAR_T);
-  const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * sizeof(SCALAR_T);
+      total_q_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim - v_head_dim) * sizeof(SCALAR_T);
+  const size_t k_nope_size = total_q_tokens * num_heads * qk_nope_head_dim * sizeof(SCALAR_T);
 
   const size_t q_tensor_offset = (k_nope_size + 1023) & ~(1023);
   const size_t k_tensor_offset = (q_tensor_offset + qk_combined_size + 1023) & ~(1023);
@@ -210,13 +198,13 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   void* const v_tensor_ptr = static_cast<char*>(mla_workspace) + v_tensor_offset;
 
   torch::Tensor q_tensor =
-      torch::from_blob(q_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(q_tensor_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor k_tensor =
-      torch::from_blob(k_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(k_tensor_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor v_tensor =
-      torch::from_blob(v_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(v_tensor_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
 
-  const size_t outer_dim_size = total_tokens * num_heads;
+  const size_t outer_dim_size = total_q_tokens * num_heads;
   const size_t inner_dim_size = 1;
 
   // cat(q_nope, q_pe)
@@ -224,7 +212,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
                    q_tensor.data_ptr(), stream);
 
   // cat(k_nope, k_pe)
-  Expand<SCALAR_T>(k_pe_ptr, k_pe_expanded_ptr, total_tokens, num_heads, qk_rope_head_dim, 0, stream);
+  Expand<SCALAR_T>(k_pe_ptr, k_pe_expanded_ptr, total_q_tokens, num_heads, qk_rope_head_dim, 0, stream);
   Concat<SCALAR_T>(output_buffer, k_pe_expanded_ptr, qk_nope_head_dim, qk_rope_head_dim, outer_dim_size, inner_dim_size,
                    k_tensor.data_ptr(), stream);
 
@@ -238,7 +226,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
       v_list, reinterpret_cast<size_t*>(seqlens_with_prefix_ptr), reinterpret_cast<size_t*>(prefix_offsets),
       reinterpret_cast<size_t*>(seqlens_without_prefix_ptr), reinterpret_cast<int*>(block_offsets), block_size, batch,
-      total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
+      total_q_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
 
   // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
   // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
@@ -247,7 +235,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       max_tokens == 1 && num_heads > num_kv_heads && head_size % 8 == 0 && !alibi_slopes.has_value();
   c10::optional<at::Tensor> out_tensor = c10::nullopt;
   if (!seqlenq_ngroups_swapped) {
-    out_tensor = torch::from_blob(mla_workspace, {total_tokens, num_heads, head_size}, options);
+    out_tensor = torch::from_blob(mla_workspace, {total_q_tokens, num_heads, head_size}, options);
   }
   c10::optional<at::Tensor> seqused_k = c10::nullopt;
   auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
@@ -287,18 +275,17 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, "
                       "set the output tensor to nullptr.";
-    at::Tensor& out_data = mha_output[0];
-    const size_t total_size = out_data.numel() * out_data.element_size();
-    CUDA_CHECK(cudaMemcpyAsync(output_buffer, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
+    const at::Tensor& res = mha_output[0];
+    CUDA_CHECK(cudaMemcpyAsync(output_buffer, res.data_ptr(), res.nbytes(), cudaMemcpyDeviceToDevice, stream));
   }
 
   //  当 v_tensor 被 pad 时调用, 取out_tensor 的 v_head_dim 大小
   const size_t dst_pitch = v_head_dim * sizeof(SCALAR_T);
   const size_t src_pitch = head_size * sizeof(SCALAR_T);
-  // Tensor(MEMORY_DEVICE, TYPE_FP16, {total_tokens, num_heads, qk_nope_head_dim +
+  // Tensor(MEMORY_DEVICE, TYPE_FP16, {total_q_tokens, num_heads, qk_nope_head_dim +
   // qk_rope_head_dim}
-  CUDA_CHECK(cudaMemcpy2DAsync(output_buffer, dst_pitch, mla_workspace, src_pitch, dst_pitch, total_tokens * num_heads,
-                               cudaMemcpyDeviceToDevice, stream));
+  CUDA_CHECK(cudaMemcpy2DAsync(output_buffer, dst_pitch, mla_workspace, src_pitch, dst_pitch,
+                               total_q_tokens * num_heads, cudaMemcpyDeviceToDevice, stream));
 }
 
 #define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                 \
@@ -307,13 +294,15 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
-      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,               \
-      int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,         \
-      int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank,     \
-      int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                        \
+      void* seqlens_with_prefix_int32_ptr, float attn_scale,                                                          \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_q_tokens,             \
+      int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,         \
+      int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank, int block_size,       \
+      void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                                        \
       const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,            \
       int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens,        \
-      int total_prefix_len, void* seqlens_without_prefix_ptr, QuantMode mm_quant_mode)
+      int total_prefix_tokens, void* seqlens_without_prefix_ptr, void* seqlens_without_prefix_int32_ptr,              \
+      QuantMode mm_quant_mode)
 MLA_ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 MLA_ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 MLA_ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -328,56 +317,79 @@ MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5
 #undef MLA_ATTEN_VARLEN
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void MlaAttenVarlenAbsorb(
-    void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,
-    void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale,
-    void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
-    void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,
-    float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
-    int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,
-    int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank, int block_size,
-    void** k_list, void** v_list, void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
-    cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,
-    int max_blocks_per_seq, int max_forwarding_tokens, int total_prefix_len, void* seqlens_without_prefix_ptr,
-    void* prefix_k_buffer, void* prefix_v_buffer, void* prefix_kv_buffer, void* prefix_k_up_buffer,
-    void* prefix_v_up_buffer, QuantMode mm_quant_mode) {
-  const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
-  const int head_size = qk_nope_head_dim + qk_rope_head_dim;
-
-  const auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
-  const auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
-
-  static thread_local void* seqlen_kv_int32 = nullptr;
-  static thread_local void* seqlen_q_int32 = nullptr;
-  if (seqlen_kv_int32 == nullptr) {
-    BatchSchedulerConfig batch_scheduler_config;
-    Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
-    cudaMalloc(&seqlen_kv_int32, batch_scheduler_config.max_batch_size * sizeof(int));
-    cudaMalloc(&seqlen_q_int32, batch_scheduler_config.max_batch_size * sizeof(int));
+void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr,
+                          void* compressed_kv_ptr, void* kv_b_nope_proj_weight, void* v_head_proj_weight,
+                          void* kv_b_nope_weight_scale, void* v_head_weight_scale, void* gemm_workspace,
+                          cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
+                          void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace,
+                          void* seqlens_with_prefix_ptr, void* seqlens_with_prefix_int32_ptr, float attn_scale,
+                          std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
+                          int total_q_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim,
+                          int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale,
+                          float v_scale, bool is_causal, int rank, int block_size, void** k_list, void** v_list,
+                          void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes,
+                          cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
+                          int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens,
+                          int total_prefix_tokens, void* seqlens_without_prefix_ptr,
+                          void* seqlens_without_prefix_int32_ptr, void* prefix_kv_buffer, QuantMode mm_quant_mode) {
+  if (rotary_embedding_cuda.has_value()) {
+    rotary_embedding_cuda->SetInput(
+        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
+        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_q_tokens, stream);
+    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
-  llm_kernels::nvidia::Int64ToInt(reinterpret_cast<const int64_t*>(seqlens_with_prefix_ptr), batch + 1,
-                                  reinterpret_cast<int*>(seqlen_kv_int32), stream);
-  llm_kernels::nvidia::Int64ToInt(reinterpret_cast<const int64_t*>(seqlens_without_prefix_ptr), batch + 1,
-                                  reinterpret_cast<int*>(seqlen_q_int32), stream);
 
-  // req total sequence length (with prefix)
-  const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlen_kv_int32, {batch + 1}, int32_options);
-  // req input_ids length (without prefix)
-  const torch::Tensor seqlen_q_tensor = torch::from_blob(seqlen_q_int32, {batch + 1}, int32_options);
+  // copy new k&v to kv cache block
+  // Use compressed kvcache, k is [num_token, qk_rope_head_dim], v is  [num_token, kv_lora_rank]
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+      reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), k_list, v_list,
+      reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr),
+      reinterpret_cast<int*>(block_offsets), block_size, batch, total_q_tokens, qk_rope_head_dim, kv_lora_rank, k_scale,
+      v_scale, stream));
 
-  // kv_b_proj升维矩阵乘
-  // 1. kv_nope_proj
+  const int total_tokens = total_q_tokens + total_prefix_tokens;
+  // get latent and k_rope from cache block (include prefix and new)
+  void* latent_buffer = compressed_kv_ptr;
+  void* k_rope_buffer = k_pe_ptr;
+  if (total_prefix_tokens > 0) {
+    latent_buffer = prefix_kv_buffer;
+    k_rope_buffer = prefix_kv_buffer + total_tokens * kv_lora_rank * sizeof(CACHE_T);
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(
+        k_rope_buffer, latent_buffer, k_list, total_tokens, reinterpret_cast<size_t*>(seqlens_with_prefix_ptr),
+        reinterpret_cast<int*>(block_offsets), block_size, qk_rope_head_dim, kv_lora_rank, stream));
+  }
+
+  constexpr size_t kValueSize = sizeof(SCALAR_T);
+  const size_t q_size = total_q_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim) * kValueSize;
+  const size_t k_rope_size = total_tokens * num_heads * qk_rope_head_dim * kValueSize;
+  const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * kValueSize;
+  const size_t v_size = total_tokens * num_heads * v_head_dim * kValueSize;
+  const size_t v_pad_part_size = k_rope_size + k_nope_size - v_size;
+
+  // WARNING: output_buffer & mla_workspace size verification is not checked. validation must be added in future.​
+  // output_buffer layout: [k_nope] [query] [k_nope+k_rope]
+  void* const k_nope_ptr = output_buffer;
+  void* const q_ptr = output_buffer + k_nope_size;
+  void* const k_ptr = output_buffer + k_nope_size + q_size;
+
+  // mla_workspace layout: [value] [k_rope] [vaule_pad_part_size] [value_padded]
+  void* const v_ptr = mla_workspace;
+  void* const k_rope_ptr = mla_workspace + v_size;
+  void* const v_pad_part_ptr = mla_workspace + v_size + k_rope_size;
+  void* const v_padded_ptr = mla_workspace + v_size + k_rope_size + v_pad_part_size;
+
+  // calc k_nope by latent_buffer @ kv_b_nope_proj. k_nope: [token_num, head, qk_nope_head_dim]
   if (kv_b_nope_weight_scale != nullptr) {
     if (gemm_workspace == nullptr) {
       KLLM_THROW("Quantized matmul has not gemm_workspace");
     }
     if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
-      SCALAR_T* a = static_cast<SCALAR_T*>(compressed_kv_ptr);
+      SCALAR_T* a = static_cast<SCALAR_T*>(latent_buffer);
       void* a_q = gemm_workspace;
       float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_tokens * kv_lora_rank);
       InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(a, a_q, a_s, total_tokens, kv_lora_rank, true, stream);
       float* b_scale = static_cast<float*>(kv_b_nope_weight_scale);
-      InvokeBlockGemm<SCALAR_T>(a_q, a_s, kv_b_nope_proj_weight, b_scale, output_buffer, total_tokens, kv_lora_rank,
+      InvokeBlockGemm<SCALAR_T>(a_q, a_s, kv_b_nope_proj_weight, b_scale, k_nope_ptr, total_tokens, kv_lora_rank,
                                 num_heads * qk_nope_head_dim, stream);
     } else if (mm_quant_mode == QUANT_GPTQ) {
       int64_t workspace_size = 0;
@@ -388,26 +400,25 @@ void MlaAttenVarlenAbsorb(
         best_schedule = std::optional<std::string>(machete_schedule_map[total_tokens]);
       }
       InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_tokens, num_heads * qk_nope_head_dim,
-                        kv_lora_rank, compressed_kv_ptr, kv_b_nope_proj_weight, output_buffer,
-                        GetMacheteDataType<SCALAR_T>(), llm_kernels::nvidia::vllm_dtype::kU4B8, kv_b_nope_weight_scale,
+                        kv_lora_rank, latent_buffer, kv_b_nope_proj_weight, k_nope_ptr, GetMacheteDataType<SCALAR_T>(),
+                        llm_kernels::nvidia::vllm_dtype::kU4B8, kv_b_nope_weight_scale,
                         std::optional<std::vector<size_t>>({static_cast<size_t>(kv_lora_rank / 128),
                                                             static_cast<size_t>(num_heads * qk_nope_head_dim)}),
                         GetMacheteDataType<SCALAR_T>(), std::nullopt, std::nullopt, std::nullopt, 128, best_schedule);
     }
   } else {
-    // 得到k_nope [token_num, head, 128]
     InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_tokens, num_heads * qk_nope_head_dim, kv_lora_rank,
-                           reinterpret_cast<const void*>(compressed_kv_ptr),
-                           reinterpret_cast<const void*>(kv_b_nope_proj_weight), output_buffer, stream, nullptr,
-                           nullptr);
+                           reinterpret_cast<const void*>(latent_buffer),
+                           reinterpret_cast<const void*>(kv_b_nope_proj_weight), k_nope_ptr, stream, nullptr, nullptr);
   }
-  // 2. v_head_proj
+
+  // calc value by latent_buffer @ v_head_proj. value: [token_num, head, v_head_dim]
   if (v_head_weight_scale != nullptr) {
     if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
       void* a_q = gemm_workspace;
       float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_tokens * kv_lora_rank);
       float* b_scale = static_cast<float*>(v_head_weight_scale);
-      InvokeBlockGemm<SCALAR_T>(a_q, a_s, v_head_proj_weight, b_scale, mla_workspace, total_tokens, kv_lora_rank,
+      InvokeBlockGemm<SCALAR_T>(a_q, a_s, v_head_proj_weight, b_scale, v_ptr, total_tokens, kv_lora_rank,
                                 num_heads * v_head_dim, stream);
     } else if (mm_quant_mode == QUANT_GPTQ) {
       int64_t workspace_size = 0;
@@ -418,119 +429,62 @@ void MlaAttenVarlenAbsorb(
         best_schedule = std::optional<std::string>(machete_schedule_map[total_tokens]);
       }
       InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_tokens, num_heads * v_head_dim, kv_lora_rank,
-                        compressed_kv_ptr, v_head_proj_weight, mla_workspace, GetMacheteDataType<SCALAR_T>(),
+                        latent_buffer, v_head_proj_weight, v_ptr, GetMacheteDataType<SCALAR_T>(),
                         llm_kernels::nvidia::vllm_dtype::kU4B8, v_head_weight_scale,
                         std::optional<std::vector<size_t>>(
                             {static_cast<size_t>(kv_lora_rank / 128), static_cast<size_t>(num_heads * v_head_dim)}),
                         GetMacheteDataType<SCALAR_T>(), std::nullopt, std::nullopt, std::nullopt, 128, best_schedule);
     }
   } else {
-    // mla_workspace得到v [token_num, head, 128]
     InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_tokens, num_heads * v_head_dim, kv_lora_rank,
-                           reinterpret_cast<const void*>(compressed_kv_ptr),
-                           reinterpret_cast<const void*>(v_head_proj_weight), mla_workspace, stream, nullptr, nullptr);
+                           reinterpret_cast<const void*>(latent_buffer),
+                           reinterpret_cast<const void*>(v_head_proj_weight), v_ptr, stream, nullptr, nullptr);
   }
 
-  if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
-                                    stream);
-    CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
-  }
-
-  /*
-  Input Parameters:
-  q_nope : q_nope_ptr       [total_tokens, num_heads, qk_nope_head_dim]
-  k_nope : output_buffer  [total_tokens, num_heads, qk_nope_head_dim]
-  q_pe   : q_pe_ptr         [total_tokens, num_heads, qk_rope_head_dim]
-  k_pe   : k_pe_ptr         [total_tokens, 1, qk_rope_head_dim]
-  v_pe   : mla_workspace    [total_tokens, num_heads, v_head_dim]
-
-  Intermediate Tensors:
-  k_pe_expanded : k_pe_expanded_ptr  [total_tokens, num_heads, qk_rope_head_dim]
-  v_pad         : v_pad_ptr          [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim - v_head_dim]
-  q_tensor      : q_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
-  k_tensor      : k_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
-  v_tensor      : v_tensor_ptr       [total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
-
-  Memory Buffer Allocation:
-  output_buffer : [k_nope][q_tensor][k_tensor]
-  mla_workspace   : [v_pe][k_pe_expanded][v_pad][v_tensor]
-  */
-
-  const size_t qk_combined_size = total_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim) * sizeof(SCALAR_T);
-  const size_t v_tensor_size = total_tokens * num_heads * v_head_dim * sizeof(SCALAR_T);
-  const size_t k_pe_expanded_size = total_tokens * num_heads * qk_rope_head_dim * sizeof(SCALAR_T);
-  const size_t v_pad_size =
-      total_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim - v_head_dim) * sizeof(SCALAR_T);
-  const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * sizeof(SCALAR_T);
-
-  const size_t q_tensor_offset = (k_nope_size + 1023) & ~(1023);
-  const size_t k_tensor_offset = (q_tensor_offset + qk_combined_size + 1023) & ~(1023);
-  const size_t k_pe_expanded_offset = (v_tensor_size + 1023) & ~(1023);
-  const size_t v_pad_offset = (k_pe_expanded_offset + k_pe_expanded_size + 1023) & ~(1023);
-  const size_t v_tensor_offset = (v_pad_offset + v_pad_size + 1023) & ~(1023);
-
-  void* const q_tensor_ptr = static_cast<char*>(output_buffer) + q_tensor_offset;
-  void* const k_tensor_ptr = static_cast<char*>(output_buffer) + k_tensor_offset;
-  void* const k_pe_expanded_ptr = static_cast<char*>(mla_workspace) + k_pe_expanded_offset;
-  void* const v_pad_ptr = static_cast<char*>(mla_workspace) + v_pad_offset;
-  void* const v_tensor_ptr = static_cast<char*>(mla_workspace) + v_tensor_offset;
-
+  const auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor q_tensor =
-      torch::from_blob(q_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(q_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor k_tensor =
-      torch::from_blob(k_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(k_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor v_tensor =
-      torch::from_blob(v_tensor_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(v_padded_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
 
-  const size_t outer_dim_size = total_tokens * num_heads;
-  const size_t inner_dim_size = 1;
+  const size_t q_outer_dim = total_q_tokens * num_heads;
+  const size_t kv_outer_dim = total_tokens * num_heads;
+  constexpr size_t inner_dim = 1;
 
   // cat(q_nope, q_pe)
-  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, qk_nope_head_dim, qk_rope_head_dim, outer_dim_size, inner_dim_size,
-                   q_tensor.data_ptr(), stream);
+  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, qk_nope_head_dim, qk_rope_head_dim, q_outer_dim, inner_dim, q_ptr, stream);
 
   // cat(k_nope, k_pe)
-  Expand<SCALAR_T>(k_pe_ptr, k_pe_expanded_ptr, total_tokens, num_heads, qk_rope_head_dim, 0, stream);
-  Concat<SCALAR_T>(output_buffer, k_pe_expanded_ptr, qk_nope_head_dim, qk_rope_head_dim, outer_dim_size, inner_dim_size,
-                   k_tensor.data_ptr(), stream);
+  Expand<SCALAR_T>(k_rope_buffer, k_rope_ptr, total_tokens, num_heads, qk_rope_head_dim, 0, stream);
+  Concat<SCALAR_T>(output_buffer, k_rope_ptr, qk_nope_head_dim, qk_rope_head_dim, kv_outer_dim, inner_dim, k_ptr,
+                   stream);
 
   // pad v
-  CUDA_CHECK(cudaMemsetAsync(v_pad_ptr, 0, v_pad_size, stream));
-  Concat<SCALAR_T>(mla_workspace, v_pad_ptr, qk_nope_head_dim, qk_rope_head_dim, outer_dim_size, inner_dim_size,
-                   v_tensor.data_ptr(), stream);
-
-  // copy new k&v to kv cache block
-  // Use compressed kvcache, k is [num_token, qk_rope_head_dim], v is  [num_token, kv_lora_rank]
-  const int k_stride_size = qk_rope_head_dim;
-  const int v_stride_size = kv_lora_rank;
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
-      reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), k_list, v_list,
-      reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr),
-      reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, k_stride_size, v_stride_size, k_scale,
-      v_scale, stream));
+  CUDA_CHECK(cudaMemsetAsync(v_pad_part_ptr, 0, v_pad_part_size, stream));
+  Concat<SCALAR_T>(mla_workspace, v_pad_part_ptr, qk_nope_head_dim, qk_rope_head_dim, kv_outer_dim, inner_dim,
+                   v_padded_ptr, stream);
 
   // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
   // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
   // leads to a core dump.
-  const bool seqlenq_ngroups_swapped =
-      max_tokens == 1 && num_heads > num_kv_heads && head_size % 8 == 0 && !alibi_slopes.has_value();
+  const bool seqlenq_ngroups_swapped = max_tokens == 1 && num_heads > num_kv_heads &&
+                                       (qk_nope_head_dim + qk_rope_head_dim) % 8 == 0 && !alibi_slopes.has_value();
   c10::optional<at::Tensor> out_tensor = c10::nullopt;
   if (!seqlenq_ngroups_swapped) {
-    out_tensor = torch::from_blob(mla_workspace, {total_tokens, num_heads, head_size}, options);
+    out_tensor = torch::from_blob(mla_workspace, q_tensor.sizes(), options);
   }
-  at::Tensor q_tmp_tensor = torch::reshape(q_tensor, {total_tokens, num_heads, head_size});
-  c10::optional<at::Tensor> seqused_k = c10::nullopt;
-  auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
   c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
   if (alibi_slopes.has_value()) {
+    const auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
     alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
   }
   // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
   // intended for use in testing accuracy outcomes only.
   if constexpr (KV_DTYPE != llm_kernels::utils::KVCacheType::kAuto) {
     if (kContextDecodeUseFP8Cache) {
+      const int stride_size = num_heads * (qk_nope_head_dim + qk_rope_head_dim);
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, k_scale,
           stream));
@@ -539,141 +493,29 @@ void MlaAttenVarlenAbsorb(
           stream));
     }
   }
-  std::vector<at::Tensor> mha_output;
-  if (total_prefix_len > 0) {
-    KLLM_LOG_DEBUG << "Prefix caching triggered, unique len:" << total_tokens << ", prefix len:" << total_prefix_len;
 
-    // copy compressed_kv_cache to prefix_kv_buffer, not include k_rope_cache
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaCopyValueBlockToBuffer<SCALAR_T, CACHE_T, KV_DTYPE>(
-        reinterpret_cast<SCALAR_T*>(prefix_kv_buffer), v_list, kv_lora_rank + qk_rope_head_dim, 0, kv_lora_rank,
-        kv_lora_rank, reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<int*>(block_offsets), block_size,
-        total_prefix_len, stream));
+  c10::optional<at::Tensor> block_table = c10::nullopt;
+  c10::optional<at::Tensor> seqused_k = c10::nullopt;
+  const auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
+  const torch::Tensor seqlen_q_tensor = torch::from_blob(seqlens_without_prefix_int32_ptr, {batch + 1}, int32_options);
+  const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlens_with_prefix_int32_ptr, {batch + 1}, int32_options);
+  const auto mha_ret = mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_q_tensor, seqlen_kv_tensor,
+                                      seqused_k, block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f,
+                                      attn_scale, false, is_causal, -1, -1, 0.f, false, c10::nullopt);
 
-    // calc cached key to prefix_k_up_buffer
-    if (kv_b_nope_weight_scale != nullptr) {
-      if (gemm_workspace == nullptr) {
-        KLLM_THROW("FP8 quantized matmul has not gemm_workspace");
-      }
-      if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
-        SCALAR_T* a = static_cast<SCALAR_T*>(prefix_kv_buffer);
-        void* a_q = gemm_workspace;
-        float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_prefix_len * kv_lora_rank);
-        InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(a, a_q, a_s, total_prefix_len, kv_lora_rank, true, stream);
-
-        float* b_scale = static_cast<float*>(kv_b_nope_weight_scale);
-        InvokeBlockGemm<SCALAR_T>(a_q, a_s, kv_b_nope_proj_weight, b_scale, prefix_k_up_buffer, total_prefix_len,
-                                  kv_lora_rank, num_heads * qk_nope_head_dim, stream);
-      } else if (mm_quant_mode == QUANT_GPTQ) {
-        int64_t workspace_size = 0;
-        std::vector<std::string> machete_schedule_map =
-            Singleton<MacheteSearchStatus>::GetInstance()->GetMacheteSchedule(num_heads * qk_nope_head_dim,
-                                                                              kv_lora_rank);
-        std::optional<std::string> best_schedule = std::nullopt;
-        if (static_cast<size_t>(total_prefix_len) < machete_schedule_map.size()) {
-          best_schedule = std::optional<std::string>(machete_schedule_map[total_prefix_len]);
-        }
-        InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_prefix_len, num_heads * qk_nope_head_dim,
-                          kv_lora_rank, prefix_kv_buffer, kv_b_nope_proj_weight, prefix_k_up_buffer,
-                          GetMacheteDataType<SCALAR_T>(), llm_kernels::nvidia::vllm_dtype::kU4B8,
-                          kv_b_nope_weight_scale,
-                          std::optional<std::vector<size_t>>({static_cast<size_t>(kv_lora_rank / 128),
-                                                              static_cast<size_t>(num_heads * qk_nope_head_dim)}),
-                          GetMacheteDataType<SCALAR_T>(), std::nullopt, std::nullopt, std::nullopt, 128, best_schedule);
-      } else {
-        KLLM_THROW(fmt::format("MLA not support quant mode: {}", mm_quant_mode));
-      }
-    } else {
-      InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_prefix_len, num_heads * qk_nope_head_dim,
-                             kv_lora_rank, prefix_kv_buffer, kv_b_nope_proj_weight, prefix_k_up_buffer, stream, nullptr,
-                             nullptr);
-    }
-
-    // calc cached value to prefix_v_up_buffer
-    if (v_head_weight_scale != nullptr) {
-      if (mm_quant_mode == QUANT_BLOCK_FP8_E4M3) {
-        void* a_q = gemm_workspace;
-        float* a_s = static_cast<float*>(a_q + sizeof(uint8_t) * total_prefix_len * kv_lora_rank);
-
-        float* b_scale = static_cast<float*>(v_head_weight_scale);
-        InvokeBlockGemm<SCALAR_T>(a_q, a_s, v_head_proj_weight, b_scale, prefix_v_up_buffer, total_prefix_len,
-                                  kv_lora_rank, num_heads * v_head_dim, stream);
-      } else if (mm_quant_mode == QUANT_GPTQ) {
-        int64_t workspace_size = 0;
-        std::vector<std::string> machete_schedule_map =
-            Singleton<MacheteSearchStatus>::GetInstance()->GetMacheteSchedule(num_heads * v_head_dim, kv_lora_rank);
-        std::optional<std::string> best_schedule = std::nullopt;
-        if (static_cast<size_t>(total_prefix_len) < machete_schedule_map.size()) {
-          best_schedule = std::optional<std::string>(machete_schedule_map[total_prefix_len]);
-        }
-        InvokeMacheteGemm(workspace_size, gemm_workspace, stream, total_prefix_len, num_heads * v_head_dim,
-                          kv_lora_rank, prefix_kv_buffer, v_head_proj_weight, prefix_v_up_buffer,
-                          GetMacheteDataType<SCALAR_T>(), llm_kernels::nvidia::vllm_dtype::kU4B8, v_head_weight_scale,
-                          std::optional<std::vector<size_t>>(
-                              {static_cast<size_t>(kv_lora_rank / 128), static_cast<size_t>(num_heads * v_head_dim)}),
-                          GetMacheteDataType<SCALAR_T>(), std::nullopt, std::nullopt, std::nullopt, 128, best_schedule);
-      }
-    } else {
-      InvokeMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, total_prefix_len, num_heads * v_head_dim, kv_lora_rank,
-                             prefix_kv_buffer, v_head_proj_weight, prefix_v_up_buffer, stream, nullptr, nullptr);
-    }
-
-    // copy new key/value to prefix_k_buffer/prefix_v_buffer
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaExtendKVPrefixWithEmpty<SCALAR_T, CACHE_T, KV_DTYPE>(
-        reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()),
-        reinterpret_cast<SCALAR_T*>(prefix_k_buffer), reinterpret_cast<SCALAR_T*>(prefix_v_buffer),
-        reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr), num_heads,
-        qk_nope_head_dim + qk_rope_head_dim, total_tokens, stream));
-
-    // copy cached k_rope to prefix_k_up_buffer each head
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaCopyKeyBlockWithReplication<SCALAR_T, CACHE_T, KV_DTYPE>(
-        reinterpret_cast<SCALAR_T*>(prefix_k_buffer), k_list, kv_lora_rank + qk_rope_head_dim, kv_lora_rank,
-        qk_rope_head_dim, num_heads, qk_nope_head_dim + qk_rope_head_dim, qk_nope_head_dim,
-        reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr),
-        reinterpret_cast<int*>(block_offsets), block_size, total_prefix_len, stream));
-
-    // copy and concat cached key/value from prefix_k_up_buffer/prefix_v_up_buffer to prefix_k_buffer/prefix_v_buffer
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFillKVPrefix<SCALAR_T, CACHE_T, KV_DTYPE>(
-        reinterpret_cast<SCALAR_T*>(prefix_k_buffer), reinterpret_cast<SCALAR_T*>(prefix_v_buffer),
-        reinterpret_cast<SCALAR_T*>(prefix_k_up_buffer), reinterpret_cast<SCALAR_T*>(prefix_v_up_buffer),
-        reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr), num_heads,
-        qk_nope_head_dim, qk_nope_head_dim + qk_rope_head_dim, total_prefix_len, stream));
-
-    const int total_len_with_prefix = total_tokens + total_prefix_len;
-    torch::Tensor prefix_k_tensor =
-        torch::from_blob(prefix_k_buffer, {total_len_with_prefix, num_heads, head_size}, options);
-    torch::Tensor prefix_v_tensor =
-        torch::from_blob(prefix_v_buffer, {total_len_with_prefix, num_heads, head_size}, options);
-    c10::optional<at::Tensor> prefix_out_tensor =
-        torch::from_blob(mla_workspace, {total_tokens, num_heads, head_size}, options);
-
-    c10::optional<at::Tensor> block_table = c10::nullopt;
-    mha_output = mha_varlen_fwd(q_tensor, prefix_k_tensor, prefix_v_tensor, prefix_out_tensor, seqlen_q_tensor,
-                                seqlen_kv_tensor, seqused_k, block_table, alibi_slopes_tensor, max_tokens, max_tokens,
-                                0.f, attn_scale, false, is_causal, -1, -1, 0.f, false, c10::nullopt);
-  } else {
-    KLLM_LOG_INFO << "start mha";
-    c10::optional<at::Tensor> block_table = c10::nullopt;  // batch_size x max_num_blocks_per_seq
-    mha_output =
-        mha_varlen_fwd(q_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-                       torch::reshape(v_tensor, {total_tokens, num_kv_heads, head_size}), out_tensor, seqlen_q_tensor,
-                       seqlen_kv_tensor, seqused_k, block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f,
-                       attn_scale, false, is_causal, -1, -1, 0.f, false, c10::nullopt);
-  }
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, "
                       "set the output tensor to nullptr.";
-    at::Tensor& out_data = mha_output[0];
-    size_t total_size = out_data.numel() * out_data.element_size();
-    CUDA_CHECK(cudaMemcpyAsync(output_buffer, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
+    const at::Tensor& res = mha_ret[0];
+    CUDA_CHECK(cudaMemcpyAsync(output_buffer, res.data_ptr(), res.nbytes(), cudaMemcpyDeviceToDevice, stream));
   }
 
   //  当 v_tensor 被 pad 时调用, 取out_tensor 的 v_head_dim 大小
   const size_t dst_pitch = v_head_dim * sizeof(SCALAR_T);
-  const size_t src_pitch = head_size * sizeof(SCALAR_T);
-  // Tensor(MEMORY_DEVICE, TYPE_FP16, {total_tokens, num_heads, qk_nope_head_dim +
-  // qk_rope_head_dim}
-  CUDA_CHECK(cudaMemcpy2DAsync(output_buffer, dst_pitch, mla_workspace, src_pitch, dst_pitch, total_tokens * num_heads,
-                               cudaMemcpyDeviceToDevice, stream));
+  const size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * sizeof(SCALAR_T);
+  // Tensor(MEMORY_DEVICE, TYPE_FP16, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}
+  CUDA_CHECK(cudaMemcpy2DAsync(output_buffer, dst_pitch, mla_workspace, src_pitch, dst_pitch,
+                               total_q_tokens * num_heads, cudaMemcpyDeviceToDevice, stream));
 }
 
 #define MLA_ATTEN_VARLEN_ABSORB(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
@@ -682,14 +524,15 @@ void MlaAttenVarlenAbsorb(
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
-      float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,               \
-      int total_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim,         \
-      int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank,     \
-      int block_size, void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                        \
+      void* seqlens_with_prefix_int32_ptr, float attn_scale,                                                          \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_q_tokens,             \
+      int max_tokens, int batch, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,         \
+      int v_head_dim, int num_kv_heads, float k_scale, float v_scale, bool is_causal, int rank, int block_size,       \
+      void** k_list, void** v_list, void* prefix_offsets, void* block_offsets,                                        \
       const std::optional<void*>& alibi_slopes, cudaStream_t stream, void* k_cache_ptr, void* v_cache_ptr,            \
       int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int max_forwarding_tokens,        \
-      int total_prefix_len, void* seqlens_without_prefix_ptr, void* prefix_k_buffer, void* prefix_v_buffer,           \
-      void* prefix_kv_buffer, void* prefix_k_up_buffer, void* prefix_v_up_buffer, QuantMode mm_quant_mode)
+      int total_prefix_tokens, void* seqlens_without_prefix_ptr, void* seqlens_without_prefix_int32_ptr,              \
+      void* prefix_kv_buffer, QuantMode mm_quant_mode)
 MLA_ATTEN_VARLEN_ABSORB(float, float, llm_kernels::utils::KVCacheType::kAuto);
 MLA_ATTEN_VARLEN_ABSORB(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 MLA_ATTEN_VARLEN_ABSORB(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -730,9 +573,11 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   auto input_iter = input_tensors.cbegin();
   const Tensor& hidden_buffer = *input_iter++;
   const Tensor& dp_input_offset = *input_iter++;
+  const Tensor& dp_input_offset_int32 = *input_iter++;
   const Tensor& kv_list = *input_iter++;
   const Tensor& dp_input_prefix = *input_iter++;
   const Tensor& dp_prefill_q_offset = *input_iter++;
+  const Tensor& dp_prefill_q_offset_int32 = *input_iter++;
   const Tensor& kv_cache_offset = *input_iter++;
   const Tensor& rotary_embedding_pos = *input_iter++;
   const Tensor& rotary_embedding_mask = *input_iter++;
@@ -753,11 +598,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const Tensor& kv_b_nope_proj_weight = *input_iter++;
   const Tensor& v_head_proj_weight = *input_iter++;
   const Tensor& attn_o_proj_weight = *input_iter++;
-  const Tensor& prefix_k_buffer = *input_iter++;
-  const Tensor& prefix_v_buffer = *input_iter++;
   const Tensor& prefix_kv_buffer = *input_iter++;
-  const Tensor& prefix_k_up_buffer = *input_iter++;
-  const Tensor& prefix_v_up_buffer = *input_iter++;
   const Tensor& workspace_buffer = *input_iter++;
 
   Tensor& out = output_tensors[0];
@@ -769,9 +610,9 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const int max_forwarding_tokens = forward_shape.shape[6];
   const int batch_size = forward_shape.shape[8];
   const int max_tokens = forward_shape.shape[9];
-  const int total_prefix_len = forward_shape.shape[12];
+  const int total_prefix_tokens = forward_shape.shape[12];
 
-  const int total_tokens = q_nope_buffer.shape[0];
+  const int total_q_tokens = q_nope_buffer.shape[0];
 
   void** const k_list = (kv_list.GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** const v_list = k_list + layer_block_num;
@@ -801,14 +642,14 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
         kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
         this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
         rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(),
-        dp_input_offset.GetPtr<void>(), this->attn_scale_, this->rotary_embedding_cuda_, total_tokens, max_tokens,
-        batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_,
-        this->v_head_dim_, this->num_kv_heads_, this->k_scale_, this->v_scale_, this->is_causal_, this->rank_,
-        this->block_token_num_, k_list, v_list, dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(),
-        this->alibi_slopes_, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr,
-        block_table.GetPtr<int32_t>(), kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_len,
-        dp_prefill_q_offset.GetPtr<void>(), prefix_k_buffer.GetPtr<void>(), prefix_v_buffer.GetPtr<void>(),
-        prefix_kv_buffer.GetPtr<void>(), prefix_k_up_buffer.GetPtr<void>(), prefix_v_up_buffer.GetPtr<void>(),
+        dp_input_offset.GetPtr<void>(), dp_input_offset_int32.GetPtr<void>(), this->attn_scale_,
+        this->rotary_embedding_cuda_, total_q_tokens, max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_,
+        this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->k_scale_,
+        this->v_scale_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
+        dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(), this->alibi_slopes_,
+        this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table.GetPtr<int32_t>(),
+        kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_tokens,
+        dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(), prefix_kv_buffer.GetPtr<void>(),
         this->mm_quant_mode_);
   } else {
     MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
@@ -817,13 +658,14 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
         kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
         this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
         rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(),
-        dp_input_offset.GetPtr<void>(), this->attn_scale_, this->rotary_embedding_cuda_, total_tokens, max_tokens,
-        batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_,
-        this->v_head_dim_, this->num_kv_heads_, this->k_scale_, this->v_scale_, this->is_causal_, this->rank_,
-        this->block_token_num_, k_list, v_list, dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(),
-        this->alibi_slopes_, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr,
-        block_table.GetPtr<int32_t>(), kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_len,
-        dp_prefill_q_offset.GetPtr<void>(), this->mm_quant_mode_);
+        dp_input_offset.GetPtr<void>(), dp_input_offset_int32.GetPtr<void>(), this->attn_scale_,
+        this->rotary_embedding_cuda_, total_q_tokens, max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_,
+        this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->k_scale_,
+        this->v_scale_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
+        dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(), this->alibi_slopes_,
+        this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table.GetPtr<int32_t>(),
+        kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_tokens,
+        dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(), this->mm_quant_mode_);
   }
 
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
@@ -832,7 +674,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
 
   const size_t o_proj_dim =
       this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3 ? attn_o_proj_weight.shape[0] : attn_o_proj_weight.shape[1];
-  out.shape = {total_tokens, o_proj_dim};
+  out.shape = {total_q_tokens, o_proj_dim};
   out.dtype = hidden_buffer.dtype;
   return Status();
 }

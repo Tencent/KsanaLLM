@@ -28,14 +28,8 @@ struct MlaBuffers {
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
 
-  // The tensor buffer used for flash attn, used to store qkv data with prefix part.
-  TensorBuffer* prefix_k_up_buffer;
-  TensorBuffer* prefix_v_up_buffer;
-
   // shared
-  TensorBuffer* shared_prefix_k_v_kv_buffer;
-  size_t prefix_k_buffer_size;
-  size_t prefix_v_buffer_size;
+  TensorBuffer* shared_prefix_kv_buffer;
 };
 
 class MultiHeadLatentAttention {
@@ -63,10 +57,9 @@ class MultiHeadLatentAttention {
                        ForwardingContext& forwarding_context);
 
  private:
-  Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                               std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                               std::vector<Tensor>& prefill_buffer_tensors, Tensor& q_nope_tensor,
-                               Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+  Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& workspace_buffer,
+                               std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor, Tensor& q_rope_buffer_tensor,
+                               Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext& forwarding_context);
 
   Status PagedAttentionForward(std::vector<Tensor>& output_tensor, std::vector<Tensor>& hidden_buffer_tensors_1,

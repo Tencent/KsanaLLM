@@ -73,7 +73,9 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
   input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
   dp_input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
+  dp_input_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
   dp_prefill_q_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
+  dp_prefill_q_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
   dp_flexible_rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
   dp_flexible_rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
   input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
@@ -1209,6 +1211,16 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
               dp_prefill_q_offset.size() * sizeof(decltype(dp_prefill_q_offset)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
 
+  std::vector<int> int32_vector(dp_prefill_q_offset.size());
+  for (size_t i = 0; i < dp_prefill_q_offset.size(); ++i) {
+    int32_vector[i] = static_cast<int>(dp_prefill_q_offset[i]);
+  }
+  dp_prefill_q_offset_int32_tensor.shape = {int32_vector.size()};
+  dp_prefill_q_offset_int32_tensor.dtype = TYPE_INT32;
+  MemcpyAsync(dp_prefill_q_offset_int32_tensor.GetPtr<void>(), int32_vector.data(),
+              int32_vector.size() * sizeof(decltype(int32_vector)::value_type), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+
   input_offset_uint64_tensor.shape = {input_offset_list_uint64.size()};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
   MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
@@ -1220,6 +1232,16 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   MemcpyAsync(dp_input_offset_uint64_tensor.GetPtr<void>(), dp_input_offset_list_uint64.data(),
               dp_input_offset_list_uint64.size() * sizeof(decltype(dp_input_offset_list_uint64)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+
+  int32_vector.resize(dp_input_offset_list_uint64.size());
+  for (size_t i = 0; i < dp_input_offset_list_uint64.size(); ++i) {
+    int32_vector[i] = static_cast<int>(dp_input_offset_list_uint64[i]);
+  }
+  dp_input_offset_int32_tensor.shape = {int32_vector.size()};
+  dp_input_offset_int32_tensor.dtype = TYPE_INT32;
+  MemcpyAsync(dp_input_offset_int32_tensor.GetPtr<void>(), int32_vector.data(),
+              int32_vector.size() * sizeof(decltype(int32_vector)::value_type), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
 
   input_prefix_uint64_tensor.shape = {input_prefix_list_uint64.size()};
   input_prefix_uint64_tensor.dtype = TYPE_UINT64;

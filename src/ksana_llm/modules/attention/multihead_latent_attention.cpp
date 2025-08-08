@@ -120,43 +120,10 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   mla_buffers.k_rope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.k_rope_buffer", {k_rope_buffer_size}, weight_type);
 
-  // TODO(jinxcwu) prefix部分与上面的buffer可能还有潜在的共享可能性
-  size_t prefix_k_buffer_size = max_token_num * head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_);
-  size_t prefix_v_buffer_size = prefix_k_buffer_size;
-  size_t prefix_o_buffer_size = 0;
-  size_t prefix_kv_buffer_size = max_token_num * head_num_per_tp_ * kv_lora_rank_;
-  size_t prefix_k_up_buffer_size = max_token_num * head_num_per_tp_ * qk_nope_head_dim_;
-  size_t prefix_v_up_buffer_size = max_token_num * head_num_per_tp_ * v_head_dim;
-
-  // 不启用prefix cache时不创建prefix buffer节约显存
-  if (!runtime_config.enable_prefix_caching) {
-    KLLM_LOG_INFO << "Not using prefix cache, so set all prefix buffer to 0 for saving vram";
-    prefix_k_buffer_size = 0;
-    prefix_v_buffer_size = 0;
-    prefix_o_buffer_size = 0;
-    prefix_kv_buffer_size = 0;
-    prefix_k_up_buffer_size = 0;
-    prefix_v_up_buffer_size = 0;
-  }
-
-  // 非共享buffer
-  mla_buffers.prefix_k_up_buffer =
-      buffer_mgr->CreateBufferTensor("mla_buffers.prefix_k_up_buffer", {prefix_k_up_buffer_size}, weight_type);
-  mla_buffers.prefix_v_up_buffer =
-      buffer_mgr->CreateBufferTensor("mla_buffers.prefix_v_up_buffer", {prefix_v_up_buffer_size}, weight_type);
-
-  // 共享buffer
-  const size_t shared_prefix_k_and_prefix_v_with_prefix_kv_buffer_size =
-      std::max(prefix_k_buffer_size + prefix_v_buffer_size, prefix_kv_buffer_size);
-  KLLM_LOG_INFO << fmt::format("Sharing prefix_k_buffer[{}]+prefix_v_buffer[{}] with prefix_kv_buffer[{}]",
-                               prefix_k_buffer_size, prefix_v_buffer_size, prefix_kv_buffer_size);
-  mla_buffers.shared_prefix_k_v_kv_buffer =
-      buffer_mgr->CreateBufferTensor("mla_buffers.shared_prefix_k_v_kv_buffer",
-                                     {shared_prefix_k_and_prefix_v_with_prefix_kv_buffer_size}, weight_type);
-
-  mla_buffers.prefix_k_buffer_size = prefix_k_buffer_size;
-  mla_buffers.prefix_v_buffer_size = prefix_v_buffer_size;
-
+  const size_t prefix_kv_buffer_size =
+      runtime_config.enable_prefix_caching ? max_token_num * (kv_lora_rank_ + qk_rope_head_dim_) : 0;
+  mla_buffers.shared_prefix_kv_buffer =
+      buffer_mgr->CreateBufferTensor("mla_buffers.shared_prefix_kv_buffer", {prefix_kv_buffer_size}, weight_type);
   return Status();
 }
 
@@ -272,9 +239,8 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     Tensor prefill_q_nope(q_buffer_tensors[0].location, q_buffer_tensors[0].dtype,
                           {context_tokens, head_num_per_tp_ * qk_nope_head_dim_}, q_buffer_tensors[0].device_id,
                           q_buffer_tensors[0].GetPtr<void>());
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
-                          hidden_buffer_tensors_0, prefill_q_nope, q_rope_buffer_tensors[0], kv_buffer_tensors[0],
-                          k_rope_buffer_tensors[0], forwarding_context);
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, hidden_buffer_tensors_0, prefill_q_nope,
+                          q_rope_buffer_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   if (decode_tokens > 0) {
@@ -507,9 +473,9 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& hidden_buff
     if (forwarding_context.GetModelCommunicator()) {
       std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
     }
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors,
-                          prefill_buffer_tensors, prefill_q_nope_tensors[0], q_rope_buffer_tensors[0],
-                          kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, prefill_buffer_tensors,
+                          prefill_q_nope_tensors[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
+                          k_rope_buffer_tensors[0], forwarding_context);
 
     {
       PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
@@ -694,30 +660,17 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& hidden_buffe
 
 Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                                        std::vector<Tensor>& workspace_buffer,
-                                                       std::vector<Tensor>& reduce_buffer_tensors,
                                                        std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor,
                                                        Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
                                                        Tensor& k_rope_buffer_tensor,
                                                        ForwardingContext& forwarding_context) {
   PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
   {
-    CREATE_BUFFER_SCOPE(prefix_k_up_buffer_tensors, mla_buffers_.prefix_k_up_buffer);
-    CREATE_BUFFER_SCOPE(prefix_v_up_buffer_tensors, mla_buffers_.prefix_v_up_buffer);
-
-    CREATE_BUFFER_SCOPE(prefix_kv_buffer_tensors, mla_buffers_.shared_prefix_k_v_kv_buffer);
-    Tensor prefix_k_buffer(prefix_kv_buffer_tensors[0].location, prefix_kv_buffer_tensors[0].dtype,
-                           {mla_buffers_.prefix_k_buffer_size}, prefix_kv_buffer_tensors[0].device_id,
-                           prefix_kv_buffer_tensors[0].GetPtr<void>());
-    Tensor prefix_v_buffer(prefix_kv_buffer_tensors[0].location, prefix_kv_buffer_tensors[0].dtype,
-                           {mla_buffers_.prefix_v_buffer_size}, prefix_kv_buffer_tensors[0].device_id,
-                           prefix_kv_buffer_tensors[0].GetPtr<void>() +
-                               mla_buffers_.prefix_k_buffer_size * prefix_kv_buffer_tensors[0].GetDTypeSize());
-
+    CREATE_BUFFER_SCOPE(prefix_kv_buffer_tensors, mla_buffers_.shared_prefix_kv_buffer);
     STATUS_CHECK_RETURN(flash_mla_attention_layers_->Forward(
         hidden_buffer_tensors_0, forwarding_context.GetModelInput(), workspace_buffer,
         forwarding_context.GetAttentionForwardContext(), q_nope_tensor, q_rope_buffer_tensor, kv_buffer_tensor,
-        k_rope_buffer_tensor, prefix_k_buffer, prefix_v_buffer, prefix_kv_buffer_tensors[0],
-        prefix_k_up_buffer_tensors[0], prefix_v_up_buffer_tensors[0], output_tensors));
+        k_rope_buffer_tensor, prefix_kv_buffer_tensors[0], output_tensors));
   }
   return Status();
 }

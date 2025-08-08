@@ -103,12 +103,14 @@ class ModelInput {
   // The ids offset tensor, uint64
   Tensor input_offset_uint64_tensor;
   Tensor dp_input_offset_uint64_tensor;
+  Tensor dp_input_offset_int32_tensor;
 
   // The input's prefix length
   Tensor input_prefix_uint64_tensor;
   Tensor dp_input_prefix_uint64_tensor;
 
   Tensor dp_prefill_q_offset_uint64_tensor;
+  Tensor dp_prefill_q_offset_int32_tensor;
 
   // Indicate the corresponding index position of the input during the flexible rotary_embedding kernel computation,
   // considering the impact of flexible cache optimization.

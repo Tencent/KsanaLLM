@@ -910,7 +910,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           batch_state_->schedule_output->running_reqs.insert(
               batch_state_->schedule_output->running_reqs.begin() + decode_request_num, req);
         } else {
-          KLLM_LOG_DEBUG << "shared token not equal forwaing size, " << req;
+          KLLM_LOG_DEBUG << "shared token not equal forwaing size, " << *req;
           req->kv_cached_token_num = shared_token_num;
           req->mtp_kv_cached_token_num = req->kv_cached_token_num;
           if (connector_config_.group_role == GroupRole::DECODE) {
