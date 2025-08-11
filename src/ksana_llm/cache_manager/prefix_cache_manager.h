@@ -116,7 +116,7 @@ class PrefixCacheManager : public CacheManagerInterface,
   size_t GetRequestUsableBlockNumber(int64_t req_id);
 
   // Check the shared and unique block num of specific request, the token number must be enough for next generation.
-  // The unique_block_num will always large than 0.
+  // The unique_block_num will always be larger than 0.
   Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids, size_t& shared_block_num,
                                      size_t& unique_block_num, size_t& shared_token_num);
 
@@ -150,7 +150,7 @@ class PrefixCacheManager : public CacheManagerInterface,
   // The swapin of the request's block must be done before call this.
   Status MergeSwapinRequest(int64_t req_id, std::vector<std::vector<int>>& req_block_ids);
 
-  // Drop a swaped cached request.
+  // Drop a swapped cached request.
   void DestroySwappedRequest(int64_t req_id);
 
   // Update internal state after request finished.

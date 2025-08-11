@@ -538,7 +538,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   cache_manager->DestroyFinishedRequest(req_id_2);
   cache_manager->DestroyFinishedRequest(req_id_4);
 
-  // test: 1 block in req, 5 block in cache_manager, expcet fill 4 block and append 2 new block
+  // test: 1 block in req, 5 block in cache_manager, expect fill 4 block and append 2 new block
   constexpr int64_t req_id_6 = 6;
   std::vector<std::vector<int>> req_block_ids_6(tensor_para_size);
   for (auto& req_block_tp : req_block_ids_6) {
@@ -601,8 +601,8 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   cache_manager->GetRequestPrefixBlockNumber(req_id_2, dst_prefix16_tokens, shared_block_num, unique_block_num,
                                              shared_token_num);
   status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num, req_block_ids);
-  // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_toeken|
-  // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_toeken|
+  // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_token|
+  // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_token|
   for (int last_token_num = 1; last_token_num < block_token_num; last_token_num++) {
     for (int delete_token_num = 1; delete_token_num <= block_token_num; delete_token_num++) {
       std::vector<int> dst_tokens;

@@ -375,7 +375,7 @@ void InvokeAbsorbMlaPagedAttention(
   }
 
   if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
-    KLLM_LOG_DEBUG << "FP8 kv cache and flash mla enabled, using FP8 inference, quanting q tensor.";
+    KLLM_LOG_DEBUG << "FP8 kv cache and flash mla enabled, using FP8 inference, quantizing q tensor.";
     // hidden_buffer_1: leave storage for o [batch_size, q_seq_per_hk, num_heads, head_size_v]
     const int num_heads_q = num_heads;
     constexpr int kNumHeadsK = 1;

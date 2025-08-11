@@ -1185,15 +1185,19 @@ TEST(NcclCommunicatorTest, SendRecv_DifferentDataTypes) {
 
   // 测试不同的数据类型
   struct DataTypeTest {
-    ncclDataType_t dtype;
+    ksana_llm::DataType ksana_dtype;
+    ncclDataType_t nccl_dtype;
     size_t expected_element_size;
     std::string name;
   };
 
   std::vector<DataTypeTest> tests = {
-      {ncclInt8, 1, "int8"},       {ncclUint8, 1, "uint8"}, {ncclInt32, 4, "int32"},   {ncclUint32, 4, "uint32"},
-      {ncclFloat32, 4, "float32"}, {ncclInt64, 8, "int64"}, {ncclUint64, 8, "uint64"}, {ncclFloat64, 8, "float64"},
-  };
+      {TYPE_INT8, ncclInt8, 1, "int8"},          {TYPE_UINT8, ncclUint8, 1, "uint8"},
+      {TYPE_INT32, ncclInt32, 4, "int32"},       {TYPE_UINT32, ncclUint32, 4, "uint32"},
+      {TYPE_INT64, ncclInt64, 8, "int64"},       {TYPE_UINT64, ncclUint64, 8, "uint64"},
+      {TYPE_FP16, ncclFloat16, 2, "float16"},    {TYPE_BF16, ncclBfloat16, 2, "bfloat16"},
+      {TYPE_FP32, ncclFloat32, 4, "float32"},    {TYPE_FP64, ncclFloat64, 8, "float64"},
+      {TYPE_FP8_E4M3, ncclUint8, 1, "fp8_e4m3"}, {TYPE_FP8_E5M2, ncclUint8, 1, "fp8_e5m2"}};
 
   for (const auto& test : tests) {
     SCOPED_TRACE("Testing data type: " + test.name);
@@ -1203,15 +1207,16 @@ TEST(NcclCommunicatorTest, SendRecv_DifferentDataTypes) {
     char buffer[8] = {0};
     size_t count = 1;
 
-    // Convert ncclDataType_t to ksana_llm::DataType
-    ksana_llm::DataType ksana_dtype = FromNcclDataType(test.dtype);
+    ncclDataType_t nccl_dtype = ncclChar;
+    GetNcclDataType(test.ksana_dtype, nccl_dtype);
+    EXPECT_EQ(nccl_dtype, test.nccl_dtype);
 
     // 测试发送
-    Status send_status = communicator.Send(group_key, 0, 0, buffer, count, ksana_dtype);
+    Status send_status = communicator.Send(group_key, 0, 0, buffer, count, test.ksana_dtype);
     EXPECT_TRUE(send_status.OK()) << "Send failed for " << test.name;
 
     // 测试接收
-    Status recv_status = communicator.Recv(group_key, 0, 0, buffer, count, ksana_dtype);
+    Status recv_status = communicator.Recv(group_key, 0, 0, buffer, count, test.ksana_dtype);
     EXPECT_TRUE(recv_status.OK()) << "Recv failed for " << test.name;
 
     EXPECT_EQ(communicator.GetSendCallCount(), 1);
