@@ -93,7 +93,8 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
 Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
                                                const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers) {
   const DataType weight_type = attn_config.model_config.weight_data_type;
-  const size_t max_token_num = runtime_config.max_step_token_num;
+  const size_t max_token_num = std::ceil(static_cast<float>(runtime_config.max_step_token_num) /
+                                         runtime_config.parallel_basic_config.attn_data_parallel_size);
   const size_t head_num = attn_config.model_config.head_num;
   const size_t max_decode_tokens = runtime_config.max_batch_size * attn_config.max_decode_tokens_per_req;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
@@ -293,6 +294,7 @@ Status MultiHeadLatentAttention::DataParallelForward(std::vector<Tensor>& hidden
   const int decode_end = dp_token_offset[dp_group_id * 4 + 3];
 
   if (forwarding_context.GetModelInput()->dp_multi_token_request_num > 0) {
+    // TODO(rockcao): remove offset
     const size_t tensor_offset = prefill_beg * token_hidden_stat_bytes;
 
     context_hidden_buffer_tensors_0[0].shape[0] = prefill_end - prefill_beg;
@@ -318,6 +320,7 @@ Status MultiHeadLatentAttention::DataParallelForward(std::vector<Tensor>& hidden
   }
 
   if (forwarding_context.GetModelInput()->dp_single_token_request_num > 0) {
+    // TODO(rockcao): remove offset
     // Fake a context part, so that the decode part could be work fine.
     const size_t tensor_offset = (decode_beg - (prefill_end - prefill_beg)) * token_hidden_stat_bytes;
 
