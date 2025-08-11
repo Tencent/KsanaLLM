@@ -354,7 +354,8 @@ std::vector<Tensor>& CommonModel::GetHiddenUnitBuffer(ForwardingContext& forward
 Status CommonModel::AllocResources(size_t multi_batch_id) {
   if (context_->IsChief()) {
     KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
-      "multi_batch_id should be smaller than max_pp");
+      FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.",
+        multi_batch_id, forwarding_context_buffer_size_));
   }
 
   size_t id = context_->IsChief() ? multi_batch_id : 0;
@@ -388,8 +389,11 @@ void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, Forw
 }
 
 ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
-  KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
-    "multi_batch_id should be smaller than max_pp");
+  if (context_->IsChief()) {
+    KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
+      FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.",
+        multi_batch_id, forwarding_context_buffer_size_));
+  }
   size_t id = context_->IsChief() ? multi_batch_id : 0;
   return forwarding_context_buffer_[id].get();
 }
