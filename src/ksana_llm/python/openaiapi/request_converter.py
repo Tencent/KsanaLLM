@@ -7,8 +7,9 @@ From OpenAI Request to KsanaLLM Request
 """
 
 import time
-from typing import Dict, List, Optional, Union, Any, Callable
+from typing import Dict, List, Optional, Union, Any, Callable, Type
 from dataclasses import dataclass
+from pydantic import BaseModel
 import orjson
 from openaiapi.openai_protocol import (
     ChatCompletionRequest, CompletionRequest, EmbeddingRequest,
@@ -17,12 +18,8 @@ from openaiapi.openai_protocol import (
     CompletionResponse, CompletionResponseChoice, CompletionLogProbs,
     CompletionStreamResponse, CompletionResponseStreamChoice,
     EmbeddingResponse, EmbeddingResponseData,
-    UsageInfo, ChatCompletionLogProbs,
-    ChatCompletionLogProbsContent, ChatCompletionLogProb
-)
-
-from openaiapi.json_schema2regex import (
-    create_structured_output_prompt
+    UsageInfo,
+    ChoiceLogprobs, ChatCompletionTokenLogprob, TopLogprob
 )
 
 from utilize.logger import get_logger
@@ -83,6 +80,24 @@ class RequestConverter:
     ) -> Dict[str, Any]:
         return self._convert_base_request(request, api_type="embedding")
     
+    def convert_json_schema2str(self, json_schema: Union[dict, str, Type[BaseModel]]) -> str:
+        """
+        Convert a JSON schema to a string.
+        """
+        if isinstance(json_schema, dict):
+            schema_str = orjson.dumps(json_schema).decode()
+        elif isinstance(json_schema, str):
+            schema_str = json_schema
+        elif isinstance(json_schema, type) and issubclass(json_schema, BaseModel):
+            schema_str = orjson.dumps(json_schema.model_json_schema()).decode()
+        else:
+            raise ValueError(
+                f"Cannot parse schema {json_schema}. The schema must be either "
+                + "a Pydantic class, a dictionary or a string that contains the JSON "
+                + "schema specification"
+            )
+        return schema_str
+
     def convert_to_ksana_format(
         self,
         request_dict: Dict[str, Any],
@@ -214,7 +229,19 @@ class RequestConverter:
         
         if config["num_return_sequences"] > config["num_beams"]:
             config["num_return_sequences"] = config["num_beams"]
-        
+
+        # handle response_format
+        # Notice: If response_format is not Null, enable_structured_output is always True
+        if hasattr(request, 'response_format') and request.response_format:
+            config["enable_structured_output"] = True
+            if(request.response_format.type == "json_schema"):
+                schema_ = request.response_format.json_schema.schema_
+                assert schema_ is not None, "json_schema should not be None"
+                config["json_schema"] = self.convert_json_schema2str(schema_)
+            elif(request.response_format.type == "json_object"):
+                config["json_schema"] = '{"type": "object"}'
+        if hasattr(request, 'enable_structured_output') and request.enable_structured_output:
+            config["enable_structured_output"] = request.enable_structured_output
         return config
     
     def _handle_chat_input(
@@ -249,31 +276,6 @@ class RequestConverter:
                 # 否则默认为"auto"（当有工具时，应该默认为auto而不是none）
                 ksana_request["tool_choice"] = "auto"
         
-
-        # 处理结构化输出
-        if hasattr(request, 'response_format') and request.response_format:
-            response_format_dict = request.response_format.model_dump()
-
-            # If json_object is not null, use structured output regex
-            # TODO(ethanyczeng): Improve regex generation for structured output
-            ksana_request["structured_output_regex"] = '{"[*]":"[*]"}'
-            
-            # 生成提示后缀
-            prompt_suffix = create_structured_output_prompt(response_format_dict)
-            if prompt_suffix:
-                prompt_suffix.encode('ascii')
-                if "prompt" in ksana_request:
-                    ksana_request["prompt"] += prompt_suffix
-                else:
-                    if hasattr(request, 'messages') and request.messages:
-                        if messages_to_prompt_func:
-                            modified_messages = request.messages.copy()
-                            if modified_messages:
-                                last_msg = modified_messages[-1]
-                                if hasattr(last_msg, 'content'):
-                                    last_msg.content = (last_msg.content or "") + prompt_suffix
-                            ksana_request["prompt"] = messages_to_prompt_func(modified_messages)
-    
     def _handle_completion_input(
         self,
         request: CompletionRequest,
@@ -434,7 +436,7 @@ class RequestConverter:
         ksana_logprobs: Any,
         token_ids: Optional[List[int]] = None,
         num_output_top_logprobs: int = 0
-    ) -> Optional[ChatCompletionLogProbs]:
+    ) -> Optional[ChoiceLogprobs]:
         """将KsanaLLM的logprobs转换为OpenAI格式
         
         KsanaLLM格式: std::vector<std::vector<std::vector<std::pair<int, float>>>>
@@ -484,21 +486,21 @@ class RequestConverter:
                     # 取前N个候选
                     for tid, lp in position_logprobs[:num_output_top_logprobs]:
                         candidate_text = self._decode_token(tid)
-                        top_logprobs_list.append(ChatCompletionLogProb(
+                        top_logprobs_list.append(TopLogprob(
                             token=candidate_text,
                             logprob=float(lp),
                             bytes=list(candidate_text.encode("utf-8", errors="replace"))
                         ))
                 
                 # 添加到content列表
-                content_list.append(ChatCompletionLogProbsContent(
+                content_list.append(ChatCompletionTokenLogprob(
                     token=token_text,
                     logprob=float(current_logprob),
                     bytes=list(token_text.encode("utf-8", errors="replace")),
                     top_logprobs=top_logprobs_list
                 ))
             
-            return ChatCompletionLogProbs(content=content_list) if content_list else None
+            return ChoiceLogprobs(content=content_list) if content_list else None
             
         except (IndexError, TypeError, ValueError, AttributeError) as e:
             logger.error(f"Failed to convert logprobs: {e}")

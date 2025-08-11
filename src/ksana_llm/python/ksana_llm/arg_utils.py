@@ -19,6 +19,7 @@ class EngineArgs:
     host: str
     port: int
     access_log: bool
+    max_token_len: int = 2048
     plugin_model_enable_trt: bool = True
     plugin_thread_pool_size: int = 1
     ssl_keyfile: Optional[str] = None
@@ -68,6 +69,9 @@ class EngineArgs:
 
         endpoint = yaml_config["setting"].get("endpoint_type", "python").lower()
 
+        max_token_len = yaml_config["setting"]["batch_scheduler"].get(
+            "max_token_len", 2048
+        )
         # Parse the model config to determine the model type
         model_config = AutoConfig.from_pretrained(
             model_dir, trust_remote_code=True
@@ -109,6 +113,7 @@ class EngineArgs:
             host="localhost",  # Default host; can be overridden by CLI args
             port=8080,  # Default port; can be overridden by CLI args
             access_log=True,
+            max_token_len=max_token_len,
             plugin_model_enable_trt=plugin_model_enable_trt,
             plugin_thread_pool_size=plugin_thread_pool_size,
             multi_modal_vit_model_type=multi_modal_vit_model_type

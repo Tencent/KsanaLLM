@@ -174,7 +174,7 @@ curl -X POST "http://localhost:8080/v1/chat/completions" \
 
 ```
 
-tool_choice 为 required 时，需要约束解码的限制，在 json_schema 开发完成后会马上支持
+tool_choice 为 required 时，需要约束解码的支持，已在开发计划中
 
 ## 其他功能
 
@@ -204,27 +204,72 @@ curl -X POST "http://localhost:8080/v1/chat/completions" \
 ```
 
 ### 2. 结构化输出
+特别向 Xgrammar 的开源贡献者为LLM 推理开源做出的贡献表示感谢
+KsanaLLM 支持以 Xgrammar 为约束解码后端的json_object/json_schema的结构化输出功能，更新了之前以 Prompt+结构化输出约束输出的方案
+调用 KsanaLLM 原生的 generate 接口，想要使用 json_schema进行约束解码时，需要配合enable_structured_output共同使用
+同时，需要启动服务时的配置文件：
+在配置文件中的 setting->batch_scheduler 下添加:
+    enable_xgrammar: true
 
-目前，KsanaLLM 支持较为简单的json_object的结构化输出功能，可以通过 prompt 和 response_format 来指定 json_object的返回
+
 ```shell
+# For Json_object
+curl -X POST 'http://localhost:1019/v1/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "ksana-llm",
+    "messages": [
+      {
+        "role": "user",
+        "content": "请提取以下文本中的人物信息并严格以JSON格式返回：小明今年18岁，是一名高三学生，爱好是打篮球。"
+      }
+    ],
+    "enable_structured_output" : true,
+    "response_format": {
+      "type": "json_object"
+    },
+    "do_sample": true,
+    "temperature": 0,
+    "max_tokens": 2048,
+    "top_p": 1.0,
+    "top_k": 50,
+    "repetition_penalty": 1.0
+  }'
 
-curl -X POST 'http://localhost:8080/v1/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer ksana-llm' \
--d '{
-  "model": "ksana-llm",
-  "messages": [
-    {"role": "user", "content": "Which is the longest river in the world? The Nile River."}
-  ],
-  "response_format" : {
-    "type": "json_object"
-  }
-}'
+# For Json_schema
 
+curl -X POST 'http://localhost:1019/v1/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "ksana-llm",
+    "messages": [
+      {
+        "role": "user",
+        "content": "给我提供法国首都的信息和人口数据，请使用JSON格式返回。"
+      }
+    ],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "capital_info",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[\\w]+$"
+            },
+            "population": {
+              "type": "integer"
+            }
+          },
+          "required": ["name", "population"]
+        }
+      }
+    }
+  }'
 ```
 
-
-JSON Schema 格式的结构化输出正在规划开发中
 
 ## 配置选项
 

@@ -25,7 +25,7 @@ from uuid import uuid4
 
 import regex as re
 from typing_extensions import Never, TypeIs, assert_never
-from utilize.logger import init_logger
+from .logger import init_logger
 
 logger = init_logger(__name__)
 

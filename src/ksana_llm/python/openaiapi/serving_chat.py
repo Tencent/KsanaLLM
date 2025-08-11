@@ -65,16 +65,13 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         super().__init__(llm_server, config)
 
         self.response_role = "assistant"
-        # 保存 chat template 相关配置
         self.chat_template = chat_template
         self.chat_template_content_format = chat_template_content_format
         self.tokenizer = getattr(self.llm_server, 'tokenizer', None)
         
-        # 初始化解析器实例
         self._init_parsers()
     
     def _init_parsers(self) -> None:
-        # 初始化推理解析器
         self.reasoning_parser: Optional[Callable[[AnyTokenizer],
                                             ReasoningParser]] = None
         if self.config.reasoning_parser is not None:
@@ -107,7 +104,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         converter = RequestConverter(self.config, self.tokenizer)
         
-        request_dict = request.model_dump()
+        request_dict = request.model_dump(by_alias=True)
         
         # Handle Extra body
         if hasattr(request, '__pydantic_extra__') and request.__pydantic_extra__:
@@ -159,7 +156,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         if content is None and finish_reason is None and role is None and delta_message is None:
             return "data: [DONE]\n"
         
-        # 如果提供了 delta_message，直接使用它
         if delta_message is not None:
             # filter out empty strings from delta_message
             delta_dict = delta_message.model_dump(exclude_unset=True, exclude_none=True)
@@ -184,7 +180,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 chunk_data["usage"] = usage
             return f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
         
-        converter = RequestConverter(self.config, self.tokenizer)
+        converter = RequestConverter(self.config, tokenizer)
         return converter.format_chat_completion_stream_chunk(
             request_id=request_id,
             model_name=model_name,
@@ -218,9 +214,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         finish_reason_sent = [False] * num_choices
         num_prompt_tokens = 0
         
-        # 跟踪每个 choice 的 token 长度，用于检测是否停止生成
         previous_token_lengths = [0] * num_choices
-        unchanged_count = [0] * num_choices  # 记录连续未变化的次数
+        unchanged_count = [0] * num_choices
 
         # Determine if we need to use Named tool parser
         if isinstance(request.tool_choice, ChatCompletionNamedToolChoiceParam):
@@ -282,7 +277,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 # First chunk , response with assistant role, get prompt token ids
                 if first_iteration:
                     first_iteration = False
-                    # 根据输出索引获取对应的 prompt tokens
                     if prompt_tokens_count and output_index < len(prompt_tokens_count):
                         num_prompt_tokens = prompt_tokens_count[output_index]
                     elif prompt_tokens_count and len(prompt_tokens_count) > 0:
@@ -342,36 +336,33 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                 if previous_texts is None:
                     previous_texts = [""] * num_choices
-                # 检查 finish_status 是否表示结束
                 is_finished = False
                 if hasattr(ksana_python_output, 'finish_status') and ksana_python_output.finish_status:
-                    # 如果 finish_status 不是 OK，表示已经结束
                     if hasattr(ksana_python_output.finish_status, 'OK') and not ksana_python_output.finish_status.OK():
                         is_finished = True
                 
-                # 处理每个输出批次中的 tokens, Notice : The Ksana Output is Accumulated mode.
+                # Notice : The Ksana Output is Accumulated mode.
                 for i, choice_tokens in enumerate(ksana_python_output.output_tokens):
                     try:
-                        # 如果该 choice 已经发送了 finish_reason，跳过
                         if finish_reason_sent[i]:
                             continue
                         
                         current_token_ids = list(choice_tokens)
                         current_token_length = len(current_token_ids)
                         
-                        # 检查 token 长度是否不再增加
+                        # check token length unchanged 
                         if current_token_length == previous_token_lengths[i]:
                             unchanged_count[i] += 1
-                            if unchanged_count[i] >= 2:  # 连续2次未变化
+                            if unchanged_count[i] >= 2:
                                 is_finished = True
                         else:
-                            unchanged_count[i] = 0  # 重置计数器
+                            unchanged_count[i] = 0  
                             previous_token_lengths[i] = current_token_length
                         
                         full_text = self.llm_server.pre_post_processor.decode(current_token_ids, True)
                         
                         delta_text = ""
-                        prev_length = len(previous_texts[i]) 
+                        prev_length = len(previous_texts[i])
 
                         # update previous
 
@@ -451,7 +442,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 delta_message = DeltaMessage(tool_calls=[
                                     delta_tool_call,
                                 ])
-                        # 2. 如果 tool_choice 是 "required"，使用特殊的解析器
                         elif request and request.tool_choice == "required":
                             fn_name_returned = function_name_returned[i]
 
@@ -560,6 +550,21 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                             current_token_ids=current_token_ids,
                                             delta_token_ids=delta_token_ids,
                                             request=request))
+                                    # Check tool parser returned content length is abnormal
+                                    if delta_message and delta_message.content:
+                                        # Calc recalculated delta text
+                                        if output_tokenids:
+                                            recalculated_delta_text = self.llm_server.pre_post_processor.decode(
+                                                list(output_tokenids), True)
+                                            # Notice:
+                                            # If tool_parser returns a wrong content length, it maybe:
+                                            # 1. Contains longer reasoning content, which is not expected
+                                            # it may contain reasoning content, delete
+                                            # 2. Contains shorter tool_call content, it may be a tool call
+                                            # Use it directly
+                                            if len(delta_message.content) > len(recalculated_delta_text):
+                                                delta_text = recalculated_delta_text
+                                                delta_message.content = recalculated_delta_text
                                 else:
                                     delta_message = DeltaMessage(content=delta_text)
 
@@ -575,6 +580,14 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     current_token_ids=current_token_ids,
                                     delta_token_ids=output_tokenids,
                                     request=request))
+                            # Check tool parser returned content length is abnormal
+                            if delta_message and delta_message.content:
+                                if output_tokenids:
+                                    recalculated_delta_text = self.llm_server.pre_post_processor.decode(
+                                        list(output_tokenids), True)
+                                    if len(delta_message.content) > len(recalculated_delta_text):
+                                        delta_text = recalculated_delta_text
+                                        delta_message.content = recalculated_delta_text
                         elif self.reasoning_parser:
                             delta_message = (reasoning_parser.
                                              extract_reasoning_content_streaming(
@@ -589,8 +602,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         else:
                             delta_message = DeltaMessage(content = delta_text)
                         
-                        processed_delta = delta_text
-
                         previous_num_tokens[i] += len(output_tokenids)
 
                         if delta_message is None:
@@ -598,6 +609,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         
                         logprobs = getattr(ksana_python_output, 'logprobs', None) if request_logprobs else None
                         
+                        processed_delta = delta_text
                         if processed_delta or (delta_message and delta_message != DeltaMessage(content="")):
                             chunk = await self._generate_stream_chunk(
                                 request_id, model_name, tokenizer,
@@ -609,7 +621,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             if chunk:
                                 yield chunk
                         
-                        # 如果检测到该 choice 已结束，发送 finish_reason
+                        # if this choice is finished, send finish_reason
                         if is_finished and not finish_reason_sent[i]:
                             finish_reason = "stop"
 
@@ -618,7 +630,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     and len(tool_parser_instance.prev_tool_call_arr) > 0:
                                     finish_reason = "tool_calls"
                             
-                            # 如果是最后一个 choice 且需要 usage 信息
+                            # if it is the last choice and we need usage info, send it
                             usage_info = None
                             if include_usage and i == num_choices - 1:
                                 completion_tokens = current_token_length
@@ -643,11 +655,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     except (AttributeError, TypeError) as e:
                         logger.error(f"Decoding error: {e}")
 
-            # 为所有未发送 finish_reason 的 choices 发送（作为兜底）
+            # if there are still finish_reason not sent,
             for i in range(num_choices):
                 if not finish_reason_sent[i]:
                     finish_reason = "stop"
-                    # 检查当前 choice 的 tool_parser_instance 是否有工具调用
+                    # check if tool parser is used
                     if tool_parsers and tool_parsers[i] is not None:
                         tool_parser_instance = tool_parsers[i]
                         if hasattr(tool_parser_instance, 'prev_tool_call_arr') \
@@ -741,13 +753,12 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         req_ctx = self._get_trace_context(raw_request) if raw_request else None
 
         all_outputs = []
-        prompt_tokens_per_request = []  # 存储每个请求的 prompt tokens 数量
+        prompt_tokens_per_request = []
         try:
             for i, engine_prompt in enumerate(engine_prompts):
                 prompt_token_ids = engine_prompt.get("prompt_token_ids", [])
-                prompt_tokens_per_request.append(len(prompt_token_ids))  # 保存 prompt tokens 数量
+                prompt_tokens_per_request.append(len(prompt_token_ids))  # laod prompt tokens nums
                 
-                # 直接修改请求字典，避免创建新对象
                 ksana_request = self._convert_to_ksana_request(request)
                 ksana_request["input_tokens"] = prompt_token_ids
                 max_new_tokens = request.max_tokens or request.max_completion_tokens or 8192
@@ -760,7 +771,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 if "mm_processor_kwargs" in engine_prompt:
                     ksana_request["mm_processor_kwargs"] = engine_prompt["mm_processor_kwargs"]
                 
-                # 调用 KsanaLLM generate func, get output
+                # call KsanaLLM generate func, get output
                 status, output = await self.llm_server.model.generate(
                     request_dict=ksana_request,
                     req_ctx=req_ctx,
@@ -793,12 +804,22 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             request_logprobs = getattr(request, 'logprobs', False)
             
             async def stream_generator():
+                valid_outputs = [
+                    (idx, output)
+                    for idx, (status, output) in enumerate(all_outputs)
+                    if status.OK()
+                ]
                 async def merged_outputs():
-                    for idx, (status, output) in enumerate(all_outputs):
-                        if not status.OK():
-                            logger.warning(f"Output {idx} failed: {status.GetMessage()}")
-                            continue
-                        
+                    # 记录失败的输出以减少日志调用
+                    failed_indices = [
+                        idx for idx, (status, _) in enumerate(all_outputs)
+                        if not status.OK()
+                    ]
+                    if failed_indices:
+                        logger.warning(f"Outputs failed at indices: {failed_indices}")
+                    
+                    # 处理有效输出
+                    for idx, output in valid_outputs:
                         async for item in output:
                             yield (idx, item)
                     
@@ -842,7 +863,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         total_completion_tokens = 0
         role = self.get_chat_request_role(request) if request else "assistant"
         
-        # 检查是否需要返回 logprobs
         request_logprobs = getattr(request, 'logprobs', False) if request else False
         top_logprobs = getattr(request, 'top_logprobs', 0) if request_logprobs else 0
         
@@ -920,7 +940,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                 elif request.tool_choice and type (
                     request.tool_choice) is ChatCompletionNamedToolChoiceParam:
-                    # 指定工具
                     tool_call_class = ToolCall
                     message = ChatMessage(
                         role=role,
@@ -1005,7 +1024,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     index=i,
                     message=message,
                     finish_reason=finish_reason or "stop",
-                    logprobs=output_logprobs  # 添加 logprobs
+                    logprobs=output_logprobs 
                 )
                 choices.append(choice)
                 

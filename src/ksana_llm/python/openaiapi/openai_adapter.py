@@ -117,7 +117,7 @@ ChatCompletionStreamChoice = ChatCompletionResponseStreamChoice
 
 class KsanaOpenAIServing:
     """
-    KsanaLLM OpenAI服务基类，专注于 chat/completions 接口
+    Base class for OpenAI API serving in KsanaLLM.
     """
     
     def __init__(
@@ -141,7 +141,6 @@ class KsanaOpenAIServing:
         self.request_logger = request_logger
         self.return_tokens_as_token_ids = return_tokens_as_token_ids
         
-        # Tokenizer 执行器
         self._tokenizer_executor = ThreadPoolExecutor(max_workers=1)
         
         # 异步 tokenization 方法
@@ -151,7 +150,6 @@ class KsanaOpenAIServing:
             self._tokenize_prompt_input_or_inputs,
             executor=self._tokenizer_executor)
         
-        # 提取模型信息
         self._model_info = self._extract_model_info()
     
     @property
@@ -165,27 +163,17 @@ class KsanaOpenAIServing:
     
     
     def _get_max_model_len(self) -> int:
-        """获取模型最大长度"""
-        try:
-            # 尝试从 llm_server 获取
-            if hasattr(self.llm_server, 'model_config'):
-                return getattr(self.llm_server.model_config, 'max_model_len', 4096)
-            elif hasattr(self.llm_server, 'engine_args'):
-                engine_args = self.llm_server.engine_args
-                if hasattr(engine_args, 'max_model_len') and engine_args.max_model_len:
-                    return engine_args.max_model_len
-            
-            # 尝试从 tokenizer 获取
-            if hasattr(self.llm_server, 'tokenizer') and self.llm_server.tokenizer:
-                tokenizer = self.llm_server.tokenizer
-                if hasattr(tokenizer, 'model_max_length'):
-                    return tokenizer.model_max_length
-            
-            # 默认值
-            return 4096
-        except ValueError as e:
-            logger.warning(f"Failed to get max model length: {e}")
-            return 4096
+        engine_args = getattr(self.llm_server, 'engine_args', None)
+        if engine_args is None:
+            raise ValueError("llm_server.engine_args is not available")
+        
+        if not hasattr(engine_args, 'max_token_len'):
+            raise ValueError("engine_args.max_token_len attribute is not available")
+        
+        if engine_args.max_token_len is None or engine_args.max_token_len <= 0:
+            raise ValueError(f"engine_args.max_token_len is invalid: {engine_args.max_token_len}")
+        
+        return engine_args.max_token_len
     
     def _extract_model_info(self) -> Dict[str, Any]:
     # extract model information from the llm_server
@@ -335,12 +323,12 @@ class KsanaOpenAIServing:
         
         # 对于 chat completion 请求
         if isinstance(request, ChatCompletionRequest):
-            max_tokens = request.max_completion_tokens or request.max_tokens
+            max_tokens = getattr(request, 'max_new_tokens', None)
         else:
             max_tokens = getattr(request, 'max_tokens', None)
         
         if max_tokens is None:
-            if token_num >= self.max_model_len:
+            if token_num > self.max_model_len:
                 raise ValueError(
                     f"This model's maximum context length is "
                     f"{self.max_model_len} tokens. However, you requested "
@@ -379,7 +367,6 @@ class KsanaOpenAIServing:
                     if hasattr(encoded, 'input_ids'):
                         encoded = encoded.input_ids
                 else:
-                    # 简单的字符级别 tokenization 作为后备
                     encoded = list(prompt.encode('utf-8'))
             except (AttributeError, TypeError, RuntimeError) as e:
                 logger.warning(f"Tokenization failed: {e}, using character-level fallback")
@@ -447,7 +434,6 @@ class KsanaOpenAIServing:
         truncate_prompt_tokens: Optional[Annotated[int, Field(ge=1)]] = None,
         add_special_tokens: bool = True,
     ) -> TextTokensPrompt:
-        """Tokenize 单个 prompt 输入"""
         if isinstance(prompt_input, str):
             return self._normalize_prompt_text_to_input(
                 request,
@@ -478,7 +464,7 @@ class KsanaOpenAIServing:
                 truncate_prompt_tokens, add_special_tokens
             )]
         
-        # 处理单个 token 列表
+        # Handle Single Token List
         if isinstance(input_or_inputs, list) and len(input_or_inputs) > 0:
             if isinstance(input_or_inputs[0], int):
                 return [self._tokenize_prompt_input(
@@ -486,7 +472,7 @@ class KsanaOpenAIServing:
                     truncate_prompt_tokens, add_special_tokens
                 )]
         
-        # 处理多个输入
+        # Handle Multi Token List
         results = []
         for input_item in input_or_inputs:
             result = self._tokenize_prompt_input(
@@ -507,7 +493,7 @@ class KsanaOpenAIServing:
     
     @staticmethod
     def _base_request_id(raw_request: Optional[Request], default: Optional[str] = None) -> Optional[str]:
-        """从请求头中获取请求 ID"""
+        # Get Request id
         if default is None:
             default = f"req-{uuid.uuid4().hex}"
         
@@ -565,7 +551,7 @@ class KsanaOpenAIServing:
         truncate_prompt_tokens: Optional[Annotated[int, Field(ge=1)]] = None,
         add_special_tokens: bool = True,
     ) -> tuple[list[TextTokensPrompt], list[Any]]:
-        """预处理 completion 请求 - 与 vLLM 保持一致的实现"""
+        # preprocess completion request
         request_prompts = await self._tokenize_prompt_input_or_inputs_async(
             request,
             tokenizer,
@@ -574,7 +560,6 @@ class KsanaOpenAIServing:
             add_special_tokens=add_special_tokens,
         )
 
-        # 创建引擎 prompts（适配 Ksana）
         engine_prompts = []
         for request_prompt in request_prompts:
             engine_prompt = {
@@ -648,7 +633,8 @@ class KsanaOpenAIServing:
                 **_chat_template_kwargs,
             )
 
-        # 暂时不支持多模态，mm_data 为空列表
+        # TODO(ethanyczeng): Multi Modal Data Support
+        # now, it is temporarily set to None
         mm_data = [] if mm_data_future is None else await mm_data_future
 
         # tool parsing is done only if a tool_parser has been set and if
@@ -662,12 +648,9 @@ class KsanaOpenAIServing:
                 msg = "Tool usage is only supported for Chat Completions API"
                 raise NotImplementedError(msg)
             
-            # 检查 tool_parser 是否是 callable（类或函数）
             if callable(tool_parser):
-                # 如果是 callable，调用它获取实例
                 tool_parser_instance = tool_parser(tokenizer)
             else:
-                # 如果已经是实例，直接使用
                 tool_parser_instance = tool_parser
             
             request = tool_parser_instance.adjust_request(request=request)
@@ -690,7 +673,7 @@ class KsanaOpenAIServing:
                 prompt=tokenizer.decode(request_prompt),
                 prompt_token_ids=request_prompt)
 
-        # 创建 engine_prompt（适配 Ksana）
+        # create engine prompts
         engine_prompt = {
             "prompt_token_ids": prompt_inputs["prompt_token_ids"]
         }

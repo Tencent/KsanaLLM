@@ -38,12 +38,9 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
         super().__init__(llm_server, config)
     
     async def create_completion(self, request: Request) -> Union[JSONResponse, Any]:
-        """创建 completion 响应"""
         try:
-            # 解析请求
             request_dict = await request.json()
             
-            # 验证必需参数
             prompt = request_dict.get("prompt")
             if not prompt:
                 return self.create_error_response(
@@ -61,12 +58,11 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                     HTTPStatus.BAD_REQUEST
                 )
             
-            # 检查模型
+            # check model
             model_check_result = await self._check_model(completion_request)
             if model_check_result is not None:
                 return model_check_result
             
-            # 获取 tokenizer
             tokenizer = getattr(self.llm_server, 'tokenizer', None)
             if tokenizer is None:
                 return self.create_error_response(
@@ -75,7 +71,6 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                     HTTPStatus.INTERNAL_SERVER_ERROR
                 )
             
-            # Tokenize 输入
             try:
                 if isinstance(prompt, str):
                     prompt_inputs = [await self._tokenize_prompt_input_async(
@@ -128,17 +123,13 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                     HTTPStatus.BAD_REQUEST
                 )
             
-            # 获取追踪上下文
             req_ctx = self._get_trace_context(request) if request else None
             
-            # 生成请求 ID
             request_id = self._base_request_id(request, f"cmpl-{uuid.uuid4().hex}")
             
-            # 记录输入日志
             if len(prompt_inputs) > 0:
                 self._log_inputs(request_id, prompt_inputs[0], None)
             
-            # 调用 KsanaLLM 生成
             try:
                 status, output = await self.llm_server.model.generate(
                     request_dict=ksana_request,

@@ -192,7 +192,7 @@ class BuildExt(build_ext_orig):
         Copy the required Python files and directories into the package.
         """
         # List of directories to copy into the package
-        need_dirs = ["weight_map", "ksana_plugin", "simple_router"]
+        need_dirs = ["weight_map", "ksana_plugin", "simple_router", "openaiapi", "utilize"]
 
         # Copy each required directory
         for need_dir in need_dirs:

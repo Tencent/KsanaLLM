@@ -8,6 +8,13 @@ import sys
 # Load library path.
 sys.path.append(os.path.abspath("./lib"))
 
+try:
+    from ksana_llm import openaiapi, utilize
+    sys.modules['openaiapi'] = openaiapi
+    sys.modules['utilize'] = utilize
+except ImportError:
+    pass
+
 
 from .ksana_engine import KsanaLLMEngine
 from .arg_utils import EngineArgs

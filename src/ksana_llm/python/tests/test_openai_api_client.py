@@ -15,8 +15,10 @@ import pytest_asyncio
 import uvicorn
 from openai import OpenAI, AsyncOpenAI
 
-# 调整系统路径以导入自定义模块
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, '../../../build/lib')
+sys.path.insert(0, '.')
+
 from serving_server import LLMServer
 from ksana_llm.arg_utils import EngineArgs
 from utils import modify_yaml_field
@@ -137,9 +139,7 @@ class TestOpenAIAPIClient:
     
     @pytest.fixture(scope="class")
     def server(self, default_ksana_yaml_path):
-        # 设置默认的模型目录
-        model_dir = "/models/qwen3-8B"
-        # 使用提供的默认 yaml 路径
+        model_dir = "/model/qwen3-8B"
         yaml_path = default_ksana_yaml_path
             
         # 创建临时目录和配置文件副本
@@ -186,7 +186,6 @@ class TestOpenAIAPIClient:
             model="ksana-llm",
             messages=messages,
             max_tokens=50,
-            temperature=0.7,
             stream=False
         )
         
@@ -218,7 +217,6 @@ class TestOpenAIAPIClient:
             model="ksana-llm",
             messages=messages,
             max_tokens=100,
-            temperature=0.7,
             stream=True
         )
         
@@ -249,7 +247,6 @@ class TestOpenAIAPIClient:
         # 确保只有最后一个块有 finish_reason
         assert finish_reason_count == 1
         
-        # 重建完整响应
         full_response = ""
         for chunk in chunks:
             if chunk.choices and chunk.choices[0].delta:
@@ -257,7 +254,6 @@ class TestOpenAIAPIClient:
                 if delta.content:
                     full_response += delta.content
                     print(f"Chunk content: {delta.content}")
-                # 检查是否有 reasoning_content 属性（这是 KsanaLLM 的扩展）
                 elif hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                     full_response += delta.reasoning_content
                     print(f"Chunk reasoning content: {delta.reasoning_content}")
@@ -275,7 +271,6 @@ class TestOpenAIAPIClient:
             model="ksana-llm",
             messages=messages,
             max_tokens=10,
-            temperature=0.0,
             logprobs=True,
             top_logprobs=3
         )
@@ -301,7 +296,6 @@ class TestOpenAIAPIClient:
             model="ksana-llm",
             prompt="Once upon a time",
             max_tokens=50,
-            temperature=0.7
         )
         
         print(f"Response: {response}")
