@@ -19,6 +19,9 @@ class BatchSchedulerInterface {
   // Get the next infer reqs that ready to run.
   virtual std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) = 0;
 
+  // report the state of all instance
+  virtual void ReportTotalState() = 0;
+
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;
 

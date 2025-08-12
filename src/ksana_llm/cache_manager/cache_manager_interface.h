@@ -32,6 +32,9 @@ class CacheManagerInterface {
   // The value is from block mamanger.
   virtual size_t GetHostFreeBlockNumber() = 0;
 
+  // Get all used block number
+  virtual size_t GetUsedBlockNumber() = 0;
+
   // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
   // number for the specific request.
   virtual size_t GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) = 0;

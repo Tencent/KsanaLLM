@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <future>
+#include <iomanip>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -353,6 +356,49 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
                  << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states
                  << ", total_dp_waiting_queue_size=" << total_dp_waiting_queue_size;
   return schedule_output_group_;
+}
+
+std::string FormatTime(int64_t current_time_ms) {
+  // change milliseconds to seconds
+  time_t rawtime = static_cast<time_t>(current_time_ms / 1000);
+  struct tm* timeinfo;
+
+  struct tm tm_buffer;
+  localtime_r(&rawtime, &tm_buffer);
+  timeinfo = &tm_buffer;
+
+  // Format the time as "YYYY-MM-DD HH-MM-SS"
+  std::ostringstream oss;
+  oss << std::put_time(timeinfo, "%Y-%m-%d %H-%M-%S");
+  return oss.str();
+}
+
+void BatchScheduler::ReportTotalState() {
+  std::lock_guard<std::mutex> guard(schedule_mutex_);
+
+  size_t total_running_size = 0, total_waiting_size = 0, total_swapped_size = 0;
+  for (size_t dp_rank = 0; dp_rank < dp_num_; ++dp_rank) {
+    auto& batch_states = batch_states_[dp_rank];
+    for (size_t multi_batch_id = 0; multi_batch_id < pp_batch_num_; ++multi_batch_id) {
+      auto& batch_state = batch_states[multi_batch_id];
+      std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
+      total_running_size += batch_state->schedule_output->running_reqs.size();
+      total_waiting_size += batch_state->waiting_queue.size();
+      total_swapped_size += batch_state->swapped_queue.size();
+    }
+  }
+
+  size_t total_used_blocks_num = 0, total_free_blocks_num = 0, current_time = ProfileTimer::GetCurrentTimeInMs();
+
+  for (size_t dp_rank = 0; dp_rank < dp_num_; ++dp_rank) {
+    auto& cache_manager = schedule_strategies_[dp_rank]->GetCacheManager();
+    total_used_blocks_num += cache_manager->GetUsedBlockNumber();
+    total_free_blocks_num += cache_manager->GetUsableBlockNumber();
+  }
+  std::string formatted_time = FormatTime(current_time);
+  KLLM_LOG_INFO << "total-running-size=" << total_running_size << ", total-waiting-size=" << total_waiting_size
+                << ", total-swapped_size=" << total_swapped_size << ", total-used-blocks-num=" << total_used_blocks_num
+                << ", total-free-blocks-num=" << total_free_blocks_num << ", timestamp=" << formatted_time;
 }
 
 Status BatchScheduler::CreateMockReq(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {

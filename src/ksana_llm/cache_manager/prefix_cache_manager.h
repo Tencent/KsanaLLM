@@ -101,8 +101,11 @@ class PrefixCacheManager : public CacheManagerInterface,
   // Get all usable block number, including free and reusable ones.
   size_t GetUsableBlockNumber();
 
-  // The value is from block mamanger.
+  // The value is from block manager.
   size_t GetHostFreeBlockNumber();
+
+  // The value is from block manager.
+  size_t GetUsedBlockNumber();
 
   // Calculate the actual number of unallocated blocks by passing the input length and obtaining the required block
   // number for the specific request.

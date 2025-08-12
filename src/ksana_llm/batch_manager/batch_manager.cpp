@@ -107,9 +107,18 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   // All devices have the same number of blocks.
   SetDevice(0);
   static time_t last_end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  time_t last_report_time_ms = ProfileTimer::GetCurrentTimeInMs();
   while (!terminated_) {
     time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
     std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(multi_batch_id);
+    time_t current_time_ms = ProfileTimer::GetCurrentTimeInMs();
+
+    // Report every 5 seconds.
+    constexpr size_t kReportIntervalMs = 5000;
+    if (current_time_ms - last_report_time_ms > kReportIntervalMs) {
+      last_report_time_ms = current_time_ms;
+      batch_scheduler_->ReportTotalState();
+    }
     ScheduleOutput schedule_output = MergeScheduleOutputGroup(schedule_output_group);
     if (schedule_output_group->RunningSize() == 0) {
       multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);

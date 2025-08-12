@@ -57,6 +57,10 @@ size_t DirectCacheManager::GetHostFreeBlockNumber() {
   return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetHostFreeBlockNumber();
 }
 
+size_t DirectCacheManager::GetUsedBlockNumber() {
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetDeviceUsedBlockNumber();
+}
+
 size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {

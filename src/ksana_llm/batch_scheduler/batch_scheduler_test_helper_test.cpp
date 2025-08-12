@@ -319,6 +319,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   virtual void Stop() override {}
 
+  virtual void ReportTotalState() override {}
+
  private:
   Status AddAnInferRequest(std::shared_ptr<InferRequest>& infer_req) {
     std::lock_guard<std::mutex> guard(mux_);

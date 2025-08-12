@@ -84,6 +84,10 @@ size_t PrefixCacheManager::GetHostFreeBlockNumber() {
   return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetHostFreeBlockNumber();
 }
 
+size_t PrefixCacheManager::GetUsedBlockNumber() {
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetDeviceUsedBlockNumber();
+}
+
 size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
   const auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {

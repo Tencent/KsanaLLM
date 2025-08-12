@@ -51,6 +51,8 @@ class BaseCacheManager {
   // The value is from block mamanger.
   size_t GetHostFreeBlockNumber() { return block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber(); }
 
+  size_t GetDeviceUsedBlockNumber() { return block_allocator_group_->GetDeviceBlockAllocator()->GetUsedBlockNumber(); }
+
   // Get block number that not usable now, but will be usable in future.
   // That is, the blocks used by swapout, but not merged yet.
   size_t GetFutureFreeBlockNumber() {
