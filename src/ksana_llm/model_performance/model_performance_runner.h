@@ -9,14 +9,15 @@ namespace ksana_llm {
 
 class ModelPerformanceRunner {
  public:
-  explicit ModelPerformanceRunner(const std::string& config_path);
+  explicit ModelPerformanceRunner(const std::string& config_path,
+                                  const std::string& model_config_filename = "config.json");
 
   ~ModelPerformanceRunner();
 
   Status RunPerformanceForward();
 
  private:
-  void InitEnvs(const std::string& config_path);
+  void InitEnvs(const std::string& config_path, const std::string& model_config_filename);
 
   void OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config);
 

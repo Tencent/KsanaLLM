@@ -21,8 +21,9 @@ namespace py = pybind11;
 
 namespace ksana_llm {
 
-ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path) {
-  InitEnvs(config_path);
+ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path,
+                                               const std::string& model_config_filename) {
+  InitEnvs(config_path, model_config_filename);
   LoadModel();
   model_instance_->AllocResources(multi_batch_id_);
   InitInferRequests();
@@ -34,13 +35,13 @@ ModelPerformanceRunner::~ModelPerformanceRunner() {
   py::finalize_interpreter();
 }
 
-void ModelPerformanceRunner::InitEnvs(const std::string& config_path) {
+void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const std::string& model_config_filename) {
   InitLoguru();
   py::initialize_interpreter();
   ParsePerformanceRunnerConfig(config_path);
 
   const auto& env = Singleton<Environment>::GetInstance();
-  env->ParseConfig(config_path);
+  env->ParseConfig(config_path, "", model_config_filename);
 
   // init context
   env->GetRuntimeConfig(runtime_config_);
