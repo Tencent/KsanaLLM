@@ -75,18 +75,17 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
         vocab_size_pad, max_dim, mla_flash_attn_size, mla_max_dim, mla_hidden_buffer_size);
   }
 
-  KLLM_LOG_INFO << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
-                << ", max_token_num=" << token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
-                << ", inter_size_per_tp=" << inter_size_per_tp;
   const size_t hidden_buffer_size =
       std::max(std::max(max_logits_tokens * vocab_size_pad, token_num * max_dim), mla_hidden_buffer_size);
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
   const size_t shared_buffer_size = token_num * std::max(inter_size_per_tp, hidden_units * 2);
-
+  KLLM_LOG_INFO << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
+                << ", max_token_num=" << token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
+                << ", inter_size_per_tp=" << inter_size_per_tp << ", hidden_buffer_size=" << hidden_buffer_size
+                << ", shared_buffer_size=" << shared_buffer_size;
   buffers_shape_map = {{"hidden_buffer_0", {hidden_buffer_size}},
                        {"hidden_buffer_1", {hidden_buffer_size}},
-                       {"shared_buffer", {shared_buffer_size}},
-                       {"dp_input_buffer", {hidden_buffer_size}}};
+                       {"shared_buffer", {shared_buffer_size}}};
 
   const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
   // TODO(robertyuan): This buffer is too large
@@ -100,6 +99,12 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
 
   if (use_mtp) {
     buffers_shape_map["mtp_hidden_buffer_tensors"] = {token_num * model_config.hidden_units};
+  }
+
+  if (runtime_config.parallel_basic_config.attn_data_parallel_size > 1) {
+    buffers_shape_map["dp_input_buffer"] = {token_num * model_config.hidden_units};
+  } else {
+    buffers_shape_map["dp_input_buffer"] = {0};
   }
 }
 

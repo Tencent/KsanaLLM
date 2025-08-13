@@ -38,11 +38,11 @@ class MultiHeadLatentAttention {
                            ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                 std::vector<Tensor>& paged_buffer_tensors, ForwardingContext& forwarding_context);
+                 ForwardingContext& forwarding_context);
 
   // do forward.
-  Status DataParallelForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
-                             std::vector<Tensor>& extra_buffer_tensors, ForwardingContext& forwarding_context);
+  Status DataParallelForward(std::vector<Tensor>& dp_input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
+                             std::vector<Tensor>& reduce_buffer_tensors, ForwardingContext& forwarding_context);
 
   static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
                               const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers);
@@ -51,12 +51,12 @@ class MultiHeadLatentAttention {
   Status ReleaseBuffers();
 
   // Used for 2 stage dp forward.
-  Status ContextForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,
-                        std::vector<Tensor>& reduce_buffer_tensors, std::vector<Tensor>& prefill_buffer_tensors,
+  Status ContextForward(std::vector<Tensor>& input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
+                        std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
                         ForwardingContext& forwarding_context);
 
-  Status DecodeForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& hidden_buffer_tensors_1,
-                       std::vector<Tensor>& reduce_buffer_tensors, std::vector<Tensor>& paged_buffer_tensors,
+  Status DecodeForward(std::vector<Tensor>& input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
+                       std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
                        ForwardingContext& forwarding_context);
 
  private:

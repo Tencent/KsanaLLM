@@ -129,7 +129,6 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_->buffers_->shared_buffer);
-    CREATE_BUFFER_SCOPE(paged_buffer_tensors, forwarding_context_->buffers_->dp_input_buffer);
 
     forwarding_context_->GetAttentionForwardContext().flag_tensor.template GetPtr<bool>()[0] =
         forwarding_context_->model_input_->use_cache;
@@ -139,8 +138,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
       input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
     }
     AssignFromVector(hidden_buffer_tensors_0[0], input_data);
-    Status status =
-        mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, paged_buffer_tensors, *forwarding_context_);
+    Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, *forwarding_context_);
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);

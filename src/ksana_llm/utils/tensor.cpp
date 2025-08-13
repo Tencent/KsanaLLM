@@ -42,11 +42,11 @@ Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t
 
   if (data_ptr != nullptr) {
     is_shared_buffer_ = true;
-  } else {
-    // Do not allocate memory if lazy_allocate enabled.
-    if (!lazy_allocate || location != MemoryLocation::LOCATION_DEVICE || DeviceMemoryPool::IsDisabled()) {
-      AcquireImpl();
-    }
+  } else if (GetElementNumber() == 0) {
+    this->data_ptr = nullptr;
+  } else if (!lazy_allocate || location != MemoryLocation::LOCATION_DEVICE ||
+             DeviceMemoryPool::IsDisabled()) {  // Do not allocate memory if lazy_allocate enabled.
+    AcquireImpl();
   }
 
   reference_ = std::make_shared<int>(0);
