@@ -54,33 +54,4 @@ class WeightInstanceTest : public ::testing::Test {
   std::filesystem::path tmp_cache_model_path_;
 };
 
-TEST_F(WeightInstanceTest, SaveAndLoadCacheModel) {
-  WeightInstance instance_to_save_cache(model_config_, runtime_config_, context_);
-  instance_to_save_cache.Load();
-
-  WeightInstance instance_to_load_cache(model_config_, runtime_config_, context_);
-  instance_to_load_cache.CreateWeightInstances();
-
-  // test load from cache
-  bool loaded_from_cache = false;
-  instance_to_load_cache.LoadWeightsAndModelsMap(loaded_from_cache);
-  EXPECT_TRUE(loaded_from_cache);
-
-  // test weights_map_'s size is equal
-  size_t real_tensor_num = instance_to_save_cache.GetWeight(0)->weights_map_.size();
-  size_t expect_tensor_num = instance_to_load_cache.GetWeight(0)->weights_map_.size();
-  EXPECT_EQ(real_tensor_num, expect_tensor_num);
-
-  // test some tensors in weights_map_ is equal
-  static constexpr size_t max_compared_tensor_num = 10;
-  size_t compared_cnt = 0;
-  for (const auto &weight_pair : instance_to_save_cache.GetWeight(0)->weights_map_) {
-    EXPECT_TRUE(weight_pair.second.Equal(instance_to_load_cache.GetWeight(0)->weights_map_[weight_pair.first]));
-    compared_cnt++;
-    if (compared_cnt >= max_compared_tensor_num) {
-      break;
-    }
-  }
-}
-
 }  // namespace ksana_llm

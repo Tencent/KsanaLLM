@@ -97,13 +97,33 @@ TEST(TensorTest, CommonTest) {
   for (size_t i = 0; i < tensor_on_host.GetElementNumber(); ++i) {
     EXPECT_EQ(tensor_on_host.GetPtr<int32_t>()[i], data[i]);
   }
-}
 
-TEST(TensorTest, ShapeTypeWithCheckTest) {
-  ShapeTypeWithCheck shape = std::vector<size_t>(2, 2);
-  EXPECT_EQ(shape.end() - shape.begin(), 2);
+  // Check tensor checker.
+  setenv("ENABLE_MEMORY_CHECK", "1", 1);
 
-  const ShapeTypeWithCheck const_shape = std::vector<size_t>(2, 2);
-  EXPECT_EQ(const_shape.end() - const_shape.begin(), 2);
+  Tensor tensor_tmp(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {1024}, RANK);
+  MemoryChecker::AddMemoryBlock("test", RANK, tensor_tmp.GetPtr<void>(), 256, tensor_tmp.GetPtr<uint8_t>() + 768, 256,
+                                0);
+  EXPECT_TRUE(MemoryChecker::Enabled());
+
+  // Should be true
+  bool true_check = true;
+  Memset(tensor_tmp.GetPtr<void>(), 0, 1024);
+  try {
+    MemoryChecker::CheckMemory(RANK, false);
+  } catch (...) {
+    true_check = false;
+  }
+  EXPECT_TRUE(true_check);
+
+  // Should be false
+  Memset(tensor_tmp.GetPtr<void>(), 1, 1024);
+  try {
+    MemoryChecker::CheckMemory(RANK, false);
+  } catch (...) {
+    true_check = false;
+  }
+  EXPECT_FALSE(true_check);
+  MemoryChecker::RemoveMemoryBlock("test", RANK);
 }
 }  // namespace ksana_llm

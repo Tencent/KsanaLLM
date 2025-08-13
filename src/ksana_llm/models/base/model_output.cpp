@@ -11,6 +11,7 @@ ModelOutput::ModelOutput(const size_t max_logits_num, const size_t vocab_size, c
                          const DataType hidden_dtype)
     : rank_(rank), context_(context) {
   logits_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {max_logits_num, vocab_size}, rank_);
+
   EventCreateWithFlags(&compute_ready_event, EVENT_DISABLE_TIMING);
 }
 

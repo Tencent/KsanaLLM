@@ -104,6 +104,9 @@ TEST_F(ExpertParallelNcclDataChannelTest, TestDataChannel) {
   char unique_id_2[128];
 
   const char* all_devices = getenv("CUDA_VISIBLE_DEVICES");
+  if (all_devices == nullptr) {
+    all_devices = "0,1";
+  }
   std::vector<std::string> devices = Str2Vector(all_devices, ",");
 
   pid_t pid = fork();

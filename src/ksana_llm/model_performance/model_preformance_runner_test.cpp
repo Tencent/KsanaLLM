@@ -2,6 +2,7 @@
  *
  * ==============================================================================*/
 #include "ksana_llm/model_performance/model_performance_runner.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "tests/test.h"
 
 using namespace ksana_llm;
@@ -9,6 +10,8 @@ using namespace ksana_llm;
 class ModelPerformanceRunnerTest : public testing::Test {
  protected:
   void SetUp() override {
+    DeviceMemoryPool::Disable();
+
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm_performance_run.yaml";

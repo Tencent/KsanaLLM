@@ -18,11 +18,14 @@
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/transfer/transfer_engine.h"
+#include "ksana_llm/utils/dynamic_memory_counter.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
+#include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/tokenizer.h"
 #include "ksana_llm/utils/waiter.h"
 #ifdef ENABLE_CUDA
@@ -33,6 +36,13 @@ namespace ksana_llm {
 
 InferenceEngine::InferenceEngine(Channel<std::pair<Status, std::shared_ptr<Request>>> &request_queue)
     : request_queue_(request_queue) {
+#ifdef ENABLE_ACL
+  // Disable dynamic memory buffer for ascend device, because atb attention maybe crash in this.
+  DeviceMemoryPool::Disable();
+#else
+  // TODO(yancyliu): Enable memory pool later.
+  DeviceMemoryPool::Disable();
+#endif
   Initialize();
 }
 
@@ -208,6 +218,15 @@ Status InferenceEngine::Initialize() {
     SetModelInstance(model_config.name, model_instance);
   }
 
+  // Initialize memory pool, put it after model_instance, because the DEEPGEMM need very large memory.
+  if (DeviceMemoryPool::IsEnabled()) {
+    status = InitializeMemoryPool(env);
+    if (!status.OK()) {
+      return Status(RET_INVALID_ARGUMENT, "Initialize tensor memory pool error:" + status.ToString());
+    }
+    KLLM_LOG_DEBUG << "Initialize tensor memory pool finished.";
+  }
+
   // Calc block number after model loaded.
   status = Singleton<Environment>::GetInstance()->CalculateBlockNumber();
   if (!status.OK()) {
@@ -285,6 +304,42 @@ Status InferenceEngine::Initialize() {
 
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {
     VersionReporter::GetInstance().Init();
+  }
+
+  return Status();
+}
+
+Status InferenceEngine::InitializeMemoryPool(std::shared_ptr<Environment> env) {
+  size_t free_bytes, total_bytes;
+  Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &free_bytes, &total_bytes);
+  if (!status.OK()) {
+    return status;
+  }
+
+  BlockManagerConfig block_manager_config;
+  env->GetBlockManagerConfig(block_manager_config);
+
+  size_t dev_reserved_bytes = free_bytes * block_manager_config.reserved_device_memory_ratio;
+  size_t dev_memory_pool_bytes = free_bytes - dev_reserved_bytes;
+  KLLM_LOG_INFO << "InitializeMemoryPool, dev_reserved_mb:" << (dev_reserved_bytes / 1024 / 1024)
+                << ", dev_memory_pool_mb:" << (dev_memory_pool_bytes / 1024 / 1024) << std::endl;
+
+  constexpr size_t DEV_BLOCK_SIZE = 4096;
+
+  RuntimeConfig runtime_config;
+  status = env->GetRuntimeConfig(runtime_config);
+  if (!status.OK()) {
+    return status;
+  }
+
+  // Only for device memory now.
+  size_t tp_size = runtime_config.parallel_basic_config.tensor_parallel_size;
+  for (int rank = 0; rank < tp_size; ++rank) {
+    SetDevice(rank);
+
+    void *dev_ptr;
+    Malloc(&dev_ptr, dev_memory_pool_bytes);
+    DeviceMemoryPool::SetMemoryPool(rank, dev_ptr, dev_memory_pool_bytes, DEV_BLOCK_SIZE);
   }
 
   return Status();

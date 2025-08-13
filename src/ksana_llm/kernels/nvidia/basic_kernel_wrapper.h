@@ -168,8 +168,11 @@ void Expand(void* input, void* output, const int m, const int expand_size, const
             cudaStream_t stream);
 
 template <typename T>
-void CustomAllReduceInit(void** ptr, void** signals, void* rank_data, size_t rank_data_sz, int cur_rank,
-                         int total_ranks, bool is_full_nvlink, uint32_t root_rank);
+void CustomAllReduceInit(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, int total_ranks,
+                         bool is_full_nvlink, uint32_t root_rank);
+
+template <typename T>
+void CustomAllReduceRegisterSignalBuffer(void* ptr, void** signals);
 
 template <typename T>
 void CustomAllReduceRegisterBuffer(void* ptr, void** input_handles, cudaStream_t& stream);

@@ -50,6 +50,9 @@ struct ForwardingBuffers {
 
   void CalculateBuffersShape(size_t batch_size, size_t token_num);
 
+  // Resize buffer to save device memory.
+  Status ResizeBuffers(size_t batch_size, size_t token_num, bool release = false);
+
   // Model config
   ModelConfig model_config;
   RuntimeConfig runtime_config;
@@ -69,6 +72,9 @@ struct ModelBuffers {
 
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
+
+  Status AcquireBuffers(std::shared_ptr<ModelInput>& model_input);
+  Status ReleaseBuffers();
 };
 
 class ForwardingContext {
@@ -114,6 +120,9 @@ class ForwardingContext {
   inline void SetCurrentRank(int rank) { rank_ = rank; }
 
   inline const PipelineConfig& GetPipelineConfig() { return pipeline_config_; }
+
+  Status AcquireBuffers();
+  Status ReleaseBuffers();
 
  private:
   // Rank of current inference device

@@ -34,6 +34,9 @@ class DeepSeekV3DecoderLayer {
   Status CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                    const bool is_multi_token_forward, ForwardingContext& forwarding_context);
 
+  void AcquireMoeBuffers(ForwardingContext& forwarding_context);
+  void ReleaseMoeBuffers();
+
  private:
   bool is_moe_;
 

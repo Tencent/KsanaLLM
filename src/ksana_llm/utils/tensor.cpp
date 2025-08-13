@@ -7,226 +7,30 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
 #include "3rdparty/LLM_kernels/csrc/utils/common.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
 
-template <typename T>
-NotAssignable<T>::NotAssignable(T val) {
-  value_ = val;
-}
-
-template <typename T>
-NotAssignable<T>& NotAssignable<T>::operator=(T val) {
-  throw std::runtime_error(error_message_);
-}
-
-template <typename T>
-NotAssignable<T>::NotAssignable(const NotAssignable<T>& other) {
-  throw std::runtime_error(error_message_);
-}
-
-template <typename T>
-NotAssignable<T>::operator T() const {
-  return value_;
-}
-
-template <typename T>
-void NotAssignable<T>::Set(const T& val) {
-  value_ = val;
-}
-
-template <typename T>
-const T& NotAssignable<T>::Get() const {
-  return value_;
-}
-
-template <typename T>
-T& NotAssignable<T>::Get() {
-  return value_;
-}
-
-template <typename T>
-void NotAssignable<T>::SetErrorMessage(const std::string& error_message) {
-  error_message_ = error_message;
-}
-
-template class NotAssignable<MemoryLocation>;
-template class NotAssignable<int>;
-template class NotAssignable<void*>;
-
-template <typename T>
-TypeWithCheck<T>::TypeWithCheck() {}
-
-template <typename T>
-TypeWithCheck<T>::TypeWithCheck(T val) {
-  value_ = val;
-}
-
-template <typename T>
-void TypeWithCheck<T>::SetChecker(std::shared_ptr<std::function<void()>> checker) {
-  checker_ = checker;
-}
-
-template <typename T>
-TypeWithCheck<T>& TypeWithCheck<T>::operator=(T val) {
-  value_ = val;
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-  return *this;
-}
-
-template <typename T>
-TypeWithCheck<T>& TypeWithCheck<T>::operator+=(T val) {
-  if (std::is_integral<T>::value) {
-    value_ += val;
-    if (checker_ && *checker_) {
-      (*checker_)();
-    }
-  }
-  return *this;
-}
-
-template <>
-TypeWithCheck<DataType>& TypeWithCheck<DataType>::operator+=(DataType val) {
-  KLLM_THROW("The operator+= is not supported by DataType.");
-}
-
-template <typename T>
-TypeWithCheck<T>& TypeWithCheck<T>::operator-=(T val) {
-  if (std::is_integral<T>::value) {
-    value_ -= val;
-    if (checker_ && *checker_) {
-      (*checker_)();
-    }
-  }
-  return *this;
-}
-
-template <>
-TypeWithCheck<DataType>& TypeWithCheck<DataType>::operator-=(DataType val) {
-  KLLM_THROW("The operator-= is not supported by DataType.");
-}
-
-template <typename T>
-TypeWithCheck<T>::TypeWithCheck(const TypeWithCheck<T>& other) {
-  value_ = other.value_;
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-}
-
-template <typename T>
-TypeWithCheck<T>::operator T() const {
-  return value_;
-}
-
-template class TypeWithCheck<size_t>;
-template class TypeWithCheck<DataType>;
-
-ShapeTypeWithCheck::ShapeTypeWithCheck() {}
-
-ShapeTypeWithCheck::ShapeTypeWithCheck(const std::vector<size_t> val) {
-  val_.resize(val.size());
-  std::transform(val.begin(), val.end(), val_.begin(), [](size_t v) -> TypeWithCheck<size_t> { return size_t(v); });
-}
-
-ShapeTypeWithCheck::~ShapeTypeWithCheck() {}
-
-void ShapeTypeWithCheck::SetChecker(std::shared_ptr<std::function<void()>> checker) { checker_ = checker; }
-
-ShapeTypeWithCheck& ShapeTypeWithCheck::operator=(std::vector<size_t> val) {
-  val_.resize(val.size());
-  std::transform(val.begin(), val.end(), val_.begin(),
-                 [](size_t v) -> TypeWithCheck<size_t> { return TypeWithCheck<size_t>(v); });
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-  return *this;
-}
-
-TypeWithCheck<size_t>& ShapeTypeWithCheck::operator[](std::vector<size_t>::size_type index) {
-  val_[index].SetChecker(checker_);
-  return val_[index];
-}
-
-const TypeWithCheck<size_t>& ShapeTypeWithCheck::operator[](std::vector<size_t>::size_type index) const {
-  return val_[index];
-}
-
-ShapeTypeWithCheck::operator std::vector<size_t>() const {
-  std::vector<size_t> result(val_.size());
-  std::transform(val_.begin(), val_.end(), result.begin(), [](TypeWithCheck<size_t> v) -> size_t { return v; });
-  return result;
-}
-
-std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::begin() { return val_.begin(); }
-
-std::vector<TypeWithCheck<size_t>>::const_iterator ShapeTypeWithCheck::begin() const { return val_.begin(); }
-
-std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::end() { return val_.end(); }
-
-std::vector<TypeWithCheck<size_t>>::const_iterator ShapeTypeWithCheck::end() const { return val_.end(); }
-
-std::vector<size_t>::size_type ShapeTypeWithCheck::size() const { return val_.size(); }
-
-bool ShapeTypeWithCheck::empty() const { return val_.empty(); }
-
-void ShapeTypeWithCheck::resize(std::vector<size_t>::size_type count) {
-  val_.resize(count);
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-}
-
-void ShapeTypeWithCheck::resize(std::vector<size_t>::size_type count, const std::vector<size_t>::value_type& value) {
-  val_.resize(count, value);
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-}
-
-TypeWithCheck<size_t>& ShapeTypeWithCheck::back() { return val_.back(); }
-
-const TypeWithCheck<size_t>& ShapeTypeWithCheck::back() const { return val_.back(); }
-
-TypeWithCheck<size_t>& ShapeTypeWithCheck::front() { return val_.front(); }
-
-const TypeWithCheck<size_t>& ShapeTypeWithCheck::front() const { return val_.front(); }
-
-std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::erase(
-    std::vector<TypeWithCheck<size_t>>::iterator pos) {
-  auto result = val_.erase(pos);
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-  return result;
-}
-
-std::vector<TypeWithCheck<size_t>>::iterator ShapeTypeWithCheck::insert(
-    std::vector<TypeWithCheck<size_t>>::const_iterator pos, const TypeWithCheck<size_t>& value) {
-  auto result = val_.insert(pos, value);
-  if (checker_ && *checker_) {
-    (*checker_)();
-  }
-  return result;
-}
-
-bool ShapeTypeWithCheck::operator==(const ShapeTypeWithCheck& other) { return (val_ == other.val_); }
-
-Tensor::Tensor() { InitializeChecker(); }
+Tensor::Tensor(const std::string& name) : name(name) {}
 
 Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
-               Stream* stream)
-    : location(location), device_id(device_id), dtype(dtype), shape(shape), data_ptr(data_ptr), stream_(stream) {
+               Stream* stream, bool lazy_allocate, const std::string& name)
+    : location(location),
+      device_id(device_id),
+      dtype(dtype),
+      shape(shape),
+      data_ptr(data_ptr),
+      stream_(stream),
+      name(name) {
   if (dtype == DataType::TYPE_INVALID) {
     // For dummy tensor, with type TYPE_INVALID, checker is disabled.
     return;
@@ -239,91 +43,129 @@ Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t
   if (data_ptr != nullptr) {
     is_shared_buffer_ = true;
   } else {
-    AllocateMemory();
+    // Do not allocate memory if lazy_allocate enabled.
+    if (!lazy_allocate || location != MemoryLocation::LOCATION_DEVICE || DeviceMemoryPool::IsDisabled()) {
+      AcquireImpl();
+    }
   }
 
   reference_ = std::make_shared<int>(0);
-  max_buffer_size_ = GetTotalBytes();
-
-  InitializeChecker();
 }
 
 Tensor::~Tensor() {
   // Free underlying memory until no more tensor instances referenced.
   if (reference_.use_count() == 1) {
-    checker_ = nullptr;
-    dtype.SetChecker(nullptr);
-    shape.SetChecker(nullptr);
-    offset.SetChecker(nullptr);
+    ReleaseImpl();
 
-    FreeMemory();
-
-    location.Set(MemoryLocation::LOCATION_UNKNOWN);
-    device_id.Set(-1);
+    location = MemoryLocation::LOCATION_UNKNOWN;
+    device_id = -1;
 
     dtype = DataType::TYPE_INVALID;
-    shape.val_.clear();
+    shape.clear();
     offset = 0;
   }
 }
 
-void Tensor::FreeMemory() {
-  if (data_ptr != nullptr && !is_shared_buffer_) {
-    if (location == MemoryLocation::LOCATION_HOST) {
-      HostFree(data_ptr);
-    } else if (location == MemoryLocation::LOCATION_DEVICE) {
-      SetDevice(device_id);
-      if (stream_ == nullptr) {
-        Free(data_ptr);
-      } else {
-        FreeAsync(data_ptr, *stream_);
-      }
+Tensor::Tensor(const Tensor& other) { AssignMembers(other); }
+
+Tensor& Tensor::operator=(const Tensor& other) {
+  // Free underlying memory until no more tensor instances referenced.
+  if (this != &other) {
+    if (reference_.use_count() == 1) {
+      ReleaseImpl();
     }
-    data_ptr.Set(nullptr);
+    AssignMembers(other);
+  }
+  return *this;
+}
+
+void Tensor::AcquireImpl() {
+  if (data_ptr == nullptr && !is_shared_buffer_) {
+    size_t total_bytes = GetTotalBytes();
+    if (location == MemoryLocation::LOCATION_DEVICE) {
+      if (!DeviceMemoryPool::Empty()) {
+        constexpr size_t head_meta_bytes = 4096;
+        constexpr size_t tail_meta_bytes = 4096;
+        if (MemoryChecker::Enabled()) {
+          total_bytes += (head_meta_bytes + tail_meta_bytes);
+        }
+
+        data_ptr = DeviceMemoryPool::GetMemoryPool(device_id)->Allocate(total_bytes, false);
+
+        if (MemoryChecker::Enabled()) {
+          data_ptr += head_meta_bytes;
+          total_bytes -= (head_meta_bytes + tail_meta_bytes);
+          std::string tensor_name = name.empty() ? std::to_string(reinterpret_cast<uintptr_t>(this)) : name;
+          KLLM_LOG_DEBUG << "Add tensor " << tensor_name << " to check list.";
+
+          SetDevice(device_id);
+          Memset(data_ptr - head_meta_bytes, 0, head_meta_bytes);
+          Memset(data_ptr + total_bytes, 0, tail_meta_bytes);
+
+          MemoryChecker::AddMemoryBlock(tensor_name, device_id, data_ptr - head_meta_bytes, head_meta_bytes,
+                                        data_ptr + total_bytes, tail_meta_bytes, 0);
+        }
+      } else {
+        SetDevice(device_id);
+        Malloc(&data_ptr, total_bytes);
+      }
+    } else if (location == MemoryLocation::LOCATION_HOST) {
+      HostAlloc(&data_ptr, total_bytes);
+    }
   }
 }
 
-void Tensor::AllocateMemory() {
-  if (data_ptr == nullptr && !is_shared_buffer_) {
-    size_t total_bytes = GetTotalBytes();
-    if (location == MemoryLocation::LOCATION_HOST) {
-      HostAlloc(&data_ptr.Get(), total_bytes);
-    } else if (location == MemoryLocation::LOCATION_DEVICE) {
-      SetDevice(device_id);
-      if (stream_ == nullptr) {
-        Malloc(&data_ptr.Get(), total_bytes);
+void Tensor::Acquire() {
+  // Allocate memory only if memory pool is enabled.
+  if (DeviceMemoryPool::IsEnabled()) {
+    AcquireImpl();
+  }
+}
+
+void Tensor::ReleaseImpl() {
+  if (data_ptr != nullptr && !is_shared_buffer_) {
+    if (location == MemoryLocation::LOCATION_DEVICE) {
+      if (!DeviceMemoryPool::Empty()) {
+        constexpr size_t head_meta_bytes = 4096;
+        if (MemoryChecker::Enabled()) {
+          std::string tensor_name = name.empty() ? std::to_string(reinterpret_cast<uintptr_t>(this)) : name;
+          KLLM_LOG_DEBUG << "Remove tensor " << tensor_name << " from check list.";
+          MemoryChecker::RemoveMemoryBlock(tensor_name, device_id);
+          data_ptr -= head_meta_bytes;
+        }
+        DeviceMemoryPool::GetMemoryPool(device_id)->Free(data_ptr);
       } else {
-        // NOTE(karlluo): for NVIDIA GPU ref
-        // https://developer.nvidia.com/blog/using-cuda-stream-ordered-memory-allocator-part-1/
-        // for Huawei NPU ref
-        // https://support.enflame-tech.com/onlinedoc_dev_3.3/_static/topsplatform_html/3-guide
-        // /programing_guide/content/source/memory_model.html
-        // create device memory space with stream and memory pool as extra memory management.
-        MallocAsync(&data_ptr.Get(), total_bytes, *stream_);
+        SetDevice(device_id);
+        Free(data_ptr);
       }
+    } else if (location == MemoryLocation::LOCATION_HOST) {
+      HostFree(data_ptr);
     }
+    data_ptr = nullptr;
+  }
+}
+
+void Tensor::Release() {
+  // Release memory only if memory pool is enabled.
+  if (DeviceMemoryPool::IsEnabled()) {
+    ReleaseImpl();
   }
 }
 
 void Tensor::AssignMembers(const Tensor& other) {
-  location.Set(other.location.Get());
-  device_id.Set(other.device_id.Get());
-  data_ptr.Set(other.data_ptr.Get());
+  name = other.name;
+  location = other.location;
+  device_id = other.device_id;
   stream_ = other.stream_;
 
   dtype = other.dtype;
   shape = other.shape;
   data_format = other.data_format;
   offset = other.offset;
+  data_ptr = other.data_ptr;
 
   is_shared_buffer_ = other.is_shared_buffer_;
   reference_ = other.reference_;
-  max_buffer_size_ = other.max_buffer_size_;
-
-  // NOTE: Must bind current checker to new dtype & shape.
-  dtype.SetChecker(this->checker_);
-  shape.SetChecker(this->checker_);
-  offset.SetChecker(this->checker_);
 
   scales = other.scales;
   zeros = other.zeros;
@@ -335,37 +177,19 @@ void Tensor::AssignMembers(const Tensor& other) {
   weight_scales = other.weight_scales;
 }
 
-void Tensor::InitializeChecker() {
-  location.SetErrorMessage("The location could not be modified.");
-
-  checker_ = std::make_shared<std::function<void()>>([this]() -> void {
-    DataType dtype_impl = DataType(this->dtype);
-    if (dtype_impl == DataType::TYPE_INVALID) {
-      return;
-    }
-
-    size_t bytes = GetTypeSize(dtype_impl);
-    std::vector<size_t> dims = this->shape;
-    for (auto dim : dims) {
-      bytes *= dim;
-    }
-
-    if (this->offset > this->max_buffer_size_ || bytes > (this->max_buffer_size_ - this->offset)) {
-      KLLM_THROW(fmt::format("The tensor dtype {} and shape {} with offset {} exceed max memory size {}.", dtype_impl,
-                             Vector2Str(dims), this->offset, this->max_buffer_size_));
-    }
-  });
-  dtype.SetChecker(checker_);
-  shape.SetChecker(checker_);
-  offset.SetChecker(checker_);
+uint8_t* Tensor::GetPtrImpl(bool check_empty) const {
+  if (check_empty && data_ptr == nullptr) {
+    // do nothing now.
+  }
+  return reinterpret_cast<uint8_t*>(data_ptr) + static_cast<size_t>(offset);
 }
 
 size_t Tensor::GetElementNumber() const {
-  if (shape.val_.empty()) {
+  if (shape.empty()) {
     return 0;
   }
 
-  return std::accumulate(shape.val_.begin(), shape.val_.end(), static_cast<size_t>(1), std::multiplies<size_t>());
+  return std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 }
 
 size_t Tensor::GetDTypeSize() const {
@@ -396,7 +220,7 @@ std::string Tensor::ToString() const {
   DataType dtype_impl = dtype;
   std::string loc_str = GetLocationString();
   return FormatStr("Tensor[where=%s, dtype=%s, shape=%s]", loc_str.c_str(), dtype_to_string.at(dtype_impl).c_str(),
-                   Vector2Str(shape.val_).c_str());
+                   Vector2Str(shape).c_str());
 }
 
 std::string GetNumpyType(DataType dtype) {
@@ -506,9 +330,9 @@ void Tensor::SaveToNpyFile(const std::string& file_path) {
   file.write(reinterpret_cast<const char*>(&minor_version), sizeof(uint8_t));
   std::stringstream header_stream;
   header_stream << "{'descr': '" << GetNumpyType(dtype_impl) << "', 'fortran_order': False, 'shape': (";
-  for (size_t i = 0; i < shape.val_.size(); ++i) {
-    header_stream << shape.val_[i];
-    if (shape.val_.size() == 1 || i < shape.val_.size() - 1) {
+  for (size_t i = 0; i < shape.size(); ++i) {
+    header_stream << shape[i];
+    if (shape.size() == 1 || i < shape.size() - 1) {
       header_stream << ",";
     }
   }
@@ -566,6 +390,103 @@ void Tensor::LoadFromNpyFile(const std::string& file_path) {
 
   free(file_host_data_ptr);
   fclose(f_ptr);
+}
+
+MemoryChecker::MemoryChecker() {}
+
+bool MemoryChecker::Enabled() {
+  static bool enabled = (std::getenv("ENABLE_MEMORY_CHECK") != nullptr);
+  if (enabled && check_memory_map_.empty()) {
+    int dev_count;
+    GetDeviceCount(&dev_count);
+    check_memory_map_.resize(dev_count);
+  }
+  return enabled;
+}
+
+void MemoryChecker::AddMemoryBlock(const std::string& name, int rank, void* head_ptr, size_t head_bytes, void* tail_ptr,
+                                   size_t tail_bytes, uint8_t expect_value) {
+  if (!Enabled()) {
+    return;
+  }
+
+  if (rank < 0 || rank >= check_memory_map_.size()) {
+    throw std::runtime_error(
+        fmt::format("AddMemoryBlock error, invalid device rank {}, device count {}.", rank, check_memory_map_.size()));
+  }
+
+  MemoryChecker::MemoryMeta memory_meta{head_ptr, head_bytes, tail_ptr, tail_bytes, expect_value};
+  std::unordered_map<std::string, MemoryMeta>& check_map = check_memory_map_[rank];
+  check_map[name] = memory_meta;
+}
+
+void MemoryChecker::RemoveMemoryBlock(const std::string& name, int rank) {
+  if (!Enabled()) {
+    return;
+  }
+
+  if (rank < 0 || rank >= check_memory_map_.size()) {
+    throw std::runtime_error(fmt::format("RemoveMemoryBlock error, invalid device rank {}, device count {}.", rank,
+                                         check_memory_map_.size()));
+  }
+
+  std::unordered_map<std::string, MemoryMeta>& check_map = check_memory_map_[rank];
+  if (check_map.find(name) != check_map.end()) {
+    check_map.erase(name);
+  }
+}
+
+void MemoryChecker::CheckMemory(int rank, bool synchronize_device) {
+  if (!Enabled()) {
+    return;
+  }
+
+  if (rank < 0 || rank >= check_memory_map_.size()) {
+    throw std::runtime_error(
+        fmt::format("CheckMemory error, invalid device rank {}, device count {}.", rank, check_memory_map_.size()));
+  }
+
+  SetDevice(rank);
+  if (synchronize_device) {
+    DeviceSynchronize();
+  }
+
+  bool check_result = true;
+  std::unordered_map<std::string, MemoryMeta>& check_map = check_memory_map_[rank];
+  for (const auto& [name, memory_meta] : check_map) {
+    if (memory_meta.head_ptr == nullptr || memory_meta.tail_ptr == nullptr) {
+      KLLM_LOG_ERROR << "Check memory " << name << " on device " << rank << " error, null pointer found.";
+      continue;
+    }
+
+    bool check_head = CheckMemoryValueImpl(memory_meta.head_ptr, memory_meta.head_bytes, memory_meta.expect_value);
+    bool check_tail = CheckMemoryValueImpl(memory_meta.tail_ptr, memory_meta.tail_bytes, memory_meta.expect_value);
+    if (!check_head) {
+      check_result = false;
+      KLLM_LOG_ERROR << "Check memory " << name << " on device " << rank << " error, overwrite by other memory.";
+    } else if (!check_tail) {
+      check_result = false;
+      KLLM_LOG_ERROR << "Check memory " << name << " on device " << rank << " error, out of memory bound.";
+    }
+  }
+
+  if (!check_result) {
+    throw std::runtime_error("CheckMemory error, out of memory bound is found.");
+  }
+}
+
+bool MemoryChecker::CheckMemoryValueImpl(void* check_ptr, size_t check_bytes, uint8_t expect_value) {
+  std::vector<uint8_t> vec(check_bytes);
+  Memcpy(vec.data(), check_ptr, check_bytes, MEMCPY_DEVICE_TO_HOST);
+
+  bool check_succ = true;
+  for (const auto& v : vec) {
+    if (v != expect_value) {
+      check_succ = false;
+      break;
+    }
+  }
+  return check_succ;
 }
 
 }  // namespace ksana_llm

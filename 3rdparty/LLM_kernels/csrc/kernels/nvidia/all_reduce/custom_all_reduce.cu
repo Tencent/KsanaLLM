@@ -248,16 +248,20 @@ __global__ void __launch_bounds__(512, 1)
 
 // Note: this class does not own any device memory. Any required buffers
 // are passed in from the constructor.
-CustomAllreduce::CustomAllreduce(Signal** signals, void* rank_data, size_t rank_data_sz, int rank, int world_size,
-                                 bool full_nvlink, uint32_t root_rank)
+CustomAllreduce::CustomAllreduce(void* rank_data, size_t rank_data_sz, int rank, int world_size, bool full_nvlink,
+                                 uint32_t root_rank)
     : rank_(rank),
       world_size_(world_size),
       full_nvlink_(full_nvlink),
-      self_sg_(signals[rank]),
       root_rank_(root_rank),
       d_rank_data_base_(reinterpret_cast<RankData*>(rank_data)),
       d_rank_data_end_(d_rank_data_base_ + rank_data_sz / sizeof(RankData)) {
-  // NOTE(karlluo): in group all reduce, the world size is the group size.
+  saved_d_rank_data_base_ = d_rank_data_base_;
+  saved_d_rank_data_end_ = d_rank_data_end_;
+}
+
+void CustomAllreduce::RegisterSignalBuffer(Signal** signals) {
+  self_sg_ = signals[rank_];
   for (int i = 0; i < world_size_; i++) {
     sg_.signals[i + root_rank_] = signals[i + root_rank_];
   }
@@ -270,6 +274,10 @@ void CustomAllreduce::CheckRankDataCapacity(size_t num) {
 }
 
 void CustomAllreduce::RegisterBuffer(void** ptrs, cudaStream_t& stream) {
+  d_rank_data_base_ = saved_d_rank_data_base_;
+  d_rank_data_end_ = saved_d_rank_data_end_;
+  buffers_.clear();
+
   CheckRankDataCapacity();
   RankData data;
   for (uint32_t i = root_rank_; i < (root_rank_ + world_size_); ++i) {

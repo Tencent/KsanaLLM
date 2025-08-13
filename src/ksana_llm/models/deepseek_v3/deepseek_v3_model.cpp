@@ -91,16 +91,19 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
     input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
   }
 
+  mla_->AcquireBuffers(forwarding_context);
   if (forwarding_context.GetAttentionDataParallelSize() > 1) {
     mla_->DataParallelForward(hidden_buffer_tensors_0, reduce_buffer_tensors, extra_buffer_tensors, forwarding_context);
   } else {
     mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, extra_buffer_tensors, forwarding_context);
   }
+  mla_->ReleaseBuffers();
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
 
   post_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
 
   // Common mlp
+  AcquireMoeBuffers(forwarding_context);
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
 
@@ -109,6 +112,8 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
     PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
     tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
   }
+
+  ReleaseMoeBuffers();
 
   size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
   if (is_moe_ && world_size > 1) ep_data_transfer_->FreeHiddenUnitDeviceBuffer(forwarding_context);
@@ -284,6 +289,15 @@ Status DeepSeekV3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
   }
 
   return Status();
+}
+
+void DeepSeekV3DecoderLayer::AcquireMoeBuffers(ForwardingContext& forwarding_context) {
+  // TODO(yancyliu): Get tensor from moe_buffer_
+  // Reset its shape from batch_size and token_num, and then allocate tensor memory.
+}
+
+void DeepSeekV3DecoderLayer::ReleaseMoeBuffers() {
+  // TODO(yancyliu): Get tensor from moe_buffer_, and then release its memory.
 }
 
 DeepSeekV3MtpLayer::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,

@@ -85,6 +85,9 @@ TEST_F(NcclDataChannelTest, TestDataChannel) {
   setenv("KLLM_LOG_LEVEL", "COMMUNICATION", 1);
 
   const char* all_devices = getenv("CUDA_VISIBLE_DEVICES");
+  if (all_devices == nullptr) {
+    all_devices = "0,1";
+  }
   std::vector<std::string> devices = Str2Vector(all_devices, ",");
 
   float master_value = 3.14;

@@ -49,9 +49,13 @@ struct Signal {
   alignas(128) FlagType peer_counter[2][kMaxBlocks][maxDeviceCount];
 };
 
-struct __align__(16) RankData { const void *__restrict__ ptrs[maxDeviceCount]; };
+struct __align__(16) RankData {
+  const void *__restrict__ ptrs[maxDeviceCount];
+};
 
-struct __align__(16) RankSignals { Signal *signals[maxDeviceCount]; };
+struct __align__(16) RankSignals {
+  Signal *signals[maxDeviceCount];
+};
 
 // like std::array, but aligned
 template <typename T, int sz>
@@ -99,6 +103,7 @@ class CustomAllreduce {
   // 4. Obtain the peer pointers by opening the IPC handles, and store them in
   // the rank data array at corresponding positions.
   RankData *d_rank_data_base_, *d_rank_data_end_;
+  RankData *saved_d_rank_data_base_, *saved_d_rank_data_end_;
   std::vector<void *> graph_unreg_buffers_;
 
   // Signals are an array of ipc-enabled buffers from all ranks.
@@ -108,8 +113,10 @@ class CustomAllreduce {
   // is for storing the intermediate results required by some allreduce algos.
   //
   // Note: this class does not own any device memory. Any required buffersare passed in from the constructor.
-  CustomAllreduce(Signal **signals, void *rank_data, size_t rank_data_sz, int rank, int world_size,
-                  bool full_nvlink = true, uint32_t root_rank = 0);
+  CustomAllreduce(void *rank_data, size_t rank_data_sz, int rank, int world_size, bool full_nvlink = true,
+                  uint32_t root_rank = 0);
+
+  void RegisterSignalBuffer(Signal **signals);
 
   void CheckRankDataCapacity(size_t num = 1);
 

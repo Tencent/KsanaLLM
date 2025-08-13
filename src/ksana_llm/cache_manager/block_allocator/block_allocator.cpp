@@ -7,6 +7,7 @@
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/string_utils.h"
 
@@ -39,7 +40,7 @@ BlockAllocator::~BlockAllocator() { Clear(); }
 
 void BlockAllocator::PreAllocateBlocks() {
   bool use_continuous_memory = false;
-  uint8_t* base_mem_ptr = nullptr;
+  void* base_mem_ptr = nullptr;
 
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
     SetDevice(rank_);
@@ -48,7 +49,12 @@ void BlockAllocator::PreAllocateBlocks() {
 #if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
     use_continuous_memory = true;
-    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), (block_num_ + 1) * block_size_);
+    size_t dev_bytes = (block_num_ + 1) * block_size_;
+    if (!DeviceMemoryPool::Empty()) {
+      base_mem_ptr = DeviceMemoryPool::GetMemoryPool(rank_)->Allocate(dev_bytes, true);
+    } else {
+      malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), dev_bytes);
+    }
     blocks_base_ptr_ = base_mem_ptr;
   }
 #endif
@@ -58,9 +64,13 @@ void BlockAllocator::PreAllocateBlocks() {
   void* memory_ptr = nullptr;
   for (size_t block_id = 0; block_id < block_num_; ++block_id) {
     if (use_continuous_memory) {
-      memory_ptr = base_mem_ptr + block_id * block_size_;
+      memory_ptr = reinterpret_cast<uint8_t*>(base_mem_ptr) + block_id * block_size_;
     } else {
-      malloc_fn_(&memory_ptr, block_size_);
+      if (location_ == MemoryLocation::LOCATION_DEVICE && !DeviceMemoryPool::Empty()) {
+        memory_ptr = DeviceMemoryPool::GetMemoryPool(rank_)->Allocate(block_size_, true);
+      } else {
+        malloc_fn_(&memory_ptr, block_size_);
+      }
     }
     free_blocks_.emplace(block_id, memory_ptr);
   }
@@ -76,7 +86,11 @@ void BlockAllocator::Clear() {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (blocks_base_ptr_ != nullptr) {
-      free_fn_(blocks_base_ptr_);
+      if (location_ == MemoryLocation::LOCATION_DEVICE && !DeviceMemoryPool::Empty()) {
+        DeviceMemoryPool::GetMemoryPool(rank_)->Free(blocks_base_ptr_);
+      } else {
+        free_fn_(blocks_base_ptr_);
+      }
       blocks_base_ptr_ = nullptr;
     }
     free_blocks_.clear();
@@ -88,7 +102,11 @@ void BlockAllocator::Clear() {
   {
     auto clear_fn = [&](std::unordered_map<int, void*>& blocks) -> void {
       for (auto it = blocks.begin(); it != blocks.end();) {
-        free_fn_(it->second);
+        if (location_ == MemoryLocation::LOCATION_DEVICE && !DeviceMemoryPool::Empty()) {
+          DeviceMemoryPool::GetMemoryPool(rank_)->Free(it->second);
+        } else {
+          free_fn_(it->second);
+        }
         it = blocks.erase(it);
       }
     };

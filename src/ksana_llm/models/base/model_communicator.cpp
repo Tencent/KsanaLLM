@@ -56,6 +56,8 @@ void ModelCommunicator::InitTensorParaCustomAllReduceSumLayer(Tensor* input, con
   size_t largest_part = max_size / tp_size_ + max_size % tp_size_;
   size_t signal_sz = sizeof(llm_kernels::nvidia::Signal) + largest_part;
   Stream* stream = &(context_->GetMemoryManageStreams()[rank_]);
+
+  // Use fixed size now, change to dynamic size later.
   tp_signal_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {signal_sz}, rank_, nullptr, stream);
 
   // This is a buffer for storing the tuples of pointers pointing to
@@ -68,11 +70,29 @@ void ModelCommunicator::InitTensorParaCustomAllReduceSumLayer(Tensor* input, con
   tp_custom_all_reduce_rank_tensor_ =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {rank_data_sz}, rank_, nullptr, stream);
   StreamSynchronize(*stream);
+
   tp_custom_all_reduce_sum_layer_->Init(
-      {input->GetPtr<void>(), tp_signal_tensor_.GetPtr<void>(), signal_sz,
+      {input->GetPtr<void>(false), tp_signal_tensor_.GetPtr<void>(false), signal_sz,
        tp_custom_all_reduce_rank_tensor_.GetPtr<void>(), rank_data_sz, /*is_group_custom_all_reduce*/ false},
       runtime_config, context_, rank_);
 }
+
+void ModelCommunicator::AcquireSignalBuffer(size_t max_size) {
+  size_t largest_part = max_size / tp_size_ + max_size % tp_size_;
+  size_t signal_sz = sizeof(llm_kernels::nvidia::Signal) + largest_part;
+  tp_signal_tensor_.shape = {signal_sz};
+  tp_signal_tensor_.Acquire();
+  tp_custom_all_reduce_sum_layer_->ResetSignalBuffer(tp_signal_tensor_.GetPtr<void>(), signal_sz);
+}
+
+void ModelCommunicator::ReleaseSignalBuffer() {
+  tp_signal_tensor_.Release();
+}
+
+void ModelCommunicator::ResetInputBuffer(void* input) {
+  tp_custom_all_reduce_sum_layer_->ResetInputBuffer(input);
+}
+
 #endif
 
 ModelCommunicator::~ModelCommunicator() { EventDestroy(comm_finish_event_); }
@@ -104,6 +124,7 @@ Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, st
 Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                                     bool is_multi_token_forward, bool use_custom) {
 #ifdef ENABLE_CUDA
+  // custom all reduct mayed hanged in dynamic buffer mode, disable it temporarily. Reopen it after this bug fixed.
   if (CheckIfUseCustomReduceSum(input_tensors, use_custom)) {
     STATUS_CHECK_RETURN(tp_custom_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {

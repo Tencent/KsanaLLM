@@ -2,6 +2,7 @@
 
 ==============================================================================*/
 #include "ksana_llm/service/inference_engine.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "tests/test.h"
 
 namespace ksana_llm {
@@ -38,6 +39,7 @@ class InferenceEngineTest : public ::testing::Test {
     Singleton<Environment>::GetInstance()->InitializeExpertParallelConfig();
 
     // Init inference engine.
+    DeviceMemoryPool::Disable();
     inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
   }
 

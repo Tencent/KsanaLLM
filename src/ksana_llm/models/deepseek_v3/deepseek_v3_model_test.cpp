@@ -12,6 +12,7 @@
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
@@ -28,6 +29,7 @@ class DeepSeekV3Test : public testing::Test {
  protected:
   void SetUp() override {
     InitLoguru();
+    DeviceMemoryPool::Disable();
     const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";

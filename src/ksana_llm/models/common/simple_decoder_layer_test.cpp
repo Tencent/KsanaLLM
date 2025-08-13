@@ -19,6 +19,7 @@
 #include "ksana_llm/models/qwen3_moe/qwen3_moe_model.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
@@ -101,6 +102,8 @@ class FakeTinyWeightTest : public testing::Test {
   std::string model_config_filename_;
 
   void SetUp() override {
+    DeviceMemoryPool::Disable();
+
     context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;

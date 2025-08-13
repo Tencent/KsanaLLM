@@ -12,6 +12,7 @@
 #include "c10/core/ScalarType.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/status.h"
@@ -19,135 +20,39 @@
 
 namespace ksana_llm {
 
-class Tensor;
-
-// Make sure the value could not be assigned.
-template <typename T>
-class NotAssignable {
- public:
-  friend class Tensor;
-
-  // NOCC:runtime/explicit(Desinged like this for elegant)
-  NotAssignable(T val);
-  NotAssignable<T>& operator=(T val);
-  NotAssignable(const NotAssignable<T>& other);
-  operator T() const;
-
- private:
-  void Set(const T& val);
-
-  const T& Get() const;
-  T& Get();
-
-  void SetErrorMessage(const std::string& error_message);
-
- private:
-  T value_;
-  std::string error_message_;
-};
-
-// Trigger a check if the value is assigned.
-template <typename T>
-class TypeWithCheck {
- public:
-  TypeWithCheck();
-
-  // NOCC:runtime/explicit(Desinged like this for elegant)
-  TypeWithCheck(T val);
-
-  void SetChecker(std::shared_ptr<std::function<void()>> checker);
-
-  TypeWithCheck<T>& operator=(T val);
-  TypeWithCheck<T>& operator+=(T val);
-  TypeWithCheck<T>& operator-=(T val);
-
-  TypeWithCheck(const TypeWithCheck<T>& other);
-
-  operator T() const;
-
- private:
-  T value_;
-  std::shared_ptr<std::function<void()>> checker_ = nullptr;
-};
-
-// Wrapper of shape type, trigger if the shape of any dim of shape is assigned.
-class ShapeTypeWithCheck {
- public:
-  friend class Tensor;
-  ShapeTypeWithCheck();
-
-  // NOCC:runtime/explicit(Designed like this for elegant)
-  ShapeTypeWithCheck(const std::vector<size_t> val);
-
-  ~ShapeTypeWithCheck();
-
-  void SetChecker(std::shared_ptr<std::function<void()>> checker);
-
-  ShapeTypeWithCheck& operator=(std::vector<size_t> val);
-
-  TypeWithCheck<size_t>& operator[](std::vector<size_t>::size_type index);
-
-  const TypeWithCheck<size_t>& operator[](std::vector<size_t>::size_type index) const;
-
-  operator std::vector<size_t>() const;
-
-  std::vector<TypeWithCheck<size_t>>::iterator begin();
-  std::vector<TypeWithCheck<size_t>>::const_iterator begin() const;
-  std::vector<TypeWithCheck<size_t>>::iterator end();
-  std::vector<TypeWithCheck<size_t>>::const_iterator end() const;
-
-  std::vector<size_t>::size_type size() const;
-
-  bool empty() const;
-
-  void resize(std::vector<size_t>::size_type count);
-
-  void resize(std::vector<size_t>::size_type count, const std::vector<size_t>::value_type& value);
-
-  TypeWithCheck<size_t>& back();
-  const TypeWithCheck<size_t>& back() const;
-
-  TypeWithCheck<size_t>& front();
-  const TypeWithCheck<size_t>& front() const;
-
-  std::vector<TypeWithCheck<size_t>>::iterator erase(std::vector<TypeWithCheck<size_t>>::iterator pos);
-
-  std::vector<TypeWithCheck<size_t>>::iterator insert(std::vector<TypeWithCheck<size_t>>::const_iterator pos,
-                                                      const TypeWithCheck<size_t>& value);
-
-  bool operator==(const ShapeTypeWithCheck& other);
-
- private:
-  std::vector<TypeWithCheck<size_t>> val_;
-  std::shared_ptr<std::function<void()>> checker_ = nullptr;
-};
-
 // The tensor define, only support contigous memory layout.
 class Tensor {
  public:
   // Initialize a empty tensor.
-  Tensor();
+  explicit Tensor(const std::string& name = "");
 
   // Initialize the tensor, if data_ptr is not null, it will be used as data buffer.
-  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id = -1,
-         void* data_ptr = nullptr, Stream* stream = nullptr);
+  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
+         Stream* stream, bool lazy_allocate = false, const std::string& name = "");
+
+  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, bool lazy_allocate = false,
+         const std::string& name = "")
+      : Tensor(location, dtype, shape, -1, nullptr, nullptr, lazy_allocate, name) {}
+
+  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id,
+         bool lazy_allocate = false, const std::string& name = "")
+      : Tensor(location, dtype, shape, device_id, nullptr, nullptr, lazy_allocate, name) {}
+
+  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
+         bool lazy_allocate = false, const std::string& name = "")
+      : Tensor(location, dtype, shape, device_id, data_ptr, nullptr, lazy_allocate, name) {}
 
   ~Tensor();
 
-  Tensor(const Tensor& other) { AssignMembers(other); }
+  Tensor(const Tensor& other);
 
-  Tensor& operator=(const Tensor& other) {
-    if (this != &other) {
-      // Free underlying memory until no more tensor instances referenced.
-      if (reference_.use_count() == 1) {
-        FreeMemory();
-      }
-      AssignMembers(other);
-    }
-    return *this;
-  }
+  Tensor& operator=(const Tensor& other);
 
  public:
+  // Allocate and release buffer memory.
+  void Acquire();
+  void Release();
+
   // Whether two tensor is equal.
   bool Equal(const Tensor& other) const;
 
@@ -162,8 +67,8 @@ class Tensor {
 
   // Get pointer of block
   template <typename T>
-  inline T* GetPtr() const {
-    return reinterpret_cast<T*>(data_ptr.Get() + static_cast<size_t>(offset));
+  inline T* GetPtr(bool check_empty = true) const {
+    return reinterpret_cast<T*>(GetPtrImpl(check_empty));
   }
 
   // Get tensor meta in string.
@@ -176,54 +81,49 @@ class Tensor {
   void LoadFromNpyFile(const std::string& file_path);
 
  public:
+  // Identify a tensor, for debug and readable.
+  std::string name;
+
   // The memory location, host or device.
-  NotAssignable<MemoryLocation> location = MemoryLocation::LOCATION_UNKNOWN;
+  MemoryLocation location = MemoryLocation::LOCATION_UNKNOWN;
 
   // The rank of device, meaningless for host memory.
-  NotAssignable<int> device_id = -1;
+  int device_id = -1;
 
   // The data type of current tensor.
-  TypeWithCheck<DataType> dtype = DataType::TYPE_INVALID;
+  DataType dtype = DataType::TYPE_INVALID;
 
   // The shape of current tensor.
-  ShapeTypeWithCheck shape;
-
-  // The underlying memory address.
-  NotAssignable<void*> data_ptr = nullptr;
+  std::vector<size_t> shape;
 
   // The data format, for ascend only now.
   DataFormat data_format = DataFormat::FORMAT_DEFAULT;
 
   // The offset based on data ptr.
-  TypeWithCheck<size_t> offset = 0;
+  size_t offset = 0;
 
  private:
-  // Free tensor memory.
-  void FreeMemory();
-
-  // Allocate tensor memory.
-  void AllocateMemory();
-
   // Get location in string.
   std::string GetLocationString() const;
 
   // Assign every members.
   void AssignMembers(const Tensor& other);
 
-  // Set check logic of current tensor.
-  void InitializeChecker();
+  // The implementation of GetPtr.
+  uint8_t* GetPtrImpl(bool check_empty) const;
+
+  // Implement of allocation and release.
+  void AcquireImpl();
+  void ReleaseImpl();
 
  private:
+  // The underlying memory address.
+  void* data_ptr = nullptr;
+
   // Whether the data buffer is shared with others, the shared buffer will not be free.
   bool is_shared_buffer_ = false;
 
   std::shared_ptr<int> reference_ = nullptr;
-
-  // Check tensor memory size.
-  std::shared_ptr<std::function<void()>> checker_ = nullptr;
-
-  // The max buffer size, used to check tensor validation.
-  size_t max_buffer_size_ = 0;
 
   // NOTE(karlluo): for NVIDIA GPU ref
   // https://developer.nvidia.com/blog/using-cuda-stream-ordered-memory-allocator-part-1/
@@ -248,6 +148,42 @@ class Tensor {
   Tensor* weight_scales = nullptr;
 
   void Fill(float f);
+};
+
+// Whether whether memory is out of bound.
+class MemoryChecker {
+ public:
+  struct MemoryMeta {
+    void* head_ptr;
+    size_t head_bytes;
+
+    void* tail_ptr;
+    size_t tail_bytes;
+
+    uint8_t expect_value;
+  };
+
+ public:
+  MemoryChecker();
+
+  // Add & remove memory block from check list.
+  static void AddMemoryBlock(const std::string& name, int rank, void* head_ptr, size_t head_bytes, void* tail_ptr,
+                             size_t tail_bytes, uint8_t expect_value = 0);
+
+  static void RemoveMemoryBlock(const std::string& name, int rank);
+
+  // Check whether emory
+  static void CheckMemory(int rank, bool synchronize_device);
+
+  // Whether memory checker is enabled.
+  static bool Enabled();
+
+ private:
+  static bool CheckMemoryValueImpl(void* check_ptr, size_t check_bytes, uint8_t expect_value);
+
+ private:
+  // rank id to memory check meta.
+  static inline std::vector<std::unordered_map<std::string, MemoryMeta>> check_memory_map_;
 };
 
 }  // namespace ksana_llm

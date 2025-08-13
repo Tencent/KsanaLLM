@@ -14,6 +14,7 @@
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
@@ -30,6 +31,7 @@ class DeepSeekV3DPTest : public testing::Test {
  protected:
   void SetUp() override {
     InitLoguru();
+    DeviceMemoryPool::Disable();
 
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
     std::string yaml_path = "../../../../examples/deepseekv2/ksana_llm_deepseek_v2_tp2_dp2.yaml";

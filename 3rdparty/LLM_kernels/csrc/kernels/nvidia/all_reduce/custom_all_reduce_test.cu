@@ -118,8 +118,8 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     void *rank_data = rank_data_meta.data_ptr;
 
     std::vector<int64_t> offsets(total_ranks, 0);
-    CustomAllreduce custom_all_reduce((Signal **)signals, rank_data, rank_data_sz, cur_rank, total_ranks,
-                                      is_full_nvlink);
+    CustomAllreduce custom_all_reduce(rank_data, rank_data_sz, cur_rank, total_ranks, is_full_nvlink);
+    custom_all_reduce.RegisterSignalBuffer((Signal **)signals);
     // hack buffer registration
     void *data[8];
     for (int i = 0; i < total_ranks; i++) {
@@ -286,8 +286,8 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
         CreateBuffer<T>(MemoryType::MEMORY_GPU, {static_cast<size_t>(rank_data_sz / sizeof(T))}, false);
     void *rank_data = rank_data_meta.data_ptr;
 
-    CustomAllreduce custom_all_reduce((Signal **)signals, rank_data, rank_data_sz, cur_rank, group_size, is_full_nvlink,
-                                      root_rank);
+    CustomAllreduce custom_all_reduce(rank_data, rank_data_sz, cur_rank, group_size, is_full_nvlink, root_rank);
+    custom_all_reduce.RegisterSignalBuffer((Signal **)signals);
     // hack buffer registration
     void *data[8];
     for (int i = 0; i < total_ranks; i++) {

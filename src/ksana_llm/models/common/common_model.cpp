@@ -152,7 +152,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   bool reuse_prefix_config = prefix_caching_enabled_ || speculative_decoding_enabled_;
   model_creation_config.Init(model_config_, runtime_config_, model_buffers_.cos_sin_cache_tensor_,
                              model_run_config_.position_encoding, reuse_prefix_config, layer_num_on_node_,
-                             mrotary_section_tensor_.GetPtr<const int>());
+                             mrotary_section_tensor_.GetPtr<const int>(false));
 
   // create matmul layer
   CreateLayers(layer_creation_context_, model_creation_config);
@@ -177,7 +177,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 float* CommonModel::GetLogitsPtr(size_t multi_batch_id) {
   SetDevice(rank_);
   ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
-  return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>();
+  return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>(false);
 }
 
 Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
@@ -414,6 +414,8 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
       BuildBatchRequestSchedInfoFromForwardingReqs(forward_reqs, multi_batch_id);
 
   forwarding_context->UpdateBeforeForward(forward_reqs, run_mode);
+  forwarding_context->AcquireBuffers();
+  model_buffers_.AcquireBuffers(forwarding_context->GetModelInput());
 
   // Set shape and type of hidden unit.
   SetHiddenUnitMeta(multi_batch_id,
@@ -437,6 +439,9 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
   if (context_->IsStandalone() || epilogue) {
     LmHead(*forwarding_context, base_weight, forward_reqs, run_mode);
   }
+
+  model_buffers_.ReleaseBuffers();
+  forwarding_context->ReleaseBuffers();
 
   time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   KLLM_LOG_DEBUG << "CommonModel Forward multi_batch_id=" << multi_batch_id << ", epilogue=" << epilogue

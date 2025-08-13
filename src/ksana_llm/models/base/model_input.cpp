@@ -18,6 +18,7 @@
 
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/dynamic_memory_counter.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 

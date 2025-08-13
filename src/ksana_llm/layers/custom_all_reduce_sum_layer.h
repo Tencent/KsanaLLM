@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include "ksana_llm/utils/barrier.h"
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
@@ -23,6 +24,9 @@ class CustomAllReduceSumLayer : public BaseLayer {
       delete reduce_op_;
     }
   }
+
+  void ResetInputBuffer(void* input);
+  void ResetSignalBuffer(void* signal, size_t signal_sz);
 
  private:
   template <typename T>

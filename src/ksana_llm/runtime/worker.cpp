@@ -3,6 +3,9 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/worker.h"
+#ifdef ENABLE_CUDA
+#  include <c10/cuda/CUDAFunctions.h>
+#endif
 
 #include <memory>
 
@@ -20,9 +23,9 @@ Status Worker::Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, 
   opentelemetry::trace::StartSpanOptions options;
 
   KLLM_LOG_DEBUG << "forwarding_tokens_num " << forward_reqs[0].forwarding_tokens[0].size() << ", req_id "
-                << forward_reqs[0].req_id << ",kv_cached_token_num " << forward_reqs[0].kv_cached_token_num
-                << ", prefix_cache_len" << forward_reqs[0].prefix_cache_len << ", tokens[1]_num "
-                << forward_reqs[0].forwarding_tokens[1].size();
+                 << forward_reqs[0].req_id << ",kv_cached_token_num " << forward_reqs[0].kv_cached_token_num
+                 << ", prefix_cache_len" << forward_reqs[0].prefix_cache_len << ", tokens[1]_num "
+                 << forward_reqs[0].forwarding_tokens[1].size();
   return model->Forward(multi_batch_id, weight, forward_reqs, epilogue, run_mode);
 }
 
@@ -118,6 +121,15 @@ std::future<Status> Worker::SamplingAsync(size_t multi_batch_id, std::shared_ptr
 
 WorkerGroup::WorkerGroup(size_t tensor_parallel_size, size_t pp_batch_num, std::shared_ptr<Context> context)
     : tensor_parallel_size_(tensor_parallel_size) {
+#ifdef ENABLE_CUDA
+  // Used to force libtorch cudaStream initialized.
+  for (size_t dev_id = 0; dev_id < tensor_parallel_size_; ++dev_id) {
+    SetDevice(dev_id);
+    c10::cuda::set_device(dev_id);
+    auto int32_options = torch::TensorOptions().device(torch::kCUDA, dev_id).dtype(torch::kInt32);
+    torch::Tensor tensor = torch::ones({1024, 1}, int32_options);
+  }
+#endif
   workers_.resize(tensor_parallel_size_);
   for (size_t worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     workers_[worker_id].reset(new Worker(worker_id, pp_batch_num, context));

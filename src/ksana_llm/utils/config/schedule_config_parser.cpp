@@ -23,6 +23,8 @@
 #include "ksana_llm/models/gpt/gpt_config.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_utils.h"
+#include "ksana_llm/utils/dynamic_memory_counter.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/optional_file.h"
@@ -301,6 +303,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_device_memory_ratio", -1.0);
   block_manager_config_.block_host_memory_factor =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.block_manager.block_host_memory_factor", 2.0);
+  block_manager_config_.dynamic_reusable_memory_ratio = yaml_reader.GetScalar<float>(
+      yaml_reader.GetRootNode(), "setting.block_manager.dynamic_reusable_memory_ratio", 1.0);
 
   // Load cache manager config
   cache_manager_config_.swap_threadpool_size =
@@ -617,16 +621,29 @@ Status ScheduleConfigParser::GetRuntimeConfig(RuntimeConfig &runtime_config) {
 Status ScheduleConfigParser::CalculateBlockNumber() {
   size_t host_total, host_free;
   size_t device_total, device_free;
+  float device_reserved_ratio = block_manager_config_.reserved_device_memory_ratio;
 
-  // Allocate blocks according to the memory status of device 0.
-  SetDevice(0);
-  Status status =
-      GetDeviceMemoryInfo(block_manager_config_.device_allocator_config.device, &device_free, &device_total);
-  if (!status.OK()) {
-    return status;
+  if (!DeviceMemoryPool::Empty()) {
+    device_total = DeviceMemoryPool::GetMemoryPool(0)->GetTotalByte();
+    device_free = DeviceMemoryPool::GetMemoryPool(0)->GetMaxContinuousFreeByte(true);
+
+    // Because block allocate need (block_num_ + 1* * block_size bytes, why?
+    if (device_free <= block_manager_config_.device_allocator_config.block_size) {
+      throw std::runtime_error(fmt::format("The device_free {} should large than block_size {}", device_free,
+                                           block_manager_config_.device_allocator_config.block_size));
+    }
+    device_free -= block_manager_config_.device_allocator_config.block_size;
+  } else {
+    // Allocate blocks according to the memory status of device 0.
+    SetDevice(0);
+    Status status =
+        GetDeviceMemoryInfo(block_manager_config_.device_allocator_config.device, &device_free, &device_total);
+    if (!status.OK()) {
+      return status;
+    }
   }
 
-  status = GetHostMemoryInfo(&host_free, &host_total);
+  Status status = GetHostMemoryInfo(&host_free, &host_total);
   if (!status.OK()) {
     return status;
   }
@@ -650,9 +667,16 @@ Status ScheduleConfigParser::CalculateBlockNumber() {
                      alignment_bytes) *
         alignment_bytes;
   } else {
-    size_t reserved_memory_size =
-        DivRoundUp((device_total * block_manager_config_.reserved_device_memory_ratio), alignment_bytes) *
-        alignment_bytes;
+    size_t reserved_memory_size = 0;
+    if (!DeviceMemoryPool::Empty()) {
+      reserved_memory_size =
+          DivRoundUp(DynamicMemoryCounter::GetMemoryBytes(0) * block_manager_config_.dynamic_reusable_memory_ratio,
+                     alignment_bytes) *
+          alignment_bytes;
+    } else {
+      reserved_memory_size = DivRoundUp((device_total * device_reserved_ratio), alignment_bytes) * alignment_bytes;
+    }
+
     device_block_memory_size =
         DivRoundDown((reserved_memory_size < device_free ? device_free - reserved_memory_size : 0ul), alignment_bytes) *
         alignment_bytes;

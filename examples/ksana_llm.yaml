@@ -12,8 +12,6 @@ setting:
     expert_world_size: 1
     # 节点内的专家并行数，MoE模块的 moe_tensor_para_size = tensor_para_size / expert_para_size
     expert_para_size: 1
-    # 是否启用lora适配，false表示不启用，true表示启用
-    enable_lora_adapter: false
     # 是否使用cpu保存embed_tokens
     embed_tokens_use_cpu: false
     # 是否启用cudagraph用于decode阶段加速, 当前启用默认只开启decode阶段batchsize=1,2,3
@@ -71,14 +69,12 @@ setting:
     block_token_num: 16
     # 保留的显存占比，单位为百分比。
     reserved_device_memory_ratio: 0.05
-    # Lora权重的显存占比
-    lora_deivce_memory_ratio: 0.0
-    # Lora权重在host上的预分配大小，相比device上的倍数
-    lora_host_memory_factor: 10.0
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
     block_host_memory_factor: 1.0
+    # 动态可复用内存，占全量预分配时内存开销的最大比例
+    dynamic_reusable_memory_ratio: 0.5
 
   # 选择attention计算中的backend
   attn_backend:

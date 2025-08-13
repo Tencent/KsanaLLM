@@ -38,6 +38,9 @@ class InferenceEngine {
   // load weights & register model instance & start rpc port.
   Status Initialize();
 
+  // Initialize tensor memory pool.
+  Status InitializeMemoryPool(std::shared_ptr<Environment> env);
+
   // Execute the handle loop.
   Status HandleLoop();
 

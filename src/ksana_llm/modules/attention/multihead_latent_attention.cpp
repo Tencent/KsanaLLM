@@ -128,6 +128,18 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   return Status();
 }
 
+Status MultiHeadLatentAttention::AcquireBuffers(ForwardingContext& forwarding_context) {
+  // TODO(yancyliu): Get tensors from q_buffer, kv_lora_or_q_rope_buffer, kv_buffer, k_rope_buffer in mla_buffers_.
+  // Reset its shape from batch_size and token_num, and then allocate tensor memory.
+  return Status();
+}
+
+Status MultiHeadLatentAttention::ReleaseBuffers() {
+  // TODO(yancyliu): Get tensor from q_buffer, kv_lora_or_q_rope_buffer, kv_buffer, k_rope_buffer
+  // then release tenosr memory.
+  return Status();
+}
+
 Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                          std::vector<Tensor>& reduce_buffer_tensors,
                                          std::vector<Tensor>& paged_buffer_tensors,

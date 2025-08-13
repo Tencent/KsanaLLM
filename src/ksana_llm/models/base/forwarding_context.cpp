@@ -181,6 +181,17 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   }
 }
 
+Status ModelBuffers::AcquireBuffers(std::shared_ptr<ModelInput>& model_input) {
+  // TODO(yancyliu): Reset local_residual_buffer_tensors_'s shape from token_num and hidden_units,
+  // and then allocate memory.
+  return Status();
+}
+
+Status ModelBuffers::ReleaseBuffers() {
+  // TODO(yancyliu): Release local_residual_buffer_tensors_'s memory.
+  return Status();
+}
+
 void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
                              const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config,
                              ForwardingBuffers* buffers, BufferManager* buffer_mgr, size_t multi_batch_id) {
@@ -270,6 +281,47 @@ void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_
   // Cast to float & Copy to logits buffer
   attn_ctx_.forward_shape.shape = {forward_reqs[0].logits_offset * vocab_size_ * sizeof(float), vocab_size_,
                                    vocab_size_pad_};
+}
+
+Status ForwardingContext::AcquireBuffers() {
+  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, dp_input_buffer, kv_cache_buffer
+  // Reset its shape from batch_size and token_num and hidden_buffer_size and max_seq_len
+  // Then allocate memory.
+
+  // TODO(yancyliu): Reset shape for mtp_hidden_buffer_tensors
+  if (GetForwardingBuffers()->use_mtp) {
+    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].shape = {residual_buffer_size};
+  }
+
+  // TODO(yancyliu): Allocate memory for mtp_hidden_buffer_tensors.
+  if (GetForwardingBuffers()->use_mtp) {
+    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].Acquire();
+  }
+
+  // TODO(yancyliu): Acquire signal buffer and reset input buffer of model_communicator.
+  if (model_communicator_ != nullptr) {
+    // model_communicator_->AcquireSignalBuffer(shared_buffer_tensors[0].GetTotalBytes());
+    // model_communicator_->ResetInputBuffer(shared_buffer_tensors[0].GetPtr<void>());
+  }
+
+  return Status();
+}
+
+Status ForwardingContext::ReleaseBuffers() {
+  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, dp_input_buffer, kv_cache_buffer
+  // And then release it's memory.
+
+  // TODO(yancyliu): relase mtp_hidden_buffer_tensors
+  if (GetForwardingBuffers()->use_mtp) {
+    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].Release();
+  }
+
+  // TODO(yancyliu): Release signal buffer.
+  if (model_communicator_ != nullptr) {
+    // model_communicator_->ReleaseSignalBuffer();
+  }
+
+  return Status();
 }
 
 }  // namespace ksana_llm

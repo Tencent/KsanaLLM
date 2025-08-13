@@ -3,13 +3,20 @@
 ==============================================================================*/
 
 #include "ksana_llm/models/base/buffer_manager.h"
+#include "ksana_llm/utils/dynamic_memory_counter.h"
 
 namespace ksana_llm {
 
 TensorBuffer* BufferManager::CreateBufferTensor(const std::string& name, const std::vector<size_t> shape,
                                                 const DataType dtype, const MemoryLocation location, Stream* stream) {
+  // TODO(yancyliu): Set to true if tensor is dynamic.
+  bool lazy_allocate = false;
+
   // Create a tensor with the specified parameters
-  Tensor tensor(location, dtype, shape, rank_, nullptr, stream);
+  Tensor tensor(location, dtype, shape, rank_, nullptr, stream, lazy_allocate, name);
+  if (lazy_allocate) {
+    DynamicMemoryCounter::Increase(rank_, tensor.GetTotalBytes());
+  }
 
   // Create a TensorBuffer to manage the tensor
   auto buffer = std::make_unique<TensorBuffer>(name, tensor);

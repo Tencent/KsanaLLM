@@ -237,7 +237,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
@@ -502,14 +502,14 @@ INVOKE_EXPAND(__nv_bfloat16);
 // signals: 所有GPU共享的中间结果的指针数组
 // rank_data & rank_data_sz: 当前GPU的中间结果数据
 template <typename T>
-void CustomAllReduceInit(void** ptr, void** signals, void* rank_data, size_t rank_data_sz, int cur_rank,
-                         int total_ranks, bool is_full_nvlink, uint32_t root_rank) {
-  *ptr = new llm_kernels::nvidia::CustomAllreduce((llm_kernels::nvidia::Signal**)signals, rank_data, rank_data_sz,
-                                                  cur_rank, total_ranks, is_full_nvlink, root_rank);
+void CustomAllReduceInit(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, int total_ranks,
+                         bool is_full_nvlink, uint32_t root_rank) {
+  *ptr = new llm_kernels::nvidia::CustomAllreduce(rank_data, rank_data_sz, cur_rank, total_ranks, is_full_nvlink,
+                                                  root_rank);
 }
 
-#define CUSTOM_ALL_REDUCE_INIT(T)                                                                                      \
-  template void CustomAllReduceInit<T>(void** ptr, void** signals, void* rank_data, size_t rank_data_sz, int cur_rank, \
+#define CUSTOM_ALL_REDUCE_INIT(T)                                                                      \
+  template void CustomAllReduceInit<T>(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, \
                                        int total_ranks, bool is_full_nvlink, uint32_t root_rank);
 CUSTOM_ALL_REDUCE_INIT(float);
 CUSTOM_ALL_REDUCE_INIT(half);
@@ -522,8 +522,15 @@ void CustomAllReduceRegisterBuffer(void* ptr, void** input_handles, cudaStream_t
   reduce_op->RegisterBuffer(input_handles, stream);
 }
 
-#define CUSTOM_ALL_REDUCE_REGISTER_BUFFER(T) \
-  template void CustomAllReduceRegisterBuffer<T>(void* ptr, void** input_handles, cudaStream_t& stream);
+template <typename T>
+void CustomAllReduceRegisterSignalBuffer(void* ptr, void** signals) {
+  llm_kernels::nvidia::CustomAllreduce* reduce_op = static_cast<llm_kernels::nvidia::CustomAllreduce*>(ptr);
+  reduce_op->RegisterSignalBuffer((llm_kernels::nvidia::Signal**)signals);
+}
+
+#define CUSTOM_ALL_REDUCE_REGISTER_BUFFER(T)                                                             \
+  template void CustomAllReduceRegisterBuffer<T>(void* ptr, void** input_handles, cudaStream_t& stream); \
+  template void CustomAllReduceRegisterSignalBuffer<T>(void* ptr, void** signals);
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(float);
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(half);
 CUSTOM_ALL_REDUCE_REGISTER_BUFFER(__nv_bfloat16);

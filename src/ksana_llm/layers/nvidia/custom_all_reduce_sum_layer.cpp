@@ -5,9 +5,12 @@
 #include <unistd.h>
 
 #include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
+#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
+
+static std::shared_ptr<Barrier> s_barrier = nullptr;
 
 Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                      std::shared_ptr<Context> context, int rank) {
@@ -48,7 +51,9 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
     world_size_ = context_->GetTensorParallelSize();
   }
 
-  CUDA_CHECK(cudaMemset(signal, 0x0, signal_sz));
+  if (signal != nullptr) {
+    CUDA_CHECK(cudaMemset(signal, 0x0, signal_sz));
+  }
   CUDA_CHECK(cudaMemset(rank_data_, 0x0, rank_data_sz_));
 
   signals_ = context_->ext->GetCustomAllReduceSignals();
@@ -59,6 +64,9 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
 
   // is full nvlink on each device
   is_full_nvlink_ = context_->ext->IsFullNvLink();
+
+  s_barrier = std::make_shared<Barrier>(1);
+  s_barrier->Init(context_->GetTensorParallelSize());
 
   // When using cudaMalloc and reduce operations with P2P enabled, the system may hang. This issue may be a bug in NCCL
   // or CUDA. Resolving it requires switching PyTorch's memory allocator to asynchronous mode. Alternatively, adding a
@@ -73,9 +81,19 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
+void CustomAllReduceSumLayer::ResetInputBuffer(void* input) {
+  input_handles_[rank_] = input;
+}
+
+void CustomAllReduceSumLayer::ResetSignalBuffer(void* signal, size_t signal_sz) {
+  // The threads in reduce group must be barriered, otherwise the reduce myabe hanged.
+  CUDA_CHECK(cudaMemset(signal, 0x0, signal_sz));
+  signals_[rank_] = signal;
+}
+
 template <typename T>
 Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                         std::vector<Tensor>& output_tensors) {
+                                            std::vector<Tensor>& output_tensors) {
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());
@@ -88,9 +106,18 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
     int data_size = input_tensors[0].GetElementNumber();
     if (!is_init_) {
       // TODO(jinxcwu): layer的init是卡间串行的，但allreduce的init需要卡间并行，可以考虑并行创建commonmodel
-      CustomAllReduceInit<T>(&reduce_op_, signals_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_,
-                             root_rank_);
+      CustomAllReduceInit<T>(&reduce_op_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_, root_rank_);
+
+      // Should register new signal buffer every time later.
+      CustomAllReduceRegisterSignalBuffer<T>(reduce_op_, signals_);
       CustomAllReduceRegisterBuffer<T>(reduce_op_, input_handles_, *stream);
+
+      // Must sync, otherwise the CustomAllReduceRun maybe hanged.
+      cudaStreamSynchronize(*stream);
+
+      // Without barrier, the reduce maybe hanged.
+      s_barrier->arrive_and_wait();
+
       is_init_ = true;
     }
     CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);

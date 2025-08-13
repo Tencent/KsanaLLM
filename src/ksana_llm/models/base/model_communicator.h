@@ -33,6 +33,12 @@ class ModelCommunicator {
   Status ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                    bool is_multi_token_forward, bool use_custom);
 
+ public:
+  void AcquireSignalBuffer(size_t max_size);
+  void ReleaseSignalBuffer();
+
+  void ResetInputBuffer(void* input);
+
  private:
 #ifdef ENABLE_CUDA
   // The default all reduce layer.

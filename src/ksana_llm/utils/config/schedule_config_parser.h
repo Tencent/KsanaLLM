@@ -126,6 +126,9 @@ struct BlockManagerConfig {
 
   // The scale fator of block host memory.
   float block_host_memory_factor = 10.0;
+
+  // The ratio of dynamic reusable memory.
+  float dynamic_reusable_memory_ratio = 1.0;
 };
 
 // For cached manager, used for auto-prefix-caching.
