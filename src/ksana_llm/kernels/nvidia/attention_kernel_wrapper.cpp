@@ -13,7 +13,7 @@
 #include "ksana_llm/utils/device_utils.h"
 
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #else
 #  include "flash_api.h"
@@ -181,7 +181,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
 // flash attention 2 or flash attention 1
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
   // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
   // leads to a core dump.
@@ -210,7 +210,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     }
   }
   // vllm-attn apis.
-#  ifdef ENABLE_VLLM_FLASH_ATTN_MINOR_6
+#  if defined(ENABLE_VLLM_FLASH_ATTN_MINOR_6) || defined(ENABLE_FLASH_ATTN_3)
   std::vector<at::Tensor> mha_output;
   if (enable_blocked_multi_token_forwarding_kv) {
     torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
@@ -260,13 +260,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       alibi_slopes_tensor, max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.0, false,
       c10::nullopt);
 #    endif
-#  endif
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
     at::Tensor& out_data = mha_output[0];
     size_t total_size = out_data.numel() * out_data.element_size();
     CUDA_CHECK(cudaMemcpyAsync(out, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
   }
+#  endif
 
 #else  // flash_attn v1.x?
   c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);

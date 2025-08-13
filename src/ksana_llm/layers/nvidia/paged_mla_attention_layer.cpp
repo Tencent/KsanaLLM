@@ -12,7 +12,7 @@
 #include "ksana_llm/utils/device_utils.h"
 
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #else
 #  include "flash_api.h"

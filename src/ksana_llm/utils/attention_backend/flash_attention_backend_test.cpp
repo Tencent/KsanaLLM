@@ -6,42 +6,37 @@
 #include "ksana_llm/utils/attention_backend/flash_attention_backend.h"
 #include "test.h"
 
-
 namespace ksana_llm {
 
 // 测试用的 FlashAttentionBackend 子类，用于访问私有方法
 class TestableFlashAttentionBackend : public FlashAttentionBackend {
  public:
   // 公开私有方法用于测试
-  using FlashAttentionBackend::IsCudaPlatform;
-  using FlashAttentionBackend::GetCudaComputeCapability;
-  using FlashAttentionBackend::DetermineLibrary;
-  using FlashAttentionBackend::GetFlashAttention3LibPath;
-  using FlashAttentionBackend::GetVllmFlashAttentionLibPath;
-  using FlashAttentionBackend::GetFlashAttention2LibPath;
-  using FlashAttentionBackend::GetPythonLibPath;
-  using FlashAttentionBackend::GetPythonLibInfo;
-  using FlashAttentionBackend::GetFlashAttention3LibInfo;
-  using FlashAttentionBackend::GetVllmFlashAttentionLibInfo;
-  using FlashAttentionBackend::GetFlashAttention2LibInfo;
+  using FlashAttentionBackend::DetermineAllLibraries;
   using FlashAttentionBackend::ExecutePythonCommand;
+  using FlashAttentionBackend::GetCudaComputeCapability;
+  using FlashAttentionBackend::GetFlashAttention2LibInfo;
+  using FlashAttentionBackend::GetFlashAttention2LibPath;
+  using FlashAttentionBackend::GetFlashAttention3LibInfo;
+  using FlashAttentionBackend::GetFlashAttention3LibPath;
+  using FlashAttentionBackend::GetPythonLibInfo;
+  using FlashAttentionBackend::GetPythonLibPath;
+  using FlashAttentionBackend::GetVllmFlashAttentionLibInfo;
+  using FlashAttentionBackend::GetVllmFlashAttentionLibPath;
+  using FlashAttentionBackend::IsCudaPlatform;
   using FlashAttentionBackend::IsVersionGreaterOrEqual;
   using FlashAttentionBackend::LibraryInfo;
 
   // 访问私有成员
   bool getInitializedState() const { return IsInitialized(); }
-  const LibraryInfo& getCurrentLibraryInfo() const { return GetCurrentLibraryInfo(); }
+  const std::vector<LibraryInfo>& getLoadedLibraries() const { return GetLoadedLibraries(); }
 };
 
 class FlashAttentionBackendTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    backend_ = std::make_unique<TestableFlashAttentionBackend>();
-  }
+  void SetUp() override { backend_ = std::make_unique<TestableFlashAttentionBackend>(); }
 
-  void TearDown() override {
-    backend_.reset();
-  }
+  void TearDown() override { backend_.reset(); }
 
   std::unique_ptr<TestableFlashAttentionBackend> backend_;
 };
@@ -87,16 +82,16 @@ TEST_F(FlashAttentionBackendTest, GetCudaComputeCapabilityNoCudaTest) {
 }
 #endif
 
-
 // ============================================================================
 // 各种库路径获取测试
 // ============================================================================
-
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, GetFlashAttention3LibPathTest) {
   // 目前返回空字符串
   std::string lib_path = backend_->GetFlashAttention3LibPath();
-  EXPECT_TRUE(lib_path.empty());
+  EXPECT_FALSE(lib_path.empty());
 }
+#endif
 
 TEST_F(FlashAttentionBackendTest, GetVllmFlashAttentionLibPathTest) {
   // 这会尝试调用 Python，在测试环境中可能失败
@@ -185,9 +180,10 @@ TEST_F(FlashAttentionBackendTest, GetPythonLibInfoTest) {
 
 TEST_F(FlashAttentionBackendTest, GetFlashAttention3LibInfoTest) {
   auto info = backend_->GetFlashAttention3LibInfo();
-  EXPECT_TRUE(info.name.empty());  // 目前未实现
-  EXPECT_TRUE(info.path.empty());
-  EXPECT_TRUE(info.version.empty());
+  if (!info.path.empty()) {
+    EXPECT_EQ(info.name, "flash_attn_3");
+    EXPECT_FALSE(info.path.empty());
+  }
 }
 
 TEST_F(FlashAttentionBackendTest, GetVllmFlashAttentionLibInfoTest) {
@@ -212,24 +208,24 @@ TEST_F(FlashAttentionBackendTest, GetFlashAttention2LibInfoTest) {
 // DetermineLibrary 测试
 // ============================================================================
 
-TEST_F(FlashAttentionBackendTest, DetermineLibraryHopperTest) {
+TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesHopperTest) {
   // 测试 Hopper 架构（SM 9.0+）
-  auto lib_info = backend_->DetermineLibrary(90);
-  // 由于 GetFlashAttention3LibInfo 目前返回空路径，应该尝试其他版本
-  EXPECT_TRUE(lib_info.path.empty() || !lib_info.path.empty());
-  if (!lib_info.path.empty()) {
+  auto lib_infos = backend_->DetermineAllLibraries(90);
+  // 可能找到多个库或者没有库
+  for (const auto& lib_info : lib_infos) {
     EXPECT_FALSE(lib_info.name.empty());
+    EXPECT_FALSE(lib_info.path.empty());
     EXPECT_FALSE(lib_info.version.empty());
   }
 }
 
-TEST_F(FlashAttentionBackendTest, DetermineLibraryAmpereTest) {
+TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesAmpereTest) {
   // 测试 Ampere 架构（SM 8.0+）
-  auto lib_info = backend_->DetermineLibrary(80);
+  auto lib_infos = backend_->DetermineAllLibraries(80);
   // 应该尝试 VLLM 和 FlashAttention 2，但可能因为版本不符合要求而失败
-  EXPECT_TRUE(lib_info.path.empty() || !lib_info.path.empty());
-  if (!lib_info.path.empty()) {
+  for (const auto& lib_info : lib_infos) {
     EXPECT_FALSE(lib_info.name.empty());
+    EXPECT_FALSE(lib_info.path.empty());
     EXPECT_FALSE(lib_info.version.empty());
     // 验证版本要求
     if (lib_info.name == "vllm_flash_attn") {
@@ -240,11 +236,10 @@ TEST_F(FlashAttentionBackendTest, DetermineLibraryAmpereTest) {
   }
 }
 
-TEST_F(FlashAttentionBackendTest, DetermineLibraryUnsupportedTest) {
+TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesUnsupportedTest) {
   // 测试不支持的计算能力
-  auto lib_info = backend_->DetermineLibrary(75);
-  EXPECT_TRUE(lib_info.path.empty());
-  EXPECT_TRUE(lib_info.name.empty());
+  auto lib_infos = backend_->DetermineAllLibraries(75);
+  EXPECT_TRUE(lib_infos.empty());
 }
 
 // ============================================================================
@@ -307,8 +302,8 @@ TEST_F(FlashAttentionBackendTest, InitializeWithLibraryInfoTest) {
     int compute_capability = backend_->GetCudaComputeCapability();
     if (compute_capability >= 80) {
       // 在初始化前，库信息应该为空
-      const auto& initial_info = backend_->getCurrentLibraryInfo();
-      EXPECT_TRUE(initial_info.path.empty());
+      const auto& initial_libs = backend_->getLoadedLibraries();
+      EXPECT_TRUE(initial_libs.empty());
 
       // 尝试初始化
       bool result = backend_->Initialize();
@@ -317,16 +312,20 @@ TEST_F(FlashAttentionBackendTest, InitializeWithLibraryInfoTest) {
 
       if (result) {
         // 初始化成功后，验证库信息
-        const auto& current_info = backend_->getCurrentLibraryInfo();
-        EXPECT_FALSE(current_info.path.empty());
-        EXPECT_FALSE(current_info.name.empty());
-        EXPECT_FALSE(current_info.version.empty());
+        const auto& loaded_libs = backend_->getLoadedLibraries();
+        EXPECT_FALSE(loaded_libs.empty());
 
-        // 验证版本要求
-        if (current_info.name == "vllm_flash_attn") {
-          EXPECT_TRUE(backend_->IsVersionGreaterOrEqual(current_info.version, "2.6.0"));
-        } else if (current_info.name == "flash_attn") {
-          EXPECT_TRUE(backend_->IsVersionGreaterOrEqual(current_info.version, "2.5.0"));
+        for (const auto& lib_info : loaded_libs) {
+          EXPECT_FALSE(lib_info.path.empty());
+          EXPECT_FALSE(lib_info.name.empty());
+          EXPECT_FALSE(lib_info.version.empty());
+
+          // 验证版本要求
+          if (lib_info.name == "vllm_flash_attn") {
+            EXPECT_TRUE(backend_->IsVersionGreaterOrEqual(lib_info.version, "2.6.0"));
+          } else if (lib_info.name == "flash_attn") {
+            EXPECT_TRUE(backend_->IsVersionGreaterOrEqual(lib_info.version, "2.5.0"));
+          }
         }
       }
     } else {
@@ -342,16 +341,22 @@ TEST_F(FlashAttentionBackendTest, InitializeWithLibraryInfoTest) {
 // 更新的边界条件测试
 // ============================================================================
 
-TEST_F(FlashAttentionBackendTest, DetermineLibraryBoundaryTestUpdated) {
-  // 测试 DetermineLibrary 的边界值
-  auto info_79 = backend_->DetermineLibrary(79);
-  EXPECT_TRUE(info_79.path.empty());   // 刚好不支持
+TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesBoundaryTestUpdated) {
+  // 测试 DetermineAllLibraries 的边界值
+  auto libs_79 = backend_->DetermineAllLibraries(79);
+  EXPECT_TRUE(libs_79.empty());  // 刚好不支持
 
-  auto info_80 = backend_->DetermineLibrary(80);
-  EXPECT_TRUE(info_80.path.empty() || !info_80.path.empty());  // 刚好支持，但可能没有库
+  auto libs_80 = backend_->DetermineAllLibraries(80);
+  // 刚好支持，但可能没有库或有库
+  for (const auto& lib_info : libs_80) {
+    EXPECT_FALSE(lib_info.path.empty());
+  }
 
-  auto info_90 = backend_->DetermineLibrary(90);
-  EXPECT_TRUE(info_90.path.empty() || !info_90.path.empty());  // Hopper 最低
+  auto libs_90 = backend_->DetermineAllLibraries(90);
+  // Hopper 最低，可能有 FA3 或其他库
+  for (const auto& lib_info : libs_90) {
+    EXPECT_FALSE(lib_info.path.empty());
+  }
 }
 
 }  // namespace ksana_llm

@@ -84,7 +84,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     return;
   }
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layers_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
@@ -153,7 +153,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -274,7 +274,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   set_torch_stream_layers_->Clear();
 #endif
 
@@ -408,7 +408,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& hidden_buff
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -510,7 +510,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& hidden_buff
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   set_torch_stream_layers_->Clear();
 #endif
 
@@ -528,7 +528,7 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& hidden_buffe
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -666,7 +666,7 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& hidden_buffe
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   set_torch_stream_layers_->Clear();
 #endif
 

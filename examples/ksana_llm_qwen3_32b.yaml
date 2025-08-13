@@ -78,7 +78,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 1.0
+    block_host_memory_factor: 0.0
 
   # 选择attention计算中的backend
   attn_backend:

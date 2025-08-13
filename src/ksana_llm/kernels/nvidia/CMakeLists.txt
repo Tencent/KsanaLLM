@@ -34,3 +34,9 @@ if (SM STREQUAL "90" OR SM STREQUAL "90a")
     cc_test(fused_moe_gptq_int4_fp8_test SRCS ${FUSED_MOE_GPTQ_INT4_FP8_TEST_SRCS} DEPS
         llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 endif()
+
+if(ENABLE_CUDA)
+  set(FLASH_ATTN_CPP_WRAPPER_TEST_SRCS flash_attn_cpp_wrapper_test.cpp)
+  cc_test(flash_attn_cpp_wrapper_test SRCS ${FLASH_ATTN_CPP_WRAPPER_TEST_SRCS} DEPS
+      llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+endif()

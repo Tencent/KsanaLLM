@@ -19,7 +19,7 @@
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
 #include "ksana_llm/runtime/infer_stage.h"
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/layers/set_torch_stream_layer.h"
 #endif
 #include "ksana_llm/models/base/base_model.h"
@@ -146,7 +146,7 @@ class CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> assemble_tokens_hidden_layer_;
   std::shared_ptr<BaseLayer> cast_layer_;
   std::shared_ptr<BaseLayer> input_refit_layer_;
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;
 #endif
 

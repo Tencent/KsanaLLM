@@ -122,7 +122,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   input_refit_layer_ = std::make_shared<InputRefitLayer>();
   input_refit_layer_->Init({}, runtime_config_, context_, rank_);
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layer_->Init({}, runtime_config_, context_, rank_);
 #endif

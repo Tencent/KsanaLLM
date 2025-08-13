@@ -76,7 +76,7 @@ class MultiHeadLatentAttention {
   MlaBuffers& mla_buffers_;
 
  protected:
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::shared_ptr<BaseLayer> set_torch_stream_layers_;
 #endif
 

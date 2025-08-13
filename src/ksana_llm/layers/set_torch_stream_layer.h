@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include <torch/torch.h>
 #  include "ksana_llm/layers/base_layer.h"
 

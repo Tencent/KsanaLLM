@@ -11,7 +11,7 @@
 #include "ksana_llm/utils/device_utils.h"
 
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #else
 #  include "flash_api.h"
@@ -499,14 +499,53 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   const auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt32);
   const torch::Tensor seqlen_q_tensor = torch::from_blob(seqlens_without_prefix_int32_ptr, {batch + 1}, int32_options);
   const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlens_with_prefix_int32_ptr, {batch + 1}, int32_options);
-  const auto mha_ret = mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_q_tensor, seqlen_kv_tensor,
-                                      seqused_k, block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f,
-                                      attn_scale, false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+
+  std::vector<at::Tensor> mha_output;
+#ifdef ENABLE_FLASH_ATTN_3
+  // FA3 调用 - 使用 mha_fwd 函数
+  std::optional<at::Tensor> k_new_ = c10::nullopt;
+  std::optional<at::Tensor> v_new_ = c10::nullopt;
+  std::optional<at::Tensor> q_v_ = c10::nullopt;
+  std::optional<at::Tensor> cu_seqlens_k_new_ = c10::nullopt;
+  std::optional<at::Tensor> seqused_q_ = c10::nullopt;
+  std::optional<int64_t> max_seqlen_q_ = static_cast<int64_t>(max_tokens);
+  std::optional<int64_t> max_seqlen_k_ = static_cast<int64_t>(max_tokens);
+  std::optional<at::Tensor> kv_batch_idx_ = c10::nullopt;
+  std::optional<at::Tensor> leftpad_k_ = c10::nullopt;
+  std::optional<at::Tensor> rotary_cos_ = c10::nullopt;
+  std::optional<at::Tensor> rotary_sin_ = c10::nullopt;
+  std::optional<at::Tensor> seqlens_rotary_ = c10::nullopt;
+  std::optional<at::Tensor> q_descale_ = c10::nullopt;
+  std::optional<at::Tensor> k_descale_ = c10::nullopt;
+  std::optional<at::Tensor> v_descale_ = c10::nullopt;
+  std::optional<double> softmax_scale_ = std::optional<double>(static_cast<double>(attn_scale));
+  int64_t attention_chunk = 0;  // =0 表示采用global attention
+  int64_t num_splits = 1;
+  bool is_rotary_interleaved = false;
+  std::optional<at::Tensor> scheduler_metadata_ = c10::nullopt;
+  std::optional<bool> pack_gqa_ = c10::nullopt;
+  int64_t sm_margin = 0;
+  double softcap_val = 0.0;
+  std::optional<double> softmax_scale_double = std::optional<double>(static_cast<double>(attn_scale));
+  int64_t window_size_left_corrected = -1;                   // -1表示无左侧窗口限制
+  int64_t window_size_right_corrected = is_causal ? 0 : -1;  // causal时右侧窗口为0，否则无限制
+
+  mha_output =
+      mha_fwd(q_tensor, k_tensor, v_tensor, k_new_, v_new_, q_v_, out_tensor, seqlen_q_tensor, seqlen_kv_tensor,
+              cu_seqlens_k_new_, seqused_q_, seqused_k, max_seqlen_q_, max_seqlen_k_, block_table, kv_batch_idx_,
+              leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_, q_descale_, k_descale_, v_descale_,
+              softmax_scale_double, is_causal, window_size_left_corrected, window_size_right_corrected, attention_chunk,
+              softcap_val, is_rotary_interleaved, scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
+#else
+  mha_output = mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_q_tensor, seqlen_kv_tensor, seqused_k,
+                              block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f, attn_scale, false,
+                              is_causal, -1, -1, 0.f, false, c10::nullopt);
+#endif
 
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, "
                       "set the output tensor to nullptr.";
-    const at::Tensor& res = mha_ret[0];
+    const at::Tensor& res = mha_output[0];
     CUDA_CHECK(cudaMemcpyAsync(output_buffer, res.data_ptr(), res.nbytes(), cudaMemcpyDeviceToDevice, stream));
   }
 
@@ -554,11 +593,13 @@ Status FlashMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
 #if defined(ENABLE_FLASH_ATTN_MINOR_4) || defined(ENABLE_FLASH_ATTN_MINOR_5)
   KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_MINOR_6 or ENABLE_FLASH_ATTN_MINOR_7");
 #endif
-#if !defined(ENABLE_FLASH_ATTN_2) && !defined(ENABLE_VLLM_FLASH_ATTN_2)
-  KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_2 or ENABLE_VLLM_FLASH_ATTN_2");
+#if !defined(ENABLE_FLASH_ATTN_2) && !defined(ENABLE_VLLM_FLASH_ATTN_2) && !defined(ENABLE_FLASH_ATTN_3)
+  KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_2 or ENABLE_VLLM_FLASH_ATTN_2 or ENABLE_FLASH_ATTN_3");
 #endif
-#if !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_6) && !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_7)
-  KLLM_THROW("MLA Only support ENABLE_VLLM_FLASH_ATTN_MINOR_6 or ENABLE_VLLM_FLASH_ATTN_MINOR_7");
+#if !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_6) && !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_7) && \
+    !defined(ENABLE_FLASH_ATTN_3)
+  KLLM_THROW(
+      "MLA Only support ENABLE_VLLM_FLASH_ATTN_MINOR_6 or ENABLE_VLLM_FLASH_ATTN_MINOR_7 or ENABLE_FLASH_ATTN_3");
 #endif
 
   return AttentionLayer::Init(parameters, runtime_config, context, rank);

@@ -42,7 +42,7 @@ class CrossLayerAttention {
   std::shared_ptr<Linear> attn_qkv_projs_;
   std::shared_ptr<CommonAttention> attentions_;
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;
 #endif
 

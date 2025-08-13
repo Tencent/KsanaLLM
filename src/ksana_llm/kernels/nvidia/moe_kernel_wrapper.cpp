@@ -13,7 +13,7 @@
 #include "ksana_llm/utils/device_utils.h"
 
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2)
+#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #else
 #  include "flash_api.h"
@@ -286,7 +286,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
 
     return;
   }
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
 #endif
 
@@ -349,7 +349,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
   CUDA_CHECK(cudaMemcpyAsync(topk_ids_ptr, output_topk_ids.data_ptr(), topk_ids.numel() * sizeof(int32_t),
                              cudaMemcpyDeviceToDevice, stream));
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   InvokeSetTorchStream(torch_stream, rank);
 #endif
 }
@@ -437,16 +437,15 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
 // [vLLM Project]
 // https://github.com/Chen-XiaoBing/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L1271
 template <typename T, bool UseExpertParallel>
-void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk,
-                    bool renormalize, const std::string& scoring_func_, void* e_bias, bool inplace,
-                    bool use_grouped_topk, int num_expert_group, int topk_group, DataType weight_dtype,
-                    DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale,
-                    void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,
-                    std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
-                    float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1,
-                    void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
-                    int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,
-                    void* dequant_workspace, int rank, cudaStream_t stream) {
+void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,
+                    const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk,
+                    int num_expert_group, int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin,
+                    bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q,
+                    void* a1_scale, void* a2_scale, std::vector<int> block_shape, void* topk_weights_ptr,
+                    void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,
+                    void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
+                    void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,
+                    size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
   // w1 [num_experts, inter_size * 2, hidden_size]
   // w2 [num_experts, hidden_size, inter_size]

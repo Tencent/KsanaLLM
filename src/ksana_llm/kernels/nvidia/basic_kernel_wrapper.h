@@ -10,13 +10,13 @@
 #include <vector>
 
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
+#include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
+#include "csrc/kernels/nvidia/identity/identity.h"
 #include "csrc/kernels/nvidia/machete/machete_wrapper.h"
 #include "csrc/kernels/nvidia/mixture_of_experts/moe_wrapper.h"
 #include "csrc/kernels/nvidia/rotary_embedding/rotary_embedding.h"
 #include "csrc/kernels/nvidia/split/split.h"
-#include "csrc/kernels/nvidia/cast/cast.h"
-#include "csrc/kernels/nvidia/identity/identity.h"
 #include "csrc/kernels/nvidia/weight_only_batched_gemv/weight_only_gemv_wrapper.h"
 #include "csrc/utils/nvidia/scalar_type.hpp"
 #include "csrc/utils/quant_type.h"
@@ -227,7 +227,7 @@ void DequantFp8E4m3BlockWise(const void* d_data, const void* d_s, void* d_output
 
 size_t InvokeGetCublasWorkspaceSize();
 
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank);
 #endif
 

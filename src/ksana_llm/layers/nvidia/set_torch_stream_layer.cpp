@@ -1,8 +1,7 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 #  include "ksana_llm/layers/set_torch_stream_layer.h"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 

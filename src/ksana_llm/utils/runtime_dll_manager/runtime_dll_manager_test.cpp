@@ -1,21 +1,21 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include <string>
 #include <functional>
+#include <string>
 
 #include "ksana_llm/utils/runtime_dll_manager/runtime_dll_manager.h"
 #include "test.h"
 
 #ifdef ENABLE_CUDA
-#include "ksana_llm/utils/attention_backend/flash_attention_backend.h"
-#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#  include "ksana_llm/utils/attention_backend/flash_attention_backend.h"
 #endif
 
 namespace ksana_llm {
 
 // 定义一个简单的函数类型用于测试
-using SimpleFunc = int(*)(int);
+using SimpleFunc = int (*)(int);
 
 TEST(RuntimeDllManager, LoadNonExistentLibrary) {
   RuntimeDllManager manager;
@@ -86,7 +86,7 @@ TEST(RuntimeDllManager, GetRawFunctionPointerTest) {
   EXPECT_TRUE(result);
 
   // 尝试获取sin函数的原始指针
-  using SinFuncPtr = double(*)(double);
+  using SinFuncPtr = double (*)(double);
   SinFuncPtr sin_ptr = manager.GetRawFunctionPointer<SinFuncPtr>("sin");
   EXPECT_TRUE(sin_ptr != nullptr);
 
@@ -101,7 +101,7 @@ TEST(RuntimeDllManager, GetRawFunctionPointerTest) {
   }
 
   // 尝试获取不存在的函数
-  using NonExistentFuncPtr = void(*)();
+  using NonExistentFuncPtr = void (*)();
   NonExistentFuncPtr non_existent_ptr = manager.GetRawFunctionPointer<NonExistentFuncPtr>("non_existent_function");
   EXPECT_TRUE(non_existent_ptr == nullptr);
 }
@@ -119,7 +119,7 @@ TEST(RuntimeDllManager, GetFunctionWithoutLoadingTest) {
 TEST(RuntimeDllManager, GetRawFunctionPointerWithoutLoadingTest) {
   RuntimeDllManager manager;
   // 未加载库的情况下，GetRawFunctionPointer应该返回nullptr
-  using AnyFuncPtr = void(*)();
+  using AnyFuncPtr = void (*)();
   AnyFuncPtr func_ptr = manager.GetRawFunctionPointer<AnyFuncPtr>("any_function");
   EXPECT_TRUE(func_ptr == nullptr);
 }
@@ -136,7 +136,7 @@ TEST(RuntimeDllManager, CompareGetFunctionAndGetRawFunctionPointer) {
   EXPECT_TRUE(sin_func != nullptr);
 
   // 使用GetRawFunctionPointer获取sin函数
-  using SinFuncPtr = double(*)(double);
+  using SinFuncPtr = double (*)(double);
   SinFuncPtr sin_ptr = manager.GetRawFunctionPointer<SinFuncPtr>("sin");
   EXPECT_TRUE(sin_ptr != nullptr);
 
@@ -207,8 +207,6 @@ TEST(RuntimeDllManager, FindSymbolsForFunctionTest) {
 }
 #endif
 
-}  // namespace ksana_llm
-
 // 测试符号解码功能
 TEST(RuntimeDllManager, DemangleSymbolTest) {
   ksana_llm::RuntimeDllManager manager;
@@ -278,7 +276,7 @@ TEST(RuntimeDllManager, FindMangledFunctionSymbolBasicTest) {
   EXPECT_TRUE(result);
 
   // 定义一个简单的函数指针类型用于测试
-  using MathFunc = double(*)(double);
+  using MathFunc = double (*)(double);
   MathFunc dummy_func_ptr = nullptr;
 
   // 尝试查找 sin 函数的 mangled 符号
@@ -308,7 +306,9 @@ TEST(RuntimeDllManager, FindMangledFunctionSymbolFlashAttentionTest) {
 
   // 通过公有接口获取当前使用的库信息
   // 这些信息是通过内部的 DetermineLibrary 函数确定的
-  const auto& lib_info = fa_backend.GetCurrentLibraryInfo();
+  const auto& loaded_libs = fa_backend.GetLoadedLibraries();
+  EXPECT_FALSE(loaded_libs.empty());
+  const auto& lib_info = loaded_libs[0];  // 使用第一个加载的库进行测试
   EXPECT_FALSE(lib_info.path.empty());
 
   // 使用相同的库路径加载到我们的测试管理器中
@@ -321,7 +321,18 @@ TEST(RuntimeDllManager, FindMangledFunctionSymbolFlashAttentionTest) {
   // 测试不同版本的函数指针类型，看哪个能找到符号
   bool found_symbol = false;
 
-  if (lib_info.name == "vllm_flash_attn") {
+  if (lib_info.name == "flash_attn_3") {
+    // 测试 FlashAttention 3 版本的函数
+    mha_fwd_fa3_ptr dummy_ptr = nullptr;
+    std::string symbol = manager.FindMangledFunctionSymbol("mha_fwd", dummy_ptr);
+
+    if (!symbol.empty()) {
+      EXPECT_TRUE(symbol.find("mha_fwd") != std::string::npos);
+      auto func_ptr = manager.GetRawFunctionPointer<mha_fwd_fa3_ptr>(symbol);
+      EXPECT_TRUE(func_ptr != nullptr);
+      found_symbol = true;
+    }
+  } else if (lib_info.name == "vllm_flash_attn") {
     // 测试 VLLM FlashAttention 版本的函数
     mha_varlen_fwd_vllm_flash_attn_v26_ptr dummy_ptr = nullptr;
     std::string symbol = manager.FindMangledFunctionSymbol("mha_varlen_fwd", dummy_ptr);
@@ -375,7 +386,9 @@ TEST(RuntimeDllManager, FindSymbolsForFunctionFlashAttentionTest) {
   }
 
   // 获取库信息并加载
-  const auto& lib_info = fa_backend.GetCurrentLibraryInfo();
+  const auto& loaded_libs = fa_backend.GetLoadedLibraries();
+  EXPECT_FALSE(loaded_libs.empty());
+  const auto& lib_info = loaded_libs[0];  // 使用第一个加载的库进行测试
   bool result = manager.Load(lib_info.path);
   EXPECT_TRUE(result);
 
@@ -413,7 +426,9 @@ TEST(RuntimeDllManager, DemangleSymbolFlashAttentionTest) {
   }
 
   // 获取库信息并加载
-  const auto& lib_info = fa_backend.GetCurrentLibraryInfo();
+  const auto& loaded_libs = fa_backend.GetLoadedLibraries();
+  EXPECT_FALSE(loaded_libs.empty());
+  const auto& lib_info = loaded_libs[0];  // 使用第一个加载的库进行测试
   bool result = manager.Load(lib_info.path);
   EXPECT_TRUE(result);
 
@@ -439,3 +454,5 @@ TEST(RuntimeDllManager, DemangleSymbolFlashAttentionTest) {
   }
 }
 #endif
+
+}  // namespace ksana_llm

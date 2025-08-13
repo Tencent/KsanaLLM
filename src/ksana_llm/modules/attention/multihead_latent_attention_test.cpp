@@ -350,7 +350,7 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
 // TODO(zakwang): 支持更多类型
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2)  // TODO(qiannanzhou): 这个mr不支持A10上测mla，所以先关掉，下一个mr补上
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;
@@ -369,7 +369,7 @@ TEST_F(MlaTest, ForwardTest) {
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
 // TODO(zakwang): 支持更多类型
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -385,7 +385,7 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
+#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;

@@ -9,22 +9,24 @@
 #include "ksana_llm/utils/attention_backend/flash_attention_backend.h"
 
 #ifdef ENABLE_CUDA
-#include "ksana_llm/utils/nvidia/cuda_utils.h"
+#  include "ksana_llm/utils/nvidia/cuda_utils.h"
 #endif
 
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 
-
 namespace ksana_llm {
-  mha_varlen_fwd_vllm_flash_attn_v26_ptr FlashAttentionBackend::mha_varlen_fwd_vllm_flash_attn_v26_ = nullptr;
-  mha_fwd_kvcache_vllm_flash_attn_v26_ptr FlashAttentionBackend::mha_fwd_kvcache_vllm_flash_attn_v26_ = nullptr;
+mha_varlen_fwd_vllm_flash_attn_v26_ptr FlashAttentionBackend::mha_varlen_fwd_vllm_flash_attn_v26_ = nullptr;
+mha_fwd_kvcache_vllm_flash_attn_v26_ptr FlashAttentionBackend::mha_fwd_kvcache_vllm_flash_attn_v26_ = nullptr;
 
-  mha_varlen_fwd_flash_attn_v25_ptr FlashAttentionBackend::mha_varlen_fwd_flash_attn_v25_ = nullptr;
-  mha_fwd_kvcache_flash_attn_v25_ptr FlashAttentionBackend::mha_fwd_kvcache_flash_attn_v25_ = nullptr;
+mha_varlen_fwd_flash_attn_v25_ptr FlashAttentionBackend::mha_varlen_fwd_flash_attn_v25_ = nullptr;
+mha_fwd_kvcache_flash_attn_v25_ptr FlashAttentionBackend::mha_fwd_kvcache_flash_attn_v25_ = nullptr;
 
-  mha_varlen_fwd_flash_attn_v26_ptr FlashAttentionBackend::mha_varlen_fwd_flash_attn_v26_ = nullptr;
-  mha_fwd_kvcache_flash_attn_v26_ptr FlashAttentionBackend::mha_fwd_kvcache_flash_attn_v26_ = nullptr;
+mha_varlen_fwd_flash_attn_v26_ptr FlashAttentionBackend::mha_varlen_fwd_flash_attn_v26_ = nullptr;
+mha_fwd_kvcache_flash_attn_v26_ptr FlashAttentionBackend::mha_fwd_kvcache_flash_attn_v26_ = nullptr;
+
+// FA3 function pointer
+mha_fwd_fa3_ptr FlashAttentionBackend::mha_fwd_fa3_ = nullptr;
 
 bool FlashAttentionBackend::Initialize() {
   // 1. 平台检测
@@ -36,36 +38,49 @@ bool FlashAttentionBackend::Initialize() {
   // 2. 获取并检查 CUDA compute capability
   int compute_capability = GetCudaComputeCapability();
   if (compute_capability < 80) {  // SM 8.0 及以上支持 FlashAttention 2
-    KLLM_LOG_WARNING << "Compute capability " << compute_capability
-                  << " not support FlashAttention 2";
+    KLLM_LOG_WARNING << "Compute capability " << compute_capability << " not support FlashAttention 2";
     return false;
   }
 
-  // 3. 确定库信息
-  current_library_info_ = DetermineLibrary(compute_capability);
-  if (current_library_info_.path.empty()) {
+  // 3. 确定所有可用的库信息
+  std::vector<LibraryInfo> available_libraries = DetermineAllLibraries(compute_capability);
+  if (available_libraries.empty()) {
     KLLM_LOG_WARNING << "No compatible FlashAttention library found";
     return false;
   }
 
-  // 4. 按照库信息的path加载库
-  runtime_dll_manager_ = std::make_shared<RuntimeDllManager>();
-  if (!runtime_dll_manager_->Load(current_library_info_.path)) {
-    KLLM_LOG_ERROR << "Failed to Load FlashAttention library from " << current_library_info_.path;
-    return false;
+  // 4. 尝试加载所有可用的库
+  loaded_libraries_.clear();
+  for (auto& lib_info : available_libraries) {
+    // 为每个库创建独立的DLL管理器
+    lib_info.dll_manager = std::make_shared<RuntimeDllManager>();
+
+    if (!lib_info.dll_manager->Load(lib_info.path)) {
+      KLLM_LOG_WARNING << "Failed to load FlashAttention library from " << lib_info.path << ", skipping";
+      continue;
+    }
+
+    // 5. 为该库加载函数指针
+    if (!LoadFunctions(lib_info)) {
+      KLLM_LOG_WARNING << "Failed to load functions from FlashAttention library " << lib_info.name << ", skipping";
+      continue;
+    }
+
+    // 成功加载的库添加到列表中
+    loaded_libraries_.push_back(lib_info);
+    KLLM_LOG_INFO << "Successfully loaded FlashAttention library: " << lib_info.name
+                  << " (version: " << lib_info.version << ", path: " << lib_info.path << ")";
   }
 
-  // 5. 按照库信息的版本确定加载哪个函数指针
-  if (!LoadFunctions()) {
-    KLLM_LOG_ERROR << "Failed to load functions from FlashAttention library";
+  if (loaded_libraries_.empty()) {
+    KLLM_LOG_ERROR << "Failed to load any FlashAttention library";
     return false;
   }
 
   // 6. 设置初始化状态
   initialized_ = true;
-  KLLM_LOG_INFO << "FlashAttentionBackend initialized successfully with library: "
-                << current_library_info_.name << " (version: " << current_library_info_.version
-                << ", path: " << current_library_info_.path << ")";
+  KLLM_LOG_INFO << "FlashAttentionBackend initialized successfully with " << loaded_libraries_.size()
+                << " libraries loaded";
   return true;
 }
 
@@ -95,31 +110,10 @@ int FlashAttentionBackend::GetCudaComputeCapability() {
 #endif
 }
 
-
-// 通过编译宏确定库路径
-std::string FlashAttentionBackend::DetermineLibraryPathByMacro() {
-#ifdef ENABLE_VLLM_FLASH_ATTN_2
-  std::string lib_path = GetVllmFlashAttentionLibPath();
-  if (!lib_path.empty()) {
-    KLLM_LOG_INFO << "Using VLLM FlashAttention 2 library: " << lib_path;
-    return lib_path;
-  }
-#endif
-#ifdef ENABLE_FLASH_ATTN_2
-  std::string lib_path = GetFlashAttention2LibPath();
-  if (!lib_path.empty()) {
-    KLLM_LOG_INFO << "Using FlashAttention 2 library: " << lib_path;
-    return lib_path;
-  }
-#endif
-  return "";
-}
-
 // 辅助函数：检查版本是否大于等于最小版本要求
 bool FlashAttentionBackend::IsVersionGreaterOrEqual(const std::string& version, const std::string& min_version) {
   if (version.empty() || min_version.empty()) {
-    KLLM_LOG_DEBUG << "Invalid version strings: version=" << version
-                   << ", min_version=" << min_version;
+    KLLM_LOG_DEBUG << "Invalid version strings: version=" << version << ", min_version=" << min_version;
     return false;
   }
 
@@ -134,21 +128,18 @@ bool FlashAttentionBackend::IsVersionGreaterOrEqual(const std::string& version, 
 
     while (std::getline(ss, part, '.')) {
       // 检查是否包含非数字字符
-      auto non_digit = std::find_if(part.begin(), part.end(),
-          [](char c) { return !std::isdigit(c); });
+      auto non_digit = std::find_if(part.begin(), part.end(), [](char c) { return !std::isdigit(c); });
 
       if (non_digit != part.end()) {
-          KLLM_LOG_DEBUG << "Stopping version parsing due to non-digit character '"
-                          << *non_digit << "' in part '" << part
-                          << "' of version: " << v;
-          break;
+        KLLM_LOG_DEBUG << "Stopping version parsing due to non-digit character '" << *non_digit << "' in part '" << part
+                       << "' of version: " << v;
+        break;
       }
 
       parts.push_back(std::stoi(part));  // 此时可以安全调用stoi
     }
     return parts;
   };
-
 
   version_parts = parse_version(version);
   min_version_parts = parse_version(min_version);
@@ -165,73 +156,57 @@ bool FlashAttentionBackend::IsVersionGreaterOrEqual(const std::string& version, 
   return true;  // 版本相等
 }
 
-// 确定库信息
-FlashAttentionBackend::LibraryInfo FlashAttentionBackend::DetermineLibrary(int compute_capability) {
-  LibraryInfo lib_info;
+// 确定所有可用的库信息
+std::vector<FlashAttentionBackend::LibraryInfo> FlashAttentionBackend::DetermineAllLibraries(int compute_capability) {
+  std::vector<LibraryInfo> available_libraries;
 
-  if (compute_capability >= 90 && compute_capability < 100) {  // Hopper 架构
-    lib_info = GetFlashAttention3LibInfo();
-    if (!lib_info.path.empty()) {
-      KLLM_LOG_INFO << "Using FlashAttention 3 library: " << lib_info.path
-                    << ", version: " << lib_info.version;
-      return lib_info;
+  // 1. 检查 FlashAttention 3 (适用于 Hopper 架构)
+  if (compute_capability >= 90 && compute_capability < 100) {
+    LibraryInfo fa3_info = GetFlashAttention3LibInfo();
+    if (!fa3_info.path.empty()) {
+      KLLM_LOG_DEBUG << "Found FlashAttention 3 library: " << fa3_info.path << ", version: " << fa3_info.version;
+      available_libraries.push_back(fa3_info);
     }
   }
 
   if (compute_capability >= 80) {
-    #ifdef ENABLE_VLLM_FLASH_ATTN_2
-      // FlashAttention 2 根据宏使用 vllm 版本，要求 2.6 版本
-      lib_info = GetVllmFlashAttentionLibInfo();
-      if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.6.0")) {
-        KLLM_LOG_INFO << "Using VLLM FlashAttention 2 library: " << lib_info.path
-                      << ", version: " << lib_info.version;
-        return lib_info;
-      } else if (!lib_info.path.empty()) {
-        KLLM_LOG_ERROR << "VLLM FlashAttention version " << lib_info.version << " doesn't meet requirement (>= 2.6.0)";
-      }
-    #elif defined(ENABLE_FLASH_ATTN_2)
-      // 尝试标准 flash-attn，要求 2.5 或更高版本
-      lib_info = GetFlashAttention2LibInfo();
-      if (!lib_info.path.empty() && IsVersionGreaterOrEqual(lib_info.version, "2.5.0")) {
-        KLLM_LOG_INFO << "Using FlashAttention 2 library: " << lib_info.path
-                      << ", version: " << lib_info.version;
-        return lib_info;
-      } else if (!lib_info.path.empty()) {
-        KLLM_LOG_ERROR << "FlashAttention version " << lib_info.version << " doesn't meet requirement (>= 2.5.0)";
-      }
-    #else
-      // 如果没有启用任何宏，提示报错
-      KLLM_LOG_ERROR << "No FlashAttention library enabled. "
-                        "Please define ENABLE_VLLM_FLASH_ATTN_2 or ENABLE_FLASH_ATTN_2.";
-    #endif
+    // 2. 检查 VLLM FlashAttention 2
+    LibraryInfo vllm_info = GetVllmFlashAttentionLibInfo();
+    if (!vllm_info.path.empty() && IsVersionGreaterOrEqual(vllm_info.version, "2.6.0")) {
+      KLLM_LOG_DEBUG << "Found VLLM FlashAttention 2 library: " << vllm_info.path << ", version: " << vllm_info.version;
+      available_libraries.push_back(vllm_info);
+    } else if (!vllm_info.path.empty()) {
+      KLLM_LOG_DEBUG << "VLLM FlashAttention version " << vllm_info.version << " doesn't meet requirement (>= 2.6.0)";
+    }
+
+    // 3. 检查标准 FlashAttention 2
+    LibraryInfo fa2_info = GetFlashAttention2LibInfo();
+    if (!fa2_info.path.empty() && IsVersionGreaterOrEqual(fa2_info.version, "2.5.0")) {
+      KLLM_LOG_DEBUG << "Found FlashAttention 2 library: " << fa2_info.path << ", version: " << fa2_info.version;
+      available_libraries.push_back(fa2_info);
+    } else if (!fa2_info.path.empty()) {
+      KLLM_LOG_DEBUG << "FlashAttention version " << fa2_info.version << " doesn't meet requirement (>= 2.5.0)";
+    }
   }
 
-  KLLM_LOG_INFO << "No compatible FlashAttention library found";
-  return LibraryInfo();  // 返回空的 LibraryInfo
+  KLLM_LOG_INFO << "Found " << available_libraries.size() << " compatible FlashAttention libraries";
+  return available_libraries;
 }
 
 // 获取 flash attention 3 库路径
-std::string FlashAttentionBackend::GetFlashAttention3LibPath() {
-  // TODO(raybxu): 未来支持 flash attention 3
-  return "";
-}
-
+std::string FlashAttentionBackend::GetFlashAttention3LibPath() { return GetPythonLibPath("flash_attn_3._C"); }
 
 // 获取 vllm flash attention 库路径
-std::string FlashAttentionBackend::GetVllmFlashAttentionLibPath() {
-  return GetPythonLibPath("vllm_flash_attn_2_cuda");
-}
+std::string FlashAttentionBackend::GetVllmFlashAttentionLibPath() { return GetPythonLibPath("vllm_flash_attn_2_cuda"); }
 
 // 获取 flash attention 2 库路径
-std::string FlashAttentionBackend::GetFlashAttention2LibPath() {
-  return GetPythonLibPath("flash_attn_2_cuda");
-}
+std::string FlashAttentionBackend::GetFlashAttention2LibPath() { return GetPythonLibPath("flash_attn_2_cuda"); }
 
 // 通过 Python 获取库路径
 std::string FlashAttentionBackend::GetPythonLibPath(const std::string& module_name) {
   // 去除字符串两端的空白字符
   std::string module_name_processed = module_name;
-  module_name_processed.erase(module_name_processed.find_last_not_of(" \n\r\t\f\v")+1);
+  module_name_processed.erase(module_name_processed.find_last_not_of(" \n\r\t\f\v") + 1);
   module_name_processed.erase(0, module_name_processed.find_first_not_of(" \n\r\t\f\v"));
 
   if (module_name_processed.empty()) {
@@ -239,8 +214,8 @@ std::string FlashAttentionBackend::GetPythonLibPath(const std::string& module_na
     return "";
   }
 
-  std::string command = "python -c \"import torch, " + module_name_processed + ";print("
-                        + module_name_processed + ".__file__)\"";
+  std::string command =
+      "python -c \"import torch, " + module_name_processed + ";print(" + module_name_processed + ".__file__)\"";
   std::string result = ExecutePythonCommand(command);
 
   if (result.empty()) {
@@ -279,18 +254,17 @@ std::string FlashAttentionBackend::ExecutePythonCommand(const std::string& comma
 }
 
 // 获取 Python 模块的库信息
-FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetPythonLibInfo(
-    const std::string& lib_module_name,
-    const std::string& version_module_name) {
+FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetPythonLibInfo(const std::string& lib_module_name,
+                                                                           const std::string& version_module_name) {
   LibraryInfo info;
 
   // 去除字符串两端的空白字符
   std::string lib_module_processed = lib_module_name;
-  lib_module_processed.erase(lib_module_processed.find_last_not_of(" \n\r\t\f\v")+1);
+  lib_module_processed.erase(lib_module_processed.find_last_not_of(" \n\r\t\f\v") + 1);
   lib_module_processed.erase(0, lib_module_processed.find_first_not_of(" \n\r\t\f\v"));
 
   std::string version_module_processed = version_module_name;
-  version_module_processed.erase(version_module_processed.find_last_not_of(" \n\r\t\f\v")+1);
+  version_module_processed.erase(version_module_processed.find_last_not_of(" \n\r\t\f\v") + 1);
   version_module_processed.erase(0, version_module_processed.find_first_not_of(" \n\r\t\f\v"));
 
   if (lib_module_processed.empty() || version_module_processed.empty()) {
@@ -309,31 +283,27 @@ FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetPythonLibInfo(
   }
 
   // 2. 获取版本信息（使用版本模块名称）
-  std::string version_command = "python -c \"import " + version_module_processed
-                                + ";print(" + version_module_processed + ".__version__)\"";
+  std::string version_command =
+      "python -c \"from importlib import metadata; print(metadata.version('" + version_module_processed + "'))\"";
   info.version = ExecutePythonCommand(version_command);
 
   // 3. 获取次要版本号
   if (!info.version.empty()) {
-    std::string minor_version_command = "python -c \"import " + version_module_processed
-                                        + ";print(" + version_module_processed + ".__version__.split('.')[1])\"";
+    std::string minor_version_command = "python -c \"from importlib import metadata; print(metadata.version('" +
+                                        version_module_processed + "').split('.')[1])\"";
     info.minor_version = ExecutePythonCommand(minor_version_command);
   }
 
-  KLLM_LOG_DEBUG << "Python module info: name=" << info.name
-                 << ", lib_module=" << lib_module_processed
-                 << ", version_module=" << version_module_processed
-                 << ", path=" << info.path << ", version=" << info.version
-                 << ", minor_version=" << info.minor_version;
+  KLLM_LOG_DEBUG << "Python module info: name=" << info.name << ", lib_module=" << lib_module_processed
+                 << ", version_module=" << version_module_processed << ", path=" << info.path
+                 << ", version=" << info.version << ", minor_version=" << info.minor_version;
 
   return info;
 }
 
 // 获取 flash attention 3 库信息
 FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetFlashAttention3LibInfo() {
-  // TODO(raybxu): 未来支持 flash attention 3
-  LibraryInfo info;
-  return info;
+  return GetPythonLibInfo("flash_attn_3._C", "flash_attn_3");
 }
 
 // 获取 vllm flash attention 库信息
@@ -347,17 +317,16 @@ FlashAttentionBackend::LibraryInfo FlashAttentionBackend::GetFlashAttention2LibI
 }
 
 // 辅助函数：加载单个函数指针
-template<typename FuncPtrType>
-bool FlashAttentionBackend::LoadSingleFunction(
-    const std::string& function_name,
-    FuncPtrType& func_ptr,
-    const std::string& func_description) {
-  std::string symbol = runtime_dll_manager_->FindMangledFunctionSymbol(function_name, func_ptr);
+template <typename FuncPtrType>
+bool FlashAttentionBackend::LoadSingleFunction(const std::shared_ptr<RuntimeDllManager>& dll_manager,
+                                               const std::string& function_name, FuncPtrType& func_ptr,
+                                               const std::string& func_description) {
+  std::string symbol = dll_manager->FindMangledFunctionSymbol(function_name, func_ptr);
   if (symbol.empty()) {
     return false;
   }
 
-  func_ptr = runtime_dll_manager_->GetRawFunctionPointer<FuncPtrType>(symbol);
+  func_ptr = dll_manager->GetRawFunctionPointer<FuncPtrType>(symbol);
   if (!func_ptr) {
     KLLM_LOG_ERROR << "Failed to load " << func_description << " with symbol: " << symbol;
     return false;
@@ -368,51 +337,58 @@ bool FlashAttentionBackend::LoadSingleFunction(
   return true;
 }
 
-// 加载函数
-bool FlashAttentionBackend::LoadFunctions() {
-  if (!runtime_dll_manager_ || !runtime_dll_manager_->IsLoaded()) {
-    KLLM_LOG_ERROR << "Runtime DLL manager is not loaded.";
+// 加载函数 - 为指定库加载函数
+bool FlashAttentionBackend::LoadFunctions(LibraryInfo& lib_info) {
+  if (!lib_info.dll_manager || !lib_info.dll_manager->IsLoaded()) {
+    KLLM_LOG_ERROR << "Runtime DLL manager is not loaded for library: " << lib_info.name;
     return false;
   }
 
   // 根据库信息的版本确定加载哪个函数指针
-  if (current_library_info_.name == "vllm_flash_attn" &&
-      IsVersionGreaterOrEqual(current_library_info_.version, "2.6.0")) {
-    // VLLM FlashAttention 2.6+ 版本
-    KLLM_LOG_INFO << "Loading VLLM FlashAttention 2.6+ functions";
+  if (lib_info.name == "flash_attn_3") {
+    // FlashAttention 3.0+ 版本
+    KLLM_LOG_DEBUG << "Loading FlashAttention 3.0+ functions for library: " << lib_info.path;
 
-    if (!LoadSingleFunction("mha_varlen_fwd", mha_varlen_fwd_vllm_flash_attn_v26_,
-                           "VLLM function mha_varlen_fwd_vllm_flash_attn_v26") ||
-        !LoadSingleFunction("mha_fwd_kvcache", mha_fwd_kvcache_vllm_flash_attn_v26_,
-                           "VLLM function mha_fwd_kvcache_vllm_flash_attn_v26")) {
+    if (!LoadSingleFunction(lib_info.dll_manager, "mha_fwd", mha_fwd_fa3_, "FlashAttention 3 function mha_fwd_fa3")) {
+      return false;
+    }
+
+    KLLM_LOG_DEBUG << "FlashAttention 3.0+ functions loaded successfully";
+
+  } else if (lib_info.name == "vllm_flash_attn" && IsVersionGreaterOrEqual(lib_info.version, "2.6.0")) {
+    // VLLM FlashAttention 2.6+ 版本
+    KLLM_LOG_DEBUG << "Loading VLLM FlashAttention 2.6+ functions for library: " << lib_info.path;
+
+    if (!LoadSingleFunction(lib_info.dll_manager, "mha_varlen_fwd", mha_varlen_fwd_vllm_flash_attn_v26_,
+                            "VLLM function mha_varlen_fwd_vllm_flash_attn_v26") ||
+        !LoadSingleFunction(lib_info.dll_manager, "mha_fwd_kvcache", mha_fwd_kvcache_vllm_flash_attn_v26_,
+                            "VLLM function mha_fwd_kvcache_vllm_flash_attn_v26")) {
       return false;
     }
 
     KLLM_LOG_DEBUG << "VLLM FlashAttention 2.6+ functions loaded successfully";
 
-  } else if (current_library_info_.name == "flash_attn" &&
-             IsVersionGreaterOrEqual(current_library_info_.version, "2.6.0")) {
+  } else if (lib_info.name == "flash_attn" && IsVersionGreaterOrEqual(lib_info.version, "2.6.0")) {
     // FlashAttention 2.6+ 版本
-    KLLM_LOG_INFO << "Loading FlashAttention 2.6+ functions";
+    KLLM_LOG_DEBUG << "Loading FlashAttention 2.6+ functions for library: " << lib_info.path;
 
-    if (!LoadSingleFunction("mha_varlen_fwd", mha_varlen_fwd_flash_attn_v26_,
-                           "FlashAttention function mha_varlen_fwd_flash_attn_v26") ||
-        !LoadSingleFunction("mha_fwd_kvcache", mha_fwd_kvcache_flash_attn_v26_,
-                           "FlashAttention function mha_fwd_kvcache_flash_attn_v26")) {
+    if (!LoadSingleFunction(lib_info.dll_manager, "mha_varlen_fwd", mha_varlen_fwd_flash_attn_v26_,
+                            "FlashAttention function mha_varlen_fwd_flash_attn_v26") ||
+        !LoadSingleFunction(lib_info.dll_manager, "mha_fwd_kvcache", mha_fwd_kvcache_flash_attn_v26_,
+                            "FlashAttention function mha_fwd_kvcache_flash_attn_v26")) {
       return false;
     }
 
     KLLM_LOG_DEBUG << "FlashAttention 2.6+ functions loaded successfully";
 
-  } else if (current_library_info_.name == "flash_attn" &&
-             IsVersionGreaterOrEqual(current_library_info_.version, "2.5.0")) {
+  } else if (lib_info.name == "flash_attn" && IsVersionGreaterOrEqual(lib_info.version, "2.5.0")) {
     // FlashAttention 2.5+ 版本
-    KLLM_LOG_INFO << "Loading FlashAttention 2.5+ functions";
+    KLLM_LOG_DEBUG << "Loading FlashAttention 2.5+ functions for library: " << lib_info.path;
 
-    if (!LoadSingleFunction("mha_varlen_fwd", mha_varlen_fwd_flash_attn_v25_,
-                           "FlashAttention function mha_varlen_fwd_flash_attn_v25") ||
-        !LoadSingleFunction("mha_fwd_kvcache", mha_fwd_kvcache_flash_attn_v25_,
-                           "FlashAttention function mha_fwd_kvcache_flash_attn_v25")) {
+    if (!LoadSingleFunction(lib_info.dll_manager, "mha_varlen_fwd", mha_varlen_fwd_flash_attn_v25_,
+                            "FlashAttention function mha_varlen_fwd_flash_attn_v25") ||
+        !LoadSingleFunction(lib_info.dll_manager, "mha_fwd_kvcache", mha_fwd_kvcache_flash_attn_v25_,
+                            "FlashAttention function mha_fwd_kvcache_flash_attn_v25")) {
       return false;
     }
 
@@ -420,7 +396,8 @@ bool FlashAttentionBackend::LoadFunctions() {
 
   } else {
     // 未找到匹配的版本，返回错误
-    KLLM_LOG_ERROR << "No matching version of FlashAttention library found";
+    KLLM_LOG_ERROR << "No matching version of FlashAttention library found for: " << lib_info.name << " v"
+                   << lib_info.version;
     return false;
   }
 
