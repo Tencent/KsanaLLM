@@ -85,7 +85,7 @@ size_t PrefixCacheManager::GetHostFreeBlockNumber() {
 }
 
 size_t PrefixCacheManager::GetUsedBlockNumber() {
-  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetDeviceUsedBlockNumber();
+  return BaseCacheManager<PrefixCachedBlock, PrefixCachedRequest>::GetDeviceUsedBlockNumber() - GetUsableBlockNumber();
 }
 
 size_t PrefixCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {

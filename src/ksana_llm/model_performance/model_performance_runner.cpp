@@ -163,6 +163,8 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
     warmup_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
   }
 
+  // Sleep 100 ms to make nsys results easier to be analyzed
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
   // run
   KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", warmp_up_rounds_);
   EventRecord(start, context_->GetComputeStreams()[device_id]);

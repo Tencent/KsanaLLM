@@ -49,8 +49,6 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
 
-  void ReportTotalState();
-
  private:
   // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
   Status EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
@@ -66,6 +64,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void ReportBatchState(std::shared_ptr<BatchState> batch_state);
   Status CreateMockReq(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
+
+  // report the state of all instance
+  void ReportTotalState();
 
  private:
   // The config of batch scheduler.

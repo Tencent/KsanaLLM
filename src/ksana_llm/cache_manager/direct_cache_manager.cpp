@@ -58,7 +58,7 @@ size_t DirectCacheManager::GetHostFreeBlockNumber() {
 }
 
 size_t DirectCacheManager::GetUsedBlockNumber() {
-  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetDeviceUsedBlockNumber();
+  return BaseCacheManager<DirectCachedBlock, DirectCachedRequest>::GetDeviceUsedBlockNumber() - GetUsableBlockNumber();
 }
 
 size_t DirectCacheManager::GetRequestStepBlockNumber(int64_t req_id, size_t input_token_lens) {
