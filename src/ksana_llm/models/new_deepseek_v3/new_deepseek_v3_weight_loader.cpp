@@ -329,45 +329,23 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
         }
 
         if (!new_deepseek_v3_config->quant_config.is_fp8_blockwise) {
-          // For q_b_nope_proj weight load
-          std::string q_b_nope_name =
-              file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.q_b_nope_proj.weight";
-          std::vector<size_t> q_b_nope_shape = {
-              static_cast<size_t>(DivRoundUp(head_num * qk_nope_head_dim, attn_tp_size)), host_weight_tensor.shape[1]};
-
+          std::vector<size_t> q_b_nope_rope_shape = {
+              static_cast<size_t>(DivRoundUp(head_num * (qk_nope_head_dim + qk_rope_head_dim), attn_tp_size)),
+              host_weight_tensor.shape[1]};
+          Tensor q_b_nope_rope_tensor =
+              Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, q_b_nope_rope_shape, dev_rank, nullptr,
+                     &(context_->GetMemoryManageStreams()[dev_rank]));
           size_t para_pitch = DivRoundUp(head_num, attn_tp_size) * (qk_nope_head_dim + qk_rope_head_dim) *
                               host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
           size_t tensor_para_offset = attn_dev_rank * para_pitch;
+          MemcpyAsync(q_b_nope_rope_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>() + tensor_para_offset,
+                      para_pitch, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
-          Tensor q_b_nope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, q_b_nope_shape,
-                                          dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-          size_t nope_dst_pitch =
-              qk_nope_head_dim * host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-          size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * host_weight_tensor.shape[1] *
-                             GetTypeSize(host_weight_tensor.dtype);
-          Memcpy2DAsync(q_b_nope_tensor.GetPtr<void>(), nope_dst_pitch,
-                        host_weight_tensor.GetPtr<void>() + tensor_para_offset, src_pitch, nope_dst_pitch,
-                        DivRoundUp(head_num, attn_tp_size), MEMCPY_HOST_TO_DEVICE,
-                        context_->GetMemoryManageStreams()[dev_rank]);
-          weight_impl_->PermuteWeight(q_b_nope_tensor, {1, 0}, dev_rank);
-          device_model_weights[q_b_nope_name] = q_b_nope_tensor;
+          weight_impl_->PermuteWeight(q_b_nope_rope_tensor, {1, 0}, dev_rank);
 
-          // For q_b_rope_proj weight load
-          std::string q_b_rope_name =
-              file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.q_b_rope_proj.weight";
-          std::vector<size_t> q_b_rope_shape = {
-              static_cast<size_t>(DivRoundUp(head_num * qk_rope_head_dim, attn_tp_size)), host_weight_tensor.shape[1]};
-
-          Tensor q_b_rope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, q_b_rope_shape,
-                                          dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-          size_t rope_dst_pitch =
-              qk_rope_head_dim * host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-          Memcpy2DAsync(q_b_rope_tensor.GetPtr<void>(), rope_dst_pitch,
-                        host_weight_tensor.GetPtr<void>() + nope_dst_pitch + tensor_para_offset, src_pitch,
-                        rope_dst_pitch, DivRoundUp(head_num, attn_tp_size), MEMCPY_HOST_TO_DEVICE,
-                        context_->GetMemoryManageStreams()[dev_rank]);
-          weight_impl_->PermuteWeight(q_b_rope_tensor, {1, 0}, dev_rank);
-          device_model_weights[q_b_rope_name] = q_b_rope_tensor;
+          std::string q_b_nope_rope_name =
+              file_weight_name.substr(0, file_weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight";
+          device_model_weights[q_b_nope_rope_name] = q_b_nope_rope_tensor;
         } else {
           // For fp8 blockwise quant, do not split the weights initially, split them after dequantization later.
           std::string q_b_proj_name =

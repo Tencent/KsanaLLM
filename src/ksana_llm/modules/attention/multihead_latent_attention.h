@@ -83,11 +83,13 @@ class MultiHeadLatentAttention {
   bool use_q_lora_ = false;
   // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
   bool use_fused_lora_a_ = false;
+  bool use_q_b_nope_rope_ = false;
 
   std::shared_ptr<Linear> attn_fused_lora_a_projs_;
   std::shared_ptr<Linear> attn_q_a_projs_;
   std::shared_ptr<Linear> attn_kv_a_lora_projs_;
   std::shared_ptr<Linear> attn_kv_a_ropes_;
+  std::shared_ptr<Linear> attn_q_b_projs_;
   std::shared_ptr<Linear> attn_q_b_lora_projs_;
   std::shared_ptr<Linear> attn_q_b_rope_projs_;
   std::shared_ptr<Linear> attn_o_proj_;

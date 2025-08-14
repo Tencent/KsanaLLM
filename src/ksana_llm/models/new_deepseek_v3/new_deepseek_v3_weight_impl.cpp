@@ -220,78 +220,12 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       }
       Tensor& quant_weight = device_model_weights.at(weight_name);
       Tensor& quant_weight_scale = device_model_weights.at(weight_scale_name);
-      // Dequant q_b_proj (set dequant dtype tp bf16 for compatible)
-      Tensor& dequant_q_b_proj = GetTempTensor(quant_weight.shape, new_deepseek_v3_config->weight_data_type, dev_rank);
-      DequantFp8E4m3BlockWise<T>(quant_weight.GetPtr<void>(), quant_weight_scale.GetPtr<void>(),
-                                 dequant_q_b_proj.GetPtr<void>(), quant_weight.shape[0], quant_weight.shape[1],
-                                 new_deepseek_v3_config->quant_config.weight_block_size[1],
-                                 context_->GetMemoryManageStreams()[dev_rank].Get());
-      // split dequant q_b_proj
-      if (dequant_q_b_proj.shape[0] != (head_num_tp * (qk_nope_head_dim + qk_rope_head_dim))) {
-        KLLM_THROW(fmt::format("Not support shape of dequant weight: {}", weight_name));
-      }
-      Tensor& dequant_q_b_nope_proj = GetTempTensor({head_num_tp * qk_nope_head_dim, dequant_q_b_proj.shape[1]},
-                                                    new_deepseek_v3_config->weight_data_type, dev_rank);
-      size_t nope_dst_pitch =
-          qk_nope_head_dim * dequant_q_b_proj.shape[1] * GetTypeSize(new_deepseek_v3_config->weight_data_type);
-      size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * dequant_q_b_proj.shape[1] *
-                         GetTypeSize(new_deepseek_v3_config->weight_data_type);
-      Memcpy2DAsync(dequant_q_b_nope_proj.GetPtr<void>(), nope_dst_pitch, dequant_q_b_proj.GetPtr<void>(), src_pitch,
-                    nope_dst_pitch, head_num_tp, MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-
-      Tensor& dequant_q_b_rope_proj = GetTempTensor({head_num_tp * qk_rope_head_dim, dequant_q_b_proj.shape[1]},
-                                                    new_deepseek_v3_config->weight_data_type, dev_rank);
-      size_t rope_dst_pitch =
-          qk_rope_head_dim * dequant_q_b_rope_proj.shape[1] * GetTypeSize(new_deepseek_v3_config->weight_data_type);
-      Memcpy2DAsync(dequant_q_b_rope_proj.GetPtr<void>(), rope_dst_pitch,
-                    dequant_q_b_proj.GetPtr<void>() + nope_dst_pitch, src_pitch, rope_dst_pitch, head_num_tp,
-                    MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-
-      // Quant q_b_nope_proj and q_b_rope_proj
-      std::string quant_nope_weight_name =
-          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_proj.weight";
-      std::string quant_nope_weight_scale =
-          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_proj.weight_scale_inv";
-      Tensor quant_q_b_nope_weight =
-          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP8_E4M3, dequant_q_b_nope_proj.shape, dev_rank,
-                 nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-      size_t weight_scale_shape_0 = static_cast<size_t>(
-          DivRoundUp(quant_q_b_nope_weight.shape[0], new_deepseek_v3_config->quant_config.weight_block_size[0]));
-      size_t weight_scale_shape_1 = static_cast<size_t>(
-          DivRoundUp(quant_q_b_nope_weight.shape[1], new_deepseek_v3_config->quant_config.weight_block_size[1]));
-      Tensor quant_q_b_nope_weight_scale =
-          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, {weight_scale_shape_0, weight_scale_shape_1},
-                 dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-      ScaledQuantizeFp8E4m3<T>(static_cast<T*>(dequant_q_b_nope_proj.GetPtr<void>()),
-                               quant_q_b_nope_weight.GetPtr<void>(),
-                               static_cast<float*>(quant_q_b_nope_weight_scale.GetPtr<void>()),
-                               new_deepseek_v3_config->quant_config.weight_block_size, dequant_q_b_nope_proj.shape[0],
-                               dequant_q_b_nope_proj.shape[1], dev_rank);
-      device_model_weights[quant_nope_weight_name] = quant_q_b_nope_weight;
-      device_model_weights[quant_nope_weight_scale] = quant_q_b_nope_weight_scale;
-
-      std::string quant_rope_weight_name =
-          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_rope_proj.weight";
-      std::string quant_rope_weight_scale =
-          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_rope_proj.weight_scale_inv";
-      Tensor quant_q_b_rope_weight =
-          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP8_E4M3, dequant_q_b_rope_proj.shape, dev_rank,
-                 nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-      weight_scale_shape_0 = static_cast<size_t>(
-          DivRoundUp(quant_q_b_rope_weight.shape[0], new_deepseek_v3_config->quant_config.weight_block_size[0]));
-      weight_scale_shape_1 = static_cast<size_t>(
-          DivRoundUp(quant_q_b_rope_weight.shape[1], new_deepseek_v3_config->quant_config.weight_block_size[1]));
-      Tensor quant_q_b_rope_weight_scale =
-          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, {weight_scale_shape_0, weight_scale_shape_1},
-                 dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-      ScaledQuantizeFp8E4m3<T>(static_cast<T*>(dequant_q_b_rope_proj.GetPtr<void>()),
-                               quant_q_b_rope_weight.GetPtr<void>(),
-                               static_cast<float*>(quant_q_b_rope_weight_scale.GetPtr<void>()),
-                               new_deepseek_v3_config->quant_config.weight_block_size, dequant_q_b_rope_proj.shape[0],
-                               dequant_q_b_rope_proj.shape[1], dev_rank);
-      device_model_weights[quant_rope_weight_name] = quant_q_b_rope_weight;
-      device_model_weights[quant_rope_weight_scale] = quant_q_b_rope_weight_scale;
-
+      std::string quant_nope_rope_weight_name =
+          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight";
+      std::string quant_nope_rope_weight_scale_name =
+          weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight_scale_inv";
+      device_model_weights[quant_nope_rope_weight_name] = std::move(device_model_weights[weight_name]);
+      device_model_weights[quant_nope_rope_weight_scale_name] = std::move(device_model_weights[weight_scale_name]);
       device_model_weights.erase(weight_name);
       device_model_weights.erase(weight_scale_name);
       continue;
@@ -803,30 +737,8 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
         // Split along axis=1 first
         Tensor dev_tensor;
         TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, attn_tp_size, true);
-
-        // For q_b_nope_proj weight
-        std::string q_b_nope_name = GetReplacedName(host_weight_name, ".q_b_proj.", ".q_b_nope_proj.");
-        Tensor q_b_nope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
-                                        {host_weight_tensor.shape[0], head_num_tp * qk_nope_head_dim}, dev_rank,
-                                        nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-        size_t nope_dst_pitch = qk_nope_head_dim * GetTypeSize(host_weight_tensor.dtype);
-        size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * GetTypeSize(host_weight_tensor.dtype);
-        Memcpy2DAsync(q_b_nope_tensor.GetPtr<void>(), nope_dst_pitch, dev_tensor.template GetPtr<void>(), src_pitch,
-                      nope_dst_pitch, host_weight_tensor.shape[0] * head_num_tp, MEMCPY_DEVICE_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[dev_rank]);
-        device_model_weights[q_b_nope_name] = q_b_nope_tensor;
-
-        // For q_b_nope_proj weight
-        std::string q_b_rope_name = GetReplacedName(host_weight_name, ".q_b_proj.", ".q_b_rope_proj.");
-        Tensor q_b_rope_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype,
-                                        {host_weight_tensor.shape[0], head_num_tp * qk_rope_head_dim}, dev_rank,
-                                        nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-        size_t rope_dst_pitch = qk_rope_head_dim * GetTypeSize(host_weight_tensor.dtype);
-        Memcpy2DAsync(q_b_rope_tensor.GetPtr<void>(), rope_dst_pitch,
-                      dev_tensor.template GetPtr<void>() + nope_dst_pitch, src_pitch, rope_dst_pitch,
-                      host_weight_tensor.shape[0] * head_num_tp, MEMCPY_DEVICE_TO_DEVICE,
-                      context_->GetMemoryManageStreams()[dev_rank]);
-        device_model_weights[q_b_rope_name] = q_b_rope_tensor;
+        std::string q_b_nope_rope_name = GetReplacedName(host_weight_name, ".q_b_proj.", ".q_b_nope_rope_proj.");
+        device_model_weights[q_b_nope_rope_name] = dev_tensor;
         continue;
       }
       if (host_weight_name.find(".self_attn.kv_a_proj_with_mqa.") != std::string::npos) {

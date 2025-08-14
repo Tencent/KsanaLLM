@@ -100,6 +100,28 @@ __global__ void SplitTo2Kernel(const T* __restrict__ input, T* __restrict__ outp
   }
 }
 
+// SplitTo2KernelLinearized - in this method, a block can process elements across different rows. Particularly efficient
+// for tall-and-skinny matrices (MxN where M >> N). In these cases, threads in SplitTo2Kernel with tid greater than the
+// number of columns remain idle.
+template <typename T>
+__global__ void SplitTo2KernelLinearized(const T* __restrict__ input, T* __restrict__ output_a, T* __restrict__ output_b,
+                                        const int col_sep, int cols, int rows) {
+  size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t total_elements = static_cast<size_t>(rows) * cols;
+  
+  for (size_t idx = tid; idx < total_elements; idx += blockDim.x * gridDim.x) {
+    size_t row_id = idx / cols;
+    size_t col_id = idx % cols;
+    
+    T* output = (col_id < col_sep) ? output_a : output_b;
+    size_t local_col_id = (col_id < col_sep) ? col_id : (col_id - col_sep);
+    size_t output_cols = (col_id < col_sep) ? col_sep : (cols - col_sep);
+    size_t output_idx = row_id * output_cols + local_col_id;
+    
+    output[output_idx] = input[idx];
+  }
+}
+
 template <typename T>
 void SplitToMultiMemcpy2D(const T* __restrict__ input, const std::vector<T*>& output_ptrs,
                           std::vector<int>& col_offsets,  // [0, col1, col1+col2, ...]
@@ -139,13 +161,26 @@ void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs
   size_t for_range = ceil(static_cast<float>(cols) / packed_elems / BLOCK_SIZE);
 
   if (num_outputs == 2) {
-    if (packed_elems == 1) {  // not using PT
-      SplitTo2Kernel<T><<<grid, block, 0, stream>>>(reinterpret_cast<const T*>(input), output_ptrs[0], output_ptrs[1],
-                                                    col_offsets[1], cols, for_range);
-    } else {
-      SplitTo2Kernel<PT><<<grid, block, 0, stream>>>(
-          reinterpret_cast<const PT*>(input), reinterpret_cast<PT*>(output_ptrs[0]),
-          reinterpret_cast<PT*>(output_ptrs[1]), col_offsets[1], cols / packed_elems, for_range);
+    if (cols > BLOCK_SIZE) {
+      if (packed_elems == 1) {
+        SplitTo2Kernel<T><<<grid, block, 0, stream>>>(reinterpret_cast<const T*>(input), output_ptrs[0], output_ptrs[1],
+                                                      col_offsets[1], cols, for_range);
+      } else {
+        SplitTo2Kernel<PT><<<grid, block, 0, stream>>>(
+            reinterpret_cast<const PT*>(input), reinterpret_cast<PT*>(output_ptrs[0]),
+            reinterpret_cast<PT*>(output_ptrs[1]), col_offsets[1], cols / packed_elems, for_range);
+      }
+    } else {  // SplitTo2KernelLinearized for tall-and-skinny matrices
+      const size_t total_elements = rows * cols / packed_elems;
+      size_t num_blocks = std::min((total_elements + BLOCK_SIZE - 1) / BLOCK_SIZE, static_cast<size_t>(65535));
+      if (packed_elems == 1) {
+        SplitTo2KernelLinearized<T><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            reinterpret_cast<const T*>(input), output_ptrs[0], output_ptrs[1], col_offsets[1], cols, rows);
+      } else {
+        SplitTo2KernelLinearized<PT><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            reinterpret_cast<const PT*>(input), reinterpret_cast<PT*>(output_ptrs[0]),
+            reinterpret_cast<PT*>(output_ptrs[1]), col_offsets[1], cols / packed_elems, rows);
+      }
     }
   } else if (num_outputs == 3) {
     if (packed_elems == 1) {  // not using PT

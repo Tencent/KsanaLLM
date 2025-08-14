@@ -23,9 +23,10 @@
    using NvidiaTestSuitBase::stream;
    using InputTuple = std::tuple<size_t, size_t, std::vector<size_t>>;
    const std::vector<InputTuple> input_tuple = {
-       {30, 2112, {1536, 576}},     {30, 2112, {1539, 573}},         {30, 2112, {1536, 512, 64}},
-       {30, 2112, {1539, 512, 61}}, {30, 2112, {1536, 512, 48, 16}}, {30, 2112, {1539, 512, 48, 13}},
-   };
+       {30, 2112, {1536, 576}},         {30, 2112, {1539, 573}},
+       {30, 2112, {1536, 512, 64}},     {30, 2112, {1539, 512, 61}},
+       {30, 2112, {1536, 512, 48, 16}}, {30, 2112, {1539, 512, 48, 13}},
+       {1536 * 128, 192, {128, 64}},    {1536, 128 * 192, {128 * 128, 128 * 64}}};
 
   protected:
    template <typename T>
@@ -73,20 +74,21 @@
  
          DeleteBuffer(output_ref_meta);
        }
- 
+
        auto cuda_run = [&]() {
          InvokeSplit<T>(reinterpret_cast<T*>(input_meta.data_ptr), outputs, col_offset, m, n, output_n_dim.size(),
                         stream);
        };
        float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 30);
-       std::cout << "Split Matrix [" << m << "," << n << "] -> ";
+       std::cout << "Split Matrix [" << std::setw(8) << std::right << m << "," << std::setw(8) << std::right << n
+                 << "] -> ";
        std::stringstream output_dims_ss;
        for (size_t i = 0; i < output_n_dim.size(); ++i) {
          output_dims_ss << "[" << m << "," << output_n_dim[i] << "]";
          if (i < output_n_dim.size() - 1) output_dims_ss << " ";
        }
        std::cout << std::left << std::setw(40) << output_dims_ss.str();
-       std::cout << " | Execution Time: " << std::fixed << milliseconds << "ms" << std::endl;
+       std::cout << " | Execution Time: " << std::fixed << std::setprecision(6) << milliseconds << "ms" << std::endl;
        for (size_t i = 0; i < outputs.size(); ++i) {
          DeleteBuffer(output_metas[i]);
        }
