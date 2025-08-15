@@ -15,6 +15,13 @@ class BatchedMatMulLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+#ifdef ENABLE_CUDA
+  void* cublas_workspace_ptr_{nullptr};
+  int cublas_workspace_size_{-1};
+  cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
+#endif
+
+ private:
   template <typename T>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 };

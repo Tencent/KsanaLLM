@@ -36,6 +36,7 @@ if(WITH_STANDALONE_TEST)
   endif()
  if(WITH_CUDA)
   cpp_test(module_mla_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/modules/attention/multihead_latent_attention_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
- endif()
+  cpp_test(module_bmm_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/modules/basic/bmm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  endif()
 endif()
 
