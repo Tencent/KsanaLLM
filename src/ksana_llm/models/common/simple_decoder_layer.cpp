@@ -25,12 +25,6 @@ SimpleDecoderLayer::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv
     : layer_idx_(layer_idx) {
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  input_layernorms_ = std::make_shared<Layernorm>(
-      layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
-  post_attention_layernorms_ =
-      std::make_shared<Layernorm>(layer_prefix + ".post_attention_layernorm.weight",
-                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
-
   adds_ = std::make_shared<Add>(creation_context);
 
   bool use_qk_norm = model_creation_config.attn_config.use_qk_norm;
@@ -38,6 +32,28 @@ SimpleDecoderLayer::SimpleDecoderLayer(int layer_idx, bool is_neox, bool add_qkv
                                               model_creation_config);
   mlps_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   tp_comm_ = std::make_shared<TpCommunicator>();
+
+  pre_attention_add_norm_ = std::make_shared<FusePreAttentionAddNorm>(
+    layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
+  post_attention_add_norm_ =
+    std::make_shared<FusePostAttentionAddNorm>(layer_prefix + ".post_attention_layernorm.weight",
+                                  model_creation_config.layernorm_config.layernorm_eps, creation_context);
+
+  if (creation_context.weight_type == TYPE_FP16 || creation_context.weight_type == TYPE_BF16) {
+    use_fused_add_layernorm_ = true;
+    // determine if it is the first layer, if it is not the first layer
+    // then we need to add the last residual output of the previous layer
+    // to make a fused pre-attetion add_norm
+    if (layer_idx_ != creation_context.pipeline_config.lower_layer_idx) {
+      need_add_residual_before_attn_ = true;
+    }
+    // determine if it is the last layer in the pipeline, if it is not the last layer
+    // then we skip the last layer add operation and add the residual of the last layer
+    // to the start of the next layer
+    if (layer_idx_ != creation_context.pipeline_config.upper_layer_idx) {
+      need_add_residual_after_mlp_ = false;
+    }
+  }
 }
 
 Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
@@ -45,9 +61,8 @@ Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const b
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
-  // Pre attn layernorm
-  // Pre layernorm uses layernorm input for residual connection.
-  input_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  STATUS_CHECK_RETURN(pre_attention_add_norm_->Forward(hidden_buffer_tensors_0, residual_buffer,
+                      need_add_residual_before_attn_));
   // MultiHeadAttention
   STATUS_CHECK_RETURN(
       mha_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
@@ -55,20 +70,17 @@ Status SimpleDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const b
   // AllReduce Sum
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
 
-  // Attn residual add
-  STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
-
-  // Pre mlp layernorm
-  // Pre layernorm uses layernorm input for residual connection.
-  post_attention_layernorms_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  STATUS_CHECK_RETURN(post_attention_add_norm_->Forward(hidden_buffer_tensors_0, residual_buffer));
 
   // Common mlp
   STATUS_CHECK_RETURN(
       mlps_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
   // AllReduce Sum
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
-  // Mlp residual add
-  STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
+
+  if (!use_fused_add_layernorm_ || need_add_residual_after_mlp_) {
+    STATUS_CHECK_RETURN(adds_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
+  }
   return Status();
 }
 

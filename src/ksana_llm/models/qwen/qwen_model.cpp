@@ -29,8 +29,8 @@ Status Qwen::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& fo
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
        layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
-    STATUS_CHECK_RETURN(
-        decoder_layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
+    STATUS_CHECK_RETURN(decoder_layers_[layer_idx]->Forward(residual_buffer,
+                        is_multi_token_forward, forwarding_context));
   }
   return Status();
 }

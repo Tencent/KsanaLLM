@@ -8,12 +8,12 @@
 namespace ksana_llm {
 
 Status AddNormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                          std::shared_ptr<Context> context, int rank) {
-  BaseLayer::Init(parameters, runtime_config, context, rank);
-  int parameter_index = 0;
-  rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
-  KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
-  return Status();
+  std::shared_ptr<Context> context, int rank) {
+    BaseLayer::Init(parameters, runtime_config, context, rank);
+    int parameter_index = 0;
+    rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
+    KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
+    return Status();
 }
 
 Status AddNormLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {

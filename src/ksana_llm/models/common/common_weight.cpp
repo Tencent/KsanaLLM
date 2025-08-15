@@ -91,8 +91,7 @@ void CommonWeight<T>::SetEmbeddingsConfig() {
 template <typename T>
 bool CommonWeight<T>::ShouldUseFusedGateUpWeights() {
 #ifdef ENABLE_CUDA
-  // TODO(rockcao): support other models like llama, qwen, baichuan
-  const std::vector<std::string> enabled_type_list = {"deepseek_v3"};
+  const std::vector<std::string> enabled_type_list = {"deepseek_v3", "qwen3", "qwen", "llama"};
   std::string unified_model_type = model_config_.type;
   // unify type to lower case
   std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),
@@ -102,6 +101,10 @@ bool CommonWeight<T>::ShouldUseFusedGateUpWeights() {
       KLLM_LOG_INFO << "using fused gate up weights for " << unified_model_type;
       return true;
     }
+  }
+  if (unified_model_type.find("hunyuan") != std::string::npos && !model_config_.is_moe) {
+    KLLM_LOG_INFO << "using fused gate up weights for hunyuan-turbo";
+    return true;
   }
 #endif
   return false;
