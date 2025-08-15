@@ -41,4 +41,48 @@ TEST(TokenizerTest, TokenizeTest) {
   Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
 }
 
+TEST(TokenizerTest, GetVocabInfoTest) {
+  // Initialize tokenizer first
+  Singleton<Tokenizer>::GetInstance()->InitTokenizer("/model/llama-hf/7B");
+
+  std::vector<std::string> vocab;
+  int vocab_size = 32000;
+  std::vector<int> stop_token_ids;
+
+  Status status = Singleton<Tokenizer>::GetInstance()->GetVocabInfo(vocab, vocab_size, stop_token_ids);
+  EXPECT_TRUE(status.OK());
+
+  // Verify basic functionality
+  EXPECT_GE(vocab_size, 32000);  // Should be at least the input size
+  EXPECT_EQ(vocab.size(), static_cast<size_t>(vocab_size));  // vocab vector should match vocab_size
+  EXPECT_GT(stop_token_ids.size(), 0);  // Should have at least one stop token (EOS)
+
+  // Verify some tokens exist
+  EXPECT_FALSE(vocab[1].empty());  // Token ID 1 should exist (BOS token for LLaMA)
+
+  // Clean up
+  Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
+}
+
+TEST(TokenizerTest, GetVocabInfoErrorHandlingTest) {
+  // Test error handling when tokenizer is not properly initialized
+  // This should trigger the catch block in GetVocabInfo
+
+  // Ensure tokenizer is destroyed/uninitialized
+  Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
+
+  std::vector<std::string> vocab;
+  int vocab_size = 32000;
+  std::vector<int> stop_token_ids;
+
+  // Call GetVocabInfo without proper initialization
+  // This should trigger the exception handling in GetVocabInfo
+  Status status = Singleton<Tokenizer>::GetInstance()->GetVocabInfo(vocab, vocab_size, stop_token_ids);
+
+  // Verify that the error is properly handled
+  EXPECT_FALSE(status.OK());
+  EXPECT_EQ(status.GetCode(), RET_INVALID_ARGUMENT);
+  EXPECT_EQ(status.GetMessage(), "Failed to extract tokenizer information");
+}
+
 }  // namespace ksana_llm

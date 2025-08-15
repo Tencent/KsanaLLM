@@ -16,6 +16,7 @@
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -140,6 +141,10 @@ class InferRequest {
   // Protect parallel access for output token.
   std::mutex &output_mutex;
 
+  // grammar matcher
+  std::shared_ptr<GrammarMatcherWrapper> &grammar_matcher;
+
+  bool &grammar_finished;
   std::vector<std::shared_ptr<InferRequest>> req_group;
 
   // The model instance pointer.

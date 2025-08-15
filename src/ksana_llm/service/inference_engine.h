@@ -11,6 +11,7 @@
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance_inferface.h"
 #include "ksana_llm/utils/channel.h"
+#include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -79,6 +80,9 @@ class InferenceEngine {
   std::vector<std::shared_ptr<ModelInstance>> model_instances_;
 
   std::vector<std::shared_ptr<WeightInstanceInterface>> weight_instances_;
+
+  // Grammar backend for structured output
+  std::shared_ptr<GrammarBackend> grammar_backend_ = nullptr;
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;

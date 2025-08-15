@@ -226,6 +226,10 @@ class KsanaLLMEngine:
                                                 "encoder_no_repeat_ngram_size", 0),
             decoder_no_repeat_ngram_size=_get_sampling_value(sampling_config,
                                                 "decoder_no_repeat_ngram_size", 0),
+            enable_structured_output=_get_sampling_value(sampling_config,
+                                                "enable_structured_output", False),
+            json_schema=_get_sampling_value(sampling_config,
+                                                "json_schema", ""),
             num_beams=_get_sampling_value(sampling_config,
                                                 "num_beams", 1),
             num_return_sequences=_get_sampling_value(sampling_config,
@@ -311,6 +315,12 @@ class KsanaLLMEngine:
         )
         sampling_config.decoder_no_repeat_ngram_size = _get_generation_value(
             generation_config, "decoder_no_repeat_ngram_size", 0
+        )
+        sampling_config.enable_structured_output = _get_generation_value(
+            generation_config, "enable_structured_output", False
+        )
+        sampling_config.json_schema = _get_generation_value(
+            generation_config, "json_schema", ""
         )
         sampling_config.length_penalty = _get_generation_value(
             generation_config, "length_penalty", 1.0

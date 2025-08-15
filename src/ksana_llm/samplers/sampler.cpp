@@ -19,6 +19,7 @@
 namespace ksana_llm {
 
 static size_t kCudaMemAlignmentSize = alignof(std::max_align_t);
+static constexpr float kBitsPerInt = 32.0f;  // Number of bits in an integer for bitmask calculations
 
 Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context)
     : batch_schedule_config_(batch_scheduler_config), rank_(rank), context_(context) {
@@ -43,6 +44,19 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
   aligned_memory_queue.Add(device_repetition_processor_, batch_schedule_config_.max_vocab_size);
   aligned_memory_queue.Add(device_prob_, max_logits_num);
   aligned_memory_queue.Add(device_prob_ptrs_, max_logits_num);
+
+  // vocab mask buffer
+  // TODO(ethanyczeng): if(!grammar_backend_)
+  if (batch_schedule_config_.enable_xgrammar && rank_ == 0) {
+    const int bitmask_elements = static_cast<int>(std::ceil(batch_schedule_config_.max_vocab_size / kBitsPerInt));
+    const size_t vocab_mask_elements = batch_schedule_config_.max_batch_size * bitmask_elements;
+    aligned_memory_queue.Add(device_vocab_mask_, vocab_mask_elements);
+    host_vocab_mask_.resize(vocab_mask_elements);
+    KLLM_LOG_INFO << "Grammar vocab mask buffers initialized successfully with " << vocab_mask_elements
+                  << " elements (batch_size=" << batch_schedule_config_.max_batch_size
+                  << ", bitmask_elements=" << bitmask_elements << ")";
+  }
+
   aligned_memory_queue.AllocateAndAlign();
 
   inv_repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
@@ -415,6 +429,10 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
   STATUS_CHECK_RETURN(PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream));
 
   SamplingAndCalcLogprobs(sampling_reqs, device_logits, sampling_device_parameter, stream);
+
+  // Apply grammar mask after logits processing
+  ApplyGrammarMask(sampling_reqs, device_logits, sampling_device_parameter, stream);
+
   // Apply softmax on logits.
   if (sampling_device_parameter.logits_softmax) {
 #ifdef ENABLE_CUDA
@@ -433,9 +451,130 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
     MemcpyAsync(host_output_tokens_.data(), device_output_tokens_, sizeof(uint32_t) * sampling_device_parameter.bs,
                 MEMCPY_DEVICE_TO_HOST, stream);
   }
+
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
+
+  // Update grammar state after sampling
+  UpdateGrammarState(sampling_reqs);
+
   return Status();
 }
 
+void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+                               const SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
+  if (!batch_schedule_config_.enable_xgrammar) {
+    return;
+  }
+
+  // allocate vocab mask
+  const int bitmask_elements = static_cast<int>(std::ceil(batch_schedule_config_.max_vocab_size / kBitsPerInt));
+  const int32_t full_mask = -1;  // All bits set to 1
+
+  // Track which requests have grammar constraints
+  std::vector<size_t> grammar_req_indices;
+  std::vector<size_t> grammar_req_offsets;
+
+  // Process each sampling request to identify grammar-enabled requests
+  for (size_t req_idx = 0; req_idx < sampling_reqs.size(); ++req_idx) {
+    auto& req = sampling_reqs[req_idx];
+
+    if (!req.grammar_matcher) {
+      continue;
+    }
+
+    // TODO(ethanyczeng): Add MTP support - currently only supports single token per request
+    if (req.sampling_token_num > 1) {
+      KLLM_LOG_WARNING << fmt::format("Grammar skipped for req {} (MTP unsupported)", req_idx);
+      continue;
+    }
+
+    // Record the request index and its logits offset
+    grammar_req_indices.push_back(req_idx);
+    grammar_req_offsets.push_back(req.logits_offset);
+  }
+
+  if (grammar_req_indices.empty()) {
+    return;  // No requests with grammar constraints
+  }
+
+  // Allocate bitmask only for grammar-enabled requests
+  const size_t grammar_req_num = grammar_req_indices.size();
+  std::fill(host_vocab_mask_.begin(), host_vocab_mask_.begin() + grammar_req_num * bitmask_elements, full_mask);
+
+  // Fill bitmasks for grammar-enabled requests
+  bool has_active_grammar = false;
+  for (size_t i = 0; i < grammar_req_num; ++i) {
+    size_t req_idx = grammar_req_indices[i];
+    auto& req = sampling_reqs[req_idx];
+
+    // Fill the bitmask at position i (not req_idx)
+    int32_t* batch_bitmask = host_vocab_mask_.data() + i * bitmask_elements;
+    bool needs_mask = req.grammar_matcher->FillNextTokenBitmask(batch_bitmask, 0);
+
+    if (needs_mask) {
+      has_active_grammar = true;
+      KLLM_LOG_DEBUG << "Grammar applied: req=" << req.req_id << " idx=" << req_idx << "/" << i;
+    }
+  }
+
+  if (has_active_grammar) {
+    KLLM_LOG_DEBUG << "Applying grammar mask: " << grammar_req_num << "/" << sampling_reqs.size() << " requests";
+
+    // Copy bitmask to device (only for grammar requests)
+    const size_t vocab_mask_size = grammar_req_num * bitmask_elements * sizeof(int32_t);
+    MemcpyAsync(device_vocab_mask_, host_vocab_mask_.data(), vocab_mask_size, MEMCPY_HOST_TO_DEVICE, stream);
+
+    // Apply bitmask only to grammar-enabled requests
+    ApplyTokenBitmaskSelective(device_logits, device_vocab_mask_, sampling_device_parameter.vocab_size_padded,
+                               grammar_req_offsets, stream);
+  }
+}
+
+void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
+  for (auto& req : sampling_reqs) {
+    if (!req.grammar_matcher || !req.sampling_result_tokens || req.sampling_result_tokens->empty()) {
+      continue;
+    }
+
+    if (req.grammar_matcher->IsTerminated()) {
+      // Note: The request termination should be handled by the caller
+      KLLM_LOG_DEBUG << "Grammar completed for request " << req.req_id;
+    }
+
+    // Accept the last generated token
+    int token_id = req.sampling_result_tokens->back();
+    bool accepted = req.grammar_matcher->AcceptToken(token_id);
+
+    if (!accepted) {
+      // In production, this should rarely happen if the mask was applied correctly
+      KLLM_LOG_WARNING << "Grammar rejected token " << token_id << " for request " << req.req_id;
+    }
+  }
+}
+
+
+void Sampler::ApplyTokenBitmaskSelective(float* logits, void* bitmask_data, int vocab_size,
+                                         const std::vector<size_t>& logits_offsets, Stream& stream) {
+  KLLM_LOG_DEBUG << "BitmaskSelective parameters: vocab_size=" << vocab_size
+                 << ", num_requests=" << logits_offsets.size()
+                 << ", bitmask_stride=" << static_cast<int>(std::ceil(vocab_size / kBitsPerInt));
+
+#ifdef ENABLE_CUDA
+  const int bitmask_stride = static_cast<int>(std::ceil(vocab_size / kBitsPerInt));
+
+  // Apply bitmask to each grammar-enabled request individually
+  for (size_t i = 0; i < logits_offsets.size(); ++i) {
+    float* request_logits = logits + logits_offsets[i] * vocab_size;
+    int32_t* request_bitmask = static_cast<int32_t*>(bitmask_data) + i * bitmask_stride;
+
+    // Apply bitmask for single request
+    InvokeApplyTokenBitmaskInplace<float>(request_logits, request_bitmask, nullptr, vocab_size, vocab_size,
+                                          bitmask_stride, 1, stream.Get());
+  }
+#else
+  // NPU implementation: empty implementation for now
+  KLLM_THROW("ApplyTokenBitmask is not supported on NPU.");
+#endif
+}
 }  // namespace ksana_llm

@@ -268,6 +268,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
   batch_scheduler_config_.enable_mtp_module =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_mtp_module", false);
+  batch_scheduler_config_.enable_xgrammar =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", false);
 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 

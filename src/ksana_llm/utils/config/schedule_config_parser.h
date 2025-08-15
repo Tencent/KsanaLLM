@@ -95,6 +95,8 @@ struct BatchSchedulerConfig {
 
   bool enable_speculative_decoding = false;
   bool enable_mtp_module = false;
+
+  bool enable_xgrammar = false;
 };
 
 struct AllocatorConfig {

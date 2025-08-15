@@ -123,6 +123,13 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
     return finish_status;
   }
 
+  // Process grammar compilation for structured output
+  for (auto& req : infer_request_group) {
+    if (req->sampling_config.enable_structured_output && !req->sampling_config.json_schema.empty()) {
+      ProcessGrammarCompilation(req);
+    }
+  }
+
   return EnqueueWaitingBufferQueue(infer_request_group);
 }
 
@@ -403,6 +410,32 @@ void BatchScheduler::ReportTotalState() {
                 << ", swapped_req_num=" << total_swapped_size << ", total_block_num=" << total_block_num
                 << ", free_block_num=" << total_free_blocks_num
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "%";
+}
+
+void BatchScheduler::RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend) {
+  grammar_backend_ = grammar_backend;
+  KLLM_LOG_INFO << "Grammar backend registered successfully";
+}
+
+void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req) {
+  if (!grammar_backend_) {
+    KLLM_LOG_WARNING << "Grammar backend not available, skipping grammar compilation for request "
+                     << req->req_id;
+    return;
+  }
+
+  try {
+    auto compiled_grammar = grammar_backend_->CompileJSONSchema(req->sampling_config.json_schema);
+
+    // Create grammar matcher
+    req->grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
+
+    // TODO(ethanyczeng): The online service requires a log, which will be deleted later.
+    KLLM_LOG_DEBUG << "Grammar compiled successfully for request " << req->req_id;
+  } catch (const std::exception& e) {
+    KLLM_LOG_WARNING << "Failed to compile grammar for request " << req->req_id << ": " << e.what();
+    req->grammar_matcher = nullptr;
+  }
 }
 
 Status BatchScheduler::CreateMockReq(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {

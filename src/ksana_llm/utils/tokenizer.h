@@ -26,6 +26,9 @@ class Tokenizer {
   // Encode the given prompt into token ids
   Status Encode(const std::string& prompt, std::vector<int>& input_tokens, bool add_special_tokens = true);
 
+  // Extract vocabulary information for grammar initialization
+  Status GetVocabInfo(std::vector<std::string>& vocab, int& vocab_size, std::vector<int>& stop_token_ids);
+
  public:
   py::object tokenizer_;
 };

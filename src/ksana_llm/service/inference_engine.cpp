@@ -278,8 +278,35 @@ Status InferenceEngine::Initialize() {
   // Initialize tokenzier
   Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_instances_[0]->GetModelConfig().path);
 
+  // Initialize grammar backend for structured output
+  if (batch_scheduler_config.enable_xgrammar) {
+    std::vector<std::string> vocab;
+    int vocab_size = static_cast<int>(model_config.vocab_size);
+    std::vector<int> stop_token_ids;
+
+    auto tokenizer = Singleton<Tokenizer>::GetInstance();
+    status = tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
+    if (status.OK()) {
+      try {
+        grammar_backend_ = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
+        KLLM_LOG_INFO << "Grammar backend initialized with final vocab_size: " << vocab_size;
+      } catch (const std::exception &e) {
+        return Status(RET_RUNTIME_FAILED, "Grammar backend initialization failed: " + std::string(e.what()));
+      }
+    } else {
+      KLLM_LOG_WARNING << "Failed to get vocab info: " << status.GetMessage() << ". Structured output disabled.";
+      grammar_backend_ = nullptr;
+    }
+  }
+
   // Create batch scheduler.
-  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
+  batch_scheduler_ =
+    std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
+
+  // Register grammar backend if enabled
+  if (grammar_backend_) {
+    batch_scheduler_->RegisterGrammar(grammar_backend_);
+  }
 
   for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);

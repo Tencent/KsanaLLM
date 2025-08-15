@@ -20,5 +20,7 @@ include(external/polaris_cpp)
 include(external/yaml-cpp)
 include(external/cppzmq)
 include(external/libzmq)
+include(external/xgrammar)
+
 # import subprojects
 add_subdirectory(ksana_llm)

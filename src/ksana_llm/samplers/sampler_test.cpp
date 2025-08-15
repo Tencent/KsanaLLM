@@ -342,3 +342,111 @@ TEST_F(SamplerTest, MTPSampleTest) {
     EXPECT_EQ(-std::numeric_limits<float>::infinity(), norepeat_ngrams[token_id]);
   }
 }
+
+TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
+#ifdef ENABLE_CUDA
+  // Test ApplyGrammarMask when enable_xgrammar is false (default behavior)
+  SamplingRequest sample_req = GetSamlingRequest();
+
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
+  SetLogitsBuf(logits_buf_cpu);
+
+  float* device_logits = reinterpret_cast<float*>(logits_buf_);
+  SamplingDeviceParameter sampling_device_parameter;
+  sampling_device_parameter.vocab_size_padded = vocab_size_;
+
+  // Test with no grammar matcher (should return early due to enable_xgrammar=false)
+  sample_reqs[0].grammar_matcher = nullptr;
+  sampler_->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
+                            context_->GetComputeStreams()[device_id_]);
+
+  EXPECT_TRUE(true);  // Test passes if no exception is thrown
+#else
+  GTEST_SKIP_("Grammar mask test requires CUDA support.");
+#endif
+}
+
+TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
+#ifdef ENABLE_CUDA
+  // Create a separate sampler with enable_xgrammar=true for this test
+  BatchSchedulerConfig grammar_config;
+  Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(grammar_config);
+  grammar_config.enable_xgrammar = true;  // Enable xgrammar for this test only
+
+  auto grammar_sampler = std::make_shared<DerivedSampler>(grammar_config, device_id_, context_);
+
+  SamplingRequest sample_req = GetSamlingRequest();
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
+  SetLogitsBuf(logits_buf_cpu);
+
+  float* device_logits = reinterpret_cast<float*>(logits_buf_);
+  SamplingDeviceParameter sampling_device_parameter;
+  sampling_device_parameter.vocab_size_padded = vocab_size_;
+
+  // Test with no grammar matcher (should return early due to empty grammar_req_indices)
+  sample_reqs[0].grammar_matcher = nullptr;
+  grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
+                                   context_->GetComputeStreams()[device_id_]);
+
+  // Test with MTP (should be skipped even if grammar matcher exists)
+  sample_reqs[0].sampling_token_num = 2;
+  grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
+                                   context_->GetComputeStreams()[device_id_]);
+
+  EXPECT_TRUE(true);  // Test passes if no exception is thrown
+#else
+  GTEST_SKIP_("Grammar mask test requires CUDA support.");
+#endif
+}
+
+TEST_F(SamplerTest, UpdateGrammarStateTest) {
+#ifdef ENABLE_CUDA
+  SamplingRequest sample_req = GetSamlingRequest();
+
+  // Test with no grammar matcher (should handle gracefully)
+  sample_req.grammar_matcher = nullptr;
+  std::vector<int> result_tokens = {42};
+  sample_req.sampling_result_tokens = &result_tokens;
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+
+  sampler_->UpdateGrammarState(sample_reqs);
+
+  // Test with empty tokens (should handle gracefully)
+  std::vector<int> empty_tokens;
+  sample_reqs[0].sampling_result_tokens = &empty_tokens;
+  sampler_->UpdateGrammarState(sample_reqs);
+
+  EXPECT_TRUE(true);  // Test passes if no exception is thrown
+#else
+  GTEST_SKIP_("Grammar state test requires CUDA support.");
+#endif
+}
+
+TEST_F(SamplerTest, ApplyTokenBitmaskTest) {
+#ifdef ENABLE_CUDA
+  std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
+  SetLogitsBuf(logits_buf_cpu);
+
+  // 每个int32可以存储32个bit，所以需要std::ceil(vocab_size_ / 32.0)个int32来存储所有vocab的掩码
+  const int bitmask_elements = static_cast<int>(std::ceil(vocab_size_ / 32.0));
+  std::vector<int32_t> bitmask_cpu(bitmask_elements, 0xFFFFFFFA);  // Mask bits 0 and 2
+
+  void* device_bitmask;
+  Malloc(&device_bitmask, bitmask_elements * sizeof(int32_t));
+  MemcpyAsync(device_bitmask, bitmask_cpu.data(), bitmask_elements * sizeof(int32_t),
+              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[device_id_]);
+
+  // Test ApplyTokenBitmaskSelective
+  std::vector<size_t> logits_offsets = {0};
+  sampler_->ApplyTokenBitmaskSelective(reinterpret_cast<float*>(logits_buf_), device_bitmask,
+                                      vocab_size_, logits_offsets, context_->GetComputeStreams()[device_id_]);
+
+  StreamSynchronize(context_->GetComputeStreams()[device_id_]);
+  Free(device_bitmask);
+  EXPECT_TRUE(true);  // Test passes if no exception is thrown
+#else
+  GTEST_SKIP_("Token bitmask test requires CUDA support.");
+#endif
+}

@@ -118,7 +118,9 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("length_penalty", &ksana_llm::SamplingConfig::length_penalty)
       .def_readwrite("stop_token_ids", &ksana_llm::SamplingConfig::stop_token_ids)
       .def_readwrite("ignore_eos", &ksana_llm::SamplingConfig::ignore_eos)
-      .def_readwrite("stop_strings", &ksana_llm::SamplingConfig::stop_strings);
+      .def_readwrite("stop_strings", &ksana_llm::SamplingConfig::stop_strings)
+      .def_readwrite("enable_structured_output", &ksana_llm::SamplingConfig::enable_structured_output)
+      .def_readwrite("json_schema", &ksana_llm::SamplingConfig::json_schema);
 
   // Export `EmbeddingSlice` to python.
   pybind11::class_<ksana_llm::EmbeddingSlice, std::shared_ptr<ksana_llm::EmbeddingSlice>>(m, "EmbeddingSlice")

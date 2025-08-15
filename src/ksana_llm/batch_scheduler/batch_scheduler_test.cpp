@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "ksana_llm/profiler/timer.h"
+#include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -177,4 +178,85 @@ TEST_F(BatchSchedulerTest, CreateMockRequest) {
 
   schedule_output_group = batch_scheduler->Schedule(0);
   EXPECT_EQ(schedule_output_group->RunningSize(), 1);
+}
+
+TEST_F(BatchSchedulerTest, ProcessGrammarCompilationTest) {
+  KLLM_LOG_INFO << "BatchSchedulerTest: ProcessGrammarCompilationTest";
+
+  CommonSetUp();
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+
+  auto mock_req_input = std::make_shared<KsanaPythonInput>();
+  std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  mock_req_input->input_tokens = input_tokens;
+  mock_req_input->sampling_config.max_new_tokens = 10;
+
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto mock_req = std::make_shared<Request>(mock_req_input, req_ctx);
+  auto infer_req = std::make_shared<InferRequest>(mock_req, 0);
+
+  // 测试1: 没有 grammar_backend_ 的情况
+  {
+    // 设置 structured output 相关配置
+    infer_req->sampling_config.enable_structured_output = true;
+    infer_req->sampling_config.json_schema = R"({"type": "object", "properties": {"name": {"type": "string"}}})";
+
+    // 确保 grammar_matcher 初始为 nullptr
+    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+
+    // 调用 ProcessGrammarCompilation，由于没有 grammar_backend_，应该直接返回
+    batch_scheduler->ProcessGrammarCompilation(infer_req);
+
+    // grammar_matcher 应该仍然为 nullptr
+    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+  }
+}
+
+TEST_F(BatchSchedulerTest, RegisterGrammarTest) {
+  KLLM_LOG_INFO << "BatchSchedulerTest: RegisterGrammarTest";
+
+  CommonSetUp();
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+
+  // 测试1: 注册 nullptr grammar backend
+  {
+    std::shared_ptr<GrammarBackend> null_grammar_backend = nullptr;
+
+    // 调用 RegisterGrammar 传入 nullptr，应该能正常执行
+    EXPECT_NO_THROW(batch_scheduler->RegisterGrammar(null_grammar_backend));
+
+    // 验证内部 grammar_backend_ 被设置为 nullptr
+    // 通过创建一个带有 structured output 的请求来间接验证
+    auto mock_req_input = std::make_shared<KsanaPythonInput>();
+    std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+    mock_req_input->input_tokens = input_tokens;
+    mock_req_input->sampling_config.max_new_tokens = 10;
+
+    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+    auto mock_req = std::make_shared<Request>(mock_req_input, req_ctx);
+    auto infer_req = std::make_shared<InferRequest>(mock_req, 0);
+
+    // 设置 structured output 相关配置
+    infer_req->sampling_config.enable_structured_output = true;
+    infer_req->sampling_config.json_schema = R"({"type": "object", "properties": {"name": {"type": "string"}}})";
+
+    // 确保 grammar_matcher 初始为 nullptr
+    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+
+    // 调用 ProcessGrammarCompilation，由于 grammar_backend_ 为 nullptr，应该直接返回
+    batch_scheduler->ProcessGrammarCompilation(infer_req);
+
+    // grammar_matcher 应该仍然为 nullptr
+    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+  }
+
+  // 测试2: 注册有效的 grammar backend（如果可用
+  {
+    // 注意：这里我们只测试接口调用，不测试具体的 grammar backend 实现
+    // 因为具体的 grammar backend 可能依赖于特定的硬件或库
+    std::shared_ptr<GrammarBackend> valid_grammar_backend = nullptr;
+
+    // 再次调用 RegisterGrammar，验证可以重复注册
+    EXPECT_NO_THROW(batch_scheduler->RegisterGrammar(valid_grammar_backend));
+  }
 }

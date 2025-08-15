@@ -249,4 +249,12 @@ void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs
 
 void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream);
 
+// Apply token bitmask to logits for grammar-constrained sampling, setting masked tokens to negative infinity
+// logits-输入输出的logits数据, bitmask-位掩码数组, indices-可选索引数组
+// vocab_size-词汇表大小, logits_stride-logits行步长, bitmask_stride-掩码行步长, num_rows-批次大小
+template <typename T>
+void InvokeApplyTokenBitmaskInplace(void* logits, const void* bitmask, const void* indices, int32_t vocab_size,
+                                    int32_t logits_stride, int32_t bitmask_stride, int32_t num_rows,
+                                    cudaStream_t stream);
+
 }  // namespace ksana_llm

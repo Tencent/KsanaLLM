@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
@@ -57,6 +58,9 @@ struct SamplingRequest {
   NgramDict* ngram_dict = nullptr;
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
+
+  // Grammar matcher for constrained generation, defaults to nullptr (no grammar constraints)
+  std::shared_ptr<GrammarMatcherWrapper> grammar_matcher;
 };
 
 }  // namespace ksana_llm

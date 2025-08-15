@@ -19,6 +19,7 @@
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -47,6 +48,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void Stop() override;
 
+  // Register grammar backend for structured output
+  void RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend);
+
   std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
 
  private:
@@ -67,6 +71,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // report the state of all instance
   void ReportTotalState();
+
+  // grammar compilation
+  void ProcessGrammarCompilation(std::shared_ptr<InferRequest> req);
 
  private:
   // The config of batch scheduler.
@@ -113,6 +120,8 @@ class BatchScheduler : public BatchSchedulerInterface {
   // To avoid variables destruction， while mock req will reference KsanaPythonInput and Request.
   std::shared_ptr<Request> alias_mock_request_;
   std::shared_ptr<KsanaPythonInput> alias_python_input_;
+  // The grammar backend for structured output.
+  std::shared_ptr<GrammarBackend> grammar_backend_ = nullptr;
 };
 
 }  // namespace ksana_llm

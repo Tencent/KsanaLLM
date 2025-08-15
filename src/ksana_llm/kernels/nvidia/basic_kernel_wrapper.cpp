@@ -44,6 +44,7 @@
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
 #include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
+#include "csrc/kernels/nvidia/samplers/apply_token_bitmask_inplace.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
 
@@ -987,4 +988,29 @@ INVOKE_SPLIT(__nv_bfloat16);
 void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ProcessKvList(kv_list, layer_num, block_num, block_size, stream));
 }
+// Apply token bitmask to logits for grammar-constrained sampling
+template <typename T>
+void InvokeApplyTokenBitmaskInplace(void* logits, const void* bitmask, const void* indices, int32_t vocab_size,
+                                    int32_t logits_stride, int32_t bitmask_stride, int32_t num_rows,
+                                    cudaStream_t stream) {
+  if (logits == nullptr || bitmask == nullptr) {
+    KLLM_LOG_ERROR << "logits or bitmask pointer is null, cannot apply token bitmask";
+    return;
+  }
+
+  const int32_t* bitmask_ptr = static_cast<const int32_t*>(bitmask);
+  const int32_t* indices_ptr = (indices != nullptr) ? static_cast<const int32_t*>(indices) : nullptr;
+
+  // Call the underlying CUDA kernel implementation
+  llm_kernels::nvidia::ApplyTokenBitmaskInplace<T>(static_cast<T*>(logits), bitmask_ptr, indices_ptr, vocab_size,
+                                                   logits_stride, bitmask_stride, num_rows, stream);
+}
+#define INVOKE_APPLY_TOKEN_BITMASK_INPLACE(T)                                                                        \
+  template void InvokeApplyTokenBitmaskInplace<T>(void* logits, const void* bitmask, const void* indices,            \
+                                                  int32_t vocab_size, int32_t logits_stride, int32_t bitmask_stride, \
+                                                  int32_t num_rows, cudaStream_t stream);
+INVOKE_APPLY_TOKEN_BITMASK_INPLACE(float);
+INVOKE_APPLY_TOKEN_BITMASK_INPLACE(half);
+INVOKE_APPLY_TOKEN_BITMASK_INPLACE(__nv_bfloat16);
+#undef INVOKE_APPLY_TOKEN_BITMASK_INPLACE
 }  // namespace ksana_llm

@@ -7,6 +7,7 @@
 #include "ksana_llm/samplers/base/base_sampling.h"
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 
@@ -56,6 +57,17 @@ class Sampler {
                                      const std::vector<int>* output_tokens, NgramDict* ngram_dict, const int vocab_size,
                                      size_t last_step_token_num, Stream& stream);
 
+  // Apply grammar constraints to logits for requests with grammar matchers
+  void ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+                        const SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
+
+  // Update grammar state after token selection for grammar-enabled requests
+  void UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs);
+
+  // Apply token bitmask selectively to grammar-enabled requests only
+  void ApplyTokenBitmaskSelective(float* logits, void* bitmask_data, int vocab_size,
+                                  const std::vector<size_t>& logits_offsets, Stream& stream);
+
  private:
   const BatchSchedulerConfig batch_schedule_config_;
   const int rank_;
@@ -81,6 +93,10 @@ class Sampler {
   std::shared_ptr<Context> context_;
   std::vector<float> inv_repetition_penalties_;
   std::vector<float> norepeat_ngrams_;
+
+  // Grammar-related buffers
+  int32_t* device_vocab_mask_ = nullptr;
+  std::vector<int32_t> host_vocab_mask_;
 };
 
 }  // namespace ksana_llm

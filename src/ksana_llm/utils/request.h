@@ -9,6 +9,7 @@
 
 #include "ksana_llm/profiler/profiler.h"
 #include "ksana_llm/utils/finite_state_machine.h"
+#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -57,6 +58,10 @@ struct SamplingConfig {
 
   // In generation phasse, when stop strings are meet, the request will be stopped and truncated
   std::vector<std::string> stop_strings;
+
+  // The JSON string for guided Encoding generation.
+  std::string json_schema;
+  bool enable_structured_output = false;
 
   // Check and adjust sampling config arguments.
   Status VerifyArgs();
@@ -245,6 +250,10 @@ class Request {
 
   // The FiniteStateMachine when using structured output optimization.
   std::shared_ptr<FiniteStateMachine> req_fsm;
+
+  // grammar matcher
+  std::shared_ptr<GrammarMatcherWrapper> grammar_matcher = nullptr;
+  bool grammar_finished = false;
 
   // This is a unique ID for the KV transformer group.
   int64_t kv_comm_request_id;

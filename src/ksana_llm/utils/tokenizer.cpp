@@ -43,4 +43,59 @@ Status Tokenizer::Encode(const std::string& prompt, std::vector<int>& input_toke
   input_tokens = tokens.cast<std::vector<int>>();
   return Status();
 }
+
+Status Tokenizer::GetVocabInfo(std::vector<std::string>& vocab, int& vocab_size, std::vector<int>& stop_token_ids) {
+  // Ref: https://github.com/mlc-ai/xgrammar/blob/v0.1.21/python/xgrammar/tokenizer_info.py#L146
+  try {
+    pybind11::gil_scoped_acquire acquire;
+    py::dict vocab_dict = tokenizer_.attr("get_vocab")();
+
+    // Some tokenizer don't have token id 0 or 1 or 2. So the max_id could be larger than the
+    // number of tokens. This follows xgrammar's from_huggingface implementation.
+    int max_id = -1;
+    for (auto item : vocab_dict) {
+      int token_id = item.second.cast<int>();
+      max_id = std::max(max_id, token_id);
+    }
+
+    // Use the input vocab_size (from model_config) or tokenizer_vocab_size, whichever is larger
+    // This follows xgrammar's logic where vocab_size can be larger than tokenizer's vocabulary size
+    int tokenizer_vocab_size = std::max(static_cast<int>(vocab_dict.size()), max_id + 1);
+    int final_vocab_size = std::max(vocab_size, tokenizer_vocab_size);
+
+    vocab.resize(final_vocab_size);
+
+    // maintain tokenizer's indexing
+    for (auto item : vocab_dict) {
+      std::string token = item.first.cast<std::string>();
+      int token_id = item.second.cast<int>();
+      if (token_id < final_vocab_size) {
+        vocab[token_id] = token;
+      }
+    }
+
+    // Get stop token ids
+    stop_token_ids.clear();
+    if (py::hasattr(tokenizer_, "eos_token_id")) {
+      py::object eos_token_id = tokenizer_.attr("eos_token_id");
+      if (!eos_token_id.is_none()) {
+        stop_token_ids.push_back(eos_token_id.cast<int>());
+      }
+    }
+
+    // Update vocab_size to the final calculated value
+    vocab_size = final_vocab_size;
+
+    KLLM_LOG_INFO << "Extracted tokenizer info: input_vocab_size=" << vocab_size
+                  << ", tokenizer_vocab_size=" << tokenizer_vocab_size << ", final_vocab_size=" << final_vocab_size
+                  << ", vocab_dict_size=" << vocab_dict.size() << ", max_token_id=" << max_id
+                  << ", stop_tokens=" << stop_token_ids.size();
+
+    return Status();
+  } catch (const std::exception& e) {
+    KLLM_LOG_WARNING << "Failed to extract tokenizer info: " << e.what();
+    return Status(RET_INVALID_ARGUMENT, "Failed to extract tokenizer information");
+  }
+}
+
 }  // namespace ksana_llm

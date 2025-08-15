@@ -364,6 +364,7 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     }
     sampling_req.ngram_dict = &(req_ptr->ngram_dict);
     sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
+    sampling_req.grammar_matcher = req_ptr->grammar_matcher;
     sampling_reqs.push_back(sampling_req);
   }
 }
@@ -453,6 +454,10 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
     if (req->mtp_kv_cached_token_num != req->kv_cached_token_num) {
       continue;
     }
+    if (req->grammar_matcher) {
+      // TODO(ethanyczeng): Add MTP support
+      continue;
+    }
     mtp_reqs.emplace_back(req);
   }
 
@@ -497,6 +502,10 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
   }
   PROFILE_EVENT_SCOPE(GenerateDraftToken_, fmt::format("GenerateDraftToken"));
   for (auto& req : reqs) {
+    if (req->grammar_matcher) {
+      // TODO(ethanyczeng): Add MTP support
+      continue;
+    }
     std::vector<int> tokens;
     tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +
                    kStepGenerateTokenNum + req->draft_tokens.mtp.size());

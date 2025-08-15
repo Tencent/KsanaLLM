@@ -43,6 +43,7 @@ class InferenceEngineTest : public ::testing::Test {
     inference_engine_ = std::make_shared<InferenceEngine>(request_queue_);
   }
 
+
   std::shared_ptr<InferenceEngine> inference_engine_;
 
   Channel<std::pair<Status, std::shared_ptr<Request>>> request_queue_;

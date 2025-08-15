@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "csrc/kernels/nvidia/samplers/apply_token_bitmask_inplace.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/kernels/nvidia/samplers/repetition_penalty.h"
 #include "csrc/kernels/nvidia/samplers/sampling_topk_kernels.h"
@@ -344,6 +345,171 @@ TEST_F(LlamaNvidiaSamplersTestSuit, InvokeRepetitionPenaltyTest) {
     DeleteBuffer(output_ref);
     DeleteBuffer(output_ref_device);
   }
+}
+
+TEST_F(LlamaNvidiaSamplersTestSuit, ApplyTokenBitmaskInplaceHalfTest) {
+  using DataType = __half;
+  
+  // 使用batch_size=2来验证多batch场景，不再验证 batch = 1 的情况
+  int32_t batch_size = 2;
+  int32_t vocab_size = 16;
+  int32_t logits_stride = vocab_size;
+  // 计算bitmask步长：每个int32可以存储32个bit，所以需要(vocab_size + 31) / 32个int32来存储所有vocab的掩码
+  int32_t bitmask_stride = (vocab_size + 31) / 32;
+  
+  // 创建logits数据 - 扩展范围包含负值以验证负值掩码场景
+  BufferMeta logits = CreateBuffer<DataType>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size), static_cast<size_t>(vocab_size)}, true, -1.5, 1.5);
+  
+  // 创建bitmask数据：为每个batch设置不同的掩码模式
+  BufferMeta cpu_bitmask = CreateBuffer<int32_t>(MemoryType::MEMORY_CPU_PINNED, {static_cast<size_t>(batch_size), static_cast<size_t>(bitmask_stride)});
+  int32_t* bitmask_ptr = static_cast<int32_t*>(cpu_bitmask.data_ptr);
+  
+  // batch 0: mask所有偶数位置的token (0xAAAA = 1010101010101010)
+  bitmask_ptr[0] = 0xAAAA;
+  // batch 1: mask所有奇数位置的token (0x5555 = 0101010101010101)
+  bitmask_ptr[1] = 0x5555;
+  
+  BufferMeta bitmask = CopyToDevice<int32_t>(cpu_bitmask);
+  
+  // 复制原始logits用于验证
+  BufferMeta original_logits = CopyToHost<DataType>(logits);
+  
+  // 调用kernel
+  ApplyTokenBitmaskInplace<DataType>(
+    static_cast<DataType*>(logits.data_ptr),
+    static_cast<const int32_t*>(bitmask.data_ptr),
+    nullptr,
+    vocab_size,
+    logits_stride,
+    bitmask_stride,
+    batch_size,
+    stream
+  );
+  
+  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+  
+  // 验证结果
+  BufferMeta result_logits = CopyToHost<DataType>(logits);
+  DataType* original_ptr = static_cast<DataType*>(original_logits.data_ptr);
+  DataType* result_ptr = static_cast<DataType*>(result_logits.data_ptr);
+  
+  // 验证batch 0: 偶数位置应该被mask，奇数位置保持不变
+  for (int i = 0; i < vocab_size; i++) {
+    int batch0_idx = 0 * vocab_size + i;
+    if (i % 2 == 0) {
+      // 偶数位置应该被mask为负无穷
+      EXPECT_TRUE(std::isinf(static_cast<float>(result_ptr[batch0_idx])) && static_cast<float>(result_ptr[batch0_idx]) < 0)
+        << "Batch 0, position " << i << " should be masked (negative infinity)";
+    } else {
+      // 奇数位置应该保持不变
+      EXPECT_EQ(static_cast<float>(result_ptr[batch0_idx]), static_cast<float>(original_ptr[batch0_idx]))
+        << "Batch 0, position " << i << " should remain unchanged";
+    }
+  }
+  
+  // 验证batch 1: 奇数位置应该被mask，偶数位置保持不变
+  for (int i = 0; i < vocab_size; i++) {
+    int batch1_idx = 1 * vocab_size + i;
+    if (i % 2 == 1) {
+      // 奇数位置应该被mask为负无穷
+      EXPECT_TRUE(std::isinf(static_cast<float>(result_ptr[batch1_idx])) && static_cast<float>(result_ptr[batch1_idx]) < 0)
+        << "Batch 1, position " << i << " should be masked (negative infinity)";
+    } else {
+      // 偶数位置应该保持不变
+      EXPECT_EQ(static_cast<float>(result_ptr[batch1_idx]), static_cast<float>(original_ptr[batch1_idx]))
+        << "Batch 1, position " << i << " should remain unchanged";
+    }
+  }
+  
+  // 清理内存
+  DeleteBuffer(result_logits);
+  DeleteBuffer(original_logits);
+  DeleteBuffer(bitmask);
+  DeleteBuffer(cpu_bitmask);
+  DeleteBuffer(logits);
+}
+
+TEST_F(LlamaNvidiaSamplersTestSuit, ApplyTokenBitmaskInplaceFloatTest) {
+  using DataType = float;
+  
+  // 测试参数 - 使用batch_size=2来验证多batch独立处理
+  int32_t batch_size = 2;
+  int32_t vocab_size = 32;  // 验证vocab_size为32的情况下，测试更复杂的掩码模式（32正好是一个int32的位数，便于测试完整的位掩码）
+  int32_t logits_stride = vocab_size;
+
+  // 计算bitmask步长：每个int32可以存储32个bit，所以需要(vocab_size + 31) / 32个int32来存储所有vocab的掩码
+  int32_t bitmask_stride = (vocab_size + 31) / 32;  
+
+  // 创建logits数据 - 扩展范围包含负值以验证负值掩码场景
+  BufferMeta logits = CreateBuffer<DataType>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size), static_cast<size_t>(vocab_size)}, true, -1.5, 1.5);
+  
+  // 创建bitmask数据：为每个batch设置不同的掩码模式
+  BufferMeta cpu_bitmask = CreateBuffer<int32_t>(MemoryType::MEMORY_CPU_PINNED, {static_cast<size_t>(batch_size), static_cast<size_t>(bitmask_stride)});
+  int32_t* bitmask_ptr = static_cast<int32_t*>(cpu_bitmask.data_ptr);
+  
+  // batch 0: mask前16位 (0xFFFF0000)
+  bitmask_ptr[0] = 0xFFFF0000;
+  // batch 1: mask后16位 (0x0000FFFF)
+  bitmask_ptr[1] = 0x0000FFFF;
+  
+  BufferMeta bitmask = CopyToDevice<int32_t>(cpu_bitmask);
+  
+  // 复制原始logits用于验证
+  BufferMeta original_logits = CopyToHost<DataType>(logits);
+  
+  // 调用kernel
+  ApplyTokenBitmaskInplace<DataType>(
+    static_cast<DataType*>(logits.data_ptr),
+    static_cast<const int32_t*>(bitmask.data_ptr),
+    nullptr,
+    vocab_size,
+    logits_stride,
+    bitmask_stride,
+    batch_size,
+    stream
+  );
+  
+  CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+  
+  // 验证结果
+  BufferMeta result_logits = CopyToHost<DataType>(logits);
+  DataType* original_ptr = static_cast<DataType*>(original_logits.data_ptr);
+  DataType* result_ptr = static_cast<DataType*>(result_logits.data_ptr);
+  
+  // 验证batch 0: 前16位应该被mask，后16位保持不变
+  for (int i = 0; i < vocab_size; i++) {
+    int batch0_idx = 0 * vocab_size + i;
+    if (i < 16) {
+      // 前16位应该被mask为负无穷
+      EXPECT_TRUE(std::isinf(result_ptr[batch0_idx]) && result_ptr[batch0_idx] < 0)
+        << "Batch 0, position " << i << " should be masked (negative infinity)";
+    } else {
+      // 后16位应该保持不变
+      EXPECT_EQ(result_ptr[batch0_idx], original_ptr[batch0_idx])
+        << "Batch 0, position " << i << " should remain unchanged";
+    }
+  }
+  
+  // 验证batch 1: 后16位应该被mask，前16位保持不变
+  for (int i = 0; i < vocab_size; i++) {
+    int batch1_idx = 1 * vocab_size + i;
+    if (i >= 16) {
+      // 后16位应该被mask为负无穷
+      EXPECT_TRUE(std::isinf(result_ptr[batch1_idx]) && result_ptr[batch1_idx] < 0)
+        << "Batch 1, position " << i << " should be masked (negative infinity)";
+    } else {
+      // 前16位应该保持不变
+      EXPECT_EQ(result_ptr[batch1_idx], original_ptr[batch1_idx])
+        << "Batch 1, position " << i << " should remain unchanged";
+    }
+  }
+  
+  // 清理内存
+  DeleteBuffer(result_logits);
+  DeleteBuffer(original_logits);
+  DeleteBuffer(bitmask);
+  DeleteBuffer(cpu_bitmask);
+  DeleteBuffer(logits);
 }
 
 }  // namespace test
