@@ -437,15 +437,14 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
 // [vLLM Project]
 // https://github.com/Chen-XiaoBing/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L1271
 template <typename T, bool UseExpertParallel>
-void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,
-                    const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk,
-                    int num_expert_group, int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin,
-                    bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q,
-                    void* a1_scale, void* a2_scale, std::vector<int> block_shape, void* topk_weights_ptr,
-                    void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,
-                    void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
-                    void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,
-                    size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream) {
+void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk, DataType weight_dtype,
+                    DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale,
+                    void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,
+                    std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
+                    float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1,
+                    void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
+                    int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,
+                    void* dequant_workspace, int rank, cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
   // w1 [num_experts, inter_size * 2, hidden_size]
   // w2 [num_experts, hidden_size, inter_size]
@@ -520,7 +519,6 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
   const size_t fill_info_reserved_size = 3;
   // [start_offset0, length0, value0, ..., start_offsetN, lengthN, valueN]
   std::vector<int> fill_info(fill_info_reserved_size);
-  fill_info.reserve(fill_info_reserved_size);
   for (int i = 0; i < chunk_times; ++i) {
     // curr_hidden_states [tokens_in_chunk, hidden_size]
     // curr_interm_cache1 [tokens_in_chunk, topk, inter_size * 2]
@@ -537,8 +535,10 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
     void* curr_intermediate_cache3 = intermediate_cache3;
 
     void* fill_info_buffer_on_device = fused_id_buffer;
+    // Offset by `SGL_MOE_ALIGN_BLOCK_VEC_SIZE=4` instead of `fill_info.size()=3` to facilitate int4 vectorization in
+    // the `sgl_moe_align_block_size` kernel
     void* curr_fused_id_buffer =
-        fill_info_buffer_on_device + fill_info_reserved_size * sizeof(decltype(fill_info)::value_type);
+        fill_info_buffer_on_device + SGL_MOE_ALIGN_BLOCK_VEC_SIZE * sizeof(decltype(fill_info)::value_type);
     int id_buffer_offset = 0;
 
     // moe_align_block_size
@@ -546,14 +546,17 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
     int numel = tokens_in_chunk * topk;
     int max_num_tokens_padded = numel + num_experts * (block_size - 1);
     // torch::Tensor sorted_ids = torch::empty({max_num_tokens_padded}, int32_options);
-    fill_info[0] = id_buffer_offset;
-    fill_info[1] = max_num_tokens_padded;
-    fill_info[2] = numel;
     void* sorted_ids_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
-    // sorted_ids.fill_(numel);
-    llm_kernels::nvidia::InvokeFillIntToBuffer(reinterpret_cast<int32_t*>(curr_fused_id_buffer),
-                                               fill_info_buffer_on_device, reinterpret_cast<int*>(fill_info.data()),
-                                               fill_info.size(), stream);
+    // When `num_experts < 224`, we `InvokeFillIntToBuffer` to perform `sorted_ids.fill_(numel)`;
+    // otherwise, we fuse `sorted_ids.fill_(numel)` into the `sgl_moe_align_block_size` kernel
+    if (num_experts < 224) {
+      fill_info[0] = id_buffer_offset;
+      fill_info[1] = max_num_tokens_padded;
+      fill_info[2] = numel;
+      llm_kernels::nvidia::InvokeFillIntToBuffer(reinterpret_cast<int32_t*>(curr_fused_id_buffer),
+                                                 fill_info_buffer_on_device, reinterpret_cast<int*>(fill_info.data()),
+                                                 fill_info.size(), stream);
+    }
     id_buffer_offset += max_num_tokens_padded;
 
     int max_num_m_blocks = (max_num_tokens_padded + block_size - 1) / block_size;
@@ -564,14 +567,16 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
     // torch::Tensor num_tokens_post_pad = torch::empty({1}, int32_options);
     void* num_tokens_post_pad_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
     id_buffer_offset += 1;
+    // The legacy vllm moe_align_block_size kernel only supports `num_experts < 224` due to shared memory limits;
+    // After EP refactoring, we will unify on the sglang version
     // TODO(zezhao): SglMoe need support Expert-Parallel
     if (num_experts >= 224) {
       // torch::Tensor cumsum = torch::empty({num_experts + 1}, int32_options);
       void* cumsum_ptr = curr_fused_id_buffer + sizeof(int32_t) * id_buffer_offset;
       llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t>(
           reinterpret_cast<int32_t*>(curr_topk_ids), reinterpret_cast<int32_t*>(sorted_ids_ptr),
-          reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), num_experts,
-          block_size, numel, reinterpret_cast<int32_t*>(cumsum_ptr), stream);
+          reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr),
+          max_num_tokens_padded, num_experts, block_size, numel, reinterpret_cast<int32_t*>(cumsum_ptr), stream);
     } else {
       // https://github.com/vllm-project/vllm/blob/185cc19f922a29868bf62e4f2674c763df36c8b5/csrc/moe/moe_align_sum_kernels.cu#L296
       llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, UseExpertParallel>(
@@ -607,25 +612,23 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
   }
 }
 
-#define FUSEDMOE(T)                                                                                                   \
-  template void InvokeFusedMoe<T, true>(                                                                              \
-      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,                           \
-      const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,      \
-      int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, \
-      void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,               \
-      std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor,          \
-      void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,    \
-      void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,                        \
-      size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream);                         \
-  template void InvokeFusedMoe<T, false>(                                                                             \
-      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,                           \
-      const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,      \
-      int topk_group, DataType weight_dtype, DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, \
-      void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,               \
-      std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor,          \
-      void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,    \
-      void* fused_id_buffer, int num_tokens, int num_experts, int hidden_size, int inter_size,                        \
-      size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream)
+#define FUSEDMOE(T)                                                                                           \
+  template void InvokeFusedMoe<T, true>(                                                                      \
+      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, DataType weight_dtype,              \
+      DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp,   \
+      void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale, std::vector<int> block_shape,      \
+      void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,    \
+      void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, \
+      int num_tokens, int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,        \
+      void* dequant_workspace, int rank, cudaStream_t stream);                                                \
+  template void InvokeFusedMoe<T, false>(                                                                     \
+      void* hidden_states, void* w1, void* w2, int* expert_map, int topk, DataType weight_dtype,              \
+      DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp,   \
+      void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale, std::vector<int> block_shape,      \
+      void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,    \
+      void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, \
+      int num_tokens, int num_experts, int hidden_size, int inter_size, size_t world_expert_para_size,        \
+      void* dequant_workspace, int rank, cudaStream_t stream)
 FUSEDMOE(float);
 FUSEDMOE(half);
 FUSEDMOE(__nv_bfloat16);

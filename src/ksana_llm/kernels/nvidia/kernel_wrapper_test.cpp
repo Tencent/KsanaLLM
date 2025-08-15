@@ -199,7 +199,7 @@ TEST_F(KernelWrapperTest, ScaleQuantizeFp8E4m3Test) {
         }
       }
     }  // end j
-  }  // end i
+  }    // end i
 
   for (size_t i = 0; i < num_elements; i++) {
     if (fabsf(h_out[i]) > 0) {
@@ -285,7 +285,7 @@ TEST_F(KernelWrapperTest, MaxTest) {
 TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
   // 测试不同的num_tokens和num_experts组合
   std::vector<size_t> test_num_tokens = {32 /*, 512, 1024, 2048, 4096, 8192, 32000*/};
-  std::vector<size_t> test_num_experts = {256};
+  std::vector<size_t> test_num_experts = {128, 256};
   for (size_t num_tokens : test_num_tokens) {
     for (size_t num_experts : test_num_experts) {
       KLLM_LOG_INFO << fmt::format("===== Testing num_tokens= {}, num_experts={} =====", num_tokens, num_experts);
@@ -307,7 +307,7 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
       const std::unordered_map<std::string, int> config = {{"block_size_m", 64},
                                                            {"block_size_n", block_shape[0]},
                                                            {"block_size_k", block_shape[1]},
-                                                           {"group_size_m", 32},
+                                                           {"group_size_m", 1},
                                                            {"num_warps", 4},
                                                            {"num_stages", 3}};
       const int block_size = config.at("block_size_m");
@@ -459,17 +459,16 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
           sorted_ids = torch::empty({static_cast<int32_t>(max_num_tokens_padded)}, int32_options);
           sorted_ids.fill_(static_cast<int>(numel));
           expert_ids = torch::empty({static_cast<int32_t>(max_num_m_blocks)}, int32_options);
-          expert_ids.fill_(-1);
           num_tokens_post_pad = torch::empty({1}, int32_options);
         }
         {
           CudaEventTimer moe_align_block("AlignBlockSize", stream, cal_moe_align_block);
           if (num_experts_per_rank >= 224) {
-            torch::Tensor cumsum = torch::zeros({static_cast<int32_t>(num_experts_per_rank) + 1}, int32_options);
+            torch::Tensor cumsum = torch::empty({static_cast<int32_t>(num_experts_per_rank) + 1}, int32_options);
             llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t>(
                 reinterpret_cast<int32_t*>(topk_ids_ptr), sorted_ids.data_ptr<int32_t>(),
-                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), num_experts_per_rank,
-                block_size, numel, cumsum.data_ptr<int32_t>(), stream);
+                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), max_num_tokens_padded,
+                num_experts_per_rank, block_size, numel, cumsum.data_ptr<int32_t>(), stream);
           } else if (expert_para_size == 1) {
             llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, false>(
                 reinterpret_cast<int32_t*>(topk_ids_ptr), sorted_ids.data_ptr<int32_t>(),

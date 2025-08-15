@@ -31,14 +31,14 @@
 
 #include "csrc/utils/nvidia/cuda_utils.h"
 
-#define CEILDIV(x, y) (((x) + (y)-1) / (y))
-#define WARP_SIZE 32
-
 namespace llm_kernels {
 namespace nvidia {
 
+#define CEILDIV(x, y) (((x) + (y)-1) / (y))
+#define WARP_SIZE 32
+
 using FP8_TYPE = uint8_t;
-static constexpr float FP8_E4M3_MAX = 448.0f;
+inline constexpr float FP8_E4M3_MAX = 448.0f;
 
 namespace {
 __device__ __forceinline__ int32_t index(int32_t total_col, int32_t row, int32_t col) {
@@ -257,85 +257,6 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
   }
 }
 
-// TODO(simon): this is temporarily adapted from
-// https://github.com/sgl-project/sglang/commit/31548116a8dc8c6df7e146e0587335a59fc5b9d7
-// we did this to unblock Deepseek V3 but there should be a better
-// implementation to manage shared memory.
-template <typename scalar_t>
-__global__ void moe_align_block_size_global_mem_kernel(scalar_t* __restrict__ topk_ids, int32_t* sorted_token_ids,
-                                                       int32_t* expert_ids, int32_t* total_tokens_post_pad,
-                                                       int32_t num_experts, int32_t block_size, size_t numel,
-                                                       int32_t* tokens_cnts, int32_t* cumsum) {
-  const size_t tokens_per_thread = CEILDIV(numel, blockDim.x);
-  const size_t start_idx = threadIdx.x * tokens_per_thread;
-
-  for (int i = 0; i < num_experts; ++i) {
-    tokens_cnts[index(num_experts, threadIdx.x + 1, i)] = 0;
-  }
-
-  /**
-   * In the first step we compute token_cnts[thread_index + 1][expert_index],
-   * which counts how many tokens in the token shard of thread_index are
-   * assigned to expert expert_index.
-   */
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
-    ++tokens_cnts[index(num_experts, threadIdx.x + 1, topk_ids[i])];
-  }
-
-  __syncthreads();
-
-  // For each expert we accumulate the token counts from the different threads.
-  if (threadIdx.x < num_experts) {
-    tokens_cnts[index(num_experts, 0, threadIdx.x)] = 0;
-    for (int i = 1; i <= blockDim.x; ++i) {
-      tokens_cnts[index(num_experts, i, threadIdx.x)] += tokens_cnts[index(num_experts, i - 1, threadIdx.x)];
-    }
-  }
-
-  __syncthreads();
-
-  // We accumulate the token counts of all experts in thread 0.
-  if (threadIdx.x == 0) {
-    cumsum[0] = 0;
-    for (int i = 1; i <= num_experts; ++i) {
-      cumsum[i] = cumsum[i - 1] + CEILDIV(tokens_cnts[index(num_experts, blockDim.x, i - 1)], block_size) * block_size;
-    }
-    *total_tokens_post_pad = cumsum[num_experts];
-  }
-
-  __syncthreads();
-
-  /**
-   * For each expert, each thread processes the tokens of the corresponding
-   * blocks and stores the corresponding expert_id for each block.
-   */
-  if (threadIdx.x < num_experts) {
-    for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
-      expert_ids[i / block_size] = threadIdx.x;
-    }
-  }
-
-  /**
-   * Each thread processes a token shard, calculating the index of each token
-   * after sorting by expert number. Given the example topk_ids =
-   * [0,1,2,1,2,3,0,3,4] and block_size = 4, then the output would be [0, 6, *,
-   * *, 1, 3, *, *, 2, 4, *, *, 5, 7, *, *, 8, *, *, *], where * represents a
-   * padding value(preset in python).
-   */
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
-    int32_t expert_id = topk_ids[i];
-    /** The cumsum[expert_id] stores the starting index of the tokens that the
-     * expert with expert_id needs to process, and
-     * tokens_cnts[threadIdx.x][expert_id] stores the indices of the tokens
-     * processed by the expert with expert_id within the current thread's token
-     * shard.
-     */
-    int32_t rank_post_pad = tokens_cnts[index(num_experts, threadIdx.x, expert_id)] + cumsum[expert_id];
-    sorted_token_ids[rank_post_pad] = i;
-    ++tokens_cnts[index(num_experts, threadIdx.x, expert_id)];
-  }
-}
-
 // taken from
 // https://github.com/sgl-project/sglang/blame/f024795e57c3589a63df2457d3d64771989d4ed7/sgl-kernel/csrc/moe/moe_align_kernel.cu#L30
 template <typename scalar_t>
@@ -366,12 +287,32 @@ __device__ __forceinline__ int warp_exclusive_scan(int v, const unsigned mask = 
 // taken from
 // https://github.com/sgl-project/sglang/blame/f024795e57c3589a63df2457d3d64771989d4ed7/sgl-kernel/csrc/moe/moe_align_kernel.cu#L58
 template <typename scalar_t>
-__global__ void sgl_moe_align_block_size_kernel(const scalar_t* __restrict__ topk_ids,
-                                                int32_t* __restrict__ sorted_token_ids,
-                                                int32_t* __restrict__ expert_ids,
-                                                int32_t* __restrict__ total_tokens_post_pad, int32_t num_experts,
-                                                int32_t block_size, size_t numel, int32_t* __restrict__ cumsum,
-                                                const int32_t scan_size) {
+__global__ void sgl_moe_align_block_size_kernel(
+    const scalar_t* __restrict__ topk_ids, int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
+    int32_t* __restrict__ total_tokens_post_pad, const int32_t max_num_tokens_padded, const int32_t num_experts,
+    const int32_t block_size, const size_t numel, int32_t* __restrict__ cumsum, const int32_t scan_size) {
+  // Threads in blocks with indices `> 0` just perform `sorted_ids.fill_(numel)`
+  if (blockIdx.x > 0) {
+    const int32_t fill_val = static_cast<int32_t>(numel);
+    vec4_t<int32_t> fill_vec;
+    fill_vec.x = fill_vec.y = fill_vec.z = fill_vec.w = fill_val;
+
+    const int32_t stride = (gridDim.x - 1) * blockDim.x;
+
+    // Vectorization
+    const int32_t max_num_tokens_padded_vecs = max_num_tokens_padded / SGL_MOE_ALIGN_BLOCK_VEC_SIZE;
+    vec4_t<int32_t>* out_ptr = reinterpret_cast<vec4_t<int32_t>*>(sorted_token_ids);
+    for (int32_t i = (blockIdx.x - 1) * blockDim.x + threadIdx.x; i < max_num_tokens_padded_vecs; i += stride) {
+      out_ptr[i] = fill_vec;
+    }
+    // Handle the remaining part
+    for (int32_t i = max_num_tokens_padded_vecs * SGL_MOE_ALIGN_BLOCK_VEC_SIZE + threadIdx.x; i < max_num_tokens_padded;
+         i += stride) {
+      sorted_token_ids[i] = fill_val;
+    }
+    return;
+  }
+
   extern __shared__ int32_t smem[];
   int32_t* shared_counts = smem;                  // [num_experts]
   int32_t* prefix = shared_counts + num_experts;  // [num_experts + 1]
@@ -725,23 +666,6 @@ __global__ void map_expert_ids_kernel(const int* expert_map, int* expert_idx, in
   }
 }
 
-template <typename T>
-void InvokeMoeAlignBlockSizeGlobalMem(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
-                                      int32_t* total_tokens_post_pad, const int32_t num_thread,
-                                      const int32_t num_experts, const int32_t block_size, const size_t numel,
-                                      int32_t* tokens_cnts, int32_t* cumsum, const cudaStream_t& stream) {
-  moe_align_block_size_global_mem_kernel<T><<<1, num_thread, 0, stream>>>(topk_ids, sorted_token_ids, experts_ids,
-                                                                          total_tokens_post_pad, num_experts,
-                                                                          block_size, numel, tokens_cnts, cumsum);
-}
-#define INVOKE_MOE_ALIGN_BLOCK_SIZE_GLOBAL_MEM(T)                                                        \
-  template void InvokeMoeAlignBlockSizeGlobalMem<T>(                                                     \
-      T * topk_ids, int32_t * sorted_token_ids, int32_t * experts_ids, int32_t * total_tokens_post_pad,  \
-      const int32_t num_thread, const int32_t num_experts, const int32_t block_size, const size_t numel, \
-      int32_t* tokens_cnts, int32_t* cumsum, const cudaStream_t& stream)
-INVOKE_MOE_ALIGN_BLOCK_SIZE_GLOBAL_MEM(int32_t);
-#undef INVOKE_MOE_ALIGN_BLOCK_SIZE_GLOBAL_MEM
-
 template <typename T, typename TOKEN_CNTS_T, bool UseExpertParallel>
 void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
                              int32_t* total_tokens_post_pad, const int32_t* expert_map, const int32_t topk,
@@ -819,23 +743,31 @@ INVOKE_MOE_ALIGN_BLOCK_SIZE(int32_t, int32_t);
 // `num_experts` should be greater than 64
 template <typename T>
 void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* expert_ids,
-                                int32_t* total_tokens_post_pad, int32_t num_experts, int32_t block_size, size_t numel,
+                                int32_t* total_tokens_post_pad, const int32_t max_num_tokens_padded,
+                                const int32_t num_experts, const int32_t block_size, const size_t numel,
                                 int32_t* cumsum, const cudaStream_t& stream) {
+  const int max_blocks = 65535;
+
+  const int align_block_threads = 1024;
+  // We employ extra blocks to perform `sorted_ids.fill_(numel)`
+  const int align_num_blocks =
+      std::min(max_blocks, 1 + CEILDIV(max_num_tokens_padded / SGL_MOE_ALIGN_BLOCK_VEC_SIZE, align_block_threads));
   const size_t scan_size = llm_kernels::utils::next_pow2(num_experts);
   const size_t shared_mem_size = (num_experts + (num_experts + 1) + scan_size + WARP_SIZE) * sizeof(int32_t);
-  sgl_moe_align_block_size_kernel<T><<<1, 1024, shared_mem_size, stream>>>(
-      topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, num_experts, block_size, numel, cumsum, scan_size);
+  sgl_moe_align_block_size_kernel<T><<<align_num_blocks, align_block_threads, shared_mem_size, stream>>>(
+      topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, max_num_tokens_padded, num_experts, block_size,
+      numel, cumsum, scan_size);
 
   const int block_threads = 256;
   const int num_blocks = (numel + block_threads - 1) / block_threads;
-  const int max_blocks = 65535;
   const int actual_blocks = std::min(num_blocks, max_blocks);
   sgl_moe_token_sort_kernel<T><<<actual_blocks, block_threads, 0, stream>>>(topk_ids, sorted_token_ids, cumsum, numel);
 }
-#define INVOKE_SGL_MOE_ALIGN_BLOCK_SIZE(T)                                                             \
-  template void InvokeSglMoeAlignBlockSize<T>(                                                         \
-      T * topk_ids, int32_t * sorted_token_ids, int32_t * expert_ids, int32_t * total_tokens_post_pad, \
-      int32_t num_experts, int32_t block_size, size_t numel, int32_t * cumsum, const cudaStream_t& stream)
+#define INVOKE_SGL_MOE_ALIGN_BLOCK_SIZE(T)                                                                             \
+  template void InvokeSglMoeAlignBlockSize<T>(T * topk_ids, int32_t * sorted_token_ids, int32_t * expert_ids,          \
+                                              int32_t * total_tokens_post_pad, const int32_t max_num_tokens_padded,    \
+                                              const int32_t num_experts, const int32_t block_size, const size_t numel, \
+                                              int32_t* cumsum, const cudaStream_t& stream)
 INVOKE_SGL_MOE_ALIGN_BLOCK_SIZE(int32_t);
 #undef INVOKE_SGL_MOE_ALIGN_BLOCK_SIZE
 

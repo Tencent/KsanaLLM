@@ -89,7 +89,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
 
   return Status();
 }
-#  define VLLM_FUSED_MOE_CHUNK_SIZE ((size_t)(32 * 1024))
+
+#define VLLM_FUSED_MOE_CHUNK_SIZE ((size_t)(32 * 1024))
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
@@ -214,13 +215,6 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                                input_tensors[3].GetPtr<void>(),              // w2
                                input_tensors[4].GetPtr<int>(),               // expert_map
                                expert_topk_,                                 // topk
-                               norm_topk_prob_,                              // renormalize
-                               scoring_func_,                                // scoring_func_
-                               e_score_correction_bias_weight_void,          // e_bias
-                               true,                                         // inplace
-                               num_expert_group_ != 1,                       // use_grouped_topk
-                               num_expert_group_,                            // num_expert_group
-                               expert_groups_topk_,                          // topk_group
                                weight_dtype_,                                // weight_dtype
                                compute_dtype_,                               // compute_dtype
                                false,                                        // is_marlin
@@ -256,13 +250,6 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                               input_tensors[3].GetPtr<void>(),              // w2
                               input_tensors[4].GetPtr<int>(),               // expert_map
                               expert_topk_,                                 // topk
-                              norm_topk_prob_,                              // renormalize
-                              scoring_func_,                                // scoring_func_
-                              e_score_correction_bias_weight_void,          // e_bias
-                              true,                                         // inplace
-                              num_expert_group_ != 1,                       // use_grouped_topk
-                              num_expert_group_,                            // num_expert_group
-                              expert_groups_topk_,                          // topk_group
                               weight_dtype_,                                // weight_dtype
                               compute_dtype_,                               // compute_dtype
                               false,                                        // is_marlin
@@ -293,15 +280,6 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                               rank_,                                        // rank
                               context_->GetComputeStreams()[rank_].Get());  // stream
     }
-    // template void InvokeFusedMoe<T>(
-    //   void* hidden_states, void* w1, void* w2, int* expert_map, int topk, bool renormalize,
-    //   const std::string& scoring_func_, void* e_bias, bool inplace, bool use_grouped_topk, int num_expert_group,
-    //   int topk_group, bool use_fp8_w8a8, bool use_int8_w8a16, bool use_int4_w4a16, bool is_marlin,
-    //   bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q, void* a2_q,
-    //   void* a1_scale, void* a2_scale, std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
-    //   float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2,
-    //   void* intermediate_cache3, int num_tokens, int num_experts, int hidden_size, int inter_size, int rank,
-    //   cudaStream_t stream)
   } else {
     // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     if (moe_scale_norm_mode_ == MoeScaleNormMode::RE_NORM) {

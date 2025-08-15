@@ -24,14 +24,11 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
+// Vectorization size used in the sgl_moe_align_block_size kernel
+#define SGL_MOE_ALIGN_BLOCK_VEC_SIZE 4
+
 namespace llm_kernels {
 namespace nvidia {
-
-template <typename T>
-void InvokeMoeAlignBlockSizeGlobalMem(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
-                                      int32_t* total_tokens_post_pad, const int32_t num_thread,
-                                      const int32_t num_experts, const int32_t block_size, const size_t numel,
-                                      int32_t* tokens_cnts, int32_t* cumsum, const cudaStream_t& stream);
 
 template <typename T, typename TOKEN_CNTS_T, bool UseExpertParallel>
 void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
@@ -41,7 +38,8 @@ void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* ex
 
 template <typename T>
 void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* expert_ids,
-                                int32_t* total_tokens_post_pad, int32_t num_experts, int32_t block_size, size_t numel,
+                                int32_t* total_tokens_post_pad, const int32_t max_num_tokens_padded,
+                                const int32_t num_experts, const int32_t block_size, const size_t numel,
                                 int32_t* cumsum, const cudaStream_t& stream);
 
 template <typename T>

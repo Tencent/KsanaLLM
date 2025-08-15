@@ -224,7 +224,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
                             /*is_random_init*/ true, /*min_val*/ 0, /*max_val*/ num_experts - 1);
       BufferMeta h_sorted_token_ids =
           CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(max_num_tokens_padded)},
-                            /*is_random_init*/ false);
+                            /*is_random_init*/ true, /*min_val*/ numel, /*max_val*/ numel);
       BufferMeta h_expert_ids = CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(max_num_m_blocks)},
                                                   /*is_random_init*/ false);
       BufferMeta h_total_tokens_post_pad = CreateBuffer<int>(MemoryType::MEMORY_CPU, {1},
@@ -291,7 +291,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
         InvokeSglMoeAlignBlockSize<int>(
             reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
             reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
-            num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
+            max_num_tokens_padded, num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
         CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
         // Verify accuracy of sglang version
@@ -358,7 +358,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, DISABLED_MoeAlignBlockKernelPerfTest) {
       InvokeSglMoeAlignBlockSize<int>(
           reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
           reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
-          num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
+          max_num_tokens_padded, num_experts, block_size, numel, reinterpret_cast<int*>(d_cumsum.data_ptr), stream);
     };
     float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
@@ -391,9 +391,9 @@ TEST_F(LlamaNvidiaMoeTestSuit, FillIntToBufferTest) {
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(static_cast<void*>(device_output.data()), output_ptr, total_length * sizeof(int),
                                      cudaMemcpyDeviceToHost));
   for (size_t i = 0; i < total_length; ++i) {
-    if (i < test_fill_length[0]) {
+    if (i < static_cast<size_t>(test_fill_length[0])) {
       EXPECT_EQ(device_output[i], -1);
-    } else if (i < test_fill_length[0] + test_fill_length[1]) {
+    } else if (i < static_cast<size_t>(test_fill_length[0] + test_fill_length[1])) {
       EXPECT_EQ(device_output[i], 0);
     } else {
       EXPECT_EQ(device_output[i], 1);

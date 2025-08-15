@@ -41,8 +41,11 @@ class DeepSeekV3Test : public testing::Test {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
       expected_tokens = {{28570, 27932, 4180}, {6301, 24138, 27364}};
     } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
-      expected_tokens = {{28570, 27932, 4180}, {5306, 13245, 15354}};
       model_path = "/model/DeepSeek-R1-0528-moe-int4";
+      expected_tokens = {{28570, 27932, 4180}, {5306, 13245, 15354}};
+    } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
+      model_path = "/model/deepseek_v3";
+      expected_tokens = {{3648, 303, 19892}, /*placeholder*/ {0, 0, 0}};
     } else {
       expected_tokens = {{5306, 13245, 15354}, {28570, 27932, 4180}};
     }
@@ -301,7 +304,6 @@ class DeepSeekV3Test : public testing::Test {
     }
     EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN).OK());
     sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
-
     EXPECT_TRUE(generated_tokens0[0] == expected_tokens[0][2] || generated_tokens0[0] == expected_tokens[1][2]);
     EXPECT_TRUE(generated_tokens1[0] == expected_tokens[0][2] || generated_tokens1[0] == expected_tokens[1][2]);
 
@@ -361,6 +363,15 @@ TEST_F(DeepSeekV3Test, ForwardMoeInt4Test) {
   std::cout << "Test MoeInt4 TYPE_BF16 weight_data_type forward." << std::endl;
   TestDeepSeekV3Forward<bfloat16>();
 #endif
+}
+
+// Test for `num_experts_per_rank_ <= 224`
+TEST_F(DeepSeekV3Test, SmallExpertsTest) {
+  model_config.is_quant = true;
+  model_config.weight_data_type = TYPE_BF16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
+  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
+  TestDeepSeekV3Forward<bfloat16>();
 }
 
 TEST_F(DeepSeekV3Test, EnableFullShardExpertTest) {

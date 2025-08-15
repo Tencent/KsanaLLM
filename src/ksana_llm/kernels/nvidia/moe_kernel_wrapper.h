@@ -67,9 +67,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                        void* e_bias, float routed_scaling_factor, int rank, cudaStream_t stream);
 
 template <typename T, bool UseExpertParallel>
-void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk,
-                    bool renormalize, const std::string& scoring_func_, void* e_bias, bool inplace,
-                    bool use_grouped_topk, int num_expert_group, int topk_group, DataType weight_dtype,
+void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, int topk, DataType weight_dtype,
                     DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale,
                     void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,
                     std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
