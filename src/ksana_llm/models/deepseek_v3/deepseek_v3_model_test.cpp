@@ -40,6 +40,7 @@ class DeepSeekV3Test : public testing::Test {
     if (test_name.find("ForwardGPTQInt4Test") != std::string::npos) {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
     } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
+      // NOTE(jinxcwu) 模型命名不合理，本质是裁剪模型，但沿用了原始完整模型名字，容易用错
       model_path = "/model/DeepSeek-R1-0528-moe-int4";
     } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
       model_path = "/model/deepseek_v3";

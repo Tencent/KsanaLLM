@@ -97,26 +97,25 @@ TEST_F(MarlinUtilsTest, TestMarlinSortGIdx) {
 
   torch::manual_seed(42);
   // tensor is 1D
-  int32_t int32_min = std::numeric_limits<int32_t>::min();
-  int32_t int32_max = std::numeric_limits<int32_t>::max();
+  int32_t int32_min = -gidx_len;
+  int32_t int32_max = gidx_len;
   auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::Device(torch::kCUDA, rank_));
-  torch::Tensor gidx = torch::randint(int32_min, int32_max, {static_cast<int64_t>(gidx_len)}, options);
+  torch::Tensor gidx_src = torch::randint(int32_min, int32_max, {static_cast<int64_t>(gidx_len)}, options);
 
   // Note: gidx is modified
+  torch::Tensor gidx = gidx_src.clone();
   torch::Tensor perm = marlin_helper_->MarlinSortGIdx(gidx);
 
   // 数据检查
-  std::vector<int32_t> gidx_ref_0 = {-2143065743, -2125184002, -2115842831, -2112175817, -2104422457,
-                                     -2104281239, -2101887190, -2099697292, -2098007451, -2084918534};
-  std::vector<int32_t> perm_ref_0 = {309, 346, 20, 292, 485, 1, 424, 412, 256, 136};
+  std::vector<int32_t> gidx_ref_0 = {-508, -502, -501, -500, -497, -497, -496, -492, -486, -485};
+  std::vector<int32_t> perm_ref_0 = {58, 94, 375, 357, 188, 426, 99, 175, 447, 172};
   for (size_t i = 0; i < 10; i++) {
     EXPECT_TRUE(gidx[i].item<int32_t>() == gidx_ref_0[i]);
     EXPECT_TRUE(perm[i].item<int32_t>() == perm_ref_0[i]);
   }
 
-  std::vector<int32_t> gidx_ref_1 = {2092600530, 2099881348, 2111888513, 2112545028, 2114573769,
-                                     2115374391, 2121156829, 2124809658, 2139573741, 2146308641};
-  std::vector<int32_t> perm_ref_1 = {278, 391, 324, 453, 386, 74, 205, 474, 329, 493};
+  std::vector<int32_t> gidx_ref_1 = {496, 499, 499, 503, 503, 504, 505, 508, 510, 511};
+  std::vector<int32_t> perm_ref_1 = {461, 86, 465, 178, 244, 110, 215, 83, 346, 491};
   for (size_t i = 0; i < 10; i++) {
     EXPECT_TRUE(gidx[gidx_len - 10 + i].item<int32_t>() == gidx_ref_1[i]);
     EXPECT_TRUE(perm[gidx_len - 10 + i].item<int32_t>() == perm_ref_1[i]);
@@ -124,8 +123,7 @@ TEST_F(MarlinUtilsTest, TestMarlinSortGIdx) {
 
   // tensor is 2D
   size_t num_experts = 4;
-  torch::manual_seed(42);
-  gidx = torch::randint(int32_min, int32_max, {static_cast<int64_t>(gidx_len)}, options);
+  gidx = gidx_src.clone();
   gidx = gidx.repeat({static_cast<int64_t>(num_experts), 1}).contiguous();
 
   perm = marlin_helper_->MarlinSortGIdx(gidx);
