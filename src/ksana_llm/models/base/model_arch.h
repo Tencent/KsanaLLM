@@ -37,4 +37,7 @@ enum class ModelArchitecture {
 // Get model architecture.
 Status GetModelArchitectureFromString(const std::string& model_type, ModelArchitecture& model_arch);
 
+// Get model type string.
+Status GetModelTypeFromArchitecture(ModelArchitecture model_arch, std::string& model_type);
+
 }  // namespace ksana_llm

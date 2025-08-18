@@ -14,7 +14,6 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/chatglm/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/gpt/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_moe/*.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_mla/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/mixtral/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen2_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen3_moe/*.cpp
@@ -58,7 +57,6 @@ if(WITH_STANDALONE_TEST)
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(deepseek_v3_dp_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_dp_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(quant_int4_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/quant/quant_int4_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-      cpp_test(absorb_weight_v2_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     endif()
   endif()
 endif()

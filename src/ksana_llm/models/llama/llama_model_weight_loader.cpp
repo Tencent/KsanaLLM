@@ -8,9 +8,9 @@
 
 #include <unordered_set>
 
+#include "ksana_llm/model_loader/model_loader_utils.h"
 #include "ksana_llm/models/base/model_arch.h"
 #include "ksana_llm/models/base/model_format.h"
-#include "ksana_llm/model_loader/model_loader_utils.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 
@@ -104,47 +104,43 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
       const Tensor& k_host_weight_tensor = host_model_weights.at(qkv_weight_name_prefix + "k_proj.weight");
       const Tensor& v_host_weight_tensor = host_model_weights.at(qkv_weight_name_prefix + "v_proj.weight");
 
-      size_t qkv_shape_0 = q_host_weight_tensor.shape[0] + k_host_weight_tensor.shape[0] +
-          v_host_weight_tensor.shape[0];
+      size_t qkv_shape_0 =
+          q_host_weight_tensor.shape[0] + k_host_weight_tensor.shape[0] + v_host_weight_tensor.shape[0];
       size_t qkv_slice_shape_0 = static_cast<size_t>(DivRoundUp(qkv_shape_0, context_->GetTensorParallelSize()));
-      std::vector<size_t> qkv_slice_shape = {
-          qkv_slice_shape_0,
-          host_weight_tensor.shape[1]};
+      std::vector<size_t> qkv_slice_shape = {qkv_slice_shape_0, host_weight_tensor.shape[1]};
 
       Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, qkv_slice_shape, dev_rank);
       Tensor qkv_dev_tensor =
           Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, qkv_slice_shape, dev_rank);
 
-      size_t q_slice_offset = static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0],
-        context_->GetTensorParallelSize())) *
-        q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
-      size_t q_slice_bytes = static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0],
-        context_->GetTensorParallelSize())) *
-        q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
+      size_t q_slice_offset =
+          static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
+          q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
+      size_t q_slice_bytes =
+          static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
+          q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
 
       if (k_host_weight_tensor.shape[0] != v_host_weight_tensor.shape[0]) {
         KLLM_THROW(fmt::format("k & v should have same shape for llama"));
       }
-      size_t kv_slice_offset = static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0],
-        context_->GetTensorParallelSize())) *
-        k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
-      size_t kv_slice_bytes = static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0],
-        context_->GetTensorParallelSize())) *
-        k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-      if (dev_rank == context_->GetTensorParallelSize() - 1) {
+      size_t kv_slice_offset =
+          static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
+          k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
+      size_t kv_slice_bytes =
+          static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
+          k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
+      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
         q_slice_bytes = q_host_weight_tensor.GetTotalBytes() - q_slice_offset;
         kv_slice_bytes = k_host_weight_tensor.GetTotalBytes() - kv_slice_offset;
       }
 
-      MemcpyAsync(qkv_dev_tensor.GetPtr<void>(),
-                  q_host_weight_tensor.GetPtr<void>() + q_slice_offset, q_slice_bytes,
+      MemcpyAsync(qkv_dev_tensor.GetPtr<void>(), q_host_weight_tensor.GetPtr<void>() + q_slice_offset, q_slice_bytes,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-      MemcpyAsync(qkv_dev_tensor.GetPtr<void>() + q_slice_bytes,
-                  k_host_weight_tensor.GetPtr<void>() + kv_slice_offset, kv_slice_bytes,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+      MemcpyAsync(qkv_dev_tensor.GetPtr<void>() + q_slice_bytes, k_host_weight_tensor.GetPtr<void>() + kv_slice_offset,
+                  kv_slice_bytes, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
       MemcpyAsync(qkv_dev_tensor.GetPtr<void>() + q_slice_bytes + kv_slice_bytes,
-                  v_host_weight_tensor.GetPtr<void>() + kv_slice_offset, kv_slice_bytes,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+                  v_host_weight_tensor.GetPtr<void>() + kv_slice_offset, kv_slice_bytes, MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[dev_rank]);
       StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
 
       PermuteDeviceTensor(qkv_dev_tensor, {1, 0}, dev_rank, dev_tensor);
@@ -196,7 +192,7 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
 
       size_t slice_offset = dev_tensor.GetTotalBytes() * dev_rank;
       size_t slice_bytes = dev_tensor.GetTotalBytes();
-      if (dev_rank == context_->GetTensorParallelSize() - 1) {
+      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
         slice_bytes = host_weight_tensor.GetTotalBytes() - slice_offset;
       }
 
@@ -225,7 +221,7 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
 
       size_t slice_offset = dev_tensor.GetTotalBytes() * dev_rank;
       size_t slice_bytes = dev_tensor.GetTotalBytes();
-      if (dev_rank == context_->GetTensorParallelSize() - 1) {
+      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
         slice_bytes = host_weight_tensor.GetTotalBytes() - slice_offset;
       }
 
@@ -268,7 +264,7 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
 
       size_t slice_offset = dev_tensor.GetTotalBytes() * dev_rank;
       size_t slice_bytes = dev_tensor.GetTotalBytes();
-      if (dev_rank == context_->GetTensorParallelSize() - 1) {
+      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
         slice_bytes = host_weight_tensor.GetTotalBytes() - slice_offset;
       }
 
@@ -299,7 +295,7 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
 
       size_t slice_offset = dev_tensor.GetTotalBytes() * dev_rank;
       size_t slice_bytes = dev_tensor.GetTotalBytes();
-      if (dev_rank == context_->GetTensorParallelSize() - 1) {
+      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
         slice_bytes = host_weight_tensor.GetTotalBytes() - slice_offset;
       }
 

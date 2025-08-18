@@ -137,7 +137,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
       continue;
     }
     if (weight_tensor.dtype != new_deepseek_v3_config->weight_data_type) {
-      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, ptr {}, from {} to {}\n", dev_rank, weight_name,
+      KLLM_LOG_DEBUG << fmt::format("Dev_rank-{}, cast weight {}, from {} to {}\n", dev_rank, weight_name,
                                     weight_tensor.dtype, new_deepseek_v3_config->weight_data_type);
       CastDeviceTensorType(weight_tensor, new_deepseek_v3_config->weight_data_type, dev_rank);
     }
@@ -522,26 +522,20 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
     // The parameters of both the mlp (dense) layer and the shared expert layer need to be transposed.
     if (CheckWeightNameMatched(
             file_weight_name,
-            {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.shared_experts.gate_proj", ".mlp.shared_experts.up_proj"},
+            {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.shared_expert.gate_proj", ".mlp.shared_expert.up_proj"},
             false)) {
       // "up && gate proj(bf16/fp16): First split along axis = 0, then transpose."
       // "up && gate proj(fp8 weight/fp32 weight_scale_inv): split along axis = 0."
       Tensor dev_tensor;
       weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
                                   context_->GetTensorParallelSize(), !new_deepseek_v3_config->is_quant);
-      std::string file_weight_name_replace;
-      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
-      } else {
-        file_weight_name_replace = file_weight_name;
-      }
       // TODO(huicongyao): Refactor to eliminate string-based type checking
       if (new_deepseek_v3_config->type == "deepseek_v3") {
         // deepseek v3 need to combine gate & up proj
-        weight_impl_->ProcessGateUpProjWeight(file_weight_name_replace, dev_tensor, device_model_weights, dev_rank,
+        weight_impl_->ProcessGateUpProjWeight(file_weight_name, dev_tensor, device_model_weights, dev_rank,
                                               new_deepseek_v3_config->is_quant);
       } else {
-        device_model_weights[file_weight_name_replace] = dev_tensor;
+        device_model_weights[file_weight_name] = dev_tensor;
       }
       continue;
     }
@@ -549,7 +543,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
     if (CheckWeightNameMatched(file_weight_name,
                                {
                                    ".mlp.down_proj.",
-                                   ".mlp.shared_experts.down_proj",
+                                   ".mlp.shared_expert.down_proj",
                                },
                                false)) {
       // down proj(bf16/fp16): transpose first, then split along axis = 0
@@ -557,14 +551,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       Tensor dev_tensor;
       weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
                                        context_->GetTensorParallelSize(), new_deepseek_v3_config->is_quant);
-
-      std::string file_weight_name_replace;
-      if (file_weight_name.find(".shared_experts.") != std::string::npos) {
-        file_weight_name_replace = GetReplacedName(file_weight_name, "shared_experts", "shared_expert");
-      } else {
-        file_weight_name_replace = file_weight_name;
-      }
-      device_model_weights[file_weight_name_replace] = dev_tensor;
+      device_model_weights[file_weight_name] = dev_tensor;
       continue;
     }
 

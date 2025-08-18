@@ -213,54 +213,5 @@ TEST_F(QuantWeightTest, BindFp8E4m3ScaleOfMoeWeight) {
     EXPECT_EQ(scales[3], 1.0f);
   }
 }
-#    ifdef ENABLE_FP8_TORCH
-TEST_F(QuantWeightTest, ProcessMlaFp8E4m3BlockWiseScaleOfWeightTest) {
-  model_config.weight_data_type = TYPE_FP16;
-  model_config.mla_config.qk_rope_head_dim = 2;
-  model_config.mla_config.qk_nope_head_dim = 2;
-  model_config.mla_config.v_head_dim = 2;
-  model_config.head_num = 1;
-  model_config.mla_config.kv_lora_rank = 2;
-  model_config.quant_config.weight_block_size = {2, 2};
-  runtime_config.inter_data_type = model_config.weight_data_type;
-
-  std::vector<size_t> kv_b_weight_shape = {
-      model_config.head_num * (model_config.mla_config.qk_nope_head_dim + model_config.mla_config.v_head_dim),
-      model_config.mla_config.kv_lora_rank};
-  // kv_b_proj weight value: [1,1,1,1,1,1,0,0]
-  AddFp8BlockWiseWeightTensor("model.layers.0.self_attn.kv_b_proj.weight", kv_b_weight_shape, 1.0f, 0.0f);
-  std::vector<size_t> kv_b_scale_shape = {kv_b_weight_shape[0] / model_config.quant_config.weight_block_size[0],
-                                          kv_b_weight_shape[1] / model_config.quant_config.weight_block_size[1]};
-  // kv_b_proj scale value: [1,1]
-  AddFp8BlockWiseScaleTensor("model.layers.0.self_attn.kv_b_proj.weight_scale_inv", kv_b_scale_shape, 1.0f);
-  QuantWeight<half> quant_weight =
-      QuantWeight<half>(model_config, runtime_config, device_rank, context_, weights_map, weights_data_type_map);
-  // new compressed_kv process
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-  quant_weight.ProcessMlaFp8E4m3BlockWiseScaleOfWeight();
-  std::string prefix = "model.layers.0.self_attn.";
-  EXPECT_TRUE(weights_map.find(prefix + "kv_b_nope_proj.weight") != weights_map.end());
-  EXPECT_TRUE(weights_map.find(prefix + "kv_b_nope_proj.weight_scale_inv") != weights_map.end());
-  EXPECT_TRUE(weights_map.find(prefix + "v_head_proj.weight") != weights_map.end());
-  EXPECT_TRUE(weights_map.find(prefix + "v_head_proj.weight_scale_inv") != weights_map.end());
-  EXPECT_TRUE(weights_map.find(prefix + "w_uk_t.weight") != weights_map.end());
-  EXPECT_TRUE(weights_map.find(prefix + "w_uv.weight") != weights_map.end());
-
-  // w_uk_t weight value: [1,1,1,1]
-  std::vector<half> w_uk_t_data = CopyFp16Weight("model.layers.0.self_attn.w_uk_t.weight");
-  // w_uv weight value: from [1,1,0,0] permute(0,2,1) to [1,0,1,0]
-  std::vector<half> w_uv_data = CopyFp16Weight("model.layers.0.self_attn.w_uv.weight");
-  EXPECT_EQ(w_uk_t_data.size(), w_uv_data.size());
-  for (int i = 0; i < w_uk_t_data.size(); ++i) {
-    EXPECT_EQ(static_cast<float>(w_uk_t_data[i]), 1.0f);
-    if (i % 2 == 0) {
-      EXPECT_EQ(static_cast<float>(w_uv_data[i]), 1.0f);
-    } else {
-      EXPECT_EQ(static_cast<int>(w_uv_data[i]), 0);
-    }
-  }
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
-}
-#    endif
 #  endif
 #endif

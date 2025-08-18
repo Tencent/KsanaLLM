@@ -30,6 +30,13 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
                                                                     context_, model_weight_loader);
   STATUS_CHECK_RETURN(status);
 
+  std::string model_type;
+  status = GetModelTypeFromArchitecture(model_config->model_arch, model_type);
+  STATUS_CHECK_RETURN(status);
+
+  status = model_weight_loader->InitRegexPatterns(model_config->model_dir, model_type, model_config->model_format);
+  STATUS_CHECK_RETURN(status);
+
   std::vector<std::string> model_file_list;
   status = GetModelFileList(model_config->model_dir, model_file_list);
   STATUS_CHECK_RETURN(status);
@@ -76,6 +83,8 @@ Status ModelWeightLoader::LoadWeights(std::shared_ptr<BaseModelConfig>& model_co
         std::lock_guard<std::mutex> lock(tp_mutex[dev_rank]);
         SetDevice(dev_rank);
         std::unordered_map<std::string, Tensor> model_weights = *host_model_weights;
+        model_weight_loader->GetCustomWeightMap(model_config->model_dir, model_type, model_weights,
+                                                model_config->model_format);
         auto& left_tensor = left_host_weights[dev_rank];
         model_weights.insert(left_tensor.begin(), left_tensor.end());
         left_tensor.clear();

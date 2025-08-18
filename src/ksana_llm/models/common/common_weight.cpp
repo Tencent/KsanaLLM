@@ -226,11 +226,9 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
       continue;
     }
 
-    // filter out moe or mla model weight
+    // filter out moe model weight
     // TODO(winminkong): suport mla and moe weight type from fp32 to fp16/bf16 cast
-    if (!quant_weight_solver_->IsEnable() &&
-        (tensor_name.find(".experts.") != std::string::npos || tensor_name.find("q_b_proj") != std::string::npos ||
-         tensor_name.find("kv_a_proj") != std::string::npos || tensor_name.find("kv_b_proj.") != std::string::npos)) {
+    if (!quant_weight_solver_->IsEnable() && (tensor_name.find(".experts.") != std::string::npos)) {
       moe_weight_data_type_ = weight_data_type;
       continue;
     }

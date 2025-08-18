@@ -45,7 +45,7 @@ class NewDeepSeekV3WeightImplBase {
 
   virtual Status GetExpertsIdx(const std::string& expert_name, int32_t& layer_idx_, int32_t& expert_idx_) = 0;
 
-  virtual Status ProcessGateUpProjWeight(std::string& file_weight_name_, const Tensor& dev_tensor,
+  virtual Status ProcessGateUpProjWeight(const std::string& file_weight_name_, const Tensor& dev_tensor,
                                          std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
                                          bool is_quant_weight) = 0;
 #ifdef ENABLE_FP8
@@ -99,7 +99,7 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 
   Status GetExpertsIdx(const std::string& expert_name, int32_t& layer_idx_, int32_t& expert_idx_) override;
 
-  Status ProcessGateUpProjWeight(std::string& file_weight_name_, const Tensor& dev_tensor,
+  Status ProcessGateUpProjWeight(const std::string& file_weight_name_, const Tensor& dev_tensor,
                                  std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
                                  bool is_quant_weight = false) override;
 

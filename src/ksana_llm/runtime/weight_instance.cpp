@@ -18,7 +18,6 @@
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
-#include "ksana_llm/models/deepseek_v3/deepseek_v3_weight.h"
 #include "ksana_llm/models/gpt/gpt_weight.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_weight.h"
 #include "ksana_llm/models/internlm2/internlm2_weight.h"
@@ -101,9 +100,6 @@ void WeightInstance::CreateWeightInstances() {
     CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
     CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
-  } else if (unified_model_type.find("deepseek_v3") != std::string::npos ||
-             unified_model_type.find("deepseek_v2") != std::string::npos) {
-    CreateWeightInstance<DeepSeekV3Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();
@@ -119,12 +115,17 @@ void WeightInstance::CreateWeightInstances() {
 
 void WeightInstance::Load() {
   const char* const enable_old_loader = std::getenv("ENABLE_OLD_LOADER");
-  const bool use_old_loader = (enable_old_loader != nullptr && strcmp(enable_old_loader, "1") == 0);
+  bool use_old_loader = (enable_old_loader != nullptr && strcmp(enable_old_loader, "1") == 0);
 
   ModelConfigParser model_config_parser;
   std::shared_ptr<BaseModelConfig> model_config;
   Status status =
       model_config_parser.ParseModelConfig(model_config_.path, runtime_config_.parallel_basic_config, model_config);
+
+  if (use_old_loader && model_config->model_arch == ModelArchitecture::ARCH_DEEPSEEK) {
+    KLLM_LOG_WARNING << "DeepSeek is disabled for old model loader now. Ignore env variable `ENABLE_OLD_LOADER`";
+    use_old_loader = false;
+  }
 
   if (status.OK() && IsCompatibleWithNewLoader(model_config) && !use_old_loader) {
     KLLM_LOG_INFO << "Using new loader to load model weights";
@@ -235,7 +236,7 @@ bool WeightInstance::SaveWeightsToCache() {
   std::vector<std::future<void>> save_weight_tasks;
   save_weight_tasks.reserve(context_->GetTensorParallelSize());
 
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     save_weight_tasks.emplace_back(loader_weight_threadpool_->Submit([worker_id, this]() {
       StreamSynchronize(this->context_->GetMemoryManageStreams()[worker_id]);
       this->weights_[worker_id]->SaveWeightsToCacheFolder();
@@ -329,7 +330,7 @@ void WeightInstance::ProcessWeights() {
   const auto start_time = std::chrono::high_resolution_clock::now();
   std::vector<std::future<void>> process_weight_tasks;
   process_weight_tasks.reserve(context_->GetTensorParallelSize());
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     process_weight_tasks.emplace_back(
         loader_weight_threadpool_->Submit([worker_id, this]() { this->weights_[worker_id]->ProcessWeights(); }));
   }
@@ -365,7 +366,6 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     case ModelArchitecture::ARCH_DEEPSEEK: {
       std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
           std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
-      // Early return for incompatible cases
 
       return true;
     }

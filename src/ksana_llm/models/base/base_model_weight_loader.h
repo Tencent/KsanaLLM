@@ -39,10 +39,18 @@ class BaseModelWeightLoader {
   // Invoked only once after ProcessModelWeights.
   virtual Status PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map, int dev_rank);
 
+  Status GetCustomWeightMap(const std::string& model_path, const std::string& model_type,
+                            std::unordered_map<std::string, Tensor>& weight_map,
+                            ModelFormat model_format = ModelFormat::PYTORCH_SAFETENSOR);
+
+  Status InitRegexPatterns(const std::string& model_path, const std::string& model_type, ModelFormat model_format);
+
  protected:
   // Permute tensor by specific permutation.
   Status PermuteDeviceTensor(const Tensor& input_tensor, const std::vector<size_t>& permutation, int dev_rank,
                              Tensor& output_tensor);
+
+  std::string GetWeightMapPath(const std::string& model_path, const std::string& model_type, ModelFormat model_format);
 
   // cast device tensor type.
   Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank);
@@ -64,6 +72,9 @@ class BaseModelWeightLoader {
   std::shared_ptr<BaseModelConfig> model_config_ = nullptr;
   std::shared_ptr<Environment> env_ = nullptr;
   std::shared_ptr<Context> context_ = nullptr;
+
+  std::vector<std::pair<std::regex, std::string>> patterns_;
+  bool loaded_patterns_ = false;
 };
 
 }  // namespace ksana_llm

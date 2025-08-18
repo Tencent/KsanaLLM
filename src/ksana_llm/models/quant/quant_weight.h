@@ -51,20 +51,14 @@ class QuantWeight {
   // Copy scale from weights_loader_ to weights_map_
   bool LoadFp8E4m3Scale(const std::string& tensor_name, std::vector<size_t>& weight_shape, DataType& weight_data_type,
                         void* weight_ptr);
-  bool LoadMlaFp8E4m3BlockWiseScale(const std::string& tensor_name, std::vector<size_t>& weight_shape,
-                                    DataType& weight_data_type, void* weight_ptr);
   bool LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name, std::vector<size_t>& weight_shape,
                                     DataType& weight_data_type, void* weight_ptr);
 
-#  ifdef ENABLE_FP8_TORCH
-  Status ProcessMlaFp8E4m3BlockWiseScaleOfWeight();
-#  endif
   // Bind scale to weight
   Status BindFp8E4m3Scale(const int num_heads, const int num_kv_heads);
   Status BindFp8E4m3ScaleOfProjWeight(const std::string& name);
   Status BindFp8E4m3ScaleOfQkvWeight(const std::string& name, const int num_heads, const int num_kv_heads);
   // Bind fp8-blockwise scale to weight
-  Status BindMlaFp8E4m3BlockWiseScaleOfWeight();
   Status BindMoeFp8E4m3BlockWiseScaleOfWeight();
 
   Status BindFp8E4m3ScaleOfMoeWeight();
@@ -74,8 +68,6 @@ class QuantWeight {
   Status ConvertFp8E4m3Tensor(const std::string& weight_name, DataType quant_type);
 
   Status ConvertFp8E4m3();
-  Tensor DequantMlaFp8E4m3BlockWiseTensor(const std::string& weight_name, bool remove_weight = false);
-  Tensor QuantMlaFp8E4m3BlockWiseTensor(const std::string& weight_name, bool remove_weight = false);
 #endif
 
  private:

@@ -9,7 +9,7 @@
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/data_hub/data_hub.h"
-#include "ksana_llm/models/common_mla/common_mla_weight.h"
+#include "ksana_llm/models/base/model_weight.h"
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/samplers/sampler.h"
@@ -39,7 +39,65 @@ GET_KSANA_DATA_TYPE(__nv_bfloat16, TYPE_BF16);
 
 size_t schedule_id = 0;
 
-void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector) {
+Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank,
+                            std::shared_ptr<Context>& context_) {
+#ifdef ENABLE_ACL
+  KLLM_THROW(fmt::format("Unsupported tensor cast for Ascend device"));
+#elif ENABLE_TOPS
+  KLLM_THROW(fmt::format("Unsupported tensor cast for Tops device"));
+#endif
+  if (input_tensor.dtype == new_dtype) {
+    return Status();
+  }
+#ifdef ENABLE_CUDA
+  if (input_tensor.dtype == DataType::TYPE_FP32 && new_dtype == DataType::TYPE_FP16) {
+    Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank, nullptr,
+                               &(context_->GetMemoryManageStreams()[dev_rank]));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FloatToHalf(
+        input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<float16>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
+    input_tensor = new_tensor;
+  } else if (input_tensor.dtype == DataType::TYPE_FP32 && new_dtype == DataType::TYPE_BF16) {
+    Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank, nullptr,
+                               &(context_->GetMemoryManageStreams()[dev_rank]));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FloatToBFloat16(
+        input_tensor.GetPtr<float>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<bfloat16>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
+    input_tensor = new_tensor;
+  } else if (input_tensor.dtype == DataType::TYPE_FP16 && new_dtype == DataType::TYPE_FP32) {
+    Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank, nullptr,
+                               &(context_->GetMemoryManageStreams()[dev_rank]));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToFloat(input_tensor.GetPtr<float16>(),
+                                                           input_tensor.GetElementNumber(), new_tensor.GetPtr<float>(),
+                                                           context_->GetMemoryManageStreams()[dev_rank].Get()));
+    input_tensor = new_tensor;
+  } else if (input_tensor.dtype == DataType::TYPE_BF16 && new_dtype == DataType::TYPE_FP32) {
+    Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, dev_rank, nullptr,
+                               &(context_->GetMemoryManageStreams()[dev_rank]));
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToFloat(
+        input_tensor.GetPtr<bfloat16>(), input_tensor.GetElementNumber(), new_tensor.GetPtr<float>(),
+        context_->GetMemoryManageStreams()[dev_rank].Get()));
+    input_tensor = new_tensor;
+  } else if (input_tensor.dtype == DataType::TYPE_BF16 && new_dtype == DataType::TYPE_FP16) {
+    input_tensor.dtype = new_dtype;
+    // Inplace cast
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::BFloat16ToHalf(input_tensor.GetPtr<void>(),
+                                                              input_tensor.GetElementNumber(),
+                                                              context_->GetMemoryManageStreams()[dev_rank].Get()));
+  } else if (input_tensor.dtype == DataType::TYPE_FP16 && new_dtype == DataType::TYPE_BF16) {
+    input_tensor.dtype = new_dtype;
+    // Inplace cast
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::HalfToBFloat16(input_tensor.GetPtr<void>(),
+                                                              input_tensor.GetElementNumber(),
+                                                              context_->GetMemoryManageStreams()[dev_rank].Get()));
+  } else {
+    KLLM_THROW(fmt::format("Unsupported tensor cast from type {} to {}", input_tensor.dtype, new_dtype));
+  }
+#endif
+  return Status();
+}
+
+void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector, std::shared_ptr<Context>& context) {
   DeviceSynchronize();
   int device_rank;
   GetDevice(&device_rank);
@@ -48,23 +106,19 @@ void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector) {
     KLLM_THROW("Vector size does not match tensor element count");
   }
 
-  torch::Tensor cpu_tensor =
-      torch::from_blob(const_cast<float*>(f_vector.data()), {static_cast<int64_t>(f_vector.size())}, torch::kFloat32);
-
-  DataType dtype_impl = tensor.dtype;
-  auto options = torch::TensorOptions().device(torch::kCUDA, device_rank).dtype(GetTorchTypeFromDataType(dtype_impl));
-
-  void* tensor_data_ptr = tensor.GetPtr<void>();
-  torch::Tensor gpu_tensor =
-      torch::from_blob(tensor_data_ptr, {static_cast<int64_t>(tensor.GetElementNumber())}, options);
-  gpu_tensor.copy_(cpu_tensor.to(options.device()));
-
-  DeviceSynchronize();
+  Tensor fp32_cast = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, tensor.shape, device_rank, nullptr,
+                            &(context->GetMemoryManageStreams()[device_rank]));
+  MemcpyAsync(fp32_cast.GetPtr<void>(), f_vector.data(), f_vector.size() * sizeof(float), MEMCPY_HOST_TO_DEVICE,
+              context->GetMemoryManageStreams()[device_rank]);
+  CastDeviceTensorType(fp32_cast, tensor.dtype, device_rank, context);
+  MemcpyAsync(tensor.GetPtr<void>(), fp32_cast.GetPtr<void>(), tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+              context->GetMemoryManageStreams()[device_rank]);
 }
 
 template <typename T>
 class MultiHeadLatentAttentionTestModel : public CommonModel {
  public:
+  using CommonModel::context_;
   using CommonModel::model_config_;
 
   ForwardingContext* forwarding_context_;
@@ -137,7 +191,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     for (size_t i = 0; i < input_data.size(); i++) {
       input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
     }
-    AssignFromVector(hidden_buffer_tensors_0[0], input_data);
+    AssignFromVector(hidden_buffer_tensors_0[0], input_data, context_);
     Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, *forwarding_context_);
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
@@ -168,22 +222,40 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
       const float diff = std::fabs((input_data[i] - output[i]) / output[i]);
       EXPECT_LT(diff, 0.05);
     }
+
     return status;
   }
 };
 
 template <typename T>
-class MultiHeadLatentAttentionTestWeight : public CommonMlaWeight<T> {
+class TestWeight : public BaseWeight {
  public:
-  using CommonWeight<T>::weights_map_;
-  using CommonWeight<T>::tensor_manager_;
+  using ksana_llm::BaseWeight::weights_map_;
+  TestWeight() {}
+  explicit TestWeight(const ksana_llm::ModelConfig& model_config, const ksana_llm::RuntimeConfig& runtime_config,
+                      int rank, std::shared_ptr<ksana_llm::Context> context)
+      : ksana_llm::BaseWeight(model_config, runtime_config, rank, context) {}
+  ~TestWeight() override {}
 
-  MultiHeadLatentAttentionTestWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
-                                     std::shared_ptr<Context> context)
-      : CommonWeight<T>(model_config, runtime_config, rank, context),
-        CommonMlaWeight<T>(model_config, runtime_config, rank, context) {}
+  Tensor GetModelWeights(const std::string& weight_name) override {
+    auto it = weights_map_.find(weight_name);
+    if (it == weights_map_.end()) {
+      KLLM_LOG_WARNING << fmt::format("weight_name: {} not in weights map", weight_name);
+      return Tensor();
+    }
+    return it->second;
+  }
 
-  void AddWeight(int device_id = 0) {
+  virtual Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
+                                     const std::vector<std::string>& weight_name_list,
+                                     const std::vector<std::string>& custom_name_list) override {
+    return Status();
+  }
+
+  virtual void ProcessWeights() override { return; }
+  virtual void SetEmbeddingsConfig() override { return; }
+
+  void AddMlaWeight(int device_id = 0) {
     std::unordered_map<std::string, std::vector<size_t>> add_tensor_map;
     const int layer_num = 4;
     for (int i = 0; i < layer_num; i++) {
@@ -197,22 +269,32 @@ class MultiHeadLatentAttentionTestWeight : public CommonMlaWeight<T> {
       add_tensor_map[fmt::format("model.layers.{}.self_attn.kv_a_lora_proj.weight", i)] = {2048, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", i)] = {512, 2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_rope_proj.weight", i)] = {2048, 1024};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_rope_proj.weight", i)] = {2048, 1024};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uk_t.weight", i)] = {16, 128, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uv.weight", i)] = {16, 512, 128};
     }
     DataType weight_type = GetKsanaDataType<T>();
     for (auto& [tensor_name, shape] : add_tensor_map) {
-      tensor_manager_->AddWeightTensor(tensor_name, shape, weight_type);
-      Tensor& tensor = weights_map_[tensor_name];
+      weights_map_[tensor_name] = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, shape, device_id,
+                                         nullptr, &(context_->GetMemoryManageStreams()[device_id]));
+      Tensor& tensor = weights_map_.at(tensor_name);
       std::vector<float> input_data(tensor.GetElementNumber());
       for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
       }
-      AssignFromVector(tensor, input_data);
+      MemcpyAsync(tensor.template GetPtr<void>(), reinterpret_cast<void*>(input_data.data()), tensor.GetTotalBytes(),
+                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[device_id]);
+      CastDeviceTensorType(tensor, weight_type, device_id, context_);
+    }
+  }
+
+  void SaveToNpy() {
+    const std::string save_prefix = "Tensors_new/";
+    for (auto& [tensor_name, tensor] : weights_map_) {
+      tensor.SaveToNpyFile(save_prefix + tensor_name + "_" + std::to_string(static_cast<int>(tensor.dtype)) + ".npy");
     }
   }
 };
+
 // 定义一个 MlaTest 类,继承自 testing::Test
 class MlaTest : public testing::Test {
  protected:
@@ -221,19 +303,18 @@ class MlaTest : public testing::Test {
     loguru::g_stderr_verbosity = loguru::Verbosity_MAX;
     DeviceMemoryPool::Disable();
 
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    test_name = test_info->name();
+    if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
+      SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
+    }
+
     context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/ksana_llm_deepseekv2.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
-
-    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    const std::string test_name = test_info->name();
-    if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
-      SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-      KLLM_LOG_INFO << "Exec Test ForwardNewAbsorbWithFlashMla*";
-    }
 
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, std::filesystem::absolute(parent_path / "../../../../examples/deepseekv2/").string());
@@ -243,6 +324,7 @@ class MlaTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     if (test_name.find("ForwardNewAbsorbWithFlashMlaKvFP8Test") != std::string::npos) {
       env->GetBlockManagerConfig(block_manager_config);
+      // kv_cache_dtype must be set before calling env->InitializeBlockManagerConfig()
       block_manager_config.host_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
       block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
       env->SetBlockManagerConfig(block_manager_config);
@@ -283,10 +365,16 @@ class MlaTest : public testing::Test {
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
   }
 
-  void TearDown() override { loguru::g_stderr_verbosity = origin_stderr_verbosity; }
+  void TearDown() override {
+    loguru::g_stderr_verbosity = origin_stderr_verbosity;
+    if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
+      SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
+    }
+  }
 
  protected:
   int origin_stderr_verbosity = loguru::Verbosity_MAX;
+  std::string test_name;
   ModelConfig model_config;
   RuntimeConfig runtime_config;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group;
@@ -297,10 +385,10 @@ class MlaTest : public testing::Test {
   template <typename weight_data_type>
   void TestMlaForward(int device_id = 0) {
     SetDevice(device_id);
-    std::shared_ptr<MultiHeadLatentAttentionTestWeight<weight_data_type>> base_weight =
-        std::make_shared<MultiHeadLatentAttentionTestWeight<weight_data_type>>(model_config, runtime_config, 0,
-                                                                               context_);
-    base_weight->AddWeight();
+    std::shared_ptr<TestWeight<weight_data_type>> base_weight =
+        std::make_shared<TestWeight<weight_data_type>>(model_config, runtime_config, 0, context_);
+    base_weight->AddMlaWeight(device_id);
+
     std::shared_ptr<ksana_llm::BaseWeight> bs1 = base_weight;
     std::shared_ptr<MultiHeadLatentAttentionTestModel<weight_data_type>> test_mla_model =
         std::make_shared<MultiHeadLatentAttentionTestModel<weight_data_type>>(model_config, runtime_config, 0, context_,
@@ -349,7 +437,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
 #endif
 // TODO(zakwang): 支持更多类型
 #if defined(ENABLE_VLLM_FLASH_ATTN_2)  // TODO(qiannanzhou): 这个mr不支持A10上测mla，所以先关掉，下一个mr补上
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -357,7 +444,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
 #endif
   return;
 }
@@ -384,7 +470,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
 #if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -393,7 +478,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   runtime_config.attn_backend_config.kv_cache_dtype = TYPE_FP8_E4M3;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
 #endif
   return;
 }

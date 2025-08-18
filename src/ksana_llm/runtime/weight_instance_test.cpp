@@ -23,7 +23,7 @@ class WeightInstanceTest : public ::testing::Test {
     setenv("MODEL_CACHE_PATH", tmp_cache_model_path_.c_str(), 1);
 
     const auto &env = Singleton<Environment>::GetInstance();
-    env->ParseConfig(config_path, "/model/deepseek_v3");
+    env->ParseConfig(config_path, "/model/Qwen1.5-Moe-A2.7B-18188");
     env->GetModelConfig(model_config_);
 
     AttnBackendConfig attn_backend_config;

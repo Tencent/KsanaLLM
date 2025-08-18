@@ -1,21 +1,4 @@
 {
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.weight" : "model.layers.$1.mlp.shared_expert.gate_proj.weight",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.weight" : "model.layers.$1.mlp.shared_expert.up_proj.weight",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.weight" : "model.layers.$1.mlp.shared_expert.down_proj.weight",
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.weight_scale_inv" : "model.layers.$1.mlp.shared_expert.gate_proj.weight_scale_inv",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.weight_scale_inv" : "model.layers.$1.mlp.shared_expert.up_proj.weight_scale_inv",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.weight_scale_inv" : "model.layers.$1.mlp.shared_expert.down_proj.weight_scale_inv",
-
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.g_idx": "model.layers.$1.mlp.shared_expert.gate_proj.g_idx",
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.qweight": "model.layers.$1.mlp.shared_expert.gate_proj.qweight",
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.qzeros": "model.layers.$1.mlp.shared_expert.gate_proj.qzeros",
-    "model.layers.(\\d+).mlp.shared_experts.gate_proj.scales": "model.layers.$1.mlp.shared_expert.gate_proj.scales",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.scales": "model.layers.$1.mlp.shared_expert.down_proj.scales",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.g_idx": "model.layers.$1.mlp.shared_expert.up_proj.g_idx",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.qweight": "model.layers.$1.mlp.shared_expert.up_proj.qweight",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.qzeros": "model.layers.$1.mlp.shared_expert.up_proj.qzeros",
-    "model.layers.(\\d+).mlp.shared_experts.up_proj.scales": "model.layers.$1.mlp.shared_expert.up_proj.scales",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.g_idx": "model.layers.$1.mlp.shared_expert.down_proj.g_idx",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.qweight": "model.layers.$1.mlp.shared_expert.down_proj.qweight",
-    "model.layers.(\\d+).mlp.shared_experts.down_proj.qzeros": "model.layers.$1.mlp.shared_expert.down_proj.qzeros"
+    "model.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_b_proj.weight",
+    "model.layers.(\\d+).mlp.shared_experts.(.*)": "model.layers.$1.mlp.shared_expert.$2"
 }

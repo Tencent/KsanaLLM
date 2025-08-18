@@ -107,7 +107,11 @@ void Tensor::AcquireImpl() {
         }
       } else {
         SetDevice(device_id);
-        Malloc(&data_ptr, total_bytes);
+        if (stream_ != nullptr) {
+          MallocAsync(&data_ptr, total_bytes, *stream_);
+        } else {
+          Malloc(&data_ptr, total_bytes);
+        }
       }
     } else if (location == MemoryLocation::LOCATION_HOST) {
       HostAlloc(&data_ptr, total_bytes);
@@ -136,7 +140,11 @@ void Tensor::ReleaseImpl() {
         DeviceMemoryPool::GetMemoryPool(device_id)->Free(data_ptr);
       } else {
         SetDevice(device_id);
-        Free(data_ptr);
+        if (stream_ != nullptr) {
+          FreeAsync(data_ptr, *stream_);
+        } else {
+          Free(data_ptr);
+        }
       }
     } else if (location == MemoryLocation::LOCATION_HOST) {
       HostFree(data_ptr);

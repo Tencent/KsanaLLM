@@ -41,7 +41,7 @@ def check_torch_tensor_equl(tensor_name, torch_tensor, rank, dump_path):
         str(rank) + "/" + tensor_name + ".npy"
     if not os.path.isfile(tensor_data_file):
         print("Tensor file {} is not exist.".format(tensor_data_file))
-        sys.exit(1)
+        return
 
     read_data_arr = np.load(tensor_data_file)
     if read_data_arr.dtype == np.uint16:

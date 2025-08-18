@@ -127,26 +127,27 @@ Status NewDeepSeekV3WeightImpl<T>::GetExpertsIdx(const std::string& expert_name,
 
 template <typename T>
 Status NewDeepSeekV3WeightImpl<T>::ProcessGateUpProjWeight(
-    std::string& file_weight_name_, const Tensor& dev_tensor,
+    const std::string& file_weight_name, const Tensor& dev_tensor,
     std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank, bool is_quant_weight) {
   int concat_offset = 0;
   std::string replacement = "gate_up_proj";
-  if (file_weight_name_.find("gate_proj") != std::string::npos) {
+  std::string file_weight_name_replace;
+  if (file_weight_name.find("gate_proj") != std::string::npos) {
     concat_offset = 0;
     static const std::regex pattern("gate_proj");
-    file_weight_name_ = std::regex_replace(file_weight_name_, pattern, replacement);
+    file_weight_name_replace = std::regex_replace(file_weight_name, pattern, replacement);
   } else {
     concat_offset = 1;
     static const std::regex pattern("up_proj");
-    file_weight_name_ = std::regex_replace(file_weight_name_, pattern, replacement);
+    file_weight_name_replace = std::regex_replace(file_weight_name, pattern, replacement);
   }
 
-  if (device_model_weights.find(file_weight_name_) == device_model_weights.end()) {
-    device_model_weights[file_weight_name_] =
+  if (device_model_weights.find(file_weight_name_replace) == device_model_weights.end()) {
+    device_model_weights[file_weight_name_replace] =
         Tensor(MemoryLocation::LOCATION_DEVICE, dev_tensor.dtype, {dev_tensor.shape[0] * 2, dev_tensor.shape[1]},
                dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
   }
-  Tensor& gate_up_proj_tensor = device_model_weights[file_weight_name_];
+  Tensor& gate_up_proj_tensor = device_model_weights[file_weight_name_replace];
   size_t total_bytes = gate_up_proj_tensor.GetTotalBytes() / 2;
   if (is_quant_weight) {
     MemcpyAsync(gate_up_proj_tensor.GetPtr<void>() + concat_offset * total_bytes, dev_tensor.GetPtr<void>(),
@@ -595,7 +596,6 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   size_t hidden_units = new_deepseek_v3_config->hidden_units;
 
   size_t attn_tp_size = context_->GetAttentionTensorParallelSize();
-  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
   size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
   size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
   size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
@@ -613,23 +613,21 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
                                   Vector2Str(std::vector<size_t>(host_weight_tensor.shape)));
     // 1, quant MLP layers
     if (host_weight_name.find(".mlp.down_proj.") != std::string::npos ||
-        host_weight_name.find(".mlp.shared_experts.down_proj.") != std::string::npos) {
+        host_weight_name.find(".mlp.shared_expert.down_proj.") != std::string::npos) {
       Tensor dev_tensor;
       SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, context_->GetTensorParallelSize(),
                     false);
-      std::string weight_name = GetReplacedName(host_weight_name, "shared_experts", "shared_expert");
-      device_model_weights[weight_name] = dev_tensor;
+      device_model_weights[host_weight_name] = dev_tensor;
       continue;
     }
     if (host_weight_name.find(".mlp.up_proj.") != std::string::npos ||
-        host_weight_name.find(".mlp.shared_experts.up_proj.") != std::string::npos ||
-        host_weight_name.find(".mlp.shared_experts.gate_proj.") != std::string::npos ||
+        host_weight_name.find(".mlp.shared_expert.up_proj.") != std::string::npos ||
+        host_weight_name.find(".mlp.shared_expert.gate_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.gate_proj.") != std::string::npos) {
       Tensor dev_tensor;
       TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
                          context_->GetTensorParallelSize(), true);
-      std::string weight_name = GetReplacedName(host_weight_name, "shared_experts", "shared_expert");
-      device_model_weights[weight_name] = dev_tensor;
+      device_model_weights[host_weight_name] = dev_tensor;
 
       continue;
     }

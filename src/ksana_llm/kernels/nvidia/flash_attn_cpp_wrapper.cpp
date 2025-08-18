@@ -43,7 +43,6 @@ std::vector<at::Tensor> mha_fwd(
     std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
     int64_t num_splits, std::optional<bool> pack_gqa_, int64_t sm_margin) {
   // Call FA3 backend function and convert tuple to vector for compatibility
-  std::cout << "mha_fwd_fa3_" << std::endl;
   auto result_tuple = ksana_llm::FlashAttentionBackend::mha_fwd_fa3_(
       q, k, v, k_new_, v_new_, q_v_, out_, cu_seqlens_q_, cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_,
       max_seqlen_q_, max_seqlen_k_, page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_,

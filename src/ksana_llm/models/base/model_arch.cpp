@@ -21,6 +21,18 @@ static const std::unordered_map<std::string, ModelArchitecture> model_type_to_ar
     {"mixtral", ModelArchitecture::ARCH_MIXTRAL},   {"qwen3_moe", ModelArchitecture::ARCH_QWEN3_MOE},
     {"deepseek", ModelArchitecture::ARCH_DEEPSEEK}};
 
+static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_type = {
+    {ModelArchitecture::ARCH_LLAMA, "llama"},
+    {ModelArchitecture::ARCH_QWEN2_MOE, "qwen2_moe"},
+    {ModelArchitecture::ARCH_QWEN2_VL, "qwen2_vl"},
+    {ModelArchitecture::ARCH_QWEN, "qwen"},
+    {ModelArchitecture::ARCH_BAICHUAN, "baichuan"},
+    {ModelArchitecture::ARCH_CHATGLM, "chatglm"},
+    {ModelArchitecture::ARCH_GPT, "gpt"},
+    {ModelArchitecture::ARCH_MIXTRAL, "mixtral"},
+    {ModelArchitecture::ARCH_QWEN3_MOE, "qwen3_moe"},
+    {ModelArchitecture::ARCH_DEEPSEEK, "deepseek_v3"}};
+
 Status GetModelArchitectureFromString(const std::string& model_type, ModelArchitecture& model_arch) {
   for (const auto& [key, value] : model_type_to_archs) {
     if (model_type.find(key) != std::string::npos) {
@@ -29,7 +41,16 @@ Status GetModelArchitectureFromString(const std::string& model_type, ModelArchit
     }
   }
 
-  return Status(RET_INVALID_ARGUMENT);
+  return Status(RET_INVALID_ARGUMENT, fmt::format("Not supported model type: {}", model_type));
+}
+
+Status GetModelTypeFromArchitecture(ModelArchitecture model_arch, std::string& model_type) {
+  const auto it = arch_to_model_type.find(model_arch);
+  if (it != arch_to_model_type.end()) {
+    model_type = it->second;
+    return Status();
+  }
+  return Status(RET_INVALID_ARGUMENT, fmt::format("Not supported model arch: {}", static_cast<int>(model_arch)));
 }
 
 }  // namespace ksana_llm

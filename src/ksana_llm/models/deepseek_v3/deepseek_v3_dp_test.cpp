@@ -7,7 +7,6 @@
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
-#include "ksana_llm/models/deepseek_v3/deepseek_v3_weight.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"

@@ -460,111 +460,6 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
       size_t single_size = tensor.size(0) / tp;
       tensor = TpSplitTensor(tensor, 0, slice_pos, single_size);
       AddWeightFromTorchTensor(tensor_name, tensor, weight_data_type);
-    } else if (tensor_name.find("kv_a_proj_with_mqa") != std::string::npos) {
-      // For DeepSeek, Replicate to TP, and split to kv_a_lora_proj and kv_a_rope_proj
-      torch::Tensor tensor = GetTorchTensorFromWeightPtr(weight_shape, weight_data_type, weight_ptr, true);
-      tensor = TrySmartAutoUnpack(tensor_name, tensor);
-
-      size_t kv_lora_rank = model_config_.mla_config.kv_lora_rank;
-      size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
-      if (tensor_name.find(".qzeros") != std::string::npos) {
-        size_t pack_factor = 32 / model_config_.quant_config.bits;
-        kv_lora_rank /= pack_factor;
-        qk_rope_head_dim /= pack_factor;
-      }
-      auto tensors =
-          torch::split(tensor, {static_cast<int64_t>(kv_lora_rank), static_cast<int64_t>(qk_rope_head_dim)}, -1);
-      torch::Tensor kv_a_lora_tensor = tensors[0].contiguous();
-      torch::Tensor kv_a_rope_tensor = tensors[1].contiguous();
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "kv_a_proj_with_mqa", "kv_a_lora_proj"), kv_a_lora_tensor,
-                               weight_data_type);
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "kv_a_proj_with_mqa", "kv_a_rope_proj"), kv_a_rope_tensor,
-                               weight_data_type);
-    } else if (tensor_name.find("q_a_proj") != std::string::npos) {
-      // For DeepSeek, Replicate to TP
-      torch::Tensor tensor = GetTorchTensorFromWeightPtr(weight_shape, weight_data_type, weight_ptr, true);
-      tensor = TrySmartAutoUnpack(tensor_name, tensor);
-      AddWeightFromTorchTensor(tensor_name, tensor, weight_data_type);
-    } else if (tensor_name.find("kv_b_proj") != std::string::npos) {
-      // For DeepSeek, Column slice to TP, and split to kv_b_nope_proj and v_head_proj
-      size_t head_num = model_config_.head_num;
-      size_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
-      size_t v_head_dim = model_config_.mla_config.v_head_dim;
-      if (tensor_name.find(".qzeros") != std::string::npos) {
-        size_t pack_factor = 32 / model_config_.quant_config.bits;
-        qk_nope_head_dim /= pack_factor;
-        v_head_dim /= pack_factor;
-      }
-      if (head_num * (qk_nope_head_dim + v_head_dim) != weight_shape[1]) {
-        KLLM_THROW(
-            fmt::format("The shape of the 1th dim of the weight named '{}' is not equal to (num_head {} * "
-                        "(qk_nope_head_dim {} + v_head_dim {})).",
-                        tensor_name, head_num, qk_nope_head_dim, v_head_dim));
-      }
-      torch::Tensor tensor = GetTorchTensorFromWeightPtr({weight_shape[0], head_num, qk_nope_head_dim + v_head_dim},
-                                                         weight_data_type, weight_ptr, true);
-      tensor = TrySmartAutoUnpack(tensor_name, tensor);
-
-      auto tensors =
-          torch::split(tensor, {static_cast<int64_t>(qk_nope_head_dim), static_cast<int64_t>(v_head_dim)}, -1);
-      torch::Tensor kv_b_nope_tensor = tensors[0].contiguous();
-      torch::Tensor v_head_tensor = tensors[1].contiguous();
-
-      size_t single_size = head_num / tensor_para_size_;
-      int inner_group_rank = rank_;
-      if (attn_data_parallel_size > 1) {
-        // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
-        // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
-        // = 2, then each attn dp group size is 2.
-        single_size = head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-      }
-      kv_b_nope_tensor = TpSplitTensor(kv_b_nope_tensor, 1, inner_group_rank, single_size).flatten(1);
-      v_head_tensor = TpSplitTensor(v_head_tensor, 1, inner_group_rank, single_size).flatten(1);
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "kv_b_proj", "kv_b_nope_proj"), kv_b_nope_tensor,
-                               weight_data_type);
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "kv_b_proj", "v_head_proj"), v_head_tensor, weight_data_type);
-    } else if (tensor_name.find("q_b_proj") != std::string::npos) {
-      // For DeepSeek, Column slice to TP, and split to q_b_nope_proj and q_b_rope_proj
-      size_t head_num = model_config_.head_num;
-      size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
-      size_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
-      if (tensor_name.find(".qzeros") != std::string::npos) {
-        size_t pack_factor = 32 / model_config_.quant_config.bits;
-        qk_rope_head_dim /= pack_factor;
-        qk_nope_head_dim /= pack_factor;
-      }
-      // TODO(winminkong): support deepseek v2 q_b_proj
-      if ((qk_nope_head_dim + qk_rope_head_dim) * head_num != weight_shape[1]) {
-        KLLM_THROW(fmt::format(
-            "The shape of the 1th dim of the weight named '{} ({})' is not equal to the sum of qk_nope_head_dim {} "
-            "and qk_rope_head_dim {}.",
-            tensor_name, weight_shape[1], qk_nope_head_dim, qk_rope_head_dim));
-      }
-      torch::Tensor tensor = GetTorchTensorFromWeightPtr(
-          {weight_shape[0], head_num, qk_nope_head_dim + qk_rope_head_dim}, weight_data_type, weight_ptr, true);
-      tensor = TrySmartAutoUnpack(tensor_name, tensor);
-
-      auto tensors =
-          torch::split(tensor, {static_cast<int64_t>(qk_nope_head_dim), static_cast<int64_t>(qk_rope_head_dim)}, -1);
-      torch::Tensor q_b_nope_tensor = tensors[0].contiguous();
-      torch::Tensor q_b_rope_tensor = tensors[1].contiguous();
-
-      size_t single_size = head_num / tensor_para_size_;
-      int inner_group_rank = rank_;
-      if (attn_data_parallel_size > 1) {
-        // NOTE(karlluo): for tp + attn_dp, all gpus consist tensor parallel group, attn_data_parallel_size is the
-        // number of attn dp groups and conduct tp in each dp groups. For example, if tp = 4, then gpus = 4 and attn_dp
-        // = 2, then each attn dp group size is 2.
-        single_size = head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-        inner_group_rank = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-      }
-      q_b_nope_tensor = TpSplitTensor(q_b_nope_tensor, 1, inner_group_rank, single_size).flatten(1);
-      q_b_rope_tensor = TpSplitTensor(q_b_rope_tensor, 1, inner_group_rank, single_size).flatten(1);
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "q_b_proj", "q_b_nope_proj"), q_b_nope_tensor,
-                               weight_data_type);
-      AddWeightFromTorchTensor(NameReplace(tensor_name, "q_b_proj", "q_b_rope_proj"), q_b_rope_tensor,
-                               weight_data_type);
     } else {
       if (weight_shape[1] % tensor_para_size_ != 0) {
         KLLM_THROW(
@@ -648,8 +543,7 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
       torch::Tensor processed_tensor_gpu = cutlass_helper_->CutlassPreprocessWeightsForMixedGemmWarpper(
           qweight_gpu, llm_kernels::nvidia::QuantType::W4_A16);
       AddWeightFromTorchTensor(weight_name, processed_tensor_gpu);
-    } else if (model_config_.quant_config.backend == MARLIN_BACKEND ||
-               needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos || is_experts) {
+    } else if (model_config_.quant_config.backend == MARLIN_BACKEND || is_experts) {
       if (model_config_.quant_config.method == QUANT_GPTQ) {
         std::optional<torch::Tensor> perm_gpu = std::nullopt;
         if (model_config_.quant_config.desc_act == true) {
@@ -674,8 +568,7 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
     weights_map_.erase(qweight_name);
 
     // In Marlin, GPTQ and AWQ share the same scale layout
-    if (model_config_.quant_config.backend == MARLIN_BACKEND ||
-        needed_slove_weight_name.find("kv_a_rope_proj") != std::string::npos || is_experts) {
+    if (model_config_.quant_config.backend == MARLIN_BACKEND || is_experts) {
       torch::Tensor scales_gpu = GetTorchTensorFromWeight(scales_name);
       scales_gpu = marlin_helper_->MarlinPermuteScales<T>(
           scales_gpu, model_config_.quant_config.group_size * scales_gpu.size(-2), scales_gpu.size(-1));
@@ -861,16 +754,8 @@ Status QuantWeight<T>::ConvertGroupTensor() {
   }
 
   // convert qweight layout and binding scales
-  needed_slove_weights_name = {"self_attn.o_proj"};
-  if (use_mla) {
-    std::vector<std::string> mla_needed_slove_weights_name = {
-        "self_attn.q_a_proj",       "self_attn.q_b_nope_proj",  "self_attn.q_b_rope_proj", "self_attn.kv_a_lora_proj",
-        "self_attn.kv_a_rope_proj", "self_attn.kv_b_nope_proj", "self_attn.v_head_proj"};
-    needed_slove_weights_name.insert(needed_slove_weights_name.end(), mla_needed_slove_weights_name.begin(),
-                                     mla_needed_slove_weights_name.end());
-  } else {
-    needed_slove_weights_name.push_back("self_attn.query_key_value");
-  }
+  needed_slove_weights_name = {"self_attn.o_proj", "self_attn.query_key_value"};
+
   if (model_config_.is_moe) {
     needed_slove_weights_name.push_back("mlp.experts.down_proj");
     needed_slove_weights_name.push_back("mlp.experts.up_gate_proj");
@@ -1015,90 +900,6 @@ bool QuantWeight<T>::LoadFp8E4m3Scale(const std::string& tensor_name, std::vecto
 }
 
 template <typename T>
-bool QuantWeight<T>::LoadMlaFp8E4m3BlockWiseScale(const std::string& tensor_name, std::vector<size_t>& weight_shape,
-                                                  DataType& weight_data_type, void* weight_ptr) {
-  SetDevice(rank_);
-  if (model_config_.quant_config.method != QUANT_FP8_E4M3 && !model_config_.quant_config.is_fp8_blockwise) {
-    return false;
-  }
-  if (tensor_name.find(".weight_scale") == std::string::npos && tensor_name.find(".input_scale") == std::string::npos) {
-    return false;
-  }
-  // scale is float scalar
-  if (weight_data_type != TYPE_FP32) {
-    KLLM_THROW("Not support data type of scale:" + tensor_name);
-  }
-  size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  // For q_b_proj scale
-  if (tensor_name.find(".q_b_proj.weight_scale") != std::string::npos) {
-    size_t tensor_para_offset = rank_;
-    size_t inner_tensor_para_size = tensor_para_size_;
-    if (attn_data_parallel_size > 1) {
-      tensor_para_offset = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-      inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-    }
-    size_t para_pitch =
-        DivRoundUp(weight_shape[0], inner_tensor_para_size) * weight_shape[1] * GetTypeSize(weight_data_type);
-    tensor_para_offset *= para_pitch;
-
-    tensor_manager_->AddWeightTensor(
-        tensor_name, {DivRoundUp(weight_shape[0], inner_tensor_para_size), weight_shape[1]}, weight_data_type);
-    MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                context_->GetMemoryManageStreams()[rank_]);
-  }
-  // For kv_a_proj scale
-  if (tensor_name.find(".kv_a_proj_with_mqa.weight_scale") != std::string::npos) {
-    // For kv_a_lora_proj scale
-    size_t kv_lora_rank = model_config_.mla_config.kv_lora_rank;
-    if (kv_lora_rank % model_config_.quant_config.weight_block_size[0] != 0) {
-      KLLM_THROW("Not support shape of scale:" + tensor_name);
-    }
-    std::string kv_a_lora_scale_name =
-        tensor_name.substr(0, tensor_name.find_first_of('_')) + "_attn.kv_a_lora_proj.weight_scale_inv";
-    size_t kv_a_lora_scale_shape_0 = kv_lora_rank / model_config_.quant_config.weight_block_size[0];
-    std::vector<size_t> kv_a_lora_scale_shape = {kv_a_lora_scale_shape_0, weight_shape[1]};
-    tensor_manager_->AddWeightTensor(kv_a_lora_scale_name, kv_a_lora_scale_shape, weight_data_type);
-    size_t kv_a_lora_scale_size = kv_a_lora_scale_shape_0 * weight_shape[1] * GetTypeSize(weight_data_type);
-    MemcpyAsync(weights_map_[kv_a_lora_scale_name].GetPtr<void>(), weight_ptr, kv_a_lora_scale_size,
-                MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-
-    // For kv_a_rope_proj scale
-    std::string kv_a_rope_scale_name =
-        tensor_name.substr(0, tensor_name.find_first_of('_')) + "_attn.kv_a_rope_proj.weight_scale_inv";
-    size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
-    size_t kv_a_rope_scale_shape_0 = DivRoundUp(qk_rope_head_dim, model_config_.quant_config.weight_block_size[0]);
-    if (kv_a_rope_scale_shape_0 + kv_a_lora_scale_shape_0 != weight_shape[0]) {
-      KLLM_THROW("Not support shape of scale:" + tensor_name);
-    }
-    std::vector<size_t> kv_a_rope_scale_shape = {kv_a_rope_scale_shape_0, weight_shape[1]};
-    tensor_manager_->AddWeightTensor(kv_a_rope_scale_name, kv_a_rope_scale_shape, weight_data_type);
-    size_t kv_a_rope_scale_size = kv_a_rope_scale_shape_0 * weight_shape[1] * GetTypeSize(weight_data_type);
-    MemcpyAsync(weights_map_[kv_a_rope_scale_name].GetPtr<void>(), weight_ptr + kv_a_lora_scale_size,
-                kv_a_rope_scale_size, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-  }
-  // For kv_b_proj scale
-  if (tensor_name.find(".kv_b_proj.weight_scale") != std::string::npos) {
-    size_t tensor_para_offset = rank_;
-    size_t inner_tensor_para_size = tensor_para_size_;
-    if (attn_data_parallel_size > 1) {
-      tensor_para_offset = rank_ % runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-      inner_tensor_para_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-    }
-    size_t para_pitch =
-        DivRoundUp(weight_shape[0], inner_tensor_para_size) * weight_shape[1] * GetTypeSize(weight_data_type);
-    tensor_para_offset *= para_pitch;
-
-    tensor_manager_->AddWeightTensor(
-        tensor_name, {DivRoundUp(weight_shape[0], inner_tensor_para_size), weight_shape[1]}, weight_data_type);
-    MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
-                weights_map_[tensor_name].GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
-                context_->GetMemoryManageStreams()[rank_]);
-  }
-  return true;
-}
-
-template <typename T>
 bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name, std::vector<size_t>& weight_shape,
                                                   DataType& weight_data_type, void* weight_ptr) {
   SetDevice(rank_);
@@ -1198,222 +999,6 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
   return true;
 }
 
-#  ifdef ENABLE_FP8_TORCH
-template <typename T>
-Status QuantWeight<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight() {
-  SetDevice(rank_);
-  size_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
-  size_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
-  size_t v_head_dim = model_config_.mla_config.v_head_dim;
-  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size /
-                   runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  size_t head_num_tp = DivRoundUp(model_config_.head_num, tp_size);
-  for (const auto layer_idx : required_layer_idx_.all) {
-    // Process q_b_proj
-    std::string weight_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_proj.weight";
-    std::string weight_scale_name =
-        "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_proj.weight_scale_inv";
-    if (weights_map_.find(weight_name) != weights_map_.end() &&
-        weights_map_.find(weight_scale_name) != weights_map_.end()) {
-      // Dequant q_b_proj
-      std::string dequant_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(dequant_weight_name, std::vector<size_t>(weights_map_[weight_name].shape),
-                                       weight_data_type_);
-      DequantFp8E4m3BlockWise<T>(
-          weights_map_[weight_name].GetPtr<void>(), weights_map_[weight_scale_name].GetPtr<void>(),
-          weights_map_[dequant_weight_name].GetPtr<void>(), size_t(weights_map_[weight_name].shape[0]),
-          size_t(weights_map_[weight_name].shape[1]), model_config_.quant_config.weight_block_size[1],
-          context_->GetMemoryManageStreams()[rank_].Get());
-
-      weights_map_.erase(weight_name);
-      weights_map_.erase(weight_scale_name);
-
-      // Split dequant q_b_proj
-      if (size_t(weights_map_[dequant_weight_name].shape[0]) != (head_num_tp * (qk_nope_head_dim + qk_rope_head_dim))) {
-        KLLM_THROW("Not support shape of dequant weight:" + dequant_weight_name);
-      }
-      std::string dequant_nope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_nope_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(
-          dequant_nope_weight_name,
-          {head_num_tp * qk_nope_head_dim, size_t(weights_map_[dequant_weight_name].shape[1])}, weight_data_type_);
-      size_t nope_dst_pitch =
-          qk_nope_head_dim * size_t(weights_map_[dequant_nope_weight_name].shape[1]) * GetTypeSize(weight_data_type_);
-      size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * size_t(weights_map_[dequant_weight_name].shape[1]) *
-                         GetTypeSize(weight_data_type_);
-      Memcpy2DAsync(weights_map_[dequant_nope_weight_name].GetPtr<void>(), nope_dst_pitch,
-                    weights_map_[dequant_weight_name].GetPtr<void>(), src_pitch, nope_dst_pitch, head_num_tp,
-                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-
-      std::string dequant_rope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_rope_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(
-          dequant_rope_weight_name,
-          {head_num_tp * qk_rope_head_dim, size_t(weights_map_[dequant_weight_name].shape[1])}, weight_data_type_);
-      size_t rope_dst_pitch =
-          qk_rope_head_dim * size_t(weights_map_[dequant_rope_weight_name].shape[1]) * GetTypeSize(weight_data_type_);
-      Memcpy2DAsync(weights_map_[dequant_rope_weight_name].GetPtr<void>(), rope_dst_pitch,
-                    weights_map_[dequant_weight_name].GetPtr<void>() + nope_dst_pitch, src_pitch, rope_dst_pitch,
-                    head_num_tp, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-
-      weights_map_.erase(dequant_weight_name);
-
-      // Quant q_b_nope_proj and q_b_rope_proj
-      std::string quant_nope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_nope_proj.weight";
-      tensor_manager_->AddWeightTensor(
-          quant_nope_weight_name, std::vector<size_t>(weights_map_[dequant_nope_weight_name].shape), TYPE_FP8_E4M3);
-      std::string quant_nope_weight_scale_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_nope_proj.weight_scale_inv";
-      size_t quant_nope_weight_scale_shape_0 = DivRoundUp(size_t(weights_map_[dequant_nope_weight_name].shape[0]),
-                                                          model_config_.quant_config.weight_block_size[0]);
-      size_t quant_nope_weight_scale_shape_1 = DivRoundUp(size_t(weights_map_[dequant_nope_weight_name].shape[1]),
-                                                          model_config_.quant_config.weight_block_size[1]);
-      tensor_manager_->AddWeightTensor(quant_nope_weight_scale_name,
-                                       {quant_nope_weight_scale_shape_0, quant_nope_weight_scale_shape_1}, TYPE_FP32);
-      ScaledQuantizeFp8E4m3(static_cast<T*>(weights_map_[dequant_nope_weight_name].GetPtr<void>()),
-                            weights_map_[quant_nope_weight_name].GetPtr<void>(),
-                            static_cast<float*>(weights_map_[quant_nope_weight_scale_name].GetPtr<void>()),
-                            model_config_.quant_config.weight_block_size,
-                            size_t(weights_map_[dequant_nope_weight_name].shape[0]),
-                            size_t(weights_map_[dequant_nope_weight_name].shape[1]), rank_);
-      weights_map_.erase(dequant_nope_weight_name);
-
-      std::string quant_rope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_rope_proj.weight";
-      tensor_manager_->AddWeightTensor(
-          quant_rope_weight_name, std::vector<size_t>(weights_map_[dequant_rope_weight_name].shape), TYPE_FP8_E4M3);
-      std::string quant_rope_weight_scale_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.q_b_rope_proj.weight_scale_inv";
-      size_t quant_rope_weight_scale_shape_0 = DivRoundUp(size_t(weights_map_[dequant_rope_weight_name].shape[0]),
-                                                          model_config_.quant_config.weight_block_size[0]);
-      size_t quant_rope_weight_scale_shape_1 = DivRoundUp(size_t(weights_map_[dequant_rope_weight_name].shape[1]),
-                                                          model_config_.quant_config.weight_block_size[1]);
-      tensor_manager_->AddWeightTensor(quant_rope_weight_scale_name,
-                                       {quant_rope_weight_scale_shape_0, quant_rope_weight_scale_shape_1}, TYPE_FP32);
-      ScaledQuantizeFp8E4m3(static_cast<T*>(weights_map_[dequant_rope_weight_name].GetPtr<void>()),
-                            weights_map_[quant_rope_weight_name].GetPtr<void>(),
-                            static_cast<float*>(weights_map_[quant_rope_weight_scale_name].GetPtr<void>()),
-                            model_config_.quant_config.weight_block_size,
-                            size_t(weights_map_[dequant_rope_weight_name].shape[0]),
-                            size_t(weights_map_[dequant_rope_weight_name].shape[1]), rank_);
-      weights_map_.erase(dequant_rope_weight_name);
-    }  // end if
-    // Process kv_b_proj
-    weight_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_proj.weight";
-    weight_scale_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_proj.weight_scale_inv";
-    if (weights_map_.find(weight_name) != weights_map_.end() &&
-        weights_map_.find(weight_scale_name) != weights_map_.end()) {
-      // KLLM_LOG_INFO << "Start process kv_b_proj on layer: " << layer_idx << ", on rank: " << rank_ << "";
-      // Dequant kv_b_proj
-      std::string dequant_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(dequant_weight_name, std::vector<size_t>(weights_map_[weight_name].shape),
-                                       weight_data_type_);
-      DequantFp8E4m3BlockWise<T>(
-          weights_map_[weight_name].GetPtr<void>(), weights_map_[weight_scale_name].GetPtr<void>(),
-          weights_map_[dequant_weight_name].GetPtr<void>(), size_t(weights_map_[weight_name].shape[0]),
-          size_t(weights_map_[weight_name].shape[1]), model_config_.quant_config.weight_block_size[1],
-          context_->GetMemoryManageStreams()[rank_].Get());
-      weights_map_.erase(weight_name);
-      weights_map_.erase(weight_scale_name);
-
-      // Split dequant kv_b_proj
-      if (size_t(weights_map_[dequant_weight_name].shape[0]) != (head_num_tp * (qk_nope_head_dim + v_head_dim))) {
-        KLLM_THROW("Not support shape of dequant weight:" + dequant_weight_name);
-      }
-      std::string dequant_nope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_nope_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(
-          dequant_nope_weight_name,
-          {head_num_tp * qk_nope_head_dim, size_t(weights_map_[dequant_weight_name].shape[1])}, weight_data_type_);
-      size_t nope_dst_pitch =
-          qk_nope_head_dim * size_t(weights_map_[dequant_nope_weight_name].shape[1]) * GetTypeSize(weight_data_type_);
-      size_t src_pitch = (qk_nope_head_dim + v_head_dim) * size_t(weights_map_[dequant_weight_name].shape[1]) *
-                         GetTypeSize(weight_data_type_);
-      Memcpy2DAsync(weights_map_[dequant_nope_weight_name].GetPtr<void>(), nope_dst_pitch,
-                    weights_map_[dequant_weight_name].GetPtr<void>(), src_pitch, nope_dst_pitch, head_num_tp,
-                    MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-
-      std::string dequant_vhead_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.v_head_proj.weight_dequant";
-      tensor_manager_->AddWeightTensor(dequant_vhead_weight_name,
-                                       {head_num_tp * v_head_dim, size_t(weights_map_[dequant_weight_name].shape[1])},
-                                       weight_data_type_);
-      size_t vhead_dst_pitch =
-          v_head_dim * size_t(weights_map_[dequant_vhead_weight_name].shape[1]) * GetTypeSize(weight_data_type_);
-      Memcpy2DAsync(weights_map_[dequant_vhead_weight_name].GetPtr<void>(), vhead_dst_pitch,
-                    weights_map_[dequant_weight_name].GetPtr<void>() + nope_dst_pitch, src_pitch, vhead_dst_pitch,
-                    head_num_tp, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
-
-      weights_map_.erase(dequant_weight_name);
-
-      // For the latest weight absorption version process
-      if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
-        // Copy dequant kv_b_nope_proj to w_uk_t
-        Tensor w_uk_t_tensor = weights_map_[dequant_nope_weight_name];
-        w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, weights_map_[dequant_nope_weight_name].shape[1]};
-        std::string w_uk_t_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.w_uk_t.weight";
-        weights_map_[w_uk_t_name] = w_uk_t_tensor;
-
-        // Permute dequant_vhead_weight_name to w_uv
-        std::string w_uv_name = "model.layers." + std::to_string(layer_idx) + ".self_attn.w_uv.weight";
-        tensor_manager_->AddWeightTensor(
-            w_uv_name, {head_num_tp, weights_map_[dequant_vhead_weight_name].shape[1], v_head_dim}, weight_data_type_);
-        weights_map_[dequant_vhead_weight_name].shape = {head_num_tp, v_head_dim,
-                                                         weights_map_[dequant_vhead_weight_name].shape[1]};
-        Permute(weights_map_[dequant_vhead_weight_name], weights_map_[w_uv_name], {0, 2, 1},
-                context_->GetMemoryManageStreams()[rank_]);
-        weights_map_[dequant_vhead_weight_name].shape = {head_num_tp * v_head_dim,
-                                                         weights_map_[dequant_vhead_weight_name].shape[2]};
-      }
-      // Quant kv_b_nope_proj and v_head_proj
-      std::string quant_nope_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_nope_proj.weight";
-      tensor_manager_->AddWeightTensor(
-          quant_nope_weight_name, std::vector<size_t>(weights_map_[dequant_nope_weight_name].shape), TYPE_FP8_E4M3);
-      std::string quant_nope_weight_scale_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.kv_b_nope_proj.weight_scale_inv";
-      size_t quant_nope_weight_scale_shape_0 = DivRoundUp(size_t(weights_map_[dequant_nope_weight_name].shape[0]),
-                                                          model_config_.quant_config.weight_block_size[0]);
-      size_t quant_nope_weight_scale_shape_1 = DivRoundUp(size_t(weights_map_[dequant_nope_weight_name].shape[1]),
-                                                          model_config_.quant_config.weight_block_size[1]);
-      tensor_manager_->AddWeightTensor(quant_nope_weight_scale_name,
-                                       {quant_nope_weight_scale_shape_0, quant_nope_weight_scale_shape_1}, TYPE_FP32);
-      ScaledQuantizeFp8E4m3(static_cast<T*>(weights_map_[dequant_nope_weight_name].GetPtr<void>()),
-                            weights_map_[quant_nope_weight_name].GetPtr<void>(),
-                            static_cast<float*>(weights_map_[quant_nope_weight_scale_name].GetPtr<void>()),
-                            model_config_.quant_config.weight_block_size,
-                            size_t(weights_map_[dequant_nope_weight_name].shape[0]),
-                            size_t(weights_map_[dequant_nope_weight_name].shape[1]), rank_);
-      weights_map_.erase(dequant_nope_weight_name);
-
-      std::string quant_vhead_weight_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.v_head_proj.weight";
-      tensor_manager_->AddWeightTensor(
-          quant_vhead_weight_name, std::vector<size_t>(weights_map_[dequant_vhead_weight_name].shape), TYPE_FP8_E4M3);
-      std::string quant_vhead_weight_scale_name =
-          "model.layers." + std::to_string(layer_idx) + ".self_attn.v_head_proj.weight_scale_inv";
-      size_t quant_vhead_weight_scale_shape_0 = DivRoundUp(size_t(weights_map_[dequant_vhead_weight_name].shape[0]),
-                                                           model_config_.quant_config.weight_block_size[0]);
-      size_t quant_vhead_weight_scale_shape_1 = DivRoundUp(size_t(weights_map_[dequant_vhead_weight_name].shape[1]),
-                                                           model_config_.quant_config.weight_block_size[1]);
-      tensor_manager_->AddWeightTensor(quant_vhead_weight_scale_name,
-                                       {quant_vhead_weight_scale_shape_0, quant_vhead_weight_scale_shape_1}, TYPE_FP32);
-      ScaledQuantizeFp8E4m3(static_cast<T*>(weights_map_[dequant_vhead_weight_name].GetPtr<void>()),
-                            weights_map_[quant_vhead_weight_name].GetPtr<void>(),
-                            static_cast<float*>(weights_map_[quant_vhead_weight_scale_name].GetPtr<void>()),
-                            model_config_.quant_config.weight_block_size,
-                            size_t(weights_map_[dequant_vhead_weight_name].shape[0]),
-                            size_t(weights_map_[dequant_vhead_weight_name].shape[1]), rank_);
-      weights_map_.erase(dequant_vhead_weight_name);
-    }  // end if
-  }  // end for loop
-  return Status();
-}
-#  endif
-
 template <typename T>
 Status QuantWeight<T>::BindFp8E4m3Scale(const int num_heads, const int num_kv_heads) {
   // KLLM_LOG_INFO << "Start binding scale";
@@ -1455,38 +1040,6 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfProjWeight(const std::string& name) {
       }
       if (weights_map_.find(gate_input_scale_name) != weights_map_.end()) {
         weights_map_[weight_name].input_scales = &(weights_map_[gate_input_scale_name]);
-      }
-    }
-  }
-  return Status();
-}
-
-template <typename T>
-Status QuantWeight<T>::BindMlaFp8E4m3BlockWiseScaleOfWeight() {
-  SetDevice(rank_);
-  const std::vector<std::string> names = {".self_attn.q_a_proj.",
-                                          ".self_attn.q_b_nope_proj.",
-                                          ".self_attn.q_b_rope_proj.",
-                                          ".self_attn.kv_a_lora_proj.",
-                                          ".self_attn.kv_a_rope_proj.",
-                                          ".self_attn.kv_b_nope_proj.",
-                                          ".self_attn.v_head_proj.",
-                                          ".self_attn.o_proj.",
-                                          ".mlp.gate_up_proj.",
-                                          ".mlp.gate_proj.",
-                                          ".mlp.up_proj.",
-                                          ".mlp.down_proj."};
-  const std::unordered_set<std::string> optional_names = {".mlp.gate_up_proj.", ".mlp.gate_proj.", ".mlp.up_proj."};
-  for (auto name : names) {
-    const auto& layer_range =
-        name.find(".mlp.") == std::string::npos ? required_layer_idx_.all : required_layer_idx_.dense;
-    for (const auto layer_idx : layer_range) {
-      const std::string weight_name = "model.layers." + std::to_string(layer_idx) + name + "weight";
-      const std::string weight_scale_name = "model.layers." + std::to_string(layer_idx) + name + "weight_scale_inv";
-      if (weights_map_.find(weight_scale_name) != weights_map_.end()) {
-        weights_map_[weight_name].weight_scales = &(weights_map_[weight_scale_name]);
-      } else if (optional_names.find(name) == optional_names.end()) {
-        KLLM_THROW("Bind error: Not find scale: " + weight_scale_name);
       }
     }
   }
@@ -1643,65 +1196,6 @@ Tensor QuantWeight<T>::CommonDequantTensor(const std::string& weight_name, bool 
     }
   }
   return weights_map_[dequant_weight_name];
-}
-
-template <typename T>
-Tensor QuantWeight<T>::DequantMlaFp8E4m3BlockWiseTensor(const std::string& weight_name, bool remove_weight) {
-  SetDevice(rank_);
-
-  // 创建dequant权重tensor
-  std::string dequant_weight_name = weight_name + "_dequant";
-  tensor_manager_->AddWeightTensor(dequant_weight_name, std::vector<size_t>(weights_map_[weight_name].shape),
-                                   weight_data_type_);
-
-  // 执行反量化
-  DequantFp8E4m3BlockWise<T>(
-      weights_map_[weight_name].GetPtr<void>(), weights_map_[weight_name + "_scale_inv"].GetPtr<void>(),
-      weights_map_[dequant_weight_name].GetPtr<void>(), size_t(weights_map_[weight_name].shape[0]),
-      size_t(weights_map_[weight_name].shape[1]), model_config_.quant_config.weight_block_size[1],
-      context_->GetMemoryManageStreams()[rank_].Get());
-
-  // 如果需要删除原始权重
-  if (remove_weight) {
-    weights_map_.erase(weight_name);
-    weights_map_.erase(weight_name + "_scale_inv");
-  }
-
-  return weights_map_[dequant_weight_name];
-}
-
-template <typename T>
-Tensor QuantWeight<T>::QuantMlaFp8E4m3BlockWiseTensor(const std::string& weight_name, bool remove_weight) {
-  SetDevice(rank_);
-
-  // 创建quant权重tensor和scale tensor
-  std::string dequant_name = weight_name + "_dequant";  // 输入的权重带_dequant后缀
-  std::string scale_name = weight_name + "_scale_inv";
-  tensor_manager_->AddWeightTensor(weight_name, std::vector<size_t>(weights_map_[dequant_name].shape), TYPE_FP8_E4M3);
-
-  size_t scale_shape_0 =
-      DivRoundUp(size_t(weights_map_[dequant_name].shape[0]), model_config_.quant_config.weight_block_size[0]);
-  size_t scale_shape_1 =
-      DivRoundUp(size_t(weights_map_[dequant_name].shape[1]), model_config_.quant_config.weight_block_size[1]);
-  tensor_manager_->AddWeightTensor(scale_name, {scale_shape_0, scale_shape_1}, TYPE_FP32);
-
-  // 执行量化
-#  ifdef ENABLE_FP8_TORCH
-  ScaledQuantizeFp8E4m3(
-      static_cast<T*>(weights_map_[dequant_name].GetPtr<void>()), weights_map_[weight_name].GetPtr<void>(),
-      static_cast<float*>(weights_map_[scale_name].GetPtr<void>()), model_config_.quant_config.weight_block_size,
-      size_t(weights_map_[dequant_name].shape[0]), size_t(weights_map_[dequant_name].shape[1]), rank_);
-#  endif
-
-  // 如果需要删除原始权重
-  if (remove_weight) {
-    weights_map_.erase(dequant_name);
-  }
-
-  // 绑定scale到量化后的权重
-  weights_map_[weight_name].weight_scales = &(weights_map_[scale_name]);
-
-  return weights_map_[weight_name];
 }
 
 template <typename T>
