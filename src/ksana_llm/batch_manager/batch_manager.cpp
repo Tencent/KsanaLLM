@@ -174,6 +174,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     int global_token_throughput =
         (end_time_ms - last_end_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - last_end_time_ms) : -1;
     int local_token_throuphput = forwarding_token_num * 1000 / (end_time_ms - start_time_ms);
+
     KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id
                    << ", running_reqs.size=" << schedule_output.running_reqs.size()
                    << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len

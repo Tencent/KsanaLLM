@@ -20,9 +20,9 @@ void PPMultibatchWorkloadBalancer::BalancePPMultiBatchReqs(size_t multi_batch_id
                                                            std::vector<std::shared_ptr<BatchState>>& batch_states) {
   // First distribute waiting_reqs to batch states to balance workload
   DistributeWaitingReqs(waiting_reqs, batch_states);
-  if (pp_multibatch_wb_strategy_ != PPMultibatchWBStrategy::NO_DYNAMIC_WB) {
-    OffloadBatchWorkload(multi_batch_id, batch_states);
-  }
+
+  // we redistribute all requests in the waiting_queue of batch_state for each dp rank,
+  // so we can not execute OffloadBatchWorkload in this function
 }
 
 void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs,
@@ -46,7 +46,7 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
 
     // Calculate workload for waiting_queue (deque) by directly using CalculateWorkload
     for (const auto& req : batch->waiting_queue) {
-      batch_workload += CalculateWorkload(req);
+      batch_workload += CalculateWorkload(req) * 10000;
     }
 
     current_workloads.push_back(batch_workload);
@@ -89,6 +89,12 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
   ss.str("");
   for (size_t i = 0; i < batch_states.size(); i++) {
     auto& batch = batch_states[i];
+
+    // sort the waiting queue by arrived time
+    std::sort(batch->waiting_queue.begin(), batch->waiting_queue.end(),
+              [](const std::shared_ptr<InferRequest>& a, const std::shared_ptr<InferRequest>& b) {
+                return a->timestamp_in_ms < b->timestamp_in_ms;
+              });
     ss << "[ batch " << batch->multi_batch_id_ << ", workload:" << current_workloads[i]
        << ", running:" << batch->schedule_output->running_reqs.size() << ", waiting:" << batch->waiting_queue.size()
        << " ] ";

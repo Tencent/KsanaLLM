@@ -66,7 +66,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void BalancePPMultiBatchReqs(size_t multi_batch_id);
 
-  void ReportBatchState(std::shared_ptr<BatchState> batch_state);
+  void ReportBatchState(std::shared_ptr<BatchState> batch_state, size_t dp_rank, size_t pp_rank,
+                        std::time_t schedule_start_time);
+
   Status CreateMockReq(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
   // report the state of all instance

@@ -74,9 +74,9 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   EXPECT_EQ(batch_states[0]->schedule_output->running_reqs.size(), 1);
   EXPECT_EQ(batch_states[0]->schedule_output->running_reqs[0]->req_id, 0);
 
-  // total 9 reqs, 3 are moved to batch 0, waiting_reqs are moved to batch 0
-  EXPECT_EQ(batch_states[0]->waiting_queue.size(), 5);
-  EXPECT_EQ(batch_states[1]->waiting_queue.size(), 0);
-  EXPECT_EQ(batch_states[1]->schedule_output->running_reqs.size(), batch1_running_req_num - 2);
+  // BalancePPMultiBatchReqs will not move reqs in batch_states[0]->waiting_queue now
+  EXPECT_EQ(batch_states[0]->waiting_queue.size(), 1);
+  EXPECT_EQ(batch_states[1]->waiting_queue.size(), 2);
+  EXPECT_EQ(batch_states[1]->schedule_output->running_reqs.size(), batch1_running_req_num);
 }
 }  // namespace ksana_llm
