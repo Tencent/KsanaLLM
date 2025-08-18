@@ -18,6 +18,9 @@ Status NcclAllGatherLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
   if (tp_size == 1) {
     return Status();
   }
+  // if gather along dim 1, need to permute, so need a buffer in input_tensors for permute
+  bool gather_along_dim_0 = input_tensors.size() == 1;
+
   size_t h = input_tensors[0].shape[0];
   size_t w_per = input_tensors[0].shape[1];
 
@@ -29,22 +32,28 @@ Status NcclAllGatherLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
   } else {
     stream = &(context_->GetCommStreams()[rank_].Get());
   }
+
   {
     PROFILE_EVENT_SCOPE(nccl_allgather_multi_batch_id_, "nccl_allgather_multi_batch_id_{}", rank_);
+    void* output_ptr = gather_along_dim_0 ? output_tensors[0].GetPtr<void>() : input_tensors[1].GetPtr<void>();
     NCCL_CHECK(ncclGroupStart());
-    ncclResult_t ncclError =
-        ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-                      reinterpret_cast<void*>(input_tensors[1].GetPtr<void>()), input_tensors[0].GetElementNumber(),
-                      GetNcclDataType(inter_data_type_), context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+    ncclResult_t ncclError = ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_ptr,
+                                           input_tensors[0].GetElementNumber(), GetNcclDataType(inter_data_type_),
+                                           context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
       return Status(RetCode::RET_INFER_FAILED, "NCCL error");
     }
     NCCL_CHECK(ncclGroupEnd());
   }
-  InvokePermute<T>(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
-                   *stream);
-  output_tensors[0].shape = {h, tp_size * w_per};
+
+  if (gather_along_dim_0) {
+    output_tensors[0].shape = {tp_size * h, w_per};
+  } else {
+    InvokePermute<T>(input_tensors[1].GetPtr<void>(), output_tensors[0].GetPtr<void>(), {tp_size, h, w_per}, {1, 0, 2},
+                     *stream);
+    output_tensors[0].shape = {h, tp_size * w_per};
+  }
   return Status();
 }
 

@@ -36,6 +36,7 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
 
  private:
   PipelineConfig pipeline_config_;
+  RuntimeConfig runtime_config_;
   std::unique_ptr<NewDeepSeekV3WeightImplBase> weight_impl_;
   // rank -> weight_name
   std::vector<std::unordered_set<std::string>> to_be_permuted_weights_;

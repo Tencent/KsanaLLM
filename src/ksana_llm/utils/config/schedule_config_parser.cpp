@@ -286,6 +286,12 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
                     batch_scheduler_config_.max_token_len));
   }
 
+  if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
+    KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,
+                         "ENABLE_O_PROJ_OUT_OF_DP only support attn_tensor_parallel_size=1");
+    runtime_config_.enable_o_proj_out_of_dp = true;
+  }
+
   // Read block manager config.
   block_manager_config_.host_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);

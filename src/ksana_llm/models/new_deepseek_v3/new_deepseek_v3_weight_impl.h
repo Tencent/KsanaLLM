@@ -83,7 +83,7 @@ class NewDeepSeekV3WeightImplBase {
 template <typename T>
 class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
  public:
-  explicit NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context);
+  explicit NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context, const RuntimeConfig& runtime_config);
   virtual ~NewDeepSeekV3WeightImpl() = default;
 
   Tensor& GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) override;
@@ -149,6 +149,7 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 
  private:
   std::shared_ptr<Context> context_;
+  RuntimeConfig runtime_config_;
   std::vector<std::unordered_map<size_t, Tensor>> permute_buffers_;
   std::vector<std::unordered_map<size_t, Tensor>> tensor_buffers_;
 };

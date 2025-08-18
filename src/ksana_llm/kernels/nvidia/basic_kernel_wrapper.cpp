@@ -985,6 +985,43 @@ INVOKE_SPLIT(half);
 INVOKE_SPLIT(__nv_bfloat16);
 #undef INVOKE_SPLIT
 
+template <typename T>
+void InvokeGatherSubmatrix(const T* __restrict__ input, T* __restrict__ output, std::vector<size_t>& m_num_per_group,
+                           size_t group_size, size_t group_num, size_t n_start, size_t n_end, size_t m, size_t n,
+                           void* workspace, cudaStream_t& stream) {
+  if (m_num_per_group.size() != group_num || group_size * group_num != m) {
+    KLLM_THROW("Invalid input for InvokeGatherSubmatrix");
+  }
+  llm_kernels::nvidia::InvokeGatherSubmatrix<T>(input, output, m_num_per_group, group_size, group_num, n_start, n_end,
+                                                m, n, workspace, stream);
+}
+
+#define INVOKE_GATHER_SUBMATRIX(T)                                                                                  \
+  template void InvokeGatherSubmatrix(                                                                              \
+      const T* __restrict__ input, T* __restrict__ output, std::vector<size_t>& m_num_per_group, size_t group_size, \
+      size_t group_num, size_t n_start, size_t n_end, size_t m, size_t n, void* workspace, cudaStream_t& stream);
+
+INVOKE_GATHER_SUBMATRIX(float);
+INVOKE_GATHER_SUBMATRIX(half);
+INVOKE_GATHER_SUBMATRIX(__nv_bfloat16);
+
+#undef INVOKE_GATHER_SUBMATRIX
+
+template <typename T>
+void InvokeDpMapCopy(const T* __restrict__ input, T* __restrict__ output, const std::vector<size_t>& group_info,
+                     size_t m, size_t n, void* workspace, cudaStream_t& stream) {
+  llm_kernels::nvidia::InvokeDpMapCopy<T>(input, output, group_info, m, n, workspace, stream);
+}
+
+#define INVOKE_MAP_COPY(T)                                                                                     \
+  template void InvokeDpMapCopy<T>(const T* __restrict__ input, T* __restrict__ output,                        \
+                                   const std::vector<size_t>& group_info, size_t m, size_t n, void* workspace, \
+                                   cudaStream_t& stream);
+INVOKE_MAP_COPY(float);
+INVOKE_MAP_COPY(half);
+INVOKE_MAP_COPY(__nv_bfloat16);
+#undef INVOKE_MAP_COPY
+
 void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ProcessKvList(kv_list, layer_num, block_num, block_size, stream));
 }

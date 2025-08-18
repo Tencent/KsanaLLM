@@ -15,6 +15,7 @@
 #include "ksana_llm/modules/basic/bmm.h"
 #include "ksana_llm/modules/basic/flash_mla_attention.h"
 #include "ksana_llm/modules/basic/linear.h"
+#include "ksana_llm/modules/basic/mem_adjuster.h"
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
 #include "ksana_llm/modules/basic/split.h"
 
@@ -27,6 +28,7 @@ struct MlaBuffers {
   TensorBuffer* kv_lora_or_q_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
+  TensorBuffer* mem_adjuster_buffer;
 
   // shared
   TensorBuffer* shared_prefix_kv_buffer;
@@ -73,6 +75,7 @@ class MultiHeadLatentAttention {
  private:
   int rank_;
   const int layer_idx_;
+  const int tensor_parallel_size_;
   MlaBuffers& mla_buffers_;
 
  protected:
@@ -83,6 +86,8 @@ class MultiHeadLatentAttention {
   bool use_q_lora_ = false;
   // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
   bool use_fused_lora_a_ = false;
+  // compute o_proj out of dp group
+  bool o_proj_out_of_dp_ = false;
   bool use_q_b_nope_rope_ = false;
 
   std::shared_ptr<Linear> attn_fused_lora_a_projs_;
@@ -97,6 +102,7 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
   std::shared_ptr<FlashMlaAttention> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention> paged_mla_attention_layers_;
+  std::shared_ptr<MemAdjuster> mem_adjuster_;
   inline static uint32_t qk_nope_head_dim_ = 0;
   inline static uint32_t qk_rope_head_dim_ = 0;
   inline static uint32_t kv_lora_rank_ = 0;

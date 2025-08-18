@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "csrc/kernels/nvidia/adjust_mem/adjust_mem.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/asymmetric_gemm_wrapper.h"
 #include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/gptq_marlin/marlin_wrapper.h"
@@ -247,6 +248,14 @@ template <typename T>
 void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs, std::vector<int>& col_offsets,
                  int rows, int cols, int num_outputs, cudaStream_t& stream);
 
+template <typename T>
+void InvokeGatherSubmatrix(const T* __restrict__ input, T* __restrict__ output, std::vector<size_t>& m_num_per_group,
+                           size_t group_size, size_t group_num, size_t n_start, size_t n_end, size_t m, size_t n,
+                           void* workspace, cudaStream_t& stream);
+
+template <typename T>
+void InvokeDpMapCopy(const T* __restrict__ input, T* __restrict__ output, const std::vector<size_t>& group_info,
+                     size_t m, size_t n, void* workspace, cudaStream_t& stream);
 void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream);
 
 // Apply token bitmask to logits for grammar-constrained sampling, setting masked tokens to negative infinity

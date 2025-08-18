@@ -8,7 +8,9 @@
 
 namespace ksana_llm {
 template <typename T>
-NewDeepSeekV3WeightImpl<T>::NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context) : context_(context) {
+NewDeepSeekV3WeightImpl<T>::NewDeepSeekV3WeightImpl(const std::shared_ptr<Context>& context,
+                                                    const RuntimeConfig& runtime_config)
+    : context_(context), runtime_config_(runtime_config) {
   permute_buffers_.resize(context_->GetTensorParallelSize());
   tensor_buffers_.resize(context_->GetTensorParallelSize());
 }
@@ -553,8 +555,10 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
 
   if (host_weight_name.find(".o_proj.weight_scale_inv") != std::string::npos) {
     // fp8: Transpose, then split along axis = 0, then transpose
+    size_t split_size =
+        runtime_config_.enable_o_proj_out_of_dp ? new_deepseek_v3_config->tensor_para_size : attn_tp_size;
     Tensor dev_tensor;
-    TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, attn_tp_size,
+    TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, split_size,
                        new_deepseek_v3_config->is_quant);
 
     device_model_weights[host_weight_name] = dev_tensor;

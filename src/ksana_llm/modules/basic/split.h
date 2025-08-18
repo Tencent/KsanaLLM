@@ -13,7 +13,7 @@ class Split {
 
   ~Split();
 
-  Status Forward(Tensor input, std::vector<Tensor>& output_tensors);
+  Status Forward(const Tensor& input, std::vector<Tensor>& output_tensors);
 
  protected:
   std::shared_ptr<BaseLayer> split_layer_;

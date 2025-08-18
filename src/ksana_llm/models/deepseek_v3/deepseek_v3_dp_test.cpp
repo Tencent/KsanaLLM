@@ -31,7 +31,21 @@ class DeepSeekV3DPTest : public testing::Test {
   void SetUp() override {
     InitLoguru();
     DeviceMemoryPool::Disable();
+  }
 
+  void TearDown() override {}
+
+ protected:
+  ModelConfig model_config;
+  RuntimeConfig runtime_config;
+  std::vector<std::shared_ptr<BlockAllocatorGroupInterface>> block_allocator_groups;
+  std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
+  std::shared_ptr<Context> context{nullptr};
+  size_t multi_batch_id = 0;
+  std::vector<std::shared_ptr<DeepSeekV3Model>> deepseek_v3_dps;
+  std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
+
+  void InitEnv() {
     std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
     std::string yaml_path = "../../../../examples/deepseekv2/ksana_llm_deepseek_v2_tp2_dp2.yaml";
     context = std::make_shared<Context>(2, 2, 1);
@@ -93,18 +107,6 @@ class DeepSeekV3DPTest : public testing::Test {
       cache_managers.push_back(std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group));
     }
   }
-
-  void TearDown() override {}
-
- protected:
-  ModelConfig model_config;
-  RuntimeConfig runtime_config;
-  std::vector<std::shared_ptr<BlockAllocatorGroupInterface>> block_allocator_groups;
-  std::vector<std::shared_ptr<PrefixCacheManager>> cache_managers;
-  std::shared_ptr<Context> context{nullptr};
-  size_t multi_batch_id = 0;
-  std::vector<std::shared_ptr<DeepSeekV3Model>> deepseek_v3_dps;
-  std::vector<std::shared_ptr<BaseWeight>> deepseek_v3_weight_dps;
 
   void LoadModel(std::filesystem::path &model_path) {
     for (int device_id : {0, 1}) {
@@ -307,10 +309,23 @@ class DeepSeekV3DPTest : public testing::Test {
 
 TEST_F(DeepSeekV3DPTest, DataParallelTest) {
 #ifdef ENABLE_CUDA
+  InitEnv();
   model_config.is_quant = true;
   model_config.weight_data_type = TYPE_BF16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
   TestDeepSeekV3DPForward();
+#endif
+}
+
+TEST_F(DeepSeekV3DPTest, OProjOutOfDPTest) {
+#ifdef ENABLE_CUDA
+  setenv("ENABLE_O_PROJ_OUT_OF_DP", "1", 1);
+  InitEnv();
+  model_config.is_quant = true;
+  model_config.weight_data_type = TYPE_BF16;
+  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
+  TestDeepSeekV3DPForward();
+  unsetenv("ENABLE_O_PROJ_OUT_OF_DP");
 #endif
 }

@@ -39,6 +39,8 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
   const size_t qkv_head_num = model_config.use_mla ? head_num_per_tp : head_num_per_tp + 2 * num_kv_heads_per_tp;
   size_t max_dim = std::max(std::max(qkv_head_num * size_per_head, hidden_units), inter_size_per_tp * 2);
+  size_t shared_buffer_unit_size = std::max(inter_size_per_tp, hidden_units * 2);
+
   size_t mla_hidden_buffer_size = 0;
   if (model_config.use_mla) {
     size_t mla_max_dim = max_dim;
@@ -59,6 +61,9 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
     size_t mla_page_attn_size = kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1);
     mla_page_attn_size = std::max(mla_page_attn_size, head_num_per_tp * mla_flash_attn_size);
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
+    if (runtime_config.enable_o_proj_out_of_dp) {
+      shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
+    }
     const size_t token_num_per_dp =
         std::ceil(static_cast<float>(token_num) / runtime_config.parallel_basic_config.attn_data_parallel_size);
     mla_hidden_buffer_size = token_num_per_dp * mla_max_dim;
@@ -78,7 +83,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   const size_t hidden_buffer_size =
       std::max(std::max(max_logits_tokens * vocab_size_pad, token_num * max_dim), mla_hidden_buffer_size);
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
-  const size_t shared_buffer_size = token_num * std::max(inter_size_per_tp, hidden_units * 2);
+  const size_t shared_buffer_size = token_num * shared_buffer_unit_size;
   KLLM_LOG_INFO << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
                 << ", max_token_num=" << token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
                 << ", inter_size_per_tp=" << inter_size_per_tp << ", hidden_buffer_size=" << hidden_buffer_size

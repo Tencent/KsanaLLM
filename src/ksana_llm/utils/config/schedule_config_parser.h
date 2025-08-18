@@ -316,6 +316,8 @@ struct RuntimeConfig {
 
   // data type of intermediate data: input data and output data type of kernels
   DataType inter_data_type;
+
+  bool enable_o_proj_out_of_dp = false;  // Whether to enable out-of-data-parallelism for o_proj in attention.
 };
 
 class ScheduleConfigParser {

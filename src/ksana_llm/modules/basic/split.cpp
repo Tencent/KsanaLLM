@@ -15,7 +15,7 @@ Split::Split(const LayerCreationContext& creation_context) {
 
 Split::~Split() {}
 
-Status Split::Forward(Tensor input, std::vector<Tensor>& output_tensors) {
+Status Split::Forward(const Tensor& input, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(split_layer_->Forward({input}, output_tensors));
   return Status();
 }

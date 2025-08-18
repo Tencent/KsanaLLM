@@ -34,9 +34,8 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
     : BaseModelWeightLoader(model_config, env, context) {
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
-  to_be_permuted_weights_.resize(runtime_config.parallel_basic_config.tensor_parallel_size);
+  env->GetRuntimeConfig(runtime_config_);
+  to_be_permuted_weights_.resize(runtime_config_.parallel_basic_config.tensor_parallel_size);
 
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);
@@ -509,8 +508,10 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       if (file_weight_name.find(".o_proj.weight") != std::string::npos) {
         // bf16/fp16: Transpose, then split along axis = 0
         // fp8: Transpose, then split along axis = 0, then transpose
+        size_t split_size =
+            runtime_config_.enable_o_proj_out_of_dp ? new_deepseek_v3_config->tensor_para_size : attn_tp_size;
         Tensor dev_tensor;
-        weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, attn_tp_size,
+        weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, split_size,
                                          new_deepseek_v3_config->is_quant);
 
         device_model_weights[file_weight_name] = dev_tensor;
@@ -632,13 +633,13 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 Status NewDeepSeekV3WeightLoader::InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
   switch (new_deepseek_v3_config->weight_data_type) {
     case DataType::TYPE_FP32:
-      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<float>>(context_);
+      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<float>>(context_, runtime_config_);
       break;
     case DataType::TYPE_BF16:
-      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<bfloat16>>(context_);
+      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<bfloat16>>(context_, runtime_config_);
       break;
     case DataType::TYPE_FP16:
-      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<float16>>(context_);
+      weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<float16>>(context_, runtime_config_);
       break;
     default:
       // Handle unexpected data type if needed
