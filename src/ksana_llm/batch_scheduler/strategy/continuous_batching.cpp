@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base_strategy.h"
+#include "ksana_llm/batch_scheduler/state/scheduler_tick_tok.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -36,16 +37,14 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
   }
   size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num / attn_data_parallel_size;
-  dp_max_batch_size_ = batch_scheduler_config_.max_batch_size / attn_data_parallel_size;
+  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num;
+  dp_max_batch_size_ = batch_scheduler_config_.max_batch_size;
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
   if (connector_config_.group_role == GroupRole::DECODE) {
     dp_max_decode_batch_size_ = dp_max_batch_size_;
     // 增加预参数的大小
-    dp_max_batch_size_ = (batch_scheduler_config_.max_batch_size + batch_scheduler_config_.max_pretransfer_batch_size) /
-                         attn_data_parallel_size;
-    // Decode 无需限制 dp_max_step_token_num_
-    dp_max_step_token_num_ *= dp_max_batch_size_;
+    dp_max_batch_size_ = batch_scheduler_config_.max_batch_size +
+                         (batch_scheduler_config_.max_pretransfer_batch_size / attn_data_parallel_size);
     KLLM_LOG_DEBUG << "decode dp_max_batch_size_:" << dp_max_batch_size_
                    << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
   }
@@ -256,10 +255,30 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
   // GPU memory management
   // step_not_kv_cached_token_num: Total count of tokens without KV caching, directly affecting computational workload
   // requirements
+
+  scheduler_ticktok_->Barrier();
+
+  if (dp_group_id_ == 0) {
+    scheduler_ticktok_->Reset();
+    scheduler_shared_counter_->step_batch_size.Reset(0);
+    scheduler_shared_counter_->step_token_num.Reset(0);
+    scheduler_shared_counter_->step_logits_num.Reset(0);
+  }
+
+  scheduler_ticktok_->Barrier();
+
   size_t step_token_num = 0, step_not_kv_cached_token_num = 0;
   size_t total_sampling_token_num = 0, req_num = 0;
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
+    // In this context, all other db groups will be paused.
+    SchedulerTickTokLockGuard tick_tok_guard(scheduler_ticktok_, dp_group_id_);
+
+    // The total num include other dp groups.
+    req_num = scheduler_shared_counter_->step_batch_size.Get();
+    step_token_num = scheduler_shared_counter_->step_token_num.Get();
+    total_sampling_token_num = scheduler_shared_counter_->step_logits_num.Get();
+
     const auto &req = *it;
     const size_t not_kv_cached_token_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
     const size_t req_token_num = not_kv_cached_token_num <= decode_token_num_threshold_ ? not_kv_cached_token_num
@@ -273,8 +292,17 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     step_not_kv_cached_token_num += not_kv_cached_token_num;
     total_sampling_token_num += req->sampling_token_num;
     ++req_num;
+
+    scheduler_shared_counter_->step_batch_size.Reset(req_num);
+    scheduler_shared_counter_->step_token_num.Reset(step_token_num);
+    scheduler_shared_counter_->step_logits_num.Reset(total_sampling_token_num);
+
     ++it;
   }
+
+  // Current dp group finished, remove from loop list.
+  scheduler_ticktok_->Skip(dp_group_id_);
+
   return {step_token_num, step_not_kv_cached_token_num};
 }
 
@@ -650,22 +678,51 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
     KLLM_LOG_ERROR << "ProcessSwappedQueue error, info: " << status.GetMessage();
   }
 
-  if (batch_state_->swapped_queue.empty()) {
-    return;
-  }
-
-  if (batch_state_->step_sched_finish) {
-    KLLM_LOG_DEBUG << "Skip swapped queue." << *batch_state_;
-    return;
-  }
-
   size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
   size_t step_logits_num = 0;
   for (const auto &req : batch_state_->schedule_output->running_reqs) {
     step_logits_num += req->sampling_token_num;
   }
   auto [step_token_num, step_not_kv_cached_token_num] = CheckRunningQueueStepTokens();
+
+  scheduler_ticktok_->Barrier();
+
+  if (dp_group_id_ == 0) {
+    scheduler_ticktok_->Reset();
+    scheduler_shared_counter_->step_batch_size.Reset(0);
+    scheduler_shared_counter_->step_token_num.Reset(0);
+    scheduler_shared_counter_->step_logits_num.Reset(0);
+  }
+
+  scheduler_ticktok_->Barrier();
+
+  scheduler_shared_counter_->step_batch_size.Increase(step_batch_size);
+  scheduler_shared_counter_->step_token_num.Increase(step_token_num);
+  scheduler_shared_counter_->step_logits_num.Increase(step_logits_num);
+
+  // Make sure all dp groups are accumulated.
+  scheduler_ticktok_->Barrier();
+
+  if (batch_state_->swapped_queue.empty()) {
+    scheduler_ticktok_->Skip(dp_group_id_);
+    return;
+  }
+
+  if (batch_state_->step_sched_finish) {
+    KLLM_LOG_DEBUG << "Skip swapped queue." << *batch_state_;
+    scheduler_ticktok_->Skip(dp_group_id_);
+    return;
+  }
+
   for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
+    // In this context, all other db groups will be paused.
+    SchedulerTickTokLockGuard tick_tok_guard(scheduler_ticktok_, dp_group_id_);
+
+    // The total num include other dp groups.
+    step_batch_size = scheduler_shared_counter_->step_batch_size.Get();
+    step_token_num = scheduler_shared_counter_->step_token_num.Get();
+    step_logits_num = scheduler_shared_counter_->step_logits_num.Get();
+
     auto req = it->second;
 
     // Check timeout, no finished req in swapped queue.
@@ -727,6 +784,10 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
         step_logits_num += req->sampling_token_num;
         step_token_num += req->draft_tokens.size() + kStepGenerateTokenNum;
 
+        scheduler_shared_counter_->step_batch_size.Reset(step_batch_size);
+        scheduler_shared_counter_->step_token_num.Reset(step_token_num);
+        scheduler_shared_counter_->step_logits_num.Reset(step_logits_num);
+
         batch_state_->swapin_pending_requests_[req->req_id] = req;
         it = batch_state_->swapped_queue.erase(it);
 
@@ -739,6 +800,7 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
 
         continue;
       }
+
       KLLM_LOG_ERROR << "Swap in request error, info: " << status.GetMessage();
       ++it;
     }
@@ -748,6 +810,9 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
     KLLM_LOG_DEBUG << "Swapped queue not empty, skip processing waiting_queue." << *batch_state_;
     break;
   }
+
+  // Current dp group finished, remove from loop list.
+  scheduler_ticktok_->Skip(dp_group_id_);
 }
 
 /**
@@ -802,15 +867,6 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
                  << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                  << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
 
-  if (batch_state_->waiting_queue.empty()) {
-    return;
-  }
-
-  if (batch_state_->step_sched_finish) {
-    KLLM_LOG_DEBUG << "Skip processing waiting_queue." << *batch_state_;
-    return;
-  }
-
   const size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
   auto [step_token_num, step_not_kv_cached_token_num] = CheckRunningQueueStepTokens();
 
@@ -818,6 +874,35 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   size_t step_logits_num = 0;
   for (const auto &req : batch_state_->schedule_output->running_reqs) {
     step_logits_num += req->sampling_token_num;
+  }
+
+  scheduler_ticktok_->Barrier();
+
+  if (dp_group_id_ == 0) {
+    scheduler_ticktok_->Reset();
+    scheduler_shared_counter_->step_batch_size.Reset(0);
+    scheduler_shared_counter_->step_token_num.Reset(0);
+    scheduler_shared_counter_->step_logits_num.Reset(0);
+  }
+
+  scheduler_ticktok_->Barrier();
+
+  scheduler_shared_counter_->step_batch_size.Increase(step_batch_size);
+  scheduler_shared_counter_->step_token_num.Increase(step_token_num);
+  scheduler_shared_counter_->step_logits_num.Increase(step_logits_num);
+
+  // Make sure all dp groups are accumulated.
+  scheduler_ticktok_->Barrier();
+
+  if (batch_state_->waiting_queue.empty()) {
+    scheduler_ticktok_->Skip(dp_group_id_);
+    return;
+  }
+
+  if (batch_state_->step_sched_finish) {
+    KLLM_LOG_DEBUG << "Skip processing waiting_queue." << *batch_state_;
+    scheduler_ticktok_->Skip(dp_group_id_);
+    return;
   }
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
@@ -835,6 +920,14 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   }
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
+    // In this context, all other db groups will be paused.
+    SchedulerTickTokLockGuard tick_tok_guard(scheduler_ticktok_, dp_group_id_);
+
+    // The total num include other dp groups.
+    step_batch_size = scheduler_shared_counter_->step_batch_size.Get();
+    step_token_num = scheduler_shared_counter_->step_token_num.Get();
+    step_logits_num = scheduler_shared_counter_->step_logits_num.Get();
+
     auto req = *it;
     if (req->forwarding_tokens.empty()) {  // new request
       req->forwarding_tokens = req->output_tokens;
@@ -896,6 +989,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         step_token_num += current_token_num;
         step_not_kv_cached_token_num += current_token_num - shared_token_num;
 
+        scheduler_shared_counter_->step_batch_size.Reset(step_batch_size);
+        scheduler_shared_counter_->step_token_num.Reset(step_token_num);
+        scheduler_shared_counter_->step_logits_num.Reset(step_logits_num);
+
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->forwarding_tokens.size()) {
           KLLM_LOG_DEBUG << "Full matched, skip prefill, " << *req;
@@ -938,10 +1035,14 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and stay in waiting.";
       MergePendingSwapoutRequests(true, false);
     }
+
     KLLM_LOG_DEBUG << "total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                    << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
     break;
   }
+
+  // Current dp group finished, remove from loop list.
+  scheduler_ticktok_->Skip(dp_group_id_);
 }
 
 Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, bool early_stop) {
@@ -1064,11 +1165,23 @@ void ContinuousBatchingStrategy::UpdateSwapPendingRequests() {
 }
 
 void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) {
+  scheduler_shared_counter_->step_batch_size.Reset(0);
+  scheduler_shared_counter_->step_token_num.Reset(0);
+  scheduler_shared_counter_->step_logits_num.Reset(0);
+
   batch_state_->MergeWaitingReqs(waiting_reqs);
   ProcessRunningQueue();
   ProcessSwappedQueue();
   ProcessWaitingQueue();
   ProcessTransferQueue();
+
+  // Must barrier before reorder.
+  scheduler_ticktok_->Barrier();
+
+  // Change next visit order of dp groups, for load balance.
+  if (dp_group_id_ == 0) {
+    scheduler_ticktok_->Reorder();
+  }
 
   REPORT_COUNTER(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
   REPORT_COUNTER(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());

@@ -56,12 +56,19 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   threadpool_ = std::make_unique<ThreadPool>(dp_num_);
   threadpool_->Start();
 
+  scheduler_shared_counter_ = std::make_shared<SchedulerSharedCounter>(dp_num_);
+  scheduler_ticktok_ = std::make_shared<SchedulerTickTok>(dp_num_);
+
   schedule_strategies_.resize(dp_num_);
   batch_states_.resize(dp_num_);
   dp_waiting_reqs_.resize(dp_num_);
 
   for (int i = 0; i < dp_num_; i++) {
     schedule_strategies_[i] = ScheduleStrategyFactory::CreateScheduleStrategy(batch_scheduler_config_, runtime_config);
+    schedule_strategies_[i]->SetSharedCounter(scheduler_shared_counter_);
+    schedule_strategies_[i]->SetSchedulerTickTok(scheduler_ticktok_);
+    schedule_strategies_[i]->SetDataParaGroupId(i);
+
     batch_states_[i].resize(pp_batch_num_);
     for (size_t j = 0; j < pp_batch_num_; j++) {
       batch_states_[i][j] = std::make_shared<BatchState>(j, batch_scheduler_config_);
@@ -378,10 +385,10 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   schedule_output_group_->schedule_id++;
 
   KLLM_LOG_SCHEDULER << "Finish schedule. multi_batch_id=" << multi_batch_id
-                 << ", schedule_id=" << schedule_output_group_->schedule_id
-                 << ", running_req.size(): " << total_running_size
-                 << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states
-                 << ", total_dp_waiting_queue_size=" << total_dp_waiting_queue_size;
+                     << ", schedule_id=" << schedule_output_group_->schedule_id
+                     << ", running_req.size(): " << total_running_size
+                     << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states
+                     << ", total_dp_waiting_queue_size=" << total_dp_waiting_queue_size;
 
   ReportTotalState();
   return schedule_output_group_;

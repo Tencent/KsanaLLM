@@ -112,8 +112,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
 Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
                                                const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers) {
   const DataType weight_type = attn_config.model_config.weight_data_type;
-  const size_t max_token_num = std::ceil(static_cast<float>(runtime_config.max_step_token_num) /
-                                         runtime_config.parallel_basic_config.attn_data_parallel_size);
+  const size_t max_token_num = runtime_config.max_step_token_num;
   const size_t head_num = attn_config.model_config.head_num;
   const size_t max_decode_tokens = runtime_config.max_batch_size * attn_config.max_decode_tokens_per_req;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;

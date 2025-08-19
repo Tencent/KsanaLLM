@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "ksana_llm/batch_scheduler/state/batch_state.h"
+#include "ksana_llm/batch_scheduler/state/scheduler_shared_counter.h"
+#include "ksana_llm/batch_scheduler/state/scheduler_tick_tok.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/stop_checker.h"
@@ -27,8 +29,13 @@ class BaseScheduleStrategy {
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;
 
   void SetBatchState(std::shared_ptr<BatchState> batch_state);
+
   // Set the cache manager instance of scheduler strategy.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager);
+
+  void SetSharedCounter(std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter);
+  void SetSchedulerTickTok(std::shared_ptr<SchedulerTickTok> scheduler_ticktok);
+  void SetDataParaGroupId(size_t dp_group_id);
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager() { return cache_manager_; }
 
@@ -45,6 +52,12 @@ class BaseScheduleStrategy {
   RuntimeConfig runtime_config_;
 
   std::shared_ptr<StopChecker> stop_checker_;
+
+  std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
+  std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;
+
+  // The dp group id.
+  size_t dp_group_id_;
 };
 
 }  // namespace ksana_llm

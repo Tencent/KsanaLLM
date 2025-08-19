@@ -276,16 +276,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   // When MTP is enabled, each request requires calculating 2 tokens while decoding.
   batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.enable_mtp_module ? 2 : 1;
 
-  if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1) {
-    KLLM_CHECK_WITH_INFO(
-        batch_scheduler_config_.max_step_token_num / runtime_config_.parallel_basic_config.attn_data_parallel_size >=
-            batch_scheduler_config_.max_token_len,
-        fmt::format("max_step_token_num({}) / attn_data_para_size({}) must >= max_token_len({})",
-                    batch_scheduler_config_.max_step_token_num,
-                    runtime_config_.parallel_basic_config.attn_data_parallel_size,
-                    batch_scheduler_config_.max_token_len));
-  }
-
   if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
     KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,
                          "ENABLE_O_PROJ_OUT_OF_DP only support attn_tensor_parallel_size=1");

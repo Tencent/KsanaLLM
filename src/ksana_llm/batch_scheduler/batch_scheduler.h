@@ -10,6 +10,8 @@
 #include "ksana_llm/batch_scheduler/batch_scheduler_balance_reqs_algo.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
 #include "ksana_llm/batch_scheduler/state/batch_state.h"
+#include "ksana_llm/batch_scheduler/state/scheduler_shared_counter.h"
+#include "ksana_llm/batch_scheduler/state/scheduler_tick_tok.h"
 #include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
 #include "ksana_llm/batch_scheduler/workload_balance/pp_multibatch_balancer.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -124,6 +126,9 @@ class BatchScheduler : public BatchSchedulerInterface {
   std::shared_ptr<KsanaPythonInput> alias_python_input_;
   // The grammar backend for structured output.
   std::shared_ptr<GrammarBackend> grammar_backend_ = nullptr;
+
+  std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
+  std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;
 };
 
 }  // namespace ksana_llm

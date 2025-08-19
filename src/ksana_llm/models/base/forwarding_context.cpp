@@ -64,8 +64,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
     if (runtime_config.enable_o_proj_out_of_dp) {
       shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
     }
-    const size_t token_num_per_dp =
-        std::ceil(static_cast<float>(token_num) / runtime_config.parallel_basic_config.attn_data_parallel_size);
+    const size_t token_num_per_dp = token_num;
     mla_hidden_buffer_size = token_num_per_dp * mla_max_dim;
     // TODO(rockcao): remove this extra buffer by removing unnecessary offset when using dp
     if (runtime_config.parallel_basic_config.attn_data_parallel_size > 1) {  //

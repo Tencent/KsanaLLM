@@ -12,4 +12,14 @@ void BaseScheduleStrategy::SetCacheManager(std::shared_ptr<CacheManagerInterface
   cache_manager_ = cache_manager;
 }
 
+void BaseScheduleStrategy::SetSharedCounter(std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter) {
+  scheduler_shared_counter_ = scheduler_shared_counter;
+}
+
+void BaseScheduleStrategy::SetSchedulerTickTok(std::shared_ptr<SchedulerTickTok> scheduler_ticktok) {
+  scheduler_ticktok_ = scheduler_ticktok;
+}
+
+void BaseScheduleStrategy::SetDataParaGroupId(size_t dp_group_id) { dp_group_id_ = dp_group_id; }
+
 }  // namespace ksana_llm
