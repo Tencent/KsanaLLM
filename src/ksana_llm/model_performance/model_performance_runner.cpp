@@ -21,12 +21,11 @@ namespace py = pybind11;
 
 namespace ksana_llm {
 
-ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path,
-                                               const std::string& model_config_filename) {
-  InitEnvs(config_path, model_config_filename);
+ModelPerformanceRunner::ModelPerformanceRunner(const std::string& config_path, const PerfProfileConfig& max_config,
+                                               int16_t lower_layer_idx, int16_t upper_layer_idx) {
+  InitEnvs(config_path, max_config, lower_layer_idx, upper_layer_idx);
   LoadModel();
   model_instance_->AllocResources(multi_batch_id_);
-  InitInferRequests();
 }
 
 ModelPerformanceRunner::~ModelPerformanceRunner() {
@@ -35,13 +34,12 @@ ModelPerformanceRunner::~ModelPerformanceRunner() {
   py::finalize_interpreter();
 }
 
-void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const std::string& model_config_filename) {
-  InitLoguru();
+void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const PerfProfileConfig& max_config,
+                                      int16_t lower_layer_idx, int16_t upper_layer_idx) {
   py::initialize_interpreter();
-  ParsePerformanceRunnerConfig(config_path);
 
   const auto& env = Singleton<Environment>::GetInstance();
-  env->ParseConfig(config_path, "", model_config_filename);
+  env->ParseConfig(config_path);
 
   // init context
   env->GetRuntimeConfig(runtime_config_);
@@ -66,8 +64,16 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const std:
   // set pipeline_config
   PipelineConfig pipeline_config;
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
-  pipeline_config.lower_layer_idx = 0;
-  pipeline_config.upper_layer_idx = model_config_.num_layer - 1;
+  if (lower_layer_idx > 0) {
+    pipeline_config.lower_layer_idx = lower_layer_idx;
+  } else {
+    pipeline_config.lower_layer_idx = 0;
+  }
+  if (upper_layer_idx > 0) {
+    pipeline_config.upper_layer_idx = upper_layer_idx;
+  } else {
+    pipeline_config.upper_layer_idx = model_config_.num_layer - 1;
+  }
   Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
 
   BatchSchedulerConfig batch_scheduler_config;
@@ -78,7 +84,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const std:
   BlockManagerConfig block_manager_config;
   env->InitializeBlockManagerConfig();
   env->GetBlockManagerConfig(block_manager_config);
-  OptimizeBlockManagerConfig(block_manager_config);
+  OptimizeBlockManagerConfig(block_manager_config, max_config);
   env->SetBlockManagerConfig(block_manager_config);
 
   // init CacheManager
@@ -115,24 +121,39 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const std:
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(), pp_batch_num, context_);
 }
 
-void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config) {
+void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config,
+                                                        const PerfProfileConfig& max_config) {
   // reset blocks_num to speedup
   size_t block_token_num = block_manager_config.device_allocator_config.block_token_num;
-  size_t needed_block_num = GetNeededBlockNum(block_token_num);
+  size_t needed_block_num = GetNeededBlockNum(block_token_num, max_config);
   block_manager_config.device_allocator_config.blocks_num = needed_block_num;
   // do not need many blocks on host
   block_manager_config.host_allocator_config.blocks_num = 10;
   KLLM_LOG_INFO << fmt::format("Reset block_manager_config.device_allocator_config.blocks_num to {}", needed_block_num);
 }
 
-size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num) const {
+size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num, const PerfProfileConfig& max_config) const {
   size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   static constexpr size_t kExtraBlockNum = 10;
-  size_t multi_token_request_block_num = (multi_token_request_token_num_ + block_token_num) / block_token_num;
+
+  size_t single_token_request_num = 0;
+  size_t single_token_request_cached_token_num = 0;
+  size_t multi_token_request_num = 0;
+  size_t multi_token_request_token_num = 0;
+
+  for (size_t dp_idx = 0; dp_idx < max_config.req_configs.size(); dp_idx++) {
+    auto& req_config = max_config.req_configs[0];
+    single_token_request_num += req_config.single_token_request_num;
+    single_token_request_cached_token_num += req_config.single_token_request_cached_token_num;
+    multi_token_request_num += req_config.multi_token_request_num;
+    multi_token_request_token_num += req_config.multi_token_request_token_num;
+  }
+
+  size_t multi_token_request_block_num = (multi_token_request_token_num + block_token_num) / block_token_num;
   size_t single_token_request_block_num =
-      (single_token_request_cached_token_num_ + 1 + block_token_num) / block_token_num;
-  return tp_size * (single_token_request_num_ * single_token_request_block_num +
-                    multi_token_request_num_ * multi_token_request_block_num + kExtraBlockNum);
+      (single_token_request_cached_token_num + 1 + block_token_num) / block_token_num;
+  return tp_size * (single_token_request_num * single_token_request_block_num +
+                    multi_token_request_num * multi_token_request_block_num + kExtraBlockNum);
 }
 
 void ModelPerformanceRunner::LoadModel() {
@@ -143,11 +164,14 @@ void ModelPerformanceRunner::LoadModel() {
   model_instance_->Load();
 }
 
-Status ModelPerformanceRunner::RunPerformanceForward() {
+Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& profile_config,
+                                                     PerfProfileResult& result) {
 #ifndef ENABLE_CUDA
   KLLM_LOG_INFO << "Currently RunPerformanceForward only supports cuda";
   return Status();
 #endif
+
+  InitInferRequests(profile_config);
   int device_id = 0;
   SetDevice(device_id);
   Event start;
@@ -159,43 +183,47 @@ Status ModelPerformanceRunner::RunPerformanceForward() {
 
   // warmup
   Status warmup_status = Status();
-  for (size_t i = 0; i < warmp_up_rounds_; ++i) {
+  for (size_t i = 0; i < profile_config.warmup_round; ++i) {
     warmup_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
   }
 
   // Sleep 100 ms to make nsys results easier to be analyzed
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   // run
-  KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", warmp_up_rounds_);
+  KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", profile_config.warmup_round);
   EventRecord(start, context_->GetComputeStreams()[device_id]);
   Status result_status = Status();
-  for (size_t i = 0; i < rounds_; ++i) {
+  for (size_t i = 0; i < profile_config.profile_round; ++i) {
     result_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
+    if (!result_status.OK()) {
+      KLLM_LOG_ERROR << "Forward error. Msg: " << result_status.GetMessage();
+      return result_status;
+    }
   }
   EventRecord(stop, context_->GetComputeStreams()[device_id]);
   EventSynchronize(stop);
   EventElapsedTime(&milliseconds, start, stop);
 
-  std::stringstream ss;
-  if (result_status.OK()) {
-    ss << fmt::format("\n Performance Results: {} rounds cost {} milliseconds \n", rounds_, milliseconds)
-       << fmt::format("Average single Forward of {} cost : {} milliseconds/round \n", model_config_.type,
-                      milliseconds / rounds_);
-    KLLM_LOG_INFO << ss.str();
-    std::cout << ss.str();
-  } else {
-    ss << fmt::format("Faild to run model_preformance. End with status {}", result_status.GetMessage());
-    KLLM_LOG_ERROR << ss.str();
-    std::cout << ss.str();
-  }
+  result.config_id = profile_config.config_id;
+  result.time_cost_ms = milliseconds;
   return result_status;
 }
 
-void ModelPerformanceRunner::InitInferRequests() {
+void ModelPerformanceRunner::ResetInferRequests() {
+  infer_reqs_.clear();
+  input_ids_map_.clear();
+  input_refit_pos_.clear();
+  embeddings_.clear();
+  embedding_tensors_.clear();
+}
+
+void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_config) {
   static constexpr size_t kVocabSize = 10000;
   std::random_device rd;
   std::mt19937 gen(42);
   std::uniform_int_distribution<> dis(0, kVocabSize);
+
+  ResetInferRequests();
 
   embedding_slice_.pos = input_refit_pos_;
   embedding_slice_.embeddings = embeddings_;
@@ -205,39 +233,48 @@ void ModelPerformanceRunner::InitInferRequests() {
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
       std::make_shared<std::unordered_map<std::string, std::string>>();
   std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input_, req_ctx);
-
-  size_t total_req_num = single_token_request_num_ + multi_token_request_num_;
-  input_ids_vec_.resize(total_req_num);
   size_t req_id = 0;
-  for (; req_id < total_req_num; req_id++) {
-    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, req_id);
-    infer_reqs_.push_back(infer_req);
-    infer_req->attn_dp_group_id = GetAttnDpGroupId(req_id);
-    infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
-    infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
-    infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
-    infer_req->model_instance = model_instance_;
-    infer_req->step = 0;  // not using
+  for (size_t dp_idx = 0; dp_idx < profile_config.req_configs.size(); dp_idx++) {
+    auto& req_config = profile_config.req_configs[dp_idx];
 
-    if (req_id < multi_token_request_num_) {  // multi_token_request
-      input_ids_vec_[req_id].resize(multi_token_request_token_num_);
-      infer_req->input_tokens = input_ids_vec_[req_id];
-      std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
-      infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-      infer_req->kv_cached_token_num = 0;
-      infer_req->prefix_cache_len = 0;
-    } else {  // single_token_request
-      input_ids_vec_[req_id].resize(single_token_request_cached_token_num_ + 1);
-      infer_req->input_tokens = input_ids_vec_[req_id];
-      std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
-      infer_req->infer_stage = InferStage::STATE_DECODE;
-      infer_req->kv_cached_token_num = infer_req->input_tokens.size() - 1;
-    }
-    infer_req->forwarding_tokens = infer_req->input_tokens;
-    Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
-                                                                    infer_req->kv_cache_blocks);
-    if (!status.OK()) {
-      KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
+    size_t single_token_request_num = req_config.single_token_request_num;
+    size_t single_token_request_cached_token_num = req_config.single_token_request_cached_token_num;
+    size_t multi_token_request_num = req_config.multi_token_request_num;
+    size_t multi_token_request_token_num = req_config.multi_token_request_token_num;
+
+    size_t dp_req_num = single_token_request_num + multi_token_request_num;
+    for (size_t req_idx = 0; req_idx < dp_req_num; req_idx++) {
+      req_id++;
+      std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, req_id);
+
+      infer_reqs_.push_back(infer_req);
+      infer_req->attn_dp_group_id = dp_idx;
+      infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
+      infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
+      infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
+      infer_req->model_instance = model_instance_;
+      infer_req->step = 0;  // not using
+
+      if (req_id < multi_token_request_num) {  // multi_token_request
+        input_ids_map_[req_id].resize(multi_token_request_token_num);
+        infer_req->input_tokens = input_ids_map_[req_id];
+        std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
+        infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+        infer_req->kv_cached_token_num = 0;
+        infer_req->prefix_cache_len = 0;
+      } else {  // single_token_request
+        input_ids_map_[req_id].resize(single_token_request_cached_token_num + 1);
+        infer_req->input_tokens = input_ids_map_[req_id];
+        std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
+        infer_req->infer_stage = InferStage::STATE_DECODE;
+        infer_req->kv_cached_token_num = infer_req->input_tokens.size() - 1;
+      }
+      infer_req->forwarding_tokens = infer_req->input_tokens;
+      Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
+                                                                      infer_req->kv_cache_blocks);
+      if (!status.OK()) {
+        KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
+      }
     }
   }
   CheckRequests();
@@ -259,7 +296,53 @@ void ModelPerformanceRunner::CheckRequests() const {
                                    batch_scheduler_config.max_step_token_num, step_tokens));
 }
 
-Status ModelPerformanceRunner::ParsePerformanceRunnerConfig(const std::string& config_file) {
+size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) const {
+  size_t shared_block_num = 0;
+  size_t unique_block_num = 0;
+  size_t shared_token_num = 0;
+  req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num,
+                                                  unique_block_num, shared_token_num);
+  return shared_block_num + unique_block_num;
+}
+
+/***************************************************************************************************
+ * PerfProfileConfigBuilderWithYaml
+ */
+
+PerfProfileConfigBuilderWithYaml::PerfProfileConfigBuilderWithYaml(const std::string& config_file) {
+  ParsePerformanceRunnerConfig(config_file);
+}
+
+PerfProfileConfig PerfProfileConfigBuilderWithYaml::GetMaxPerfProfileConfig() {
+  // TODO(robertyuan): build multiple configs
+  PerfProfileConfig max_config;
+  max_config.config_id = 0;
+  max_config.warmup_round = warmup_round_;
+  max_config.profile_round = profile_round_;
+  max_config.req_configs.resize(1);
+  max_config.req_configs[0].single_token_request_num = single_token_request_num_;
+  max_config.req_configs[0].single_token_request_cached_token_num = single_token_request_cached_token_num_;
+  max_config.req_configs[0].multi_token_request_num = multi_token_request_num_;
+  max_config.req_configs[0].multi_token_request_token_num = multi_token_request_token_num_;
+  return max_config;
+}
+
+void PerfProfileConfigBuilderWithYaml::GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs) {
+  configs.resize(1);
+  auto& config = configs[0];
+  config.config_id = 0;
+  config.warmup_round = warmup_round_;
+  config.profile_round = profile_round_;
+  config.req_configs.resize(dp_num_);
+  for (size_t dp_idx = 0; dp_idx < dp_num_; dp_idx++) {
+    config.req_configs[dp_idx].single_token_request_num = single_token_request_num_;
+    config.req_configs[dp_idx].single_token_request_cached_token_num = single_token_request_cached_token_num_;
+    config.req_configs[dp_idx].multi_token_request_num = multi_token_request_num_;
+    config.req_configs[dp_idx].multi_token_request_token_num = multi_token_request_token_num_;
+  }
+}
+
+Status PerfProfileConfigBuilderWithYaml::ParsePerformanceRunnerConfig(const std::string& config_file) {
   YamlReader yaml_reader;
   Status status = yaml_reader.LoadFile(config_file);
   if (!status.OK()) {
@@ -274,16 +357,14 @@ Status ModelPerformanceRunner::ParsePerformanceRunnerConfig(const std::string& c
       32);
   multi_token_request_num_ = yaml_reader.GetScalar<size_t>(
       yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.multi_token_request_num", 4);
-  multi_token_cached_token_num_ = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.multi_token_cached_token_num", 0);
   multi_token_request_token_num_ = yaml_reader.GetScalar<size_t>(
       yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.multi_token_request_token_num", 32);
 
   // Read runner_config
-  warmp_up_rounds_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
-                                                   "model_performance_runner_config.runner_config.warmup_rounds", 10);
-  rounds_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
-                                          "model_performance_runner_config.runner_config.rounds", 100);
+  warmup_round_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
+                                                "model_performance_runner_config.runner_config.warmup_rounds", 10);
+  profile_round_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
+                                                 "model_performance_runner_config.runner_config.rounds", 100);
 
   if (!(single_token_request_num_ > 0 || multi_token_request_num_ > 0)) {
     KLLM_THROW(fmt::format("single_token_request_num {} or multi_token_request_num {} should > 0",
@@ -292,14 +373,4 @@ Status ModelPerformanceRunner::ParsePerformanceRunnerConfig(const std::string& c
   return Status();
 }
 
-size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) const {
-  size_t shared_block_num = 0;
-  size_t unique_block_num = 0;
-  size_t shared_token_num = 0;
-  req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num,
-                                                  unique_block_num, shared_token_num);
-  return shared_block_num + unique_block_num;
-}
-
-uint32_t ModelPerformanceRunner::GetAttnDpGroupId(int64_t req_id) const { return req_id % attn_dp_worker_num_; }
 }  // namespace ksana_llm

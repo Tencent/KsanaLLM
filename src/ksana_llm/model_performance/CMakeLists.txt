@@ -4,6 +4,7 @@
 cmake_minimum_required(VERSION 3.13)
 
 file(GLOB_RECURSE model_performance_SRCS
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/perf_profile_config_builder_for_csv.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/model_performance_runner.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/communication_performance_runner.cpp
   )
