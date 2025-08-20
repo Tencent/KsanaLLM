@@ -255,6 +255,13 @@ struct ModelConfig {
   float attn_scale = 0;
   size_t floor_scale = 0;
   size_t attention_chunk_size = 0;
+
+  // The word embedding scale factor.
+  float emb_scale = 1.f;
+  // Scaling the hidden states of residual connections.
+  float scale_depth = 1.f;
+  // For choose lm_head.linear_head weight (for bge-reranker-v2-minicpm-layerwise)
+  int start_layer = 0;
 };
 class EnvModelConfigParser {
  public:

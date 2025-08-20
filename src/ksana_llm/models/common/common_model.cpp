@@ -104,10 +104,13 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
     Tensor position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
-    emb_lookup_layer_->Init({model_run_config_.emb_scale, position_weight.GetPtr<void>()}, runtime_config_, context_,
-                            rank_);
+    emb_lookup_layer_->Init(
+        {model_run_config_.use_emb_scale, model_run_config_.emb_scale, position_weight.GetPtr<void>()},
+        runtime_config_, context_, rank_);
   } else {
-    emb_lookup_layer_->Init({}, runtime_config_, context_, rank_);
+    emb_lookup_layer_->Init(
+        {model_run_config_.use_emb_scale, model_run_config_.emb_scale}, runtime_config_, context_,
+        rank_);
   }
 
   cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer>();

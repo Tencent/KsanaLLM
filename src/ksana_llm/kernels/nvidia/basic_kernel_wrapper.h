@@ -119,8 +119,9 @@ void InvokeFpAIntBGroupCudaGemm(void* output, const void* input, const void* wei
 // Invoke the lookup embedding.
 template <typename T>
 void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, const void* emb,
-                     const void* pos, const void* steps, void* output, const T emb_scale, int vocab_size,
-                     int hidden_size, int bs, int vocab_id, cudaStream_t stream, void* workspace_ptr = nullptr);
+                     const void* pos, const void* steps, void* output, bool use_emb_scale, const T emb_scale,
+                     int vocab_size, int hidden_size, int bs, int vocab_id, cudaStream_t stream,
+                     void* workspace_ptr = nullptr);
 
 // Layernorm without bias computes rmsnorm.
 template <typename T>
@@ -140,6 +141,28 @@ void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt
 template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,
                            void* output, cudaStream_t stream);
+
+// Add-Multiply fused operations
+template <typename T>
+void InvokeAddThenMul(const void* input1, const void* input2, const T scale, const int m, const int n,
+                      void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeAddMulSecond(const void* input1, const void* input2, const T scale, const int m, const int n,
+                        void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeAddBiasThenMul(const void* input1, const void* input2, const void* bias, const T scale,
+                          const int m, const int n, void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeMulThenAdd(const void* input1, const void* input2, const T scale1, const T scale2,
+                      const int m, const int n, void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeAddResidualsBiasThenMul(const void* input1, const void* residual1, const void* residual2,
+                                   const void* bias, const T scale, const int m, const int n,
+                                   void* output, cudaStream_t stream);
 
 // for the tensor input with shape [m, n]
 //  out = act(input[:, :n/2]) * input[:, n/2:]

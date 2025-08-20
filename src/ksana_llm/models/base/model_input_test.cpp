@@ -175,6 +175,38 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
   }
 }
 
+TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
+  model_input->model_config_.type = "minicpm";
+  model_input->cutoff_layer = 123;
+  std::vector<ForwardRequest> forward_reqs_null(1);
+  forward_reqs_null[0].request_target = nullptr;
+  model_input->PrepareCutoffLayer(forward_reqs_null);
+  EXPECT_EQ(model_input->cutoff_layer, 123);
+
+  model_input->cutoff_layer = 0;
+  ksana_llm::TargetDescribe target_desc_empty;
+  target_desc_empty.cutoff_layer.clear();
+  std::map<std::string, ksana_llm::TargetDescribe> targets_empty = {{"lm_head", target_desc_empty}};
+  auto req_targets_empty = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets_empty);
+  ForwardRequest req_empty;
+  req_empty.request_target = req_targets_empty.get();
+  std::vector<ForwardRequest> forward_reqs_empty = {req_empty};
+  model_input->model_config_.num_layer = 42;
+  model_input->PrepareCutoffLayer(forward_reqs_empty);
+  EXPECT_EQ(model_input->cutoff_layer, 42);
+
+  model_input->cutoff_layer = 0;
+  ksana_llm::TargetDescribe target_desc;
+  target_desc.cutoff_layer = {3, 7, 5};
+  std::map<std::string, ksana_llm::TargetDescribe> targets = {{"lm_head", target_desc}};
+  auto req_targets = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets);
+  ForwardRequest req;
+  req.request_target = req_targets.get();
+  std::vector<ForwardRequest> forward_reqs = {req};
+  model_input->PrepareCutoffLayer(forward_reqs);
+  EXPECT_EQ(model_input->cutoff_layer, 7);
+}
+
 TEST_F(ModelInputTest, CheckUseCacheTest) {
   // Construct forward requests as test input.
   SamplingConfig sampling_config1, sampling_config2;

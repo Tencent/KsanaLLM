@@ -13,6 +13,9 @@ Status EmbLookupLayer::Init(const std::vector<std::any>& parameters, const Runti
   BaseLayer::Init(parameters, runtime_config, context, rank);
   size_t parameter_index = 0ul;
   if (parameter_index < parameters.size()) {
+    use_emb_scale_ = std::any_cast<bool>(parameters[parameter_index++]);
+  }
+  if (parameter_index < parameters.size()) {
     emb_scale_ = std::any_cast<const float>(parameters[parameter_index++]);
   }
   if (parameter_index < parameters.size()) {
@@ -43,8 +46,9 @@ Status EmbLookupLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::v
   const void* steps = input_tensors.size() > 4 ? input_tensors[4].GetPtr<void>() : nullptr;
 
   LookupEmbedding<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
-                     input_tensors[3].GetPtr<void>(), pos_weight_, steps, output_tensors[0].GetPtr<void>(), emb_scale_,
-                     vocab_size, hidden_units, bs, vocab_id, context_->GetComputeStreams()[rank_].Get());
+                     input_tensors[3].GetPtr<void>(), pos_weight_, steps, output_tensors[0].GetPtr<void>(),
+                     use_emb_scale_, emb_scale_, vocab_size, hidden_units, bs, vocab_id,
+                     context_->GetComputeStreams()[rank_].Get());
   output_tensors[0].shape = {static_cast<size_t>(token_num), static_cast<size_t>(hidden_units)};
   output_tensors[0].dtype = input_tensors[3].dtype;
   return Status();

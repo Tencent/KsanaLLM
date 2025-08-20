@@ -28,9 +28,9 @@ Status RequestPacker::Unpack(const std::string& request_bytes,
     }
     ksana_python_input.input_refit_embedding.pos = req.input_refit_embedding.pos;
     ksana_python_input.input_refit_embedding.embeddings = req.input_refit_embedding.embeddings;
-    for (const auto& [target_name, token_id, slice_pos, token_reduce_mode] : req.request_target) {
+    for (const auto& [target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode] : req.request_target) {
       ksana_python_input.request_target.emplace(
-          target_name, TargetDescribe{token_id, slice_pos, GetTokenReduceMode(token_reduce_mode)});
+          target_name, TargetDescribe{cutoff_layer, token_id, slice_pos, GetTokenReduceMode(token_reduce_mode)});
     }
     // Verify the request target and throw an exception if anything is invalid.
     ksana_python_input.VerifyRequestTarget();

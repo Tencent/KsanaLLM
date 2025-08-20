@@ -284,6 +284,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareInputRefit(forward_reqs);
 
   PrepareVLRequest(forward_reqs);
+  PrepareCutoffLayer(forward_reqs);
   PrepareNextNGatherIdx(forward_reqs, run_mode);
 
   PreparePrefill();
@@ -319,6 +320,28 @@ void ModelInput::PrepareMetadata() {
 void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
   if (model_config_.type == "qwen2_vl") {
     PrepareMRopePos(forward_reqs);
+  }
+}
+
+void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs) {
+  if (model_config_.type != "minicpm") {
+    return;
+  }
+  for (const ForwardRequest& req : forward_reqs) {
+    if (req.request_target == nullptr) {
+      // if request_target is nullptr
+      continue;
+    }
+    auto it = req.request_target->find("lm_head");
+    if (it != req.request_target->end()) {
+      std::vector<int> cutoff_layers = it->second.cutoff_layer;
+      if (cutoff_layers.empty()) {
+        cutoff_layer = model_config_.num_layer;
+        continue;
+      }
+      auto max_layer = std::max_element(cutoff_layers.begin(), cutoff_layers.end());
+      cutoff_layer = std::max((*max_layer), cutoff_layer);
+    }
   }
 }
 

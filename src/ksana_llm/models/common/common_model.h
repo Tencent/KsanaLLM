@@ -53,9 +53,6 @@ struct ModelRunConfig {
   // The model position embedding.
   PositionEncoding position_encoding = PositionEncoding::ROPE;
 
-  // The word embedding scale factor.
-  float emb_scale = 1.f;
-
   // Use pre-norm or post-norm.
   LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
 
@@ -64,6 +61,13 @@ struct ModelRunConfig {
 
   // If use rotary_embedding_pos for embedding lookup
   bool emb_lookup_use_rotary_embedding_pos = false;
+
+  // Whether word embedding uses emb_scale.
+  bool use_emb_scale = false;
+  // The word embedding scale factor.
+  float emb_scale = 1.f;
+  // Scaling the hidden states of residual connections.
+  float scale_depth = 1.f;
 };
 
 // A common implement
@@ -102,7 +106,7 @@ class CommonModel : public BaseModel {
   virtual Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
 
   // Execute the lm head, and generate the logits.
-  Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+  virtual Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                 std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
 
   // Get a reference for hidden buffer.

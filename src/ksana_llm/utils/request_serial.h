@@ -18,11 +18,12 @@ namespace ksana_llm {
 
 struct TargetRequestSerial {
   std::string target_name;
+  std::vector<int> cutoff_layer;
   std::vector<int> token_id;
   std::vector<std::pair<int, int>> slice_pos;
   std::string token_reduce_mode;
 
-  MSGPACK_DEFINE_MAP(target_name, token_id, slice_pos, token_reduce_mode);
+  MSGPACK_DEFINE_MAP(target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode);
 };
 
 struct EmbeddingSliceSerial {

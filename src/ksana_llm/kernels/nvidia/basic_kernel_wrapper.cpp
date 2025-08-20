@@ -23,6 +23,7 @@
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
+#include "csrc/kernels/nvidia/add_mul/add_mul.h"
 #include "csrc/kernels/nvidia/all_reduce/custom_all_reduce.h"
 #include "csrc/kernels/nvidia/assemble_tokens_hidden/assemble_tokens_hidden.h"
 #include "csrc/kernels/nvidia/blockwise_gemm/blockwise_gemm.h"
@@ -320,27 +321,44 @@ INVOKE_FPA_INTB_GROUP_CUDA_GEMM(__nv_bfloat16, llm_kernels::nvidia::WeightType::
 
 template <typename T>
 void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, const void* emb,
-                     const void* pos, const void* steps, void* output, const T emb_scale, int vocab_size,
-                     int hidden_size, int bs, int vocab_id, cudaStream_t stream, void* workspace_ptr) {
+                     const void* pos, const void* steps, void* output, bool use_emb_scale, const T emb_scale,
+                     int vocab_size, int hidden_size, int bs, int vocab_id, cudaStream_t stream, void* workspace_ptr) {
   const bool do_position_encoding = (pos != nullptr) && (steps != nullptr);
   if (do_position_encoding) {
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, true>(
-        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), emb_scale, {},
-        reinterpret_cast<const int32_t*>(input_ids), reinterpret_cast<const size_t*>(steps),
-        reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size,
-        vocab_size, vocab_id, stream));
+    if (use_emb_scale) {
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, true, true>(
+          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), emb_scale, {},
+          reinterpret_cast<const int32_t*>(input_ids), reinterpret_cast<const size_t*>(steps),
+          reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs,
+          hidden_size, vocab_size, vocab_id, stream));
+    } else {
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, true, false>(
+          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), reinterpret_cast<const T*>(pos), emb_scale, {},
+          reinterpret_cast<const int32_t*>(input_ids), reinterpret_cast<const size_t*>(steps),
+          reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs,
+          hidden_size, vocab_size, vocab_id, stream));
+    }
   } else {
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, false>(
-        reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), /* pos */ nullptr, emb_scale, {},
-        reinterpret_cast<const int32_t*>(input_ids), /* steps */ nullptr, reinterpret_cast<const size_t*>(ids_offsets),
-        reinterpret_cast<const size_t*>(prefix_offsets), bs, hidden_size, vocab_size, vocab_id, stream));
+    if (use_emb_scale) {
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, false, true>(
+          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), /* pos */ nullptr, emb_scale, {},
+          reinterpret_cast<const int32_t*>(input_ids), /* steps */ nullptr,
+          reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs,
+          hidden_size, vocab_size, vocab_id, stream));
+    } else {
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::LookupFusedEmbeddingWithCSRInputs<T, false, false>(
+          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(emb), /* pos */ nullptr, emb_scale, {},
+          reinterpret_cast<const int32_t*>(input_ids), /* steps */ nullptr,
+          reinterpret_cast<const size_t*>(ids_offsets), reinterpret_cast<const size_t*>(prefix_offsets), bs,
+          hidden_size, vocab_size, vocab_id, stream));
+    }
   }
 }
 #define LOOKUP_EMBEDDING(T)                                                                                    \
   template void LookupEmbedding<T>(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, \
-                                   const void* emb, const void* pos, const void* steps, void* output,          \
-                                   const T emb_scale, int vocab_size, int hidden_size, int bs, int vocab_id,   \
-                                   cudaStream_t stream, void* workspace_ptr)
+                                   const void* emb, const void* pos, const void* steps, void* output,              \
+                                   bool use_emb_scale, const T emb_scale, int vocab_size, int hidden_size, int bs, \
+                                   int vocab_id, cudaStream_t stream, void* workspace_ptr)
 LOOKUP_EMBEDDING(float);
 LOOKUP_EMBEDDING(half);
 LOOKUP_EMBEDDING(__nv_bfloat16);
@@ -404,6 +422,89 @@ INVOKE_ADD_BIAS_RESIDUAL(float);
 INVOKE_ADD_BIAS_RESIDUAL(half);
 INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
 #undef INVOKE_ADD_BIAS_RESIDUAL
+
+// Add-Multiply fused operations implementations
+template <typename T>
+void InvokeAddThenMul(const void* input1, const void* input2, const T scale, const int m, const int n, void* output,
+                      cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(
+      llm_kernels::nvidia::InvokeAddThenMul<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input1),
+                                               reinterpret_cast<const T*>(input2), scale, m, n, stream));
+}
+
+template <typename T>
+void InvokeAddMulSecond(const void* input1, const void* input2, const T scale, const int m, const int n, void* output,
+                        cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(
+      llm_kernels::nvidia::InvokeAddMulSecond<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input1),
+                                                 reinterpret_cast<const T*>(input2), scale, m, n, stream));
+}
+
+template <typename T>
+void InvokeAddBiasThenMul(const void* input1, const void* input2, const void* bias, const T scale, const int m,
+                          const int n, void* output, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeAddBiasThenMul<T>(
+      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input1), reinterpret_cast<const T*>(input2),
+      reinterpret_cast<const T*>(bias), scale, m, n, stream));
+}
+
+template <typename T>
+void InvokeMulThenAdd(const void* input1, const void* input2, const T scale1, const T scale2, const int m, const int n,
+                      void* output, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(
+      llm_kernels::nvidia::InvokeMulThenAdd<T>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input1),
+                                               reinterpret_cast<const T*>(input2), scale1, scale2, m, n, stream));
+}
+
+template <typename T>
+void InvokeAddResidualsBiasThenMul(const void* input1, const void* residual1, const void* residual2, const void* bias,
+                                   const T scale, const int m, const int n, void* output, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeAddResidualsBiasThenMul<T>(
+      reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input1), reinterpret_cast<const T*>(residual1),
+      reinterpret_cast<const T*>(residual2), reinterpret_cast<const T*>(bias), scale, m, n, stream));
+}
+
+// Explicit template instantiations for Add-Multiply operations
+#define INVOKE_ADD_THEN_MUL(T)                                                                                       \
+  template void InvokeAddThenMul<T>(const void* input1, const void* input2, const T scale, const int m, const int n, \
+                                    void* output, cudaStream_t stream)
+INVOKE_ADD_THEN_MUL(float);
+INVOKE_ADD_THEN_MUL(half);
+INVOKE_ADD_THEN_MUL(__nv_bfloat16);
+#undef INVOKE_ADD_THEN_MUL
+
+#define INVOKE_ADD_MUL_SECOND(T)                                                                                       \
+  template void InvokeAddMulSecond<T>(const void* input1, const void* input2, const T scale, const int m, const int n, \
+                                      void* output, cudaStream_t stream)
+INVOKE_ADD_MUL_SECOND(float);
+INVOKE_ADD_MUL_SECOND(half);
+INVOKE_ADD_MUL_SECOND(__nv_bfloat16);
+#undef INVOKE_ADD_MUL_SECOND
+
+#define INVOKE_ADD_BIAS_THEN_MUL(T)                                                                              \
+  template void InvokeAddBiasThenMul<T>(const void* input1, const void* input2, const void* bias, const T scale, \
+                                        const int m, const int n, void* output, cudaStream_t stream)
+INVOKE_ADD_BIAS_THEN_MUL(float);
+INVOKE_ADD_BIAS_THEN_MUL(half);
+INVOKE_ADD_BIAS_THEN_MUL(__nv_bfloat16);
+#undef INVOKE_ADD_BIAS_THEN_MUL
+
+#define INVOKE_MUL_THEN_ADD(T)                                                                              \
+  template void InvokeMulThenAdd<T>(const void* input1, const void* input2, const T scale1, const T scale2, \
+                                    const int m, const int n, void* output, cudaStream_t stream)
+INVOKE_MUL_THEN_ADD(float);
+INVOKE_MUL_THEN_ADD(half);
+INVOKE_MUL_THEN_ADD(__nv_bfloat16);
+#undef INVOKE_MUL_THEN_ADD
+
+#define INVOKE_ADD_RESIDUALS_BIAS_THEN_MUL(T)                                                                      \
+  template void InvokeAddResidualsBiasThenMul<T>(const void* input1, const void* residual1, const void* residual2, \
+                                                 const void* bias, const T scale, const int m, const int n,        \
+                                                 void* output, cudaStream_t stream)
+INVOKE_ADD_RESIDUALS_BIAS_THEN_MUL(float);
+INVOKE_ADD_RESIDUALS_BIAS_THEN_MUL(half);
+INVOKE_ADD_RESIDUALS_BIAS_THEN_MUL(__nv_bfloat16);
+#undef INVOKE_ADD_RESIDUALS_BIAS_THEN_MUL
 
 template <template <typename T> class Activation, typename T>
 void InvokeGatedActivation(const void* input, const void* bias, const void* gated_weights, const void* gated_bias,

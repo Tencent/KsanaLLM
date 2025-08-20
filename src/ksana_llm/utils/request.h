@@ -99,6 +99,7 @@ inline TokenReduceMode GetTokenReduceMode(const std::string& token_reduce_mode_s
 }
 
 struct TargetDescribe {
+  std::vector<int> cutoff_layer = {0};
   // The IDs of special tokens in the request target. Based on these IDs, the corresponding target tensor (hidden state,
   // logits, etc.) should be returned.
   std::vector<int> token_id;

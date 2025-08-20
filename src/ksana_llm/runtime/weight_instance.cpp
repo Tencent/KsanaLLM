@@ -17,6 +17,7 @@
 #include "nlohmann/json.hpp"
 
 #include "ksana_llm/models/baichuan/baichuan_weight.h"
+#include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_weight.h"
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
 #include "ksana_llm/models/gpt/gpt_weight.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_weight.h"
@@ -100,6 +101,9 @@ void WeightInstance::CreateWeightInstances() {
     CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
     CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
+  } else if (unified_model_type.find("minicpm") != std::string::npos) {
+    CreateWeightInstance<BgeRerankerMinicpmWeight>(unified_model_type, model_config_, runtime_config_, context_,
+                                                   weights_);
   } else {
     // Optional weights map
     auto optional_file = Singleton<OptionalFile>::GetInstance();

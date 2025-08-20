@@ -17,6 +17,7 @@
 
 #include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/common/common_config.h"
+#include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
 #include "ksana_llm/models/gpt/gpt_config.h"
@@ -478,6 +479,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       }
     } else if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
       PrepareDeepSeekV3Attributes(config_json, model_config);
+    } else if (model_config.type == "minicpm") {
+      PrepareBgeRerankerMinicpmAttributes(config_json, model_config);
     } else {
       if (config_json.at("model_type") == "internvl_chat") {
         config_json = config_json.at("llm_config");

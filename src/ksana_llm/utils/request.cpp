@@ -119,7 +119,7 @@ Status KsanaPythonInput::VerifyRequestTarget() {
       KLLM_THROW("Missing 'target_name' in target description.");
     }
     // 'target_name' should be 'transformer', 'layernorm' or 'logits'
-    if (!std::unordered_set<std::string>{"transformer", "layernorm", "logits"}.count(target_name)) {
+    if (!std::unordered_set<std::string>{"transformer", "layernorm", "logits", "lm_head"}.count(target_name)) {
       KLLM_THROW(fmt::format("Invalid target name {}.", target_name));
     }
 
@@ -158,7 +158,7 @@ Status KsanaPythonInput::VerifyRequestTarget() {
     }
 
     // Validate the token reduce mode
-    if (target_desc.token_reduce_mode == TokenReduceMode::INVALID_TYPE) {
+    if (target_desc.token_reduce_mode == TokenReduceMode::INVALID_TYPE && target_name != "lm_head") {
       KLLM_THROW(fmt::format("The specified token reduce mode in {} is invalid.", target_name));
     }
     if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_TOKEN_ID) {

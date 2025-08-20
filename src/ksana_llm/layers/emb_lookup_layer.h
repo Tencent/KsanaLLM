@@ -23,6 +23,8 @@ class EmbLookupLayer : public BaseLayer {
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
  protected:
+  // Whether to use emb_scale for word embedding.
+  bool use_emb_scale_{false};
   // The scale for word embedding.
   float emb_scale_ = 1.f;
 

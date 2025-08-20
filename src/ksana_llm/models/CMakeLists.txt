@@ -11,6 +11,7 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama4/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/baichuan/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/bge_reranker_minicpm/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/chatglm/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/gpt/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_moe/*.cpp
@@ -51,7 +52,6 @@ if(WITH_STANDALONE_TEST)
   cpp_test(expert_para_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_moe/common_moe_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS}  LIBS ${MODELS_TEST_LIBS} data_hub)
   cpp_test(llama_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/llama_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS} ${TORCH_LIBRARIES})
   cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-
   if(WITH_CUDA)
     if(DEFINED SM AND "${SM}" STREQUAL "90a")
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

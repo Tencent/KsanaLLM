@@ -145,7 +145,9 @@ if __name__ == "__main__":
                     # },
                     "request_target": [  # Specify the target, multiple are allowed
                         {
-                            "target_name": "layernorm",  # The target can be "layernorm", "transformer" or "logits"
+                             # The target can be "layernorm", "transformer", "logits" or "lm_head"
+                            "target_name": "layernorm", 
+                            # "cutoff_layer": [10], # Only for "lm_head" 
                             "token_id": [
                                 13
                             ],  # Provide specific token ids (only permitted in "layernorm" and "transformer")

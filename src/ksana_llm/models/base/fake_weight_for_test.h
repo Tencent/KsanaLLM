@@ -441,4 +441,42 @@ class FakeMoeWeight : public FakeWeight {
   }
 };
 
+class FakeBgeRerankerWeight : public FakeWeight {
+ public:
+  FakeBgeRerankerWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                        bool add_qkv_bias, bool use_shared_moe, bool use_qk_norm,
+                        FakeWeightValueInitializer* value_initializer = nullptr)
+      : FakeWeight(rank, value_initializer) {
+    auto base_weight = std::make_shared<FakeBaseLayersWeight>(model_config, runtime_config, rank, value_initializer);
+    auto mha_weight = std::make_shared<FakeMultiHeadAttentionWeight>(model_config, runtime_config, rank, add_qkv_bias,
+                                                                     use_qk_norm, value_initializer);
+
+    MergeWeight(base_weight);
+    MergeWeight(mha_weight);
+
+    // Add BGE-specific MLP weights that use fused gate_up_proj
+    DataType dtype = model_config.weight_data_type;
+    MemoryLocation location = MemoryLocation::LOCATION_DEVICE;
+
+    for (uint32_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
+      std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+      // Create fused gate_up_proj weight (this is what TwoLayeredFFN expects for fused mode)
+      CreateWeight(layer_prefix + ".mlp.gate_up_proj.weight", {model_config.hidden_units, model_config.inter_size * 2},
+                   dtype, location);
+      // Create down_proj weight
+      CreateWeight(layer_prefix + ".mlp.down_proj.weight", {model_config.inter_size, model_config.hidden_units}, dtype,
+                   location);
+      // Create bias weights if needed (for BGE model bias support)
+      CreateWeight(layer_prefix + ".mlp.gate_proj_bias", {model_config.inter_size}, dtype, location);
+      CreateWeight(layer_prefix + ".mlp.up_proj_bias", {model_config.inter_size}, dtype, location);
+    }
+
+    // Add BGE-specific lm_head weights for each layer
+    for (uint32_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
+      std::string weight_name = fmt::format("lm_head.{}.linear_head.weight", layer_idx);
+      CreateWeight(weight_name, {model_config.hidden_units, 1}, dtype, location);
+    }
+  }
+};
+
 }  // namespace ksana_llm

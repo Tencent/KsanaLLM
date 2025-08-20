@@ -16,7 +16,7 @@ if(WITH_CUDA)
   list(APPEND nvidia_kernels_LIBS -lcudart llm_kernels_nvidia_kernel_paged_attention
     llm_kernels_nvidia_kernel_embedding
     llm_kernels_nvidia_kernel_layernorm llm_kernels_nvidia_kernel_gemm_wrapper
-    llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_activation
+    llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_add_mul llm_kernels_nvidia_kernel_activation
     llm_kernels_nvidia_kernel_assemble_tokens_hidden llm_kernels_nvidia_kernel_cast
     llm_kernels_nvidia_kernel_concat llm_kernels_nvidia_kernel_identity
     llm_kernels_nvidia_kernel_rotary_embedding llm_kernels_nvidia_kernel_all_reduce

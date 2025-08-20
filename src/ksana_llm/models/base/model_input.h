@@ -33,6 +33,7 @@ class ModelInput {
   void CreateVLTensors();
   void DestroyVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
 
   void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
@@ -83,6 +84,9 @@ class ModelInput {
 
   // if current req is cudagraph capture request
   bool is_cudagraph_capture_request = false;
+
+  // For cutoff layer
+  int cutoff_layer = 0;
 
   // Whether to use kv cache.
   bool use_cache = true;
