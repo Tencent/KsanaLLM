@@ -122,7 +122,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       }
       continue;
     }
-    multi_batch_controller_->MultiBatchThreadIsReady(multi_batch_id);
+    multi_batch_controller_->NotifyCurrentBatchIsStandby(multi_batch_id);
     RecordRequestSchedEventsWithStartTime(schedule_output.running_reqs, 0, multi_batch_id, 0, "Schedule",
                                           sched_start_time_ns);
     size_t forwarding_token_num = 0, total_seq_len = 0;
@@ -137,9 +137,8 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
-      multi_batch_controller_->WaitUtilCurrentBatchCanRun(multi_batch_id);
-      KLLM_LOG_DEBUG << "lock and start running multi_batch_id: " << schedule_output.multi_batch_id
-                     << ", epilogue=false";
+      KLLM_LOG_MAIN << "wait to run multi_batch_id=" << multi_batch_id << ", epilogue=false";
+      multi_batch_controller_->WaitUntilCurrentBatchCanRun(multi_batch_id);
       BroadcastScheduleOutput(&schedule_output);
       InitHiddenUnits(schedule_output.multi_batch_id);
     }
@@ -174,8 +173,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     int global_token_throughput =
         (end_time_ms - last_end_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - last_end_time_ms) : -1;
     int local_token_throuphput = forwarding_token_num * 1000 / (end_time_ms - start_time_ms);
-
-    KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id
+    KLLM_LOG_MAIN << "multi_batch_id=" << multi_batch_id
                    << ", running_reqs.size=" << schedule_output.running_reqs.size()
                    << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
                    << ", 1st step " << (middle_time_ms - start_time_ms) << "ms, 2nd step "
@@ -191,12 +189,12 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
 Status BatchManager::WorkerProcess() {
   SetDevice(0);
   while (!terminated_) {
-    KLLM_LOG_DEBUG << "Wait schedule_output from upstream node.";
+    KLLM_LOG_MAIN << "Wait schedule_output from upstream node.";
     ScheduleOutput *schedule_output = GetScheduleOutputPool()->GetFromRecvQueue();
     if (!schedule_output) {
       break;
     }
-    KLLM_LOG_DEBUG << "WorkerProcess: start process schedule_output multi_batch_id=" << schedule_output->multi_batch_id;
+    KLLM_LOG_MAIN << "WorkerProcess: start process schedule_output multi_batch_id=" << schedule_output->multi_batch_id;
     InitHiddenUnits(schedule_output->multi_batch_id);
 
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
@@ -205,7 +203,7 @@ Status BatchManager::WorkerProcess() {
       KLLM_LOG_ERROR << status.ToString();
     }
     time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-    KLLM_LOG_DEBUG << "multi_batch_id=" << schedule_output->multi_batch_id
+    KLLM_LOG_MAIN << "multi_batch_id=" << schedule_output->multi_batch_id
                    << ", runningSize=" << schedule_output->running_reqs.size() << ", step cost "
                    << (end_time_ms - start_time_ms) << "ms";
 

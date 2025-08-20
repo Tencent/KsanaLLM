@@ -23,15 +23,31 @@ class MultiBatchControllerTest : public testing::Test {
 
   void SetUp() override { Reset(4); }
 
-  void Reset(int max_multi_batch_num) {
+  void ResetConfigs(int max_multi_batch_num) {
     max_pp_multi_batch_num_ = max_multi_batch_num;
+    need_sync_start_ = false;
     start_thread_cnt_ = 0;
-    finish_threads_num_ = 0;
+
+    need_control_first_thread_start_id_ = false;
+    first_start_thread_id_ = 0;
+    first_thread_started_ = false;
+
+    thread_terminal_ = false;
+    {
+      std::unique_lock<std::mutex> lock(finish_mutex_);
+      finish_status_.clear();
+      finish_status_.resize(max_pp_multi_batch_num_, false);
+    }
+
     input_data_.resize(max_pp_multi_batch_num_, 0);
     running_order_.clear();
     step_preface_order_.clear();
     step_epilogue_order_.clear();
     recv_order_.clear();
+  }
+
+  void Reset(int max_multi_batch_num) {
+    ResetConfigs(max_multi_batch_num);
     threads_.clear();
     multi_batch_controller_ = std::make_unique<MultiBatchController>(max_pp_multi_batch_num_);
   }
@@ -62,6 +78,13 @@ class MultiBatchControllerTest : public testing::Test {
     std::cout << "Epilogue Batch ID " << batch_id << std::endl;
   }
 
+  void AddInputData(int max_multi_batch_num, int data_num_each_thread) {
+    input_data_.resize(max_multi_batch_num);
+    for (int i = 0; i < max_multi_batch_num; ++i) {
+      input_data_[i] = data_num_each_thread;
+    }
+  }
+
   void ProcessData(size_t batch_id) {
     std::this_thread::sleep_for(std::chrono::milliseconds((batch_id * 23) % 8));
   }
@@ -82,7 +105,12 @@ class MultiBatchControllerTest : public testing::Test {
     }
   }
 
+  void StopThreads() {
+    thread_terminal_.store(true);
+  }
+
   void JoinThreads() {
+    StopThreads();
     for (auto& thread : threads_) {
       thread.join();
     }
@@ -90,49 +118,75 @@ class MultiBatchControllerTest : public testing::Test {
 
   void WaitAllThreadsFinish() {
     std::unique_lock<std::mutex> lock(finish_mutex_);
-    finish_cv_.wait(lock, [this] { return finish_threads_num_ == max_pp_multi_batch_num_; });
+    finish_cv_.wait(lock, [this] {
+      for (auto finished : finish_status_) {
+        if (!finished) {
+          return false;
+        }
+      }
+      return true;
+    });
   }
 
   void ThreadFunc(size_t batch_id) {
-    int run_data_cnt = 0;
-    while (true) {
-      // std::cout << "Thread " << batch_id << " run data id " << run_data_cnt << std::endl;
+    bool first_run = true;
+    while (!thread_terminal_.load()) {
+      // std::cout << "Thread " << batch_id << " run input data id " << input_data_[batch_id] << std::endl;
       ProcessData(batch_id);
-      if (run_data_cnt >= input_data_[batch_id]) {
+      if (input_data_.at(batch_id) <= 0) {
         multi_batch_controller_->NotifyCurrentBatchThreadNotReady(batch_id);
-        break;
+        {
+          std::lock_guard<std::mutex> lock(finish_mutex_);
+          finish_status_[batch_id] = true;
+          finish_cv_.notify_one();
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        first_run = true;
+        continue;
       }
+      if (first_run) {
+        std::lock_guard<std::mutex> lock(finish_mutex_);
+        finish_status_[batch_id] = false;
+        finish_cv_.notify_all();
+      }
+      input_data_.at(batch_id)--;
 
-      multi_batch_controller_->MultiBatchThreadIsReady(batch_id);
-      if (need_sync_start_ && run_data_cnt == 0) {
+      multi_batch_controller_->NotifyCurrentBatchIsStandby(batch_id);
+      if (need_sync_start_ && first_run) {
         std::unique_lock<std::mutex> lock(start_mutex_);
         start_thread_cnt_++;
         start_cv_.notify_all();
         start_cv_.wait(lock, [this] { return start_thread_cnt_ == max_pp_multi_batch_num_; });
       }
 
-      multi_batch_controller_->WaitUtilCurrentBatchCanRun(batch_id);
+      if (need_control_first_thread_start_id_ && first_start_thread_id_ != batch_id && first_run) {
+        KLLM_CHECK(first_start_thread_id_ >= 0 && first_start_thread_id_ < max_pp_multi_batch_num_);
+        std::unique_lock<std::mutex> lock(start_mutex_);
+        start_cv_.wait(lock, [this] { return first_thread_started_; });
+      }
+      multi_batch_controller_->WaitUntilCurrentBatchCanRun(batch_id);
+      if (need_control_first_thread_start_id_ && first_run && first_start_thread_id_ == batch_id) {
+        std::unique_lock<std::mutex> lock(start_mutex_);
+        first_thread_started_ = true;
+        start_cv_.notify_all();
+      }
+
+      first_run = false;
       RecordRunningOrder(batch_id);
       RecordStepPrefaceOrder(batch_id);
       StepPreface(batch_id);
 
       multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(batch_id);
-      auto next_multi_batch_id = multi_batch_controller_->NotifyOtherBatchCanRun();
+      multi_batch_controller_->NotifyAnotherBatchCanRun(batch_id);
 
-      multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(batch_id, next_multi_batch_id);
+      multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(batch_id);
       RecordRecvOrder(batch_id);
 
-      multi_batch_controller_->WaitUtilCurrentBatchCanRun(batch_id);
+      multi_batch_controller_->WaitUntilCurrentBatchCanRun(batch_id);
       RecordRunningOrder(batch_id);
       RecordStepEpilogueOrder(batch_id);
       StepEpilogue(batch_id);
-
-      run_data_cnt++;
-    }
-    {
-      std::lock_guard<std::mutex> lock(finish_mutex_);
-      ++finish_threads_num_;
-      finish_cv_.notify_one();
+      multi_batch_controller_->NotifyCurrentBatchIsFinish(batch_id);
     }
     // std::cout << "Thread " << batch_id << " exited." << std::endl;
   }
@@ -146,9 +200,16 @@ class MultiBatchControllerTest : public testing::Test {
   bool need_sync_start_ = false;
   int start_thread_cnt_ = 0;
 
+  // control the first thread start id
+  bool need_control_first_thread_start_id_ = false;
+  int first_start_thread_id_ = 0;
+  bool first_thread_started_ = false;
+
   std::mutex finish_mutex_;
   std::condition_variable finish_cv_;
-  int finish_threads_num_ = 0;
+  std::vector<bool> finish_status_;
+
+  std::atomic<bool> thread_terminal_ = false;
 
   std::vector<std::thread> threads_;
 
@@ -165,17 +226,14 @@ class MultiBatchControllerTest : public testing::Test {
 };
 
 // 测试多线程环境下running id的有序执行
-TEST_F(MultiBatchControllerTest, BlalancedRunningOrderTest) {
+TEST_F(MultiBatchControllerTest, BalancedRunningOrderTest) {
   setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 4;
   Reset(max_multi_batch_num);
 
   // prepare input data
   int data_num_each_thread = 5;
-  input_data_.resize(max_multi_batch_num);
-  for (int i = 0; i < max_multi_batch_num; ++i) {
-    input_data_[i] = data_num_each_thread;
-  }
+  AddInputData(max_multi_batch_num, data_num_each_thread);
 
   bool need_sync_start = true;
   StartThreads(need_sync_start);
@@ -187,24 +245,44 @@ TEST_F(MultiBatchControllerTest, BlalancedRunningOrderTest) {
   EXPECT_EQ(step_epilogue_order_.size(), data_num_each_thread * max_multi_batch_num);
   EXPECT_EQ(running_order_.size(), 2 /* preface and epilogue */ * data_num_each_thread * max_multi_batch_num);
   // recv/step preface/step epilogue order: 0,1,2,3,0,1,2,3
+  //   or like: 1,2,3,0,1,2,3,0 this order kind
+  //            the first can be any idx, but next should be +1
   // running order: 0,1,2,3,0,0,1,1,2,2,3,3,0,1,2,3
   for (size_t data_id = 0; data_id < data_num_each_thread; ++data_id) {
+    size_t expected_id = 0;
     for (size_t batch_id = 0; batch_id < max_multi_batch_num; ++batch_id) {
       size_t idx = data_id * max_multi_batch_num + batch_id;
-      EXPECT_EQ(recv_order_.at(idx), batch_id) << "batch_id: " << batch_id << ", data_id: " << data_id;
-      EXPECT_EQ(step_preface_order_.at(idx), batch_id) << "batch_id: " << batch_id << ", data_id: " << data_id;
-      EXPECT_EQ(step_epilogue_order_.at(idx), batch_id) << "batch_id: " << batch_id << ", data_id: " << data_id;
+      if (batch_id == 0) {
+        expected_id = step_preface_order_.at(idx);
+      }
+      EXPECT_EQ(step_preface_order_.at(idx), expected_id)
+          << "batch_id: " << batch_id << ", data_id: " << data_id << ", expected_id: " << expected_id;
+      EXPECT_EQ(step_epilogue_order_.at(idx), expected_id)
+          << "batch_id: " << batch_id << ", data_id: " << data_id << ", expected_id: " << expected_id;
+      EXPECT_EQ(recv_order_.at(idx), expected_id)
+          << "batch_id: " << batch_id << ", data_id: " << data_id << ", expected_id: " << expected_id;
+      expected_id++;
+      if (expected_id > max_multi_batch_num - 1) {
+        expected_id = 0;
+      }
     }
   }
+  size_t expected_id = running_order_.at(0);
   for (size_t batch_id = 0; batch_id < max_multi_batch_num ; ++batch_id) {
     size_t st = 0;
     for (size_t data_id = 0; data_id < data_num_each_thread; ++data_id) {
       size_t step_preface_pos = st + (data_id == 0 ? batch_id : (batch_id * 2 + 1));
       size_t step_epilogue_pos =
           st + (data_id == 0 ? 1 : 2) * max_multi_batch_num + batch_id * (data_id == data_num_each_thread - 1 ? 1 : 2);
-      EXPECT_EQ(running_order_.at(step_preface_pos), batch_id) << "batch_id: " << batch_id << ", data_id: " << data_id;
-      EXPECT_EQ(running_order_.at(step_epilogue_pos), batch_id) << "batch_id: " << batch_id << ", data_id: " << data_id;
+      EXPECT_EQ(running_order_.at(step_preface_pos), expected_id)
+          << "batch_id: " << batch_id << ", data_id: " << data_id << ", expected_id: " << expected_id;
+      EXPECT_EQ(running_order_.at(step_epilogue_pos), expected_id)
+          << "batch_id: " << batch_id << ", data_id: " << data_id << ", expected_id: " << expected_id;
       st += max_multi_batch_num * (data_id == 0 ? 1 : 2);
+    }
+    expected_id++;
+    if (expected_id > max_multi_batch_num - 1) {
+      expected_id = 0;
     }
   }
   JoinThreads();
@@ -217,10 +295,7 @@ TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
 
   // prepare input data
   int data_num_each_thread = 5;
-  input_data_.resize(max_multi_batch_num);
-  for (int i = 0; i < max_multi_batch_num; ++i) {
-    input_data_[i] = data_num_each_thread;
-  }
+  AddInputData(max_multi_batch_num, data_num_each_thread);
 
   bool need_sync_start = false;
   StartThreads(need_sync_start);
@@ -240,7 +315,7 @@ TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
   JoinThreads();
 }
 
-// 测试多线程环境下输入不平衡的情况
+// 测试多线程环境下，输入样本不平衡，且不同步启动的情况
 TEST_F(MultiBatchControllerTest, UnBlalancedNotSyncStartOrderTest) {
   setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
   int max_multi_batch_num = 2;
@@ -291,6 +366,88 @@ TEST_F(MultiBatchControllerTest, UnBlalancedSyncStartOrderTest) {
   for (size_t i = 0; i < 9; ++i) {
     EXPECT_EQ(step_preface_order_.at(i), recv_order_.at(i)) << i;
     EXPECT_EQ(step_epilogue_order_.at(i), recv_order_.at(i)) << i;
+  }
+
+  JoinThreads();
+}
+
+// 测试多线程环境任意thread先启动的情况
+TEST_F(MultiBatchControllerTest, AnyThreadFirstStartTest) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  int max_multi_batch_num = 8;
+  Reset(max_multi_batch_num);
+  // 任意thread先启动
+  first_start_thread_id_ = 3;
+  need_control_first_thread_start_id_ = true;
+
+  // prepare input data
+  int data_num_each_thread = 5;
+  AddInputData(max_multi_batch_num, data_num_each_thread);
+
+  bool need_sync_start = false;
+  StartThreads(need_sync_start);
+
+  WaitAllThreadsFinish();
+
+  EXPECT_EQ(recv_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_preface_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_epilogue_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(running_order_.size(), 2 * data_num_each_thread * max_multi_batch_num);
+
+  EXPECT_EQ(recv_order_.at(0), first_start_thread_id_);
+  for (size_t i = 0; i < data_num_each_thread * max_multi_batch_num; ++i) {
+    EXPECT_EQ(step_preface_order_.at(i), recv_order_.at(i));
+    EXPECT_EQ(step_epilogue_order_.at(i), recv_order_.at(i));
+  }
+
+  JoinThreads();
+}
+
+// 测试运行一次后，再恢复启动，能否顺利执行
+TEST_F(MultiBatchControllerTest, RunThreadRestartTest) {
+  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  int max_multi_batch_num = 8;
+  Reset(max_multi_batch_num);
+  // 任意thread先启动
+  first_start_thread_id_ = 5;
+  need_control_first_thread_start_id_ = true;
+
+  // prepare input data
+  int data_num_each_thread = 3;
+  AddInputData(max_multi_batch_num, data_num_each_thread);
+
+  bool need_sync_start = false;
+  StartThreads(need_sync_start);
+
+  WaitAllThreadsFinish();
+
+  EXPECT_EQ(recv_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_preface_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_epilogue_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(running_order_.size(), 2 * data_num_each_thread * max_multi_batch_num);
+
+  EXPECT_EQ(recv_order_.at(0), first_start_thread_id_);
+  for (size_t i = 0; i < data_num_each_thread * max_multi_batch_num; ++i) {
+    EXPECT_EQ(step_preface_order_.at(i), recv_order_.at(i));
+    EXPECT_EQ(step_epilogue_order_.at(i), recv_order_.at(i));
+  }
+
+  // restart again
+  ResetConfigs(max_multi_batch_num);
+  need_sync_start_ = false;
+  need_control_first_thread_start_id_ = false;
+  data_num_each_thread = 2;
+  AddInputData(max_multi_batch_num, data_num_each_thread);
+  WaitAllThreadsFinish();
+
+  EXPECT_EQ(recv_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_preface_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(step_epilogue_order_.size(), data_num_each_thread * max_multi_batch_num);
+  EXPECT_EQ(running_order_.size(), 2 * data_num_each_thread * max_multi_batch_num);
+
+  for (size_t i = 0; i < data_num_each_thread * max_multi_batch_num; ++i) {
+    EXPECT_EQ(step_preface_order_.at(i), recv_order_.at(i));
+    EXPECT_EQ(step_epilogue_order_.at(i), recv_order_.at(i));
   }
 
   JoinThreads();

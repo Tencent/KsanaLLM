@@ -527,7 +527,7 @@ Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
 }
 
 Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
-  KLLM_LOG_DEBUG << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
+  KLLM_LOG_MAIN << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;
   PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
 
@@ -541,23 +541,24 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
   // Inference forward.
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   if (epilogue && !context_->IsStandalone()) {
-    auto next_multi_batch_id = multi_batch_controller_->NotifyOtherBatchCanRun();
-    KLLM_LOG_DEBUG << "unlock multi_batch_id=" << schedule_output->multi_batch_id << ", start to recv hiddens";
-    multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id, next_multi_batch_id);
+    multi_batch_controller_->NotifyAnotherBatchCanRun(schedule_output->multi_batch_id);
+    KLLM_LOG_MAIN << "wait to recv cur_multi_batch_id=" << schedule_output->multi_batch_id;
+    multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id);
     SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
     RecvHiddenUnits(schedule_output->multi_batch_id);
 
-    KLLM_LOG_DEBUG << "try to lock again multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=true";
-    multi_batch_controller_->WaitUtilCurrentBatchCanRun(schedule_output->multi_batch_id);
+    KLLM_LOG_MAIN << "try to run multi_batch_id=" << schedule_output->multi_batch_id << " again, epilogue=true";
+    multi_batch_controller_->WaitUntilCurrentBatchCanRun(schedule_output->multi_batch_id);
   }
   Forward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
   time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  KLLM_LOG_DEBUG << "LlmRuntime Forward multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue
-                 << ", time cost=" << end_time_ms - start_time_ms << "ms";
+  KLLM_LOG_MAIN << "LlmRuntime Forward multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue
+                << ", time cost=" << end_time_ms - start_time_ms << "ms";
 
   // Sampling only in standalone mode or epilogue=true in distributed mode
   if (context_->IsStandalone() || epilogue) {
     PROFILE_EVENT_SCOPE(SamplingAndMTP_, fmt::format("SamplingAndMTP_{}", schedule_output->multi_batch_id));
+    KLLM_LOG_MAIN << "start to run sampling and mtp cur_multi_batch_id=" << schedule_output->multi_batch_id;
     Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs);
     DraftTokenFilter(schedule_output->running_reqs);
     MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
@@ -565,8 +566,9 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
 
     // Forwarding finished, free resources.
     model_instance->FreeResources(schedule_output->multi_batch_id);
-    // Note(TJ): donot need NotifyOtherBatchCanRun, because maybe this batch will enter again.
-    KLLM_LOG_DEBUG << "finish multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue;
+    // Note(TJ): donot need NotifyAnotherBatchCanRun, because maybe this batch will enter again.
+    multi_batch_controller_->NotifyCurrentBatchIsFinish(schedule_output->multi_batch_id);
+    KLLM_LOG_MAIN << "finish multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue;
   }
   KLLM_LOG_DEBUG << "Leave llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;
