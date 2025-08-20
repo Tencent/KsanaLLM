@@ -12,7 +12,6 @@ struct PerfProfileConfig {
     size_t single_token_request_num = 0;
     size_t single_token_request_cached_token_num = 0;
     size_t multi_token_request_num = 0;
-    size_t multi_token_cached_token_num = 0;
     size_t multi_token_request_token_num = 0;
   };
   uint32_t config_id = 0;
@@ -93,30 +92,6 @@ class PerfProfileConfigBuilderInterface {
 
  protected:
   size_t dp_num_ = 0;
-};
-
-class PerfProfileConfigBuilderWithYaml : public PerfProfileConfigBuilderInterface {
- public:
-  explicit PerfProfileConfigBuilderWithYaml(const std::string& config_file);
-
-  PerfProfileConfig GetMaxPerfProfileConfig() override;
-
-  void GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs) override;
-
- private:
-  Status ParsePerformanceRunnerConfig(const std::string& config_file);
-
- private:
-  // input_config
-  size_t single_token_request_num_ = 0;
-  size_t single_token_request_cached_token_num_ = 0;
-  size_t multi_token_request_num_ = 0;
-  size_t multi_token_cached_token_num_ = 0;
-  size_t multi_token_request_token_num_ = 0;
-
-  // runner_config
-  size_t profile_round_ = 0;
-  size_t warmup_round_ = 0;
 };
 
 }  // namespace ksana_llm

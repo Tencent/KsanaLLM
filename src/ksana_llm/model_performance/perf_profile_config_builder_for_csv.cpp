@@ -12,7 +12,10 @@ namespace ksana_llm {
 PerfProfileConfigBuilderWithCsv::PerfProfileConfigBuilderWithCsv(const std::string& config_file, size_t warmup_round,
                                                                  size_t profile_round)
     : warmup_round_(warmup_round), profile_round_(profile_round) {
-  ParsePerformanceRunnerConfig(config_file);
+  Status status = ParsePerformanceRunnerConfig(config_file);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "Error: " << status.GetMessage();
+  }
 }
 
 PerfProfileConfig PerfProfileConfigBuilderWithCsv::GetMaxPerfProfileConfig() {
@@ -48,6 +51,17 @@ PerfProfileConfig PerfProfileConfigBuilderWithCsv::GetMaxPerfProfileConfig() {
 }
 
 void PerfProfileConfigBuilderWithCsv::GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs) {
+  if (!csv_config_dp_initialized_) {
+    // TODO(robertyuan): Support different config for dp
+    for (auto& config : csv_configs_) {
+      auto& req_config = config.req_configs[0];
+      config.req_configs.resize(dp_num_);
+      for (size_t dp_idx = 1; dp_idx < dp_num_; dp_idx++) {
+        config.req_configs[dp_idx] = req_config;
+      }
+    }
+    csv_config_dp_initialized_ = true;
+  }
   configs = csv_configs_;
 }
 

@@ -216,11 +216,11 @@ python serving_forward_client.py --port 8080
 Test performance of the model
 ```bash
 cd ${GIT_PROJECT_REPO_ROOT}/build 
-./bin/run_model_performance ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm_performance_run.yaml 
+./bin/run_model_performance --runtime-config ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm_tp.yaml --csv-config ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/model_performance/test_config.csv 
 
 # enable nsys when using Cuda
 export ENABLE_PROFILE_EVENT=1 # enale profile event like NVTX on Cuda
-nsys profile ./bin/run_model_performance ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm_performance_run.yaml 
+nsys profile ./bin/run_model_performance --runtime-config ${GIT_PROJECT_REPO_ROOT}/examples/llama7b/ksana_llm_tp.yaml --csv-config ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/model_performance/test_config.csv 
 unset ENABLE_PROFILE_EVENT # after using nsys
 ```
 

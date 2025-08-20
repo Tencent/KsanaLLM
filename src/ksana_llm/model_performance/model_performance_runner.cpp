@@ -181,6 +181,8 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   float milliseconds = 0;
   llm_runtime_->ReorderInferRequests<InferRequest>(infer_reqs_);
 
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
   // warmup
   Status warmup_status = Status();
   for (size_t i = 0; i < profile_config.warmup_round; ++i) {
@@ -303,74 +305,6 @@ size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) co
   req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num,
                                                   unique_block_num, shared_token_num);
   return shared_block_num + unique_block_num;
-}
-
-/***************************************************************************************************
- * PerfProfileConfigBuilderWithYaml
- */
-
-PerfProfileConfigBuilderWithYaml::PerfProfileConfigBuilderWithYaml(const std::string& config_file) {
-  ParsePerformanceRunnerConfig(config_file);
-}
-
-PerfProfileConfig PerfProfileConfigBuilderWithYaml::GetMaxPerfProfileConfig() {
-  // TODO(robertyuan): build multiple configs
-  PerfProfileConfig max_config;
-  max_config.config_id = 0;
-  max_config.warmup_round = warmup_round_;
-  max_config.profile_round = profile_round_;
-  max_config.req_configs.resize(1);
-  max_config.req_configs[0].single_token_request_num = single_token_request_num_;
-  max_config.req_configs[0].single_token_request_cached_token_num = single_token_request_cached_token_num_;
-  max_config.req_configs[0].multi_token_request_num = multi_token_request_num_;
-  max_config.req_configs[0].multi_token_request_token_num = multi_token_request_token_num_;
-  return max_config;
-}
-
-void PerfProfileConfigBuilderWithYaml::GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs) {
-  configs.resize(1);
-  auto& config = configs[0];
-  config.config_id = 0;
-  config.warmup_round = warmup_round_;
-  config.profile_round = profile_round_;
-  config.req_configs.resize(dp_num_);
-  for (size_t dp_idx = 0; dp_idx < dp_num_; dp_idx++) {
-    config.req_configs[dp_idx].single_token_request_num = single_token_request_num_;
-    config.req_configs[dp_idx].single_token_request_cached_token_num = single_token_request_cached_token_num_;
-    config.req_configs[dp_idx].multi_token_request_num = multi_token_request_num_;
-    config.req_configs[dp_idx].multi_token_request_token_num = multi_token_request_token_num_;
-  }
-}
-
-Status PerfProfileConfigBuilderWithYaml::ParsePerformanceRunnerConfig(const std::string& config_file) {
-  YamlReader yaml_reader;
-  Status status = yaml_reader.LoadFile(config_file);
-  if (!status.OK()) {
-    KLLM_THROW(fmt::format("Load yaml config error. {}", status.GetMessage()));
-  }
-
-  // Read input_config
-  single_token_request_num_ = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.single_token_request_num", 4);
-  single_token_request_cached_token_num_ = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.single_token_request_cached_token_num",
-      32);
-  multi_token_request_num_ = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.multi_token_request_num", 4);
-  multi_token_request_token_num_ = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "model_performance_runner_config.input_config.multi_token_request_token_num", 32);
-
-  // Read runner_config
-  warmup_round_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
-                                                "model_performance_runner_config.runner_config.warmup_rounds", 10);
-  profile_round_ = yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(),
-                                                 "model_performance_runner_config.runner_config.rounds", 100);
-
-  if (!(single_token_request_num_ > 0 || multi_token_request_num_ > 0)) {
-    KLLM_THROW(fmt::format("single_token_request_num {} or multi_token_request_num {} should > 0",
-                           single_token_request_num_, multi_token_request_num_));
-  }
-  return Status();
 }
 
 }  // namespace ksana_llm

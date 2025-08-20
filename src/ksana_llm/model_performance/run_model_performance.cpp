@@ -8,8 +8,7 @@ using namespace ksana_llm;
 void Usage() {
   std::cout << "Usage: ./run_model_performance [OPTIONS]" << std::endl;
   std::cout << "Options:" << std::endl;
-  std::cout << "  --yaml-config <file>   Use YAML configuration file" << std::endl;
-  std::cout << "  --csv-config <file>    Use CSV configuration file" << std::endl;
+  std::cout << "  --csv-config <file>    Specify profile configuration file in CSV format" << std::endl;
   std::cout << "  --runtime-config <file>  Specify runtime config filename" << std::endl;
   std::cout << "  --warmup-round <num>   Number of warmup rounds (default: 2)" << std::endl;
   std::cout << "  --profile-round <num>  Number of profile rounds (default: 100)" << std::endl;
@@ -17,9 +16,6 @@ void Usage() {
   std::cout << "  --lower-layer-idx <num> Lower layer index for partial model execution (default: -1)" << std::endl;
   std::cout << "  --upper-layer-idx <num> Upper layer index for partial model execution (default: -1)" << std::endl;
   std::cout << "Examples:" << std::endl;
-  std::cout << "  ./run_model_performance --runtime-config llama_7b_performance_run.yaml --yaml-config "
-               "perf_profile_config.yaml"
-            << std::endl;
   std::cout << "  ./run_model_performance --runtime-config llama_7b_performance_run.yaml --csv-config "
                "perf_profile_configs.csv "
             << std::endl;
@@ -28,15 +24,12 @@ void Usage() {
             << std::endl;
 }
 
-enum ConfigFileType { TYPE_NOT_SET, TYPE_YAML, TYPE_CSV };
-
 // usage: run_model_performance /data/llama/ksana_config.yaml
 int main(int argc, char* argv[]) {
   InitLoguru();
 
   // Default values
   std::string perf_config_path;
-  ConfigFileType perf_config_file_type = TYPE_NOT_SET;  // Default to YAML config
 
   std::string runtime_config_path;
 
@@ -53,37 +46,25 @@ int main(int argc, char* argv[]) {
 
   // Parse command line arguments
   if (argc == 1) {
-    // No arguments provided, use default YAML config
+    Usage();
+
+    // No arguments provided, use default config
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm_performance_run.yaml";
-    perf_config_file_type = TYPE_YAML;
-    perf_config_path = std::filesystem::absolute(config_path_relate).string();
-    runtime_config_path = perf_config_path;  // TODO(robertyuan): use two files.
-    std::cout << "Using demo perf config: " << perf_config_path << ", runtime config: " << perf_config_path
-              << std::endl;
+    std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm_tp.yaml";
+    runtime_config_path = std::filesystem::absolute(config_path_relate).string();
+    std::filesystem::path profile_csv_config_relate = parent_path / "test_config.csv";
+    perf_config_path = std::filesystem::absolute(profile_csv_config_relate).string();
+    warmup_round = 10;
+    profile_round = 100;
+    std::cout << "No arguments provided. Using demo perf config: " << perf_config_path
+              << ", runtime config: " << runtime_config_path << std::endl;
   } else {
     // Parse named arguments
     for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
-
-      if (arg == "--yaml-config" && i + 1 < argc) {
-        if (perf_config_file_type != TYPE_NOT_SET) {
-          std::cout << "Config file type can be set once. " << std::endl;
-          Usage();
-          return 1;
-        }
+      if (arg == "--csv-config" && i + 1 < argc) {
         perf_config_path = argv[++i];
-        perf_config_file_type = TYPE_YAML;
-        std::cout << "Using YAML config: " << perf_config_path << std::endl;
-      } else if (arg == "--csv-config" && i + 1 < argc) {
-        if (perf_config_file_type != TYPE_NOT_SET) {
-          std::cout << "Config file type can be set once. " << std::endl;
-          Usage();
-          return 1;
-        }
-        perf_config_path = argv[++i];
-        perf_config_file_type = TYPE_CSV;
         std::cout << "Using CSV config: " << perf_config_path << std::endl;
       } else if (arg == "--runtime-config" && i + 1 < argc) {
         runtime_config_path = argv[++i];
@@ -149,22 +130,8 @@ int main(int argc, char* argv[]) {
   }
 
   // Initialize the appropriate config builder based on the config type
-  std::shared_ptr<PerfProfileConfigBuilderInterface> config_builder;
-  switch (perf_config_file_type) {
-    case TYPE_YAML: {
-      config_builder = std::make_shared<ksana_llm::PerfProfileConfigBuilderWithYaml>(perf_config_path);
-      break;
-    }
-    case TYPE_CSV: {
-      config_builder =
-          std::make_shared<ksana_llm::PerfProfileConfigBuilderWithCsv>(perf_config_path, warmup_round, profile_round);
-      break;
-    }
-    default:
-      std::cout << "Error: No perf configuration type specified." << std::endl;
-      Usage();
-      return 1;
-  }
+  std::shared_ptr<PerfProfileConfigBuilderInterface> config_builder =
+      std::make_shared<ksana_llm::PerfProfileConfigBuilderWithCsv>(perf_config_path, warmup_round, profile_round);
 
   std::shared_ptr<ksana_llm::ModelPerformanceRunner> model_performance_runner =
       std::make_shared<ksana_llm::ModelPerformanceRunner>(

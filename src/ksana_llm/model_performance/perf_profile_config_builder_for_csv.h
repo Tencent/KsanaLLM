@@ -19,6 +19,7 @@ class PerfProfileConfigBuilderWithCsv : public PerfProfileConfigBuilderInterface
   Status ParsePerformanceRunnerConfig(const std::string& config_file);
 
  private:
+  bool csv_config_dp_initialized_ = false;
   std::vector<PerfProfileConfig> csv_configs_;
   // runner_config
   size_t warmup_round_;

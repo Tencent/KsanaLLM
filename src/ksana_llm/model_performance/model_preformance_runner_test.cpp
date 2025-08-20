@@ -2,6 +2,7 @@
  *
  * ==============================================================================*/
 #include "ksana_llm/model_performance/model_performance_runner.h"
+#include "ksana_llm/model_performance/perf_profile_config_builder_for_csv.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "tests/test.h"
 
@@ -15,9 +16,14 @@ class ModelPerformanceRunnerTest : public testing::Test {
 
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm_performance_run.yaml";
+    std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm_tp.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
-    config_builder_ = std::make_shared<ksana_llm::PerfProfileConfigBuilderWithYaml>(config_path);
+    std::filesystem::path profile_csv_config_relate = parent_path / "test_config.csv";
+    std::string profile_csv_config_path = std::filesystem::absolute(profile_csv_config_relate).string();
+    size_t warmup_round = 10;
+    size_t profile_round = 100;
+    config_builder_ = std::make_shared<ksana_llm::PerfProfileConfigBuilderWithCsv>(profile_csv_config_path,
+                                                                                   warmup_round, profile_round);
     model_performance_runner_ =
         std::make_shared<ksana_llm::ModelPerformanceRunner>(config_path, config_builder_->GetMaxPerfProfileConfig());
     config_builder_->SetAttnDpNum(model_performance_runner_->GetAttnDpNum());
@@ -26,7 +32,7 @@ class ModelPerformanceRunnerTest : public testing::Test {
   void TearDown() override {}
 
  protected:
-  std::shared_ptr<ksana_llm::PerfProfileConfigBuilderWithYaml> config_builder_;
+  std::shared_ptr<ksana_llm::PerfProfileConfigBuilderWithCsv> config_builder_;
   std::shared_ptr<ksana_llm::ModelPerformanceRunner> model_performance_runner_ = nullptr;
 };
 
