@@ -78,6 +78,7 @@ Status PerfProfileConfigBuilderWithCsv::ParsePerformanceRunnerConfig(const std::
   }
 
   // Parse each data row
+  const size_t kCsvColumnNum = 5;  // Expected number of columns
   std::string line;
   uint32_t config_id = 0;
   while (std::getline(file, line)) {
@@ -100,9 +101,10 @@ Status PerfProfileConfigBuilderWithCsv::ParsePerformanceRunnerConfig(const std::
     }
 
     // Verify we have the expected number of columns
-    if (values.size() < 4) {
-      return Status(RetCode::RET_INVALID_ARGUMENT,
-                    "CSV row has insufficient columns, expected at least 4, got " + std::to_string(values.size()));
+    if (values.size() < kCsvColumnNum) {
+      return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid CSV format, expected at least " +
+                                                       std::to_string(kCsvColumnNum) + " columns, got " +
+                                                       std::to_string(values.size()));
     }
 
     // Create a new PerfProfileConfig
@@ -117,6 +119,7 @@ Status PerfProfileConfigBuilderWithCsv::ParsePerformanceRunnerConfig(const std::
     config.req_configs[0].single_token_request_cached_token_num = values[1];
     config.req_configs[0].multi_token_request_num = values[2];
     config.req_configs[0].multi_token_request_token_num = values[3];
+    config.req_configs[0].multi_token_cached_token_num = values[4];
 
     // Add the config to our list
     csv_configs_.push_back(config);

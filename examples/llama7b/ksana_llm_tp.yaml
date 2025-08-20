@@ -9,6 +9,7 @@ setting:
     max_step_tokens: 4096
     max_batch_size: 40
     max_token_len: 1024
+    enable_auto_prefix_cache: true
   block_manager:
     block_token_num: 16
     reserved_device_memory_ratio: 0.05

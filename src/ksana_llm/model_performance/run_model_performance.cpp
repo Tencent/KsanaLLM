@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
     }
     // Write CSV header
     output_file << "single_token_request_num,single_token_request_cached_token_num,"
-                << "multi_token_request_num,multi_token_request_token_num,"
+                << "multi_token_request_num,multi_token_request_token_num,multi_token_cached_token_num,"
                 << "profile_round,time_cost_ms,avg_time_ms_per_round" << std::endl;
   }
   for (auto& config : configs) {
@@ -162,11 +162,11 @@ int main(int argc, char* argv[]) {
       ss << fmt::format(
                 "\n single_token_request_num:{}, "
                 "single_token_request_cached_token_num:{}, "
-                "multi_token_request_num:{}, multi_token_request_token_num:{}, "
+                "multi_token_request_num:{}, multi_token_request_token_num:{}, multi_token_cached_token_num:{}, "
                 "Performance Results: {} rounds cost {} milliseconds,",
                 req_config.single_token_request_num, req_config.single_token_request_cached_token_num,
-                req_config.multi_token_request_num, req_config.multi_token_request_token_num, config.profile_round,
-                result.time_cost_ms)
+                req_config.multi_token_request_num, req_config.multi_token_request_token_num,
+                req_config.multi_token_cached_token_num, config.profile_round, result.time_cost_ms)
          << fmt::format("Average: {} milliseconds/round \n", result.time_cost_ms / config.profile_round);
       KLLM_LOG_INFO << ss.str();
     } else {
@@ -181,8 +181,8 @@ int main(int argc, char* argv[]) {
       auto& req_config = config.req_configs[0];
       output_file << req_config.single_token_request_num << "," << req_config.single_token_request_cached_token_num
                   << "," << req_config.multi_token_request_num << "," << req_config.multi_token_request_token_num << ","
-                  << config.profile_round << "," << result.time_cost_ms << ","
-                  << (result.time_cost_ms / config.profile_round) << std::endl;
+                  << req_config.multi_token_cached_token_num << "," << config.profile_round << ","
+                  << result.time_cost_ms << "," << (result.time_cost_ms / config.profile_round) << std::endl;
     }
   }
 

@@ -13,6 +13,7 @@ struct PerfProfileConfig {
     size_t single_token_request_cached_token_num = 0;
     size_t multi_token_request_num = 0;
     size_t multi_token_request_token_num = 0;
+    size_t multi_token_cached_token_num = 0;
   };
   uint32_t config_id = 0;
   std::vector<PerfDpReqConfig> req_configs;

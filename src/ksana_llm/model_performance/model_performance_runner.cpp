@@ -90,7 +90,6 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
   // init CacheManager
   CacheManagerConfig cache_manager_config;
   env->GetCacheManagerConfig(cache_manager_config);
-  cache_manager_config.enable_prefix_caching = false;
 
   // RuntimeConfig is set in InitializeBlockManagerConfig
   env->GetRuntimeConfig(runtime_config_);
@@ -239,12 +238,13 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
   for (size_t dp_idx = 0; dp_idx < profile_config.req_configs.size(); dp_idx++) {
     auto& req_config = profile_config.req_configs[dp_idx];
 
-    size_t single_token_request_num = req_config.single_token_request_num;
-    size_t single_token_request_cached_token_num = req_config.single_token_request_cached_token_num;
-    size_t multi_token_request_num = req_config.multi_token_request_num;
-    size_t multi_token_request_token_num = req_config.multi_token_request_token_num;
+    const size_t single_token_request_num = req_config.single_token_request_num;
+    const size_t single_token_request_cached_token_num = req_config.single_token_request_cached_token_num;
+    const size_t multi_token_request_num = req_config.multi_token_request_num;
+    const size_t multi_token_request_token_num = req_config.multi_token_request_token_num;
+    const size_t multi_token_cached_token_num = req_config.multi_token_cached_token_num;
 
-    size_t dp_req_num = single_token_request_num + multi_token_request_num;
+    const size_t dp_req_num = single_token_request_num + multi_token_request_num;
     for (size_t req_idx = 0; req_idx < dp_req_num; req_idx++) {
       req_id++;
       std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, req_id);
@@ -262,8 +262,8 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
         infer_req->input_tokens = input_ids_map_[req_id];
         std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
         infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-        infer_req->kv_cached_token_num = 0;
-        infer_req->prefix_cache_len = 0;
+        infer_req->kv_cached_token_num = multi_token_cached_token_num;
+        infer_req->prefix_cache_len = multi_token_cached_token_num;
       } else {  // single_token_request
         input_ids_map_[req_id].resize(single_token_request_cached_token_num + 1);
         infer_req->input_tokens = input_ids_map_[req_id];
@@ -296,6 +296,14 @@ void ModelPerformanceRunner::CheckRequests() const {
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_step_token_num >= step_tokens,
                        fmt::format("max_step_token_num {} should not less than step_tokens {}",
                                    batch_scheduler_config.max_step_token_num, step_tokens));
+  for (const auto& req : infer_reqs_) {
+    KLLM_CHECK_WITH_INFO(req->prefix_cache_len % runtime_config_.attn_backend_config.block_token_num == 0,
+                         fmt::format("prefix_cache_len {} should be divisible by block_token_num {}",
+                                     req->prefix_cache_len, runtime_config_.attn_backend_config.block_token_num));
+    if (!runtime_config_.enable_prefix_caching) {
+      KLLM_CHECK_WITH_INFO(req->prefix_cache_len == 0, "prefix_caching is disabled, prefix_cache_len should be 0");
+    }
+  }
 }
 
 size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) const {

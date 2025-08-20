@@ -243,7 +243,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   std::vector<Tensor> q_b_nope_rope_output_tmps = {q_b_nope_rope_output_tmp};
   // prefill and decode
   if (use_q_b_nope_rope_) {
-    PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj_weight", rank);
+    PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);
     STATUS_CHECK_RETURN(attn_q_b_projs_->Forward(q_b_input, q_b_nope_rope_output_tmps));
     // reshape for split
     q_b_nope_rope_output_tmps[0].shape = {seq_len * head_num_per_tp_, qk_nope_head_dim_ + qk_rope_head_dim_};
@@ -255,11 +255,11 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     q_rope_buffer_tensors[0].shape = {seq_len, head_num_per_tp_ * qk_rope_head_dim_};
   } else {
     {
-      PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj_weight", rank);
+      PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj", rank);
       STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_input, q_rope_buffer_tensors));
     }
     {
-      PROFILE_EVENT_SCOPE(q_b_nope_proj_weight, "q_b_nope_proj_weight", rank);
+      PROFILE_EVENT_SCOPE(q_b_nope_proj_weight, "q_b_nope_proj", rank);
       STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(q_b_input, q_buffer_tensors));
     }
   }
@@ -303,7 +303,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   }
 
   {
-    PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+    PROFILE_EVENT_SCOPE(o_prpj, "o_proj", rank);
     Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
                    {context_tokens + decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
                    hidden_buffer_tensors_0[0].GetPtr<void>());
@@ -431,7 +431,7 @@ Status MultiHeadLatentAttention::DataParallelForward(std::vector<Tensor>& dp_inp
   hidden_buffer_tensors_1[0].offset = 0;
   hidden_buffer_tensors_1[0].shape[0] = org_token_size;
   if (o_proj_out_of_dp_) {
-    PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", forwarding_context.GetCurrentRank());
+    PROFILE_EVENT_SCOPE(o_prpj, "o_proj", forwarding_context.GetCurrentRank());
     CREATE_BUFFER_SCOPE(workspace, mla_buffers_.mem_adjuster_buffer);
     hidden_buffer_tensors_1[0].shape = hidden_buffer_tensors_0[0].shape;
     int max_seq_len = 0;
@@ -589,7 +589,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& input_tenso
     if (o_proj_out_of_dp_) {
       std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
     } else {
-      PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+      PROFILE_EVENT_SCOPE(o_prpj, "o_proj", rank);
       Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
                      {context_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
                      hidden_buffer_tensors_0[0].GetPtr<void>());
@@ -771,7 +771,7 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& input_tensor
     if (o_proj_out_of_dp_) {
       std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
     } else {
-      PROFILE_EVENT_SCOPE(o_prpj, "o_prpj", rank);
+      PROFILE_EVENT_SCOPE(o_prpj, "o_proj", rank);
       Tensor o_input(hidden_buffer_tensors_0[0].location, hidden_buffer_tensors_0[0].dtype,
                      {decode_tokens, o_proj_k_dim_}, hidden_buffer_tensors_0[0].device_id,
                      hidden_buffer_tensors_0[0].GetPtr<void>() +

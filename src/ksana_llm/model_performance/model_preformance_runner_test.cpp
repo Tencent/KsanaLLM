@@ -54,12 +54,13 @@ TEST_F(ModelPerformanceRunnerTest, Test) {
   EXPECT_EQ(expect_single_token_request_num, req_config.single_token_request_num);
   EXPECT_EQ(expect_multi_token_request_num, req_config.multi_token_request_num);
   // test multi token request
-  size_t single_token_req_idx = 0;
-  EXPECT_EQ(infer_reqs[single_token_req_idx]->forwarding_tokens.size(), req_config.multi_token_request_token_num);
+  size_t multi_token_req_idx = 0;
+  EXPECT_EQ(infer_reqs[multi_token_req_idx]->forwarding_tokens.size(), req_config.multi_token_request_token_num);
+  EXPECT_EQ(infer_reqs[multi_token_req_idx]->prefix_cache_len, req_config.multi_token_cached_token_num);
   // test single token request
-  size_t multi_token_req_idx = expect_multi_token_request_num;
-  EXPECT_EQ(infer_reqs[multi_token_req_idx]->kv_cached_token_num, req_config.single_token_request_cached_token_num);
-  EXPECT_EQ(infer_reqs[multi_token_req_idx]->forwarding_tokens.size(),
+  size_t single_token_req_idx = expect_multi_token_request_num;
+  EXPECT_EQ(infer_reqs[single_token_req_idx]->kv_cached_token_num, req_config.single_token_request_cached_token_num);
+  EXPECT_EQ(infer_reqs[single_token_req_idx]->forwarding_tokens.size(),
             req_config.single_token_request_cached_token_num + 1);
   // test random input_token
   EXPECT_NE(infer_reqs[0]->forwarding_tokens[0], infer_reqs[1]->forwarding_tokens[0]);
