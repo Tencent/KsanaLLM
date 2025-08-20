@@ -1,27 +1,17 @@
 # Copyright 2024 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
-import os
 import asyncio
-from typing import List, Optional, Dict, Tuple, Union, Any, AsyncGenerator
-from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
-from transformers import (
-    AutoProcessor,
-    AutoTokenizer,
-    LlamaTokenizer,
-    VideoLlavaProcessor,
-    PreTrainedTokenizerFast,
-    GenerationConfig,
-)
-from transformers.models.auto.tokenization_auto import get_tokenizer_config
 import libtorch_serving
+from transformers import GenerationConfig, PreTrainedTokenizerFast
 
-from .ksana_plugin import KsanaPlugin, PluginConfig
 from .arg_utils import EngineArgs
+from .ksana_plugin import KsanaPlugin, PluginConfig
 from .processor_op_base import TokenizerProcessorOpBase
-
 
 # Adjust the max_workers to a reasonable number based on the number of CPUs
 model_executor = ThreadPoolExecutor(max_workers=256)
@@ -86,7 +76,6 @@ class KsanaLLMEngine:
     def __init__(
         self,
         config_file: str,
-        tokenizer_path: str,
         plugin_config: PluginConfig,
         endpoint_config: EndpointConfig,
         pre_post_processor: TokenizerProcessorOpBase,
@@ -95,9 +84,9 @@ class KsanaLLMEngine:
 
         Args:
             config_file: The serving config file.
-            tokenizer_path: Directory containing tokenizer files.
             plugin_config: Configuration for the Ksana plugin.
             endpoint_config: Configuration for the endpoint.
+            pre_post_processor: The pre/post processor that contains the tokenizer.
         """
         self._config_file = config_file
 
@@ -114,8 +103,8 @@ class KsanaLLMEngine:
         self._serving.endpoint_config.port = endpoint_config.port
         self._serving.endpoint_config.access_log = endpoint_config.access_log
 
-        self.tokenizer = self._load_tokenizer(tokenizer_path)
         self.pre_post_processor = pre_post_processor
+        self.tokenizer = self.pre_post_processor.tokenizer
 
         if not isinstance(self.tokenizer, PreTrainedTokenizerFast):
             print(
@@ -126,21 +115,6 @@ class KsanaLLMEngine:
         self.eos_token_id = None
         if hasattr(self.tokenizer, "eos_token_id"):
             self.eos_token_id = self.tokenizer.eos_token_id
-
-    @staticmethod
-    def _load_tokenizer(tokenizer_path: str):
-        tokenizer_config = get_tokenizer_config(tokenizer_path)
-        if tokenizer_config.get("processor_class", "") == "VideoLlavaProcessor":
-            return VideoLlavaProcessor.from_pretrained(tokenizer_path)
-        if tokenizer_config.get("tokenizer_class", "") == "LlamaTokenizer":
-            return LlamaTokenizer.from_pretrained(tokenizer_path)
-        if tokenizer_config.get("processor_class", "") == "Llama4Processor" \
-            and tokenizer_config.get("tokenizer_class", "") == "PreTrainedTokenizer":
-            return PreTrainedTokenizerFast.from_pretrained(tokenizer_path)
-
-        if os.path.exists(os.path.join(tokenizer_path, "preprocessor_config.json")):
-            return AutoProcessor.from_pretrained(tokenizer_path, trust_remote_code=True)
-        return AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
 
     def initialize(self) -> None:
         """Initialize the model."""
@@ -167,8 +141,6 @@ class KsanaLLMEngine:
             access_log=args.access_log,
         )
 
-        tokenizer_path = args.tokenizer_path or args.model_dir
-
         pre_post_processor = TokenizerProcessorOpBase(
             args.model_dir,
             args.tokenizer_path,
@@ -177,12 +149,10 @@ class KsanaLLMEngine:
 
         return cls(
             config_file=args.config_file,
-            tokenizer_path=tokenizer_path,
             plugin_config=plugin_config,
             endpoint_config=endpoint_config,
             pre_post_processor=pre_post_processor,
         )
-
 
     def _build_generator_config(self, sampling_config: dict) -> GenerationConfig:
         """
