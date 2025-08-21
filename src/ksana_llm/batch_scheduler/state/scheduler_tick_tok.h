@@ -43,8 +43,16 @@ class SchedulerTickTok {
   void Unlock(size_t thread_index) {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
-    // If not locked, or Wrong thread, do nothing and return immediately.
-    if (is_lockable_.load() || thread_index != visit_order_[current_idx_]) {
+    // If not locked, return immediately.
+    if (is_lockable_.load()) {
+      return;
+    }
+
+    // If thread not matched, that is, other thread have change index via Skip(), keep current_idx_ not changed.
+    if (thread_index != visit_order_[current_idx_]) {
+      is_lockable_.store(true);
+      guard_cv_.notify_all();
+      mutex_.unlock();
       return;
     }
 
