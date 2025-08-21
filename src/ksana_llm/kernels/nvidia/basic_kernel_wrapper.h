@@ -251,9 +251,7 @@ void DequantFp8E4m3BlockWise(const void* d_data, const void* d_s, void* d_output
 
 size_t InvokeGetCublasWorkspaceSize();
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank);
-#endif
 
 template <typename T>
 void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* output, int m, int k, int n,

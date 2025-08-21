@@ -215,7 +215,17 @@ std::string FlashAttentionBackend::GetPythonLibPath(const std::string& module_na
   }
 
   std::string command =
-      "python -c \"import torch, " + module_name_processed + ";print(" + module_name_processed + ".__file__)\"";
+      "python -c \"import sys\n"
+      "try:\n"
+      "    import torch, " +
+      module_name_processed +
+      "\n"
+      "    print(" +
+      module_name_processed +
+      ".__file__)\n"
+      "except Exception:\n"
+      "    sys.exit(0)\"";
+
   std::string result = ExecutePythonCommand(command);
 
   if (result.empty()) {

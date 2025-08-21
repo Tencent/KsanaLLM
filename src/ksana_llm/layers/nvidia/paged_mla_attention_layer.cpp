@@ -11,12 +11,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 
+#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#else
-#  include "flash_api.h"
-#endif
 
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 
@@ -245,19 +241,24 @@ void InvokeMlaPagedAttention(
     alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
   }
 
-  mha_fwd_kvcache(q_tensor,             // batch_size x seqlen_q x num_heads x head_size
-                  k_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                  v_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                  const_null_tensor,    // k_
-                  const_null_tensor,    // v_
-                  seqlens_k_tensor,     // batch_size
-                  const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
-                  const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
-                  const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
-                  block_table_tensor,   // batch_size x max_num_blocks_per_seq
-                  alibi_slopes_tensor,  // num_heads or batch_size x num_heads
-                  out_tensor,           // batch_size x seqlen_q x num_heads x head_size
-                  softmax_scale, true, -1, -1, 0.0, true, 0);
+  {
+    ksana_llm::MhaFwdKVCacheParams fa_params;
+    fa_params.q = q_tensor;              // [batch, 1, num_heads, head_size]
+    fa_params.k_cache = k_cache_tensor;  // [num_blocks, block_size, num_kv_heads, head_size]
+    fa_params.v_cache = v_cache_tensor;
+    fa_params.seqlens_k = seqlens_k_tensor;      // [batch]
+    fa_params.block_table = block_table_tensor;  // [batch, max_blocks_per_seq]
+    fa_params.alibi_slopes = alibi_slopes_tensor;
+    fa_params.out = out_tensor;  // [batch, 1, num_heads, head_size]
+    fa_params.softmax_scale = softmax_scale;
+    fa_params.is_causal = true;
+    fa_params.window_size_left = -1;
+    fa_params.window_size_right = -1;
+    fa_params.softcap = 0.0f;
+    fa_params.rotary_interleaved = true;
+    fa_params.num_splits = 0;
+    ksana_llm::InvokeMhaFwdKvcCache(fa_params);
+  }
 #else
   const float* alibi_slopes_ptr =
       reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);

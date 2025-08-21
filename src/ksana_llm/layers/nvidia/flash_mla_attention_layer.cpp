@@ -10,12 +10,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 
+#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#else
-#  include "flash_api.h"
-#endif
 
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 
@@ -268,9 +264,30 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       torch::from_blob(v_cache_ptr, {kv_cache_block_num, block_size, num_kv_heads, head_size}, cache_options);
   c10::optional<at::Tensor> block_table = torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
 
-  mha_output = mha_varlen_fwd(q_tensor, k_cache_tensor, v_cache_tensor, out_tensor, seqlen_q_tensor, seqlen_kv_tensor,
-                              seqused_k, block_table, alibi_slopes_tensor, max_forwarding_tokens, max_tokens, 0.f,
-                              attn_scale, false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+  {
+    MhaVarlenFwdParams params;
+    params.q = q_tensor;
+    params.k = k_cache_tensor;
+    params.v = v_cache_tensor;
+    params.out = out_tensor;
+    params.seqlen_q = seqlen_q_tensor;
+    params.seqlen_k = seqlen_kv_tensor;
+    params.seqused_k = seqused_k;
+    params.block_table = block_table;
+    params.alibi_slopes = alibi_slopes_tensor;
+    params.max_seqlen_q = max_forwarding_tokens;
+    params.max_seqlen_k = max_tokens;
+    params.p_dropout = 0.f;
+    params.softmax_scale = static_cast<double>(attn_scale);
+    params.zero_tensors = false;
+    params.is_causal = is_causal;
+    params.window_size_left = -1;
+    params.window_size_right = -1;
+    params.softcap = 0.0f;
+    params.return_softmax = false;
+    params.gen = c10::nullopt;
+    mha_output = InvokeMhaVarlenFwd(params);
+  }
 
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, "
@@ -364,7 +381,6 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   const size_t k_rope_size = total_tokens * num_heads * qk_rope_head_dim * kValueSize;
   const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * kValueSize;
   const size_t v_size = total_tokens * num_heads * v_head_dim * kValueSize;
-  const size_t v_pad_part_size = k_rope_size + k_nope_size - v_size;
 
   // WARNING: output_buffer & mla_workspace size verification is not checked. validation must be added in future.​
   // output_buffer layout: [k_nope] [query] [k_nope+k_rope]
@@ -375,8 +391,6 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   // mla_workspace layout: [value] [k_rope] [vaule_pad_part_size] [value_padded]
   void* const v_ptr = mla_workspace;
   void* const k_rope_ptr = mla_workspace + v_size;
-  void* const v_pad_part_ptr = mla_workspace + v_size + k_rope_size;
-  void* const v_padded_ptr = mla_workspace + v_size + k_rope_size + v_pad_part_size;
 
   // calc k_nope by latent_buffer @ kv_b_nope_proj. k_nope: [token_num, head, qk_nope_head_dim]
   if (kv_b_nope_weight_scale != nullptr) {
@@ -446,9 +460,7 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
       torch::from_blob(q_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor k_tensor =
       torch::from_blob(k_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
-  torch::Tensor v_tensor =
-      torch::from_blob(v_padded_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
-
+  torch::Tensor v_tensor = torch::from_blob(v_ptr, {total_tokens, num_heads, v_head_dim}, options);
   const size_t q_outer_dim = total_q_tokens * num_heads;
   const size_t kv_outer_dim = total_tokens * num_heads;
   constexpr size_t inner_dim = 1;
@@ -461,24 +473,15 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   Concat<SCALAR_T>(output_buffer, k_rope_ptr, qk_nope_head_dim, qk_rope_head_dim, kv_outer_dim, inner_dim, k_ptr,
                    stream);
 
-  // pad v
-  CUDA_CHECK(cudaMemsetAsync(v_pad_part_ptr, 0, v_pad_part_size, stream));
-  Concat<SCALAR_T>(mla_workspace, v_pad_part_ptr, qk_nope_head_dim, qk_rope_head_dim, kv_outer_dim, inner_dim,
-                   v_padded_ptr, stream);
+  // FA3 handles variable dimensions natively, no padding needed
 
   // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
   // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
   // leads to a core dump.
-  const bool seqlenq_ngroups_swapped = max_tokens == 1 && num_heads > num_kv_heads &&
-                                       (qk_nope_head_dim + qk_rope_head_dim) % 8 == 0 && !alibi_slopes.has_value();
-  c10::optional<at::Tensor> out_tensor = c10::nullopt;
-  if (!seqlenq_ngroups_swapped) {
-    out_tensor = torch::from_blob(mla_workspace, q_tensor.sizes(), options);
-  }
-  c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
+  c10::optional<at::Tensor> out_tensor =
+      torch::from_blob(output_buffer, {total_q_tokens, num_heads, v_head_dim}, options);
   if (alibi_slopes.has_value()) {
-    const auto float32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat32);
-    alibi_slopes_tensor = torch::from_blob(alibi_slopes.value(), {num_heads}, float32_options);
+    KLLM_THROW("Flash attention 3 不支持 alibi_slopes");
   }
   // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
   // intended for use in testing accuracy outcomes only.
@@ -501,60 +504,29 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   const torch::Tensor seqlen_kv_tensor = torch::from_blob(seqlens_with_prefix_int32_ptr, {batch + 1}, int32_options);
 
   std::vector<at::Tensor> mha_output;
-#ifdef ENABLE_FLASH_ATTN_3
-  // FA3 调用 - 使用 mha_fwd 函数
-  std::optional<at::Tensor> k_new_ = c10::nullopt;
-  std::optional<at::Tensor> v_new_ = c10::nullopt;
-  std::optional<at::Tensor> q_v_ = c10::nullopt;
-  std::optional<at::Tensor> cu_seqlens_k_new_ = c10::nullopt;
-  std::optional<at::Tensor> seqused_q_ = c10::nullopt;
-  std::optional<int64_t> max_seqlen_q_ = static_cast<int64_t>(max_tokens);
-  std::optional<int64_t> max_seqlen_k_ = static_cast<int64_t>(max_tokens);
-  std::optional<at::Tensor> kv_batch_idx_ = c10::nullopt;
-  std::optional<at::Tensor> leftpad_k_ = c10::nullopt;
-  std::optional<at::Tensor> rotary_cos_ = c10::nullopt;
-  std::optional<at::Tensor> rotary_sin_ = c10::nullopt;
-  std::optional<at::Tensor> seqlens_rotary_ = c10::nullopt;
-  std::optional<at::Tensor> q_descale_ = c10::nullopt;
-  std::optional<at::Tensor> k_descale_ = c10::nullopt;
-  std::optional<at::Tensor> v_descale_ = c10::nullopt;
-  std::optional<double> softmax_scale_ = std::optional<double>(static_cast<double>(attn_scale));
-  int64_t attention_chunk = 0;  // =0 表示采用global attention
-  int64_t num_splits = 1;
-  bool is_rotary_interleaved = false;
-  std::optional<at::Tensor> scheduler_metadata_ = c10::nullopt;
-  std::optional<bool> pack_gqa_ = c10::nullopt;
-  int64_t sm_margin = 0;
-  double softcap_val = 0.0;
-  std::optional<double> softmax_scale_double = std::optional<double>(static_cast<double>(attn_scale));
-  int64_t window_size_left_corrected = -1;                   // -1表示无左侧窗口限制
-  int64_t window_size_right_corrected = is_causal ? 0 : -1;  // causal时右侧窗口为0，否则无限制
-
-  mha_output =
-      mha_fwd(q_tensor, k_tensor, v_tensor, k_new_, v_new_, q_v_, out_tensor, seqlen_q_tensor, seqlen_kv_tensor,
-              cu_seqlens_k_new_, seqused_q_, seqused_k, max_seqlen_q_, max_seqlen_k_, block_table, kv_batch_idx_,
-              leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_, q_descale_, k_descale_, v_descale_,
-              softmax_scale_double, is_causal, window_size_left_corrected, window_size_right_corrected, attention_chunk,
-              softcap_val, is_rotary_interleaved, scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
-#else
-  mha_output = mha_varlen_fwd(q_tensor, k_tensor, v_tensor, out_tensor, seqlen_q_tensor, seqlen_kv_tensor, seqused_k,
-                              block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f, attn_scale, false,
-                              is_causal, -1, -1, 0.f, false, c10::nullopt);
-#endif
-
-  if (seqlenq_ngroups_swapped) {
-    KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, "
-                      "set the output tensor to nullptr.";
-    const at::Tensor& res = mha_output[0];
-    CUDA_CHECK(cudaMemcpyAsync(output_buffer, res.data_ptr(), res.nbytes(), cudaMemcpyDeviceToDevice, stream));
+  {
+    MhaVarlenFwdParams params;
+    params.q = q_tensor;
+    params.k = k_tensor;
+    params.v = v_tensor;
+    params.out = out_tensor;
+    params.seqlen_q = seqlen_q_tensor;
+    params.seqlen_k = seqlen_kv_tensor;
+    params.seqused_k = seqused_k;
+    params.max_seqlen_q = max_tokens;
+    params.max_seqlen_k = max_tokens;
+    params.block_table = block_table;
+    params.p_dropout = 0.f;
+    params.softmax_scale = static_cast<double>(attn_scale);
+    params.zero_tensors = false;
+    params.is_causal = is_causal;
+    params.window_size_left = -1;
+    params.window_size_right = -1;
+    params.softcap = 0.0f;
+    params.return_softmax = false;
+    params.gen = c10::nullopt;
+    mha_output = InvokeMhaVarlenFwd(params);
   }
-
-  //  当 v_tensor 被 pad 时调用, 取out_tensor 的 v_head_dim 大小
-  const size_t dst_pitch = v_head_dim * sizeof(SCALAR_T);
-  const size_t src_pitch = (qk_nope_head_dim + qk_rope_head_dim) * sizeof(SCALAR_T);
-  // Tensor(MEMORY_DEVICE, TYPE_FP16, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}
-  CUDA_CHECK(cudaMemcpy2DAsync(output_buffer, dst_pitch, mla_workspace, src_pitch, dst_pitch,
-                               total_q_tokens * num_heads, cudaMemcpyDeviceToDevice, stream));
 }
 
 #define MLA_ATTEN_VARLEN_ABSORB(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
@@ -590,18 +562,9 @@ Status FlashMlaAttentionLayer::Init(const std::vector<std::any>& parameters, con
 #ifndef ENABLE_FLASH_ATTN_WITH_CACHE
   KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_WITH_CACHE.");
 #endif
-#if defined(ENABLE_FLASH_ATTN_MINOR_4) || defined(ENABLE_FLASH_ATTN_MINOR_5)
-  KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_MINOR_6 or ENABLE_FLASH_ATTN_MINOR_7");
-#endif
-#if !defined(ENABLE_FLASH_ATTN_2) && !defined(ENABLE_VLLM_FLASH_ATTN_2) && !defined(ENABLE_FLASH_ATTN_3)
-  KLLM_THROW("MLA Only support ENABLE_FLASH_ATTN_2 or ENABLE_VLLM_FLASH_ATTN_2 or ENABLE_FLASH_ATTN_3");
-#endif
-#if !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_6) && !defined(ENABLE_VLLM_FLASH_ATTN_MINOR_7) && \
-    !defined(ENABLE_FLASH_ATTN_3)
-  KLLM_THROW(
-      "MLA Only support ENABLE_VLLM_FLASH_ATTN_MINOR_6 or ENABLE_VLLM_FLASH_ATTN_MINOR_7 or ENABLE_FLASH_ATTN_3");
-#endif
-
+  if (!IsUsingFA3()) {
+    KLLM_THROW("MLA只支持FA3，请在配置中启用FlashAttention 3");
+  }
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 

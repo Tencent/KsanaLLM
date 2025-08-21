@@ -42,11 +42,11 @@ option(WITH_TOPS "Enable Tops" OFF)
 option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
-option(WITH_VLLM_FLASH_ATTN "Enable vllm-flash-attn" OFF)
-option(WITH_FLASH_ATTN_3 "Enable Flash Attention 3 (auto build if not found)" OFF)
 option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
 option(WITH_LIGHTLY_CI_TEST "Enable lightly ci test" ON)
 option(WITH_BOOST "Enable Boost" ON)
+option(WITH_FLASH_ATTN_CACHE "Enable block table-based KV cache management for Flash Attention" ON)
+  
 
 # Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
 option(WITH_INTERNAL_LIBRARIES "Enable use of Tencent internal libraries" OFF)
@@ -149,7 +149,32 @@ if(WITH_CUDA)
     message(STATUS "Auto detect SM is ${SM}")
   endif()
 
-  include(FlashAttention)
+  if(WITH_FLASH_ATTN_CACHE)
+    # Enable block table-based KV cache management.
+    # This is supported by all Flash Attention implementations except official Flash Attention versions < 2.6.
+    # Block table approach provides better memory efficiency and supports variable sequence lengths.
+    add_definitions("-DENABLE_FLASH_ATTN_WITH_CACHE")
+    message(STATUS "Flash Attention with block table-based KV cache: ENABLED")
+  else()
+    message(STATUS "Flash Attention with block table-based KV cache: DISABLED")
+  endif()
+  # 根据SM变量选择合适的CUDA架构
+  if(NOT DEFINED SM)
+    set(SM "90a")  # 默认使用90a
+  endif()
+  # 检查是否为Hopper架构（SM90+），Flash Attention 3需要Hopper架构支持
+  string(SUBSTRING "${SM}" 0 1 SM_FIRST_CHAR)
+  if(SM_FIRST_CHAR STREQUAL "9")
+    message(STATUS "Hopper architecture (SM${SM}) detected, enabling Flash Attention 3...")
+    include(FlashAttention3AutoBuild)
+    check_flash_attn_3_available(FA3_AVAILABLE)
+    if(NOT FA3_AVAILABLE)
+      message(STATUS "Flash Attention 3 not found, setting up auto build...")
+      auto_build_flash_attn_3()
+    endif()
+  else()
+    message(STATUS "Flash Attention 3 disabled for SM${SM} architecture (requires Hopper SM90+)")
+  endif()
 endif()
 
 if(WITH_BOOST)

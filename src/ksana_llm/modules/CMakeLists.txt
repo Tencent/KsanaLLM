@@ -29,7 +29,8 @@ if(WITH_STANDALONE_TEST)
   set(MODELS_TEST_DEPS modules models runtime data_hub)
   set(MODEL_TEST_MAIN ${PROJECT_SOURCE_DIR}/tests/test.cpp)
 
-  if(WITH_VLLM_FLASH_ATTN)
+  
+  if(WITH_CUDA)
     set(MODELS_TEST_LIBS ${TORCH_LIBRARIES}  ${TORCH_PYTHON_LIBRARY})
   else()
     set(MODELS_TEST_LIBS  samplers ${kernels_ascend_LIBS})

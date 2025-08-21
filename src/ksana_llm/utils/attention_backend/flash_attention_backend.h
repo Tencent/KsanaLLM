@@ -37,6 +37,9 @@ class FlashAttentionBackend {
   // Backend 初始化：加载具体版本库
   bool Initialize();
 
+  // CUDA 计算能力检测
+  int GetCudaComputeCapability();
+
   bool IsInitialized() const { return initialized_; }
 
   const std::vector<LibraryInfo>& GetLoadedLibraries() const { return loaded_libraries_; }
@@ -59,9 +62,6 @@ class FlashAttentionBackend {
 
   // 平台检测
   bool IsCudaPlatform();
-
-  // CUDA 计算能力检测
-  int GetCudaComputeCapability();
 
   // 库路径确定
   std::string DetermineLibraryPathByMacro();

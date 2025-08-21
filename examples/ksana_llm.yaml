@@ -74,13 +74,26 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 1.0
+    block_host_memory_factor: 0.0
     # 动态可复用内存，占全量预分配时内存开销的最大比例
     dynamic_reusable_memory_ratio: 0.5
 
   # 选择attention计算中的backend
   attn_backend:
     enable_blocked_multi_token_forwarding_kv: false
+    # Flash Attention 实现选择配置
+    # 可选值说明：
+    #   auto          - 自动选择最优实现（推荐）：系统会根据GPU架构和可用库自动选择
+    #   fa3           - Flash Attention 3：适用于Hopper架构（SM >= 9.0），性能最优
+    #   vllm_v26      - VLLM Flash Attention 2.6+：兼容性好，支持更多特性
+    #   flashattn_v26 - 官方Flash Attention 2.6+：标准实现
+    #   flashattn_v25 - 官方Flash Attention 2.5+：较老版本，兼容性最好
+    # 重要编译说明：
+    #   - 如果选择 flashattn_v25，需要在编译时禁用 WITH_FLASH_ATTN_CACHE 选项：
+    #     cmake -DWITH_FLASH_ATTN_CACHE=OFF ...
+    #   - 其他选项（fa3, vllm_v26, flashattn_v26）均支持 block table-based KV cache
+    # 注意：某些模型（如Deepseek）在Hopper架构下建议使用fa3以获得最佳性能
+    flash_attn_impl: auto
 
   # 量化相关配置
   quantization_config:

@@ -164,7 +164,7 @@ using mha_fwd_kvcache_flash_attn_v26_ptr = std::vector<at::Tensor> (*)(
 // Function declarations only - implementations moved to flash_attn_cpp_wrapper.cpp
 
 // FA3 function declaration
-std::vector<at::Tensor> mha_fwd(
+std::vector<at::Tensor> mha_fwd_fa3(
     at::Tensor q,  // (b, s_q, h, d) or (total_q, h, d) if there is cu_seqlens_q
     at::Tensor k,  // (b_k, s_k, h_k, d) or (total_k, h_k, d) if there is cu_seqlens_k or (num_pages, page_size, h_k, d)
                    // if there is page_table.
@@ -198,7 +198,8 @@ std::vector<at::Tensor> mha_fwd(
     std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
     int64_t num_splits, std::optional<bool> pack_gqa_, int64_t sm_margin);
 
-std::vector<at::Tensor> mha_varlen_fwd(
+
+std::vector<at::Tensor> mha_varlen_fwd_vllm_flash_attn_v26(
     at::Tensor &q,        // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x
                           // page_block_size x num_heads_k x head_size if there's a block_table.
@@ -215,7 +216,7 @@ std::vector<at::Tensor> mha_varlen_fwd(
     bool is_causal, int window_size_left, int window_size_right, const float softcap, const bool return_softmax,
     c10::optional<at::Generator> gen_);
 
-std::vector<at::Tensor> mha_fwd_kvcache(
+std::vector<at::Tensor> mha_fwd_kvcache_vllm_flash_attn_v26(
     at::Tensor &q,             // batch_size x seqlen_q x num_heads x head_size
     const at::Tensor &kcache,  // batch_size_c x seqlen_k x num_heads_k x head_size or num_blocks x page_block_size x
                                // num_heads_k x head_size if there's a block_table.
@@ -234,7 +235,7 @@ std::vector<at::Tensor> mha_fwd_kvcache(
     bool is_rotary_interleaved,  // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
     int num_splits);
 
-std::vector<at::Tensor> mha_varlen_fwd(
+std::vector<at::Tensor> mha_varlen_fwd_flash_attn_v25(
     at::Tensor &q,                    // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     const at::Tensor &k,              // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
     const at::Tensor &v,              // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -248,7 +249,7 @@ std::vector<at::Tensor> mha_varlen_fwd(
     bool is_causal, int window_size_left, int window_size_right, const bool return_softmax,
     c10::optional<at::Generator> gen_);
 
-std::vector<at::Tensor> mha_varlen_fwd(
+std::vector<at::Tensor> mha_varlen_fwd_flash_attn_v26(
     at::Tensor &q,                    // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     const at::Tensor &k,              // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
     const at::Tensor &v,              // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -264,7 +265,7 @@ std::vector<at::Tensor> mha_varlen_fwd(
     bool is_causal, int window_size_left, int window_size_right, const float softcap,
     /* default 0.0 */ const bool return_softmax, c10::optional<at::Generator> gen_);
 
-std::vector<at::Tensor> mha_fwd_kvcache(
+std::vector<at::Tensor> mha_fwd_kvcache_flash_attn_v25(
     at::Tensor &q,             // batch_size x seqlen_q x num_heads x head_size
     const at::Tensor &kcache,  // batch_size_c x seqlen_k x num_heads_k x head_size or num_blocks x page_block_size x
                                // num_heads_k x head_size if there's a block_table.
@@ -283,7 +284,7 @@ std::vector<at::Tensor> mha_fwd_kvcache(
     bool is_rotary_interleaved,  // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
     int num_splits);
 
-std::vector<at::Tensor> mha_fwd_kvcache(
+std::vector<at::Tensor> mha_fwd_kvcache_flash_attn_v26(
     at::Tensor &q,             // batch_size x seqlen_q x num_heads x head_size
     const at::Tensor &kcache,  // batch_size_c x seqlen_k x num_heads_k x head_size or num_blocks x page_block_size x
                                // num_heads_k x head_size if there's a block_table.
@@ -303,5 +304,82 @@ std::vector<at::Tensor> mha_fwd_kvcache(
     const float softcap,         // Since v2.6.0, support this param.
     bool is_rotary_interleaved,  // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
     int num_splits);
+
+// A struct to hold all possible parameters for mha_varlen_fwd.
+struct MhaVarlenFwdParams {
+  at::Tensor q;  // Support both value and reference types
+  at::Tensor k;  // Support both value and reference types
+  at::Tensor v;  // Support both value and reference types
+  c10::optional<at::Tensor> qv = c10::nullopt;
+  c10::optional<at::Tensor> out;
+  at::Tensor seqlen_q;  // Support both value and reference types
+  at::Tensor seqlen_k;  // Support both value and reference types
+  c10::optional<at::Tensor> seqused_q = c10::nullopt;
+  c10::optional<at::Tensor> seqused_k;
+  c10::optional<at::Tensor> leftpad_k = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> block_table = c10::nullopt;
+  c10::optional<at::Tensor> alibi_slopes;  // Remove const for compatibility
+  c10::optional<int64_t> max_seqlen_q = c10::nullopt;
+  c10::optional<int64_t> max_seqlen_k = c10::nullopt;
+  float p_dropout = 0.f;
+  double softmax_scale;
+  bool zero_tensors = false;
+  bool is_causal;
+  int window_size_left = -1;
+  int window_size_right = -1;
+  bool return_softmax = false;
+  c10::optional<at::Generator> gen = c10::nullopt;
+  c10::optional<at::Tensor> q_descale = c10::nullopt;
+  c10::optional<at::Tensor> k_descale = c10::nullopt;
+  c10::optional<at::Tensor> v_descale = c10::nullopt;
+  float softcap = 0.0;
+  int num_splits = 1;
+  c10::optional<bool> pack_gqa = c10::nullopt;
+  int sm_margin = 0;
+};
+
+// A struct to hold all possible parameters for mha_fwd_kvcache.
+struct MhaFwdKVCacheParams {
+  at::Tensor q;  // Support both value and reference types
+  at::Tensor k_cache;  // Support both value and reference types
+  at::Tensor v_cache;  // Support both value and reference types
+  c10::optional<at::Tensor> k = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> v = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> qv = c10::nullopt;
+  c10::optional<at::Tensor> seqlens_k;  // Remove const for compatibility
+  c10::optional<at::Tensor> rotary_cos = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> rotary_sin = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> rotary_seqlens = c10::nullopt;
+  c10::optional<at::Tensor> cache_batch_idx = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> leftpad_k = c10::nullopt;  // Remove const for compatibility
+  c10::optional<at::Tensor> block_table = c10::nullopt;
+  c10::optional<at::Tensor> seqlen_q = c10::nullopt;  // Add seqlen_q field for FA3
+  c10::optional<at::Tensor> cu_seqlens_k_new = c10::nullopt;
+  c10::optional<int64_t> max_seqlen_q = c10::nullopt;
+  c10::optional<at::Tensor> alibi_slopes;  // Remove const for compatibility
+  c10::optional<at::Tensor> out = c10::nullopt;
+  double softmax_scale;
+  bool is_causal = false;
+  int window_size_left = -1;
+  int window_size_right = -1;
+  float headdim_squared_sqrt = -1.0;
+  bool return_softmax = false;
+  int num_splits = 0;
+  c10::optional<at::Tensor> q_descale = c10::nullopt;
+  c10::optional<at::Tensor> k_descale = c10::nullopt;
+  c10::optional<at::Tensor> v_descale = c10::nullopt;
+  float softcap = 0.0;
+  bool rotary_interleaved = true;
+  c10::optional<at::Tensor> scheduler_metadata = c10::nullopt;
+  c10::optional<bool> pack_gqa = c10::nullopt;
+  int sm_margin = 0;
+};
+
+// Unified interface functions that handle version selection
+std::vector<at::Tensor> InvokeMhaVarlenFwd(MhaVarlenFwdParams& params);
+void InvokeMhaFwdKvcCache(MhaFwdKVCacheParams& params);
+
+// Helper function to check if FA3 is actually being used
+bool IsUsingFA3();
 
 }  // namespace ksana_llm

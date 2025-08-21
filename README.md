@@ -264,7 +264,7 @@ export USE_TCP_DATA_CHANNEL=1
 ##### 4.3.1 Compilation for NVIDIA H20
 
 ```bash
-cmake -DSM=90a -DWITH_VLLM_FLASH_ATTN=ON -DCMAKE_BUILD_TYPE=Release ..  && make -j
+cmake -DSM=90a -DCMAKE_BUILD_TYPE=Release ..  && make -j
 
 cd ${GIT_PROJECT_REPO_ROOT}/src/ksana_llm/python
 ln -s ${GIT_PROJECT_REPO_ROOT}/build/lib .

@@ -12,12 +12,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 
+#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#else
-#  include "flash_api.h"
-#endif
 
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 
@@ -180,11 +176,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
           k_scale, v_scale, stream));
   }
 
-// flash attention 2 or flash attention 1
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-  // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
-  // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
-  // leads to a core dump.
+  // 统一通过 InvokeMhaVarlenFwd 调用，去掉 flash-attn 版本宏判断
+  // 参考 Dao-AILab/flash-attention 的说明：当 out 非空且满足特定条件时会 core dump
   bool seqlenq_ngroups_swapped =
       max_tokens == 1 && num_heads > num_kv_heads && head_size % 8 == 0 && !alibi_slopes.has_value();
   c10::optional<at::Tensor> out_tensor = c10::nullopt;
@@ -209,9 +202,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
           stream));
     }
   }
-  // vllm-attn apis.
-#  if defined(ENABLE_VLLM_FLASH_ATTN_MINOR_6) || defined(ENABLE_FLASH_ATTN_3)
+
   std::vector<at::Tensor> mha_output;
+  // TODO(qiannanzhou): 需要考虑FA函数是否需要支持 blocked multi-token forwarding，比如FA3，FA2
   if (enable_blocked_multi_token_forwarding_kv) {
     torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
     auto cache_options = options;
@@ -228,54 +221,62 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     auto int32_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>());
     c10::optional<at::Tensor> block_table =
         torch::from_blob(block_table_ptr, {batch, max_blocks_per_seq}, int32_options);
-    mha_output = mha_varlen_fwd(q_tmp_tensor, k_cache_tensor, v_cache_tensor, out_tensor,
-                                seqlen_q_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k,
-                                block_table, alibi_slopes_tensor, max_forwarding_tokens, max_tokens, 0.f,
-                                1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+
+    MhaVarlenFwdParams params;
+    params.q = q_tmp_tensor;
+    params.k = k_cache_tensor;
+    params.v = v_cache_tensor;
+    params.out = out_tensor;
+    params.seqlen_q = seqlen_q_tensor.to(torch::kInt32);
+    params.seqlen_k = seqlen_tensor.to(torch::kInt32);
+    params.seqused_k = seqused_k;
+    params.block_table = block_table;
+    params.alibi_slopes = alibi_slopes_tensor;
+    params.max_seqlen_q = max_forwarding_tokens;
+    params.max_seqlen_k = max_tokens;
+    params.p_dropout = 0.f;
+    params.softmax_scale = 1.0 / sqrt(head_size);
+    params.zero_tensors = false;
+    params.is_causal = is_causal;
+    params.window_size_left = -1;
+    params.window_size_right = -1;
+    params.softcap = 0.f;
+    params.return_softmax = false;
+    params.gen = c10::nullopt;
+    mha_output = InvokeMhaVarlenFwd(params);
   } else {
     c10::optional<at::Tensor> block_table = c10::nullopt;  // batch_size x max_num_blocks_per_seq
-    mha_output = mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-                                torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
-                                seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k,
-                                block_table, alibi_slopes_tensor, max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size),
-                                false, is_causal, -1, -1, 0.f, false, c10::nullopt);
+
+    MhaVarlenFwdParams params;
+    params.q = q_tmp_tensor;
+    params.k = torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size});
+    params.v = torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size});
+    params.out = out_tensor;
+    params.seqlen_q = seqlen_tensor.to(torch::kInt32);
+    params.seqlen_k = seqlen_tensor.to(torch::kInt32);
+    params.seqused_k = seqused_k;
+    params.block_table = block_table;
+    params.alibi_slopes = alibi_slopes_tensor;
+    params.max_seqlen_q = max_tokens;
+    params.max_seqlen_k = max_tokens;
+    params.p_dropout = 0.f;
+    params.softmax_scale = 1.0 / sqrt(head_size);
+    params.zero_tensors = false;
+    params.is_causal = is_causal;
+    params.window_size_left = -1;
+    params.window_size_right = -1;
+    params.softcap = 0.f;
+    params.return_softmax = false;
+    params.gen = c10::nullopt;
+    mha_output = InvokeMhaVarlenFwd(params);
   }
-#  endif
 
-  // flash_attn v.2.4, 2.5.6. and later versions.
-#  if defined(ENABLE_FLASH_ATTN_2)
-#    if defined(ENABLE_FLASH_ATTN_MINNOR_4) || defined(ENABLE_FLASH_ATTN_MINOR_5)
-  std::vector<at::Tensor> mha_output =
-      mha_varlen_fwd(q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-                     torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
-                     seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), seqused_k, alibi_slopes_tensor,
-                     max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
-
-#    else  // Since v2.7.2.post1, add two more parms, such as block_table_,leftpad_t_.
-  std::vector<at::Tensor> mha_output = mha_varlen_fwd(
-      q_tmp_tensor, torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-      torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor, seqlen_tensor.to(torch::kInt32),
-      seqlen_tensor.to(torch::kInt32), seqused_k, const_null_tensor, /* leftpad_k_  */
-      null_tensor,                                                   /* block_table */
-      alibi_slopes_tensor, max_tokens, max_tokens, 0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, 0.0, false,
-      c10::nullopt);
-#    endif
   if (seqlenq_ngroups_swapped) {
     KLLM_LOG_DEBUG << "To prevent a core dump when seqlenq_ngroups_swapped is True, set the output tensor to nullptr.";
     at::Tensor& out_data = mha_output[0];
     size_t total_size = out_data.numel() * out_data.element_size();
     CUDA_CHECK(cudaMemcpyAsync(out, out_data.data_ptr(), total_size, cudaMemcpyDeviceToDevice, stream));
   }
-#  endif
-
-#else  // flash_attn v1.x?
-  c10::optional<at::Tensor> out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
-  flash_attn::mha_varlen_fwd(torch::reshape(q_tensor, {total_tokens, num_heads, head_size}),
-                             torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size}),
-                             torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size}), out_tensor,
-                             seqlen_tensor.to(torch::kInt32), seqlen_tensor.to(torch::kInt32), max_tokens, max_tokens,
-                             0.f, 1.0 / sqrt(head_size), false, is_causal, -1, -1, false, c10::nullopt);
-#endif
 }
 
 #define ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                     \
@@ -426,52 +427,29 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     }
 
     //  Not support flash-attn < 2.6.0 && != 2.5.6
-#if defined(ENABLE_FLASH_ATTN_2) && defined(ENABLE_FLASH_ATTN_MINOR_5)
-    mha_fwd_kvcache(q_tensor,             // batch_size x seqlen_q x num_heads x head_size
-                    k_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    v_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    const_null_tensor,    // k_
-                    const_null_tensor,    // v_
-                    seqlens_k_tensor,     // batch_size
-                    const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
-                    block_table_tensor,   // batch_size x max_num_blocks_per_seq
-                    alibi_slopes_tensor,  // num_heads or batch_size x num_heads
-                    out_tensor,           // batch_size x seqlen_q x num_heads x head_size
-                    softmax_scale, true, -1, -1, true, 0);
-#elif defined(ENABLE_FLASH_ATTN_2) && defined(ENABLE_FLASH_ATTN_MINOR_7)
-    // add leftpad_k_ param since flash-attn 2.7.2
-    mha_fwd_kvcache(q_tensor,             // batch_size x seqlen_q x num_heads x head_size
-                    k_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    v_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    const_null_tensor,    // k_
-                    const_null_tensor,    // v_
-                    seqlens_k_tensor,     // batch_size
-                    const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
-                    const_null_tensor,    // indices that the KV cache starts. [batch_size,], nullptr, default 0
-                    block_table_tensor,   // batch_size x max_num_blocks_per_seq
-                    alibi_slopes_tensor,  // num_heads or batch_size x num_heads
-                    out_tensor,           // batch_size x seqlen_q x num_heads x head_size
-                    softmax_scale, true, -1, -1, 0.0, true, 0);
+    // Use unified wrapper InvokeMhaFwdKvcCache instead of version-specific macros
+    c10::optional<at::Tensor> seqlen_q_tensor = c10::optional<at::Tensor>(torch::arange(
+        0, batch + 1, torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>())));
+    c10::optional<at::Tensor> seqlens_k_tensor2 = c10::optional<at::Tensor>(
+        torch::from_blob(context_lens_ptr, {batch},
+                         torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<int32_t>())));
 
-#else  // It works for vllm-flash-attn and flash-attn >= v2.5.6
-    mha_fwd_kvcache(q_tensor,             // batch_size x seqlen_q x num_heads x head_size
-                    k_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    v_cache_tensor,       // num_blocks x page_block_size x num_heads_k x head_size.
-                    const_null_tensor,    // k_
-                    const_null_tensor,    // v_
-                    seqlens_k_tensor,     // batch_size
-                    const_null_tensor,    // rotary_cos_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // rotary_sin_: seqlen_ro x (rotary_dim / 2)
-                    const_null_tensor,    // cache_batch_idx_: indices to index into the KV cache
-                    block_table_tensor,   // batch_size x max_num_blocks_per_seq
-                    alibi_slopes_tensor,  // num_heads or batch_size x num_heads
-                    out_tensor,           // batch_size x seqlen_q x num_heads x head_size
-                    softmax_scale, true, -1, -1, 0.0, true, 0);
-#endif
+    ksana_llm::MhaFwdKVCacheParams fa_params;
+    fa_params.q = q_tensor;              // [batch, 1, num_heads, head_size]
+    fa_params.k_cache = k_cache_tensor;  // [num_blocks, block_size, num_kv_heads, head_size]
+    fa_params.v_cache = v_cache_tensor;
+    fa_params.seqlen_q = seqlen_q_tensor;        // cu_seqlens_q: [batch+1]
+    fa_params.seqlens_k = seqlens_k_tensor2;     // [batch]
+    fa_params.block_table = block_table_tensor;  // [batch, max_blocks_per_seq]
+    fa_params.alibi_slopes = alibi_slopes_tensor;
+    fa_params.out = out_tensor;  // [batch, 1, num_heads, head_size]
+    fa_params.softmax_scale = softmax_scale;
+    fa_params.is_causal = true;
+    fa_params.window_size_left = -1;
+    fa_params.window_size_right = -1;
+    fa_params.softcap = 0.0f;
+
+    InvokeMhaFwdKvcCache(fa_params);
 
   } else {
     const float* alibi_slopes_ptr =

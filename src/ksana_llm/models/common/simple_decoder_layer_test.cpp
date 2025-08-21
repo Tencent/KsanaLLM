@@ -476,6 +476,45 @@ TEST_F(FakeSimpleModelTest, ForwardTest) {
                                              model_hidden_stat_baselines[INTERNLM2_MODEL_NAME][1], thresholds);
 }
 
+// Test with enable_blocked_multi_token_forwarding_kv enabled
+TEST_F(FakeSimpleModelTest, ForwardTestWithBlockedMultiTokenForwardingKV) {
+  InitModelOutputBaseline();
+  TestThresholds thresholds(1e-5, 0.004, 0.004, 0.9, 0.9);
+#ifdef ENABLE_ACL
+  // NPU is slower
+  thresholds.SetPrefillPerfThresh(3.8);
+  thresholds.SetDecodePerfThresh(3.8);
+#endif
+
+  // Modify runtime_config to enable blocked multi-token forwarding KV
+  runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
+
+  // Simple model test all data types
+  ModelTestConfig simple_test_config;
+  simple_test_config.test_acl = true;
+  simple_test_config.test_fp8 = true;
+
+  simple_test_config.add_qkv_bias = false;
+  DoForwardTest<Llama, FakeSimpleWeight>(simple_test_config, model_hidden_stat_baselines[LLAMA_MODEL_NAME][0],
+                                         model_hidden_stat_baselines[LLAMA_MODEL_NAME][1], thresholds);
+
+  // Test Baichuan (little different with Llama)
+  DoForwardTest<Baichuan, FakeSimpleWeight>(simple_test_config, model_hidden_stat_baselines[BAICHUAN_MODEL_NAME][0],
+                                            model_hidden_stat_baselines[BAICHUAN_MODEL_NAME][1], thresholds);
+
+  // Test QWen
+  simple_test_config.add_qkv_bias = true;
+  DoForwardTest<Qwen, FakeSimpleWeight>(simple_test_config, model_hidden_stat_baselines[QWEN_MODEL_NAME][0],
+                                        model_hidden_stat_baselines[QWEN_MODEL_NAME][1], thresholds);
+
+  // Test Internlm
+  simple_test_config.add_qkv_bias = false;
+  DoForwardTest<Internlm2, FakeSimpleWeight>(simple_test_config, model_hidden_stat_baselines[INTERNLM2_MODEL_NAME][0],
+                                             model_hidden_stat_baselines[INTERNLM2_MODEL_NAME][1], thresholds);
+
+  runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv = false;
+}
+
 TEST_F(FakeVLModelTest, ForwardVLTest) {
   InitModelOutputBaseline();
   TestThresholds thresholds(1e-5, 0.004, 0.004, 0.9, 0.9);

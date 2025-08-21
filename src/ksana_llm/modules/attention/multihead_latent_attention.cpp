@@ -103,7 +103,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     mem_adjuster_ = std::make_shared<MemAdjuster>(creation_context);
   }
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layers_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
@@ -175,7 +175,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -315,7 +315,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layers_->Clear();
 #endif
 
@@ -494,7 +494,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& input_tenso
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -582,9 +582,8 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& input_tenso
     if (o_proj_out_of_dp_) {
       std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
     }
-    FlashAttentionForward(input_tensors, hidden_buffer_tensors_1, hidden_buffer_tensors_0,
-                          prefill_q_nope_tensors[0], q_rope_buffer_tensors[0], kv_buffer_tensors[0],
-                          k_rope_buffer_tensors[0], forwarding_context);
+    FlashAttentionForward(input_tensors, hidden_buffer_tensors_1, hidden_buffer_tensors_0, prefill_q_nope_tensors[0],
+                          q_rope_buffer_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
 
     if (o_proj_out_of_dp_) {
       std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
@@ -606,7 +605,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& input_tenso
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layers_->Clear();
 #endif
 
@@ -624,7 +623,7 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& input_tensor
   const size_t hidden_units = input.shape[1];
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", seq_len, hidden_units), rank);
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layers_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -791,7 +790,7 @@ Status MultiHeadLatentAttention::DecodeForward(std::vector<Tensor>& input_tensor
     std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
   }
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layers_->Clear();
 #endif
 

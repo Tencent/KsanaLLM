@@ -4,6 +4,7 @@
 
 #include "ksana_llm/utils/config/schedule_config_parser.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -337,6 +338,50 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetRootNode(), "setting.attn_backend.enable_blocked_multi_token_forwarding_kv", false);
   KLLM_LOG_INFO << "enable_blocked_multi_token_forwarding_kv: "
                 << runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+
+  // Parse FlashAttention implementation preference (optional)
+  {
+    std::string impl =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.attn_backend.flash_attn_impl", "auto");
+    // Trim whitespace and treat empty as auto
+    auto is_space = [](unsigned char c) {
+      return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+    };
+    impl.erase(impl.begin(), std::find_if(impl.begin(), impl.end(), [&](unsigned char ch) { return !is_space(ch); }));
+    impl.erase(std::find_if(impl.rbegin(), impl.rend(), [&](unsigned char ch) { return !is_space(ch); }).base(),
+               impl.end());
+    if (impl.empty()) {
+      impl = "auto";
+    }
+    std::string impl_lower = impl;
+    std::transform(impl_lower.begin(), impl_lower.end(), impl_lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    using Choice = AttnBackendConfig::FlashAttnImplChoice;
+    Choice choice = Choice::AUTO;
+    if (impl_lower == "auto") {
+      choice = Choice::AUTO;
+    } else if (impl_lower == "fa3") {
+      choice = Choice::FA3;
+    } else if (impl_lower == "vllm_v26" || impl_lower == "vllm") {
+      choice = Choice::VLLM_V26;
+    } else if (impl_lower == "flashattn_v26" || impl_lower == "fa2_v26" || impl_lower == "flash_attn_v26") {
+      choice = Choice::FA2_V26;
+    } else if (impl_lower == "flashattn_v25" || impl_lower == "fa2_v25" || impl_lower == "flash_attn_v25") {
+      choice = Choice::FA2_V25;
+    } else {
+      KLLM_LOG_WARNING << "Unknown setting.attn_backend.flash_attn_impl='" << impl << "', fallback to 'auto'.";
+      choice = Choice::AUTO;
+    }
+    runtime_config_.attn_backend_config.flash_attn_impl_choice = choice;
+
+    const char *choice_str = (choice == Choice::AUTO)       ? "auto"
+                             : (choice == Choice::FA3)      ? "fa3"
+                             : (choice == Choice::VLLM_V26) ? "vllm_v26"
+                             : (choice == Choice::FA2_V26)  ? "flashattn_v26"
+                                                            : "flashattn_v25";
+    KLLM_LOG_INFO << "flash_attn_impl: " << choice_str;
+  }
 
   InitConnectorConfig(yaml_reader);
   return Status();

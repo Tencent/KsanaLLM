@@ -27,7 +27,7 @@ CrossLayerAttention::CrossLayerAttention(int layer_idx, int cla_share_factor, Cl
   attentions_ =
       std::make_shared<CommonAttention>(layer_idx, is_neox, use_qk_norm, creation_context, model_creation_config);
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
 #endif
@@ -84,7 +84,7 @@ Status CrossLayerAttention::QKVClaBufferCopy(std::vector<Tensor>& hidden_buffer_
 Status CrossLayerAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                     std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                     ForwardingContext& forwarding_context) {
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   std::vector<Tensor> empty_tensors;
   set_torch_stream_layer_->Forward(empty_tensors, empty_tensors);
 #endif
@@ -98,7 +98,7 @@ Status CrossLayerAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0
   }
   attentions_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layer_->Clear();
 #endif
   return Status();

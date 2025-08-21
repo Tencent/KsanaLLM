@@ -12,12 +12,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 
+#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#else
-#  include "flash_api.h"
-#endif
 
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 
@@ -286,9 +282,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
 
     return;
   }
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   cudaStream_t torch_stream = InvokeSetTorchStream(stream, rank);
-#endif
 
   auto origin_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>());
   torch::Tensor gating_tensor = torch::from_blob(
@@ -349,9 +343,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
   CUDA_CHECK(cudaMemcpyAsync(topk_ids_ptr, output_topk_ids.data_ptr(), topk_ids.numel() * sizeof(int32_t),
                              cudaMemcpyDeviceToDevice, stream));
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
   InvokeSetTorchStream(torch_stream, rank);
-#endif
 }
 #define INVOKE_GROUPED_TOPK(T)                                                                                      \
   template void InvokeGroupedTopk<T>(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows, \

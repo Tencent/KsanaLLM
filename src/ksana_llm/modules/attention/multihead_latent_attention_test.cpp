@@ -431,12 +431,38 @@ class MlaTest : public testing::Test {
   }
 };
 
+// 运行时检测是否是 Hopper 架构的辅助函数
+bool IsHopperSupported() {
+#ifdef ENABLE_CUDA
+  int device = -1;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    return false;
+  }
+
+  int major = 0, minor = 0;
+  if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device) != cudaSuccess ||
+      cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device) != cudaSuccess) {
+    return false;
+  }
+
+  int compute_capability = major * 10 + minor;
+  // Hopper 架构是 SM 9.0 (compute capability 90)
+  return compute_capability >= 90;
+#else
+  return false;
+#endif
+}
+
 TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
-// TODO(zakwang): 支持更多类型
-#if defined(ENABLE_VLLM_FLASH_ATTN_2)  // TODO(qiannanzhou): 这个mr不支持A10上测mla，所以先关掉，下一个mr补上
+  // TODO(zakwang): 支持更多类型
+  // 运行时检测 GPU 架构，只有在 Hopper 架构时才运行测试
+  if (!IsHopperSupported()) {
+    GTEST_SKIP_("Test requires FA3 support or Hopper architecture (SM >= 9.0)");
+    return;
+  }
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -444,7 +470,6 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
-#endif
   return;
 }
 
@@ -452,8 +477,13 @@ TEST_F(MlaTest, ForwardTest) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
-// TODO(zakwang): 支持更多类型
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+
+  // 运行时检测 GPU 架构，只有在 Hopper 架构时才运行测试
+  if (!IsHopperSupported()) {
+    GTEST_SKIP_("Test requires FA3 support or Hopper architecture (SM >= 9.0)");
+    return;
+  }
+
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -461,7 +491,6 @@ TEST_F(MlaTest, ForwardTest) {
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
-#endif
   return;
 }
 
@@ -469,7 +498,12 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+
+  // 运行时检测 GPU 架构，只有在支持 FA3 或 Hopper 架构时才运行测试
+  if (!IsHopperSupported()) {
+    GTEST_SKIP_("Test requires FA3 support or Hopper architecture (SM >= 9.0)");
+    return;
+  }
   // fp16 forward
   model_config.is_quant = false;
   model_config.weight_data_type = TYPE_FP16;
@@ -478,6 +512,5 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   runtime_config.attn_backend_config.kv_cache_dtype = TYPE_FP8_E4M3;
   std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
   TestMlaForward<float16>();
-#endif
   return;
 }

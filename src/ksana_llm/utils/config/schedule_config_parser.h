@@ -270,6 +270,16 @@ struct AttnBackendConfig {
   size_t block_token_num{0};  // The max token number of one block.
   size_t block_size{0};       // The block size, in bytes.
 
+  // User preference for FlashAttention implementation selection.
+  enum class FlashAttnImplChoice {
+    AUTO = 0,  // Auto-detect by hardware and availability (default)
+    FA3,       // FlashAttention 3
+    VLLM_V26,  // vLLM FlashAttention 2.6+
+    FA2_V26,   // FlashAttention 2.6+
+    FA2_V25    // FlashAttention 2.5+
+  };
+  FlashAttnImplChoice flash_attn_impl_choice = FlashAttnImplChoice::AUTO;
+
   // std::vector<float> k_scales;  // to be removed
   // std::vector<float> v_scales;  // to be removed
 };

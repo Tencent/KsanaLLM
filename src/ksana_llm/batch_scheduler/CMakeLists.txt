@@ -10,7 +10,7 @@ message(STATUS "batch_scheduler_SRCS: ${batch_scheduler_SRCS}")
 
 add_library(batch_scheduler STATIC ${batch_scheduler_SRCS})
 
-if(WITH_VLLM_FLASH_ATTN)
+if(WITH_CUDA)
   set(MODELS_TEST_LIBS ${TORCH_LIBRARIES}  ${TORCH_PYTHON_LIBRARY})
 else()
   set(MODELS_TEST_LIBS "")

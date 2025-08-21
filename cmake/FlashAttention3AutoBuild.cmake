@@ -4,9 +4,9 @@
 
 # Flash Attention 3 Auto Build Module
 # This module automatically downloads, builds and installs Flash Attention 3 from source
-# when WITH_FLASH_ATTN_3 is enabled but flash_attn_3 is not found in Python environment
 
 message(STATUS "Setting up Flash Attention 3 Auto Build")
+find_package(Git QUIET)
 
 # Set the Flash Attention 3 source directory
 set(FA3_SOURCE_DIR ${CMAKE_BINARY_DIR}/third_party/flash-attention)

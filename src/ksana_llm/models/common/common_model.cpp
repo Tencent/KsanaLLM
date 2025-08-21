@@ -125,7 +125,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   input_refit_layer_ = std::make_shared<InputRefitLayer>();
   input_refit_layer_->Init({}, runtime_config_, context_, rank_);
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
   set_torch_stream_layer_ = std::make_shared<SetTorchStreamLayer>();
   set_torch_stream_layer_->Init({}, runtime_config_, context_, rank_);
 #endif
@@ -357,8 +357,8 @@ std::vector<Tensor>& CommonModel::GetHiddenUnitBuffer(ForwardingContext& forward
 Status CommonModel::AllocResources(size_t multi_batch_id) {
   if (context_->IsChief()) {
     KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
-      FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.",
-        multi_batch_id, forwarding_context_buffer_size_));
+                         FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.", multi_batch_id,
+                                   forwarding_context_buffer_size_));
   }
 
   size_t id = context_->IsChief() ? multi_batch_id : 0;
@@ -370,9 +370,7 @@ Status CommonModel::AllocResources(size_t multi_batch_id) {
   return Status();
 }
 
-Status CommonModel::FreeResources(size_t multi_batch_id) {
-  return Status();
-}
+Status CommonModel::FreeResources(size_t multi_batch_id) { return Status(); }
 
 void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   if (forwarding_context.IsForwardingLayers()) {
@@ -394,8 +392,8 @@ void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, Forw
 ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
   if (context_->IsChief()) {
     KLLM_CHECK_WITH_INFO(multi_batch_id < forwarding_context_buffer_size_,
-      FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.",
-        multi_batch_id, forwarding_context_buffer_size_));
+                         FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.", multi_batch_id,
+                                   forwarding_context_buffer_size_));
   }
   size_t id = context_->IsChief() ? multi_batch_id : 0;
   return forwarding_context_buffer_[id].get();
@@ -580,4 +578,3 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
 }
 
 }  // namespace ksana_llm
-

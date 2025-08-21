@@ -12,12 +12,8 @@
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 
+#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/utils/singleton.h"
-#if defined(ENABLE_FLASH_ATTN_2) || defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#else
-#  include "flash_api.h"
-#endif
 
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 
@@ -239,7 +235,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);
@@ -891,7 +887,6 @@ void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scal
 
 size_t InvokeGetCublasWorkspaceSize() { return llm_kernels::nvidia::GetCublasWorkspaceSize(); }
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
 cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank) {
   cudaStream_t old_stream = c10::cuda::getCurrentCUDAStream(rank).stream();
   // set compute stream as torch stream
@@ -899,7 +894,6 @@ cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank) {
   c10::cuda::setCurrentCUDAStream(new_stream);
   return old_stream;
 }
-#endif
 
 template <typename T>
 void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* output, int m, int k, int n,

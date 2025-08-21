@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#if defined(ENABLE_VLLM_FLASH_ATTN_2) || defined(ENABLE_FLASH_ATTN_3)
+#ifdef ENABLE_CUDA
 #  include <torch/torch.h>
 #  include "ksana_llm/layers/base_layer.h"
 
@@ -16,11 +16,9 @@ class SetTorchStreamLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
   void Clear() override;
 
-#  ifdef ENABLE_CUDA
  private:
   cudaStream_t torch_stream_;
-#  endif
 };
 
 }  // namespace ksana_llm
-#endif
+#  endif
