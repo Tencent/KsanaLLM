@@ -33,7 +33,6 @@ add_subdirectory(fused_add_norm)
 add_subdirectory(per_token_group_quant)
 add_subdirectory(split)
 add_subdirectory(identity)
-
 if(SM VERSION_GREATER_EQUAL "90")
   add_subdirectory(decode_grouped_att_m_fwd)
   add_subdirectory(fused_moe)
@@ -41,3 +40,7 @@ if(SM VERSION_GREATER_EQUAL "90")
   add_subdirectory(decode_softmax_reducev_fwd)
 endif()
 add_subdirectory(marlin_moe)
+
+# 新逻辑
+add_subdirectory(gemm)
+add_subdirectory(others)

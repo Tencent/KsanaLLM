@@ -20,13 +20,25 @@ execute_process(COMMAND mkdir -p ${CMAKE_BINARY_DIR}/triton_kernel_files)
 
 # fetch 3rdparty
 if(GIT_FOUND)
-  message(STATUS "Running submodule update to fetch cutlass")
-  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/cutlass
+  message(STATUS "Running submodule update to fetch cutlass c3x")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/c3x/cutlass
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE GIT_SUBMOD_RESULT)
 
   if(NOT GIT_SUBMOD_RESULT EQUAL "0")
-    message(FATAL_ERROR "git submodule update --init 3rdparty/cutlass failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
+    message(FATAL_ERROR "git submodule update --init 3rdparty/c3x/cutlass failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
+  endif()
+endif()
+
+# fetch 3rdparty
+if(GIT_FOUND)
+  message(STATUS "Running submodule update to fetch cutlass c4x")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/c4x/cutlass
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE GIT_SUBMOD_RESULT)
+
+  if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+    message(FATAL_ERROR "git submodule update --init 3rdparty/c4x/cutlass failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
   endif()
 endif()
 
@@ -99,20 +111,49 @@ else()
   list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
 endif()
 
-# setting cutlass
-set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
-set(CUTLASS_TOOLS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/tools/util/include)
-set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/fastertransformer/cutlass_extensions/include)
-subproject_version(${PROJECT_SOURCE_DIR}/3rdparty/cutlass CUTLASS_VERSION)
-set(CUTLASS_VERSION_SUB_LIST ${CUTLASS_VERSION})
-string(REPLACE "." ";" CUTLASS_VERSION_SUB_LIST "${CUTLASS_VERSION}")
-message(STATUS "cutlass version is: ${CUTLASS_VERSION}")
-list(GET CUTLASS_VERSION_SUB_LIST 0 CUTLASS_MAJOR_VERSION)
-list(GET CUTLASS_VERSION_SUB_LIST 1 CUTLASS_MINOR_VERSION)
-list(GET CUTLASS_VERSION_SUB_LIST 2 CUTLASS_PATCH_VERSION)
-add_definitions("-DCUTLASS_MAJOR_VERSION=${CUTLASS_MAJOR_VERSION}")
-add_definitions("-DCUTLASS_MINOR_VERSION=${CUTLASS_MINOR_VERSION}")
-add_definitions("-DCUTLASS_PATCH_VERSION=${CUTLASS_PATCH_VERSION}")
+# setting cutlass v3.x
+add_library(cutlass_c3x INTERFACE)
+set(CUTLASS_C3X_SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/c3x/cutlass)
+set(CUTLASS_C3X_HEADER_DIR ${CUTLASS_C3X_SOURCE_DIR}/include)
+set(CUTLASS_C3X_TOOLS_HEADER_DIR ${CUTLASS_C3X_SOURCE_DIR}/tools/util/include)
+target_include_directories(cutlass_c3x INTERFACE
+    ${CUTLASS_C3X_HEADER_DIR}
+    ${CUTLASS_C3X_TOOLS_HEADER_DIR}
+)
+subproject_version(${CUTLASS_C3X_SOURCE_DIR} CUTLASS_C3X_VERSION)
+set(CUTLASS_C3X_VERSION_SUB_LIST ${CUTLASS_C3X_VERSION})
+string(REPLACE "." ";" CUTLASS_C3X_VERSION_SUB_LIST "${CUTLASS_C3X_VERSION}")
+message(STATUS "cutlass c3x version is: ${CUTLASS_C3X_VERSION}")
+list(GET CUTLASS_C3X_VERSION_SUB_LIST 0 CUTLASS_C3X_MAJOR_VERSION)
+list(GET CUTLASS_C3X_VERSION_SUB_LIST 1 CUTLASS_C3X_MINOR_VERSION)
+list(GET CUTLASS_C3X_VERSION_SUB_LIST 2 CUTLASS_C3X_PATCH_VERSION)
+target_compile_definitions(cutlass_c3x INTERFACE
+    CUTLASS_MAJOR_VERSION=${CUTLASS_C3X_MAJOR_VERSION}
+    CUTLASS_MINOR_VERSION=${CUTLASS_C3X_MINOR_VERSION}
+    CUTLASS_PATCH_VERSION=${CUTLASS_C3X_PATCH_VERSION}
+)
+
+# setting cutlass v4.x
+add_library(cutlass_c4x INTERFACE)
+set(CUTLASS_C4X_SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/c4x/cutlass)
+set(CUTLASS_C4X_HEADER_DIR ${CUTLASS_C4X_SOURCE_DIR}/include)
+set(CUTLASS_C4X_TOOLS_HEADER_DIR ${CUTLASS_C4X_SOURCE_DIR}/tools/util/include)
+target_include_directories(cutlass_c4x INTERFACE
+    ${CUTLASS_C4X_HEADER_DIR}
+    ${CUTLASS_C4X_TOOLS_HEADER_DIR}
+)
+subproject_version(${CUTLASS_C4X_SOURCE_DIR} CUTLASS_C4X_VERSION)
+set(CUTLASS_C4X_VERSION_SUB_LIST ${CUTLASS_C4X_VERSION})
+string(REPLACE "." ";" CUTLASS_C4X_VERSION_SUB_LIST "${CUTLASS_C4X_VERSION}")
+message(STATUS "cutlass c4x version is: ${CUTLASS_C4X_VERSION}")
+list(GET CUTLASS_C4X_VERSION_SUB_LIST 0 CUTLASS_C4X_MAJOR_VERSION)
+list(GET CUTLASS_C4X_VERSION_SUB_LIST 1 CUTLASS_C4X_MINOR_VERSION)
+list(GET CUTLASS_C4X_VERSION_SUB_LIST 2 CUTLASS_C4X_PATCH_VERSION)
+target_compile_definitions(cutlass_c4x INTERFACE
+    CUTLASS_MAJOR_VERSION=${CUTLASS_C4X_MAJOR_VERSION}
+    CUTLASS_MINOR_VERSION=${CUTLASS_C4X_MINOR_VERSION}
+    CUTLASS_PATCH_VERSION=${CUTLASS_C4X_PATCH_VERSION}
+)
 
 # setting deep gemm
 if(GIT_FOUND)
@@ -141,8 +182,6 @@ endif()
 
 set(CUDA_INC_DIRS
   ${CUDA_PATH}/include
-  ${CUTLASS_HEADER_DIR}
-  ${CUTLASS_TOOLS_HEADER_DIR}
 )
 
 set(CUDA_LIB_DIRS

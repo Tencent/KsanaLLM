@@ -1,1 +1,2 @@
-This file records version info about imported codes
+dev
+ - 分支来源：https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3

@@ -19,7 +19,6 @@ struct WorkspaceMeta {
   size_t space_size = 0ul;
 };
 
-
 template <typename T>
 __attribute__((unused)) static T DivRoundUp(T dividend, T divisor) {
   static_assert(std::is_integral<T>::value, "DivRoundUp requires integral types");
@@ -32,6 +31,12 @@ __attribute__((unused)) static T DivRoundDown(T dividend, T divisor) {
   return dividend / divisor;
 }
 
+template <typename T>
+__attribute__((unused)) static T RoundUp(T value, T multiple) {
+  static_assert(std::is_integral<T>::value, "RoundUp requires integral types");
+  return ((value + multiple - 1) / multiple) * multiple;
+}
+
 // 保持向后兼容性
 __attribute__((unused)) static int64_t DivRoundUp(int64_t dividend, int64_t divisor) {
   return DivRoundUp<int64_t>(dividend, divisor);
@@ -39,6 +44,10 @@ __attribute__((unused)) static int64_t DivRoundUp(int64_t dividend, int64_t divi
 
 __attribute__((unused)) static int64_t DivRoundDown(int64_t dividend, int64_t divisor) {
   return DivRoundDown<int64_t>(dividend, divisor);
+}
+
+__attribute__((unused)) static int64_t RoundUp(int64_t value, int64_t multiple) {
+  return RoundUp<int64_t>(value, multiple);
 }
 
 /**

@@ -5,6 +5,7 @@ file(GLOB_RECURSE GEMM_WRAPPER_SRCS *.cu)
 list(FILTER GEMM_WRAPPER_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_kernel_gemm_wrapper STATIC ${GEMM_WRAPPER_SRCS})
 target_link_libraries(llm_kernels_nvidia_kernel_gemm_wrapper PUBLIC -lcublas -lcudart -lcublasLt yaml-cpp)
+target_link_libraries(llm_kernels_nvidia_kernel_gemm_wrapper PRIVATE cutlass_c3x)
 set_property(TARGET llm_kernels_nvidia_kernel_gemm_wrapper PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_gemm_wrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 

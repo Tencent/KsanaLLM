@@ -1,9 +1,12 @@
-[submodule "3rdparty/cutlass"]
-	path = 3rdparty/LLM_kernels/3rdparty/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
 [submodule "3rdparty/half"]
 	path = 3rdparty/LLM_kernels/3rdparty/half
 	url = https://github.com/whitelok/half.git
 [submodule "3rdparty/DeepGEMM"]
 	path = 3rdparty/LLM_kernels/3rdparty/DeepGEMM
 	url = https://github.com/deepseek-ai/DeepGEMM.git
+[submodule "3rdparty/c3x/cutlass"]
+	path = 3rdparty/LLM_kernels/3rdparty/c3x/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
+[submodule "3rdparty/c4x/cutlass"]
+	path = 3rdparty/LLM_kernels/3rdparty/c4x/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

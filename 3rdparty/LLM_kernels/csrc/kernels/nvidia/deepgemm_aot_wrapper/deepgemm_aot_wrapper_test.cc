@@ -5,6 +5,7 @@
  * It tests the functionality of DeepGEMM matrix multiplication operations
  * with FP8 data types and scaling factors.
  */
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
@@ -156,7 +157,7 @@ class DeepGEMMAOTWrapperTestSuit : public NvidiaTestSuitBase {
    * running the matrix multiplication operation, and comparing the results
    * with a reference implementation.
    */
-  void TestDeepGEMMAOTWrapper() {
+  void TestDeepGEMMAOTWrapperPrecision() {
     // Test parameters for matrix dimensions
     uint32_t m = 16;
     uint32_t k = 7168;
@@ -222,26 +223,39 @@ class DeepGEMMAOTWrapperTestSuit : public NvidiaTestSuitBase {
           << "Cosine similarity difference is too large: " << cosine_diff.item<float>();
     }
   }
+
+  void TestDeepGEMMAOTWrapperPerformance() {
+    uint32_t k = 7168;
+    uint32_t n = 2048;
+
+    for (uint32_t m = 4; m <= 8192; m *= 2) {
+      auto result = construct(m, k, n);
+      auto x_tuple = std::get<0>(result);
+      auto y_tuple = std::get<1>(result);
+      auto out = std::get<2>(result);
+      auto ref_out = std::get<3>(result);
+      auto x_fp8 = std::get<0>(x_tuple);
+      auto x_scales_aligned = std::get<1>(x_tuple);
+      auto y_fp8 = std::get<0>(y_tuple);
+      auto y_scales = std::get<1>(y_tuple);
+
+      DeepGEMMAOTWrapper deepgemm_aot_wrapper(m, n, k, /*need_generate_kernel*/ true,
+                                              /*tuner_device_id*/ 0);
+
+      auto kernel = [&]() {
+        deepgemm_aot_wrapper.Forward(x_fp8.data_ptr(), x_scales_aligned.data_ptr(), y_fp8.data_ptr(),
+                                     y_scales.data_ptr(), out.data_ptr(), m, stream);
+      };
+      float kernel_time = MeasureCudaExecutionTime(kernel, stream, 10, 100);
+
+      std::cout << fmt::format("DeepGemm mnk({},{},{}) cost: {} ms", m, n, k, kernel_time) << std::endl;
+    }
+  }
 };
 
-/**
- * @brief Test case for common GEMM operations using DeepGEMM AOT wrapper
- *
- * This test verifies the functionality of the DeepGEMM AOT wrapper
- * for matrix multiplication operations. It requires a CUDA-capable GPU.
- */
-TEST_F(DeepGEMMAOTWrapperTestSuit, CommonGemmTest) {
-  // Initialize CUDA device
-  torch::Device device(torch::kCUDA);
-  if (torch::cuda::is_available()) {
-    std::cerr << "CUDA is available! Testing on GPU." << std::endl;
-  } else {
-    GTEST_SKIP() << "CUDA is not available. This test requires GPU." << std::endl;
-  }
+TEST_F(DeepGEMMAOTWrapperTestSuit, TestDeepGEMMAOTWrapperPrecision) { TestDeepGEMMAOTWrapperPrecision(); }
 
-  // Run the test function
-  TestDeepGEMMAOTWrapper();
-}
+TEST_F(DeepGEMMAOTWrapperTestSuit, TestDeepGEMMAOTWrapperPerformance) { TestDeepGEMMAOTWrapperPerformance(); }
 
 }  // namespace test
 }  // namespace nvidia

@@ -324,6 +324,14 @@ inline int32_t GetSMVersion() {
   return sm_major * 10 + sm_minor;
 }
 
+inline int32_t GetSMCount() {
+  int32_t device{-1};
+  CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device));
+  int32_t sms{0};
+  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device));
+  return sms;
+}
+
 inline int getMaxSharedMemoryPerBlockOptin() {
   int device_id;
   int max_shared_memory_per_block;

@@ -16,7 +16,7 @@ endif()
 # 获取所有相关目录下的所有文件
 file(GLOB_RECURSE ALL_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/*
-  ${3RDPARTY_DIR}/cutlass/python/*
+  ${3RDPARTY_DIR}/c3x/cutlass/python/*
 )
 
 set(INSTANTIATION_GENERATION_DIR
@@ -60,7 +60,7 @@ if(NEED_REGENERATE)
   
   # NOTE(karlluo): setup cutlass python environment refer to: https://github.com/NVIDIA/cutlass/tree/main/python#installation
   execute_process(
-    WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass
+    WORKING_DIRECTORY ${3RDPARTY_DIR}/c3x/cutlass
     COMMAND ${Python3_EXECUTABLE} -m pip install -e .
     RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
 
@@ -101,6 +101,7 @@ set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY POSITION_INDEPEND
 set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(llm_kernels_nvidia_kernel_machete PUBLIC fmt -lcuda -lcudart -lnccl -lnvidia-ml 
     llm_kernels_nvidia_utils)
+target_link_libraries(llm_kernels_nvidia_kernel_machete PRIVATE cutlass_c3x)
 
 target_compile_options(llm_kernels_nvidia_kernel_machete PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 -DNDEBUG --use_fast_math>

@@ -28,7 +28,7 @@ endif()
 # 获取所有相关目录下的所有文件
 file(GLOB_RECURSE ALL_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/*
-  ${3RDPARTY_DIR}/cutlass/python/*
+  ${3RDPARTY_DIR}/c3x/cutlass/python/*
   ${CMAKE_CURRENT_SOURCE_DIR}/python/*
 )
 
@@ -73,7 +73,7 @@ if(NEED_REGENERATE)
   
   # NOTE(karlluo): setup cutlass python environment refer to: https://github.com/NVIDIA/cutlass/tree/main/python#installation
   execute_process(
-    WORKING_DIRECTORY ${3RDPARTY_DIR}/cutlass
+    WORKING_DIRECTORY ${3RDPARTY_DIR}/c3x/cutlass
     COMMAND ${Python3_EXECUTABLE} -m pip install -e .
     RESULT_VARIABLE _CUTLASS_LIBRARY_SUCCESS)
 
@@ -162,6 +162,8 @@ foreach(target_name
         fpA_intB_gemm_src;moe_gemm_src;fb_gemm_src;gemm_swiglu_sm90_src;llm_kernels_nvidia_kernel_asymmetric_gemm)
   set_property(TARGET ${target_name} PROPERTY POSITION_INDEPENDENT_CODE ON)
   set_property(TARGET ${target_name} PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+  target_link_libraries(${target_name} PRIVATE cutlass_c3x)
 
   # Note - we deliberately do not include 90a PTX (even when 9.0+PTX is
   # specified). This is because sm_90a has arch conditional instructions that

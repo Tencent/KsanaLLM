@@ -5,6 +5,7 @@
 
 #ifdef ENABLE_FP8
 #  include "ksana_llm/layers/base_layer.h"
+#  include "ksana_llm/layers/deepgemm_matmul_layer.h"
 #  ifdef ENABLE_CUDA
 #    include "csrc/kernels/nvidia/deepgemm_aot_wrapper/deepgemm_aot_wrapper.h"
 #  endif
@@ -19,6 +20,8 @@ class BlockwiseMatMulLayer : public BaseLayer {
 
   virtual size_t GetWorkSpaceSize() override;
 
+  virtual Status SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) override;
+
  private:
   template <typename T>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
@@ -31,7 +34,7 @@ class BlockwiseMatMulLayer : public BaseLayer {
   size_t workspace_size_;
   size_t kDeepGemmMaxMThreshold_ = 0;
 #  ifdef ENABLE_CUDA
-  std::map<size_t, std::unique_ptr<llm_kernels::nvidia::DeepGEMMAOTWrapper>> m_to_deepgemm_aot_wrapper_;
+  DeepGemmMatMulLayer deepgemm_matmul_layer_;
 #  endif
 };
 

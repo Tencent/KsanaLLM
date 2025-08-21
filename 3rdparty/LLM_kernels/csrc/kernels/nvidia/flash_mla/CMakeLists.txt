@@ -41,6 +41,13 @@ ${CUDA_FLASH_MLA_FLAGS} --threads 16")
 # Convert the string to a list of arguments
 separate_arguments(CUSTOM_CUDA_FLAGS_LIST UNIX_COMMAND "${CUSTOM_CUDA_FLAGS}")
 
+# get cutlass
+get_target_property(CUTLASS_INCLUDE_DIRS cutlass_c3x INTERFACE_INCLUDE_DIRECTORIES)
+set(CUTLASS_INCLUDE_FLAGS "")
+foreach(dir ${CUTLASS_INCLUDE_DIRS})
+  list(APPEND CUTLASS_INCLUDE_FLAGS "-I${dir}")
+endforeach()
+
 # For each source file, create a custom command to compile it with our custom flags
 foreach(src_file ${FLASH_MLA_SRCS})
   get_filename_component(src_name ${src_file} NAME_WE)
@@ -49,7 +56,7 @@ foreach(src_file ${FLASH_MLA_SRCS})
   # Custom command to compile each source file with our custom flags
   add_custom_command(
     OUTPUT ${obj_file}
-    COMMAND ${CMAKE_CUDA_COMPILER} ${CUSTOM_CUDA_FLAGS_LIST} -c ${src_file} -o ${obj_file}
+    COMMAND ${CMAKE_CUDA_COMPILER} ${CUTLASS_INCLUDE_FLAGS} ${CUSTOM_CUDA_FLAGS_LIST} -c ${src_file} -o ${obj_file}
     DEPENDS ${src_file}
     COMMENT "Compiling ${src_file} with nvcc custom flags"
     VERBATIM
@@ -60,6 +67,7 @@ foreach(src_file ${FLASH_MLA_SRCS})
 endforeach()
 
 target_link_libraries(llm_kernels_nvidia_kernel_flash_mla PUBLIC -lcublas -lcudart -lcublasLt)
+target_link_libraries(llm_kernels_nvidia_kernel_flash_mla PRIVATE cutlass_c3x)
 
 # for test
 file(GLOB_RECURSE FLASH_MLA_TEST_SRCS *test.cu)
