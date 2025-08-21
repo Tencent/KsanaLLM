@@ -8,6 +8,7 @@ import time
 import base64
 
 import msgpack
+import orjson
 import requests
 import numpy as np
 
@@ -20,6 +21,7 @@ def args_config():
                         help='server host address')
     parser.add_argument('--port', type=int, default=8888, help='server port')
     parser.add_argument('--api', type=str, default="forward", help='server api')
+    parser.add_argument('--content_type', type=str, default="msgpack", help='content type: msgpack or json')
     args = parser.parse_args()
     return args
 
@@ -40,6 +42,28 @@ def post_request_msgpack(serv, data, queue=None):
         result = f"Failed to parse the response: {e}\n" \
                  f"response content: {responses.content}, response code: {responses.status_code}"
 
+    if queue is None:
+        return result
+    else:
+        queue.put(result)
+
+
+def post_request_json(serv, data, queue=None):
+    json_data = orjson.dumps(data)
+    responses = requests.post(serv, data=json_data, headers={
+                              'Content-Type': 'application/json'})
+    result = None
+    try:
+        if responses.status_code == 200:  # Request succeeded
+            result = orjson.loads(responses.content)
+        elif responses.status_code == 500:  # Internal server error
+            result = orjson.loads(responses.content)
+        else:
+            result = f"Request failed with response content: {responses.content}, " \
+                     f"response code: {responses.status_code}"
+    except Exception as e:  # pylint: disable=broad-except
+        result = f"Failed to parse the response: {e}\n" \
+                 f"response content: {responses.content}, response code: {responses.status_code}"
     if queue is None:
         return result
     else:
@@ -161,9 +185,18 @@ if __name__ == "__main__":
         }
 
         # Create a new process to handle the post request
-        proc = multiprocessing.Process(
-            target=post_request_msgpack,  # function to call
-            args=(  # arguments to pass
+        if args.content_type == "msgpack":
+            proc = multiprocessing.Process(
+                target=post_request_msgpack,  # function to call
+                args=(  # arguments to pass
+                serv,  # server object
+                data,  # data dictionary
+                multi_proc_queue,  # queue for communication
+            ))
+        elif args.content_type == "json":
+            proc = multiprocessing.Process(
+                target=post_request_json,  # function to call
+                args=(  # arguments to pass
                 serv,  # server object
                 data,  # data dictionary
                 multi_proc_queue,  # queue for communication

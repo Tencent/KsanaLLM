@@ -69,9 +69,12 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
   auto span = REPORT_TRACE(local_endpoint_handle_forward, options);
   opentelemetry::trace::Scope scope(span);
 
+  auto it = req_ctx->find("Content-Type");
+  std::optional<std::string> content_type = (it != req_ctx->end()) ? std::make_optional(it->second) : std::nullopt;
+
   // Unpack requests into ksana_python_input objects.
   std::vector<std::shared_ptr<KsanaPythonInput>> ksana_python_inputs;
-  Status status = request_packer_.Unpack(request_bytes, ksana_python_inputs);
+  Status status = request_packer_.Unpack(request_bytes, ksana_python_inputs, content_type);
   if (!status.OK()) {
     // Ignore all the inputs since unpack failed.
     ksana_python_inputs.clear();
@@ -94,9 +97,7 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
   request_queue_.Write(reqs.data(), batch_size);
 
   // Get inference result
-  KLLM_LOG_DEBUG << "LocalEndpoint::HandleForward start Wait.";
   waiter->Wait();
-  KLLM_LOG_DEBUG << "LocalEndpoint::HandleForward Wait finished.";
 
   std::vector<KsanaPythonOutput> ksana_python_outputs;
   ksana_python_outputs.reserve(batch_size);
@@ -113,7 +114,7 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
 
   // Pack ksana_python_output objects into response.
   STATUS_CHECK_RETURN_AND_REPORT(
-      request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, status, response_bytes), span);
+      request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, status, response_bytes, content_type), span);
   STATUS_CHECK_AND_REPORT(status, span);
 }
 

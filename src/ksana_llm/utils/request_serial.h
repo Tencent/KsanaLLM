@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "msgpack.hpp"
+#include "nlohmann/json.hpp"
 
 namespace ksana_llm {
 
@@ -24,6 +25,8 @@ struct TargetRequestSerial {
   std::string token_reduce_mode;
 
   MSGPACK_DEFINE_MAP(target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(TargetRequestSerial, target_name, cutoff_layer, token_id, slice_pos,
+                                              token_reduce_mode);
 };
 
 struct EmbeddingSliceSerial {
@@ -31,6 +34,7 @@ struct EmbeddingSliceSerial {
   std::vector<std::vector<float>> embeddings;
 
   MSGPACK_DEFINE_MAP(pos, embeddings);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(EmbeddingSliceSerial, pos, embeddings);
 };
 
 struct RequestSerial {
@@ -40,6 +44,8 @@ struct RequestSerial {
   std::vector<TargetRequestSerial> request_target;
 
   MSGPACK_DEFINE_MAP(prompt, input_tokens, input_refit_embedding, request_target);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RequestSerial, prompt, input_tokens, input_refit_embedding,
+                                              request_target);
 };
 
 // Forward request interface
@@ -47,14 +53,16 @@ struct BatchRequestSerial {
   std::vector<RequestSerial> requests;
 
   MSGPACK_DEFINE_MAP(requests);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(BatchRequestSerial, requests);
 };
 
 struct PythonTensorSerial {
-  std::vector<uint8_t> data;
+  std::string data;
   std::vector<size_t> shape;
   std::string dtype;
 
   MSGPACK_DEFINE_MAP(data, shape, dtype);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(PythonTensorSerial, data, shape, dtype);
 };
 
 struct TargetResponseSerial {
@@ -62,6 +70,7 @@ struct TargetResponseSerial {
   PythonTensorSerial tensor;
 
   MSGPACK_DEFINE_MAP(target_name, tensor);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(TargetResponseSerial, target_name, tensor);
 };
 
 struct ResponseSerial {
@@ -69,6 +78,7 @@ struct ResponseSerial {
   std::vector<TargetResponseSerial> response;
 
   MSGPACK_DEFINE_MAP(input_token_ids, response);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ResponseSerial, input_token_ids, response);
 };
 
 // Forward response interface
@@ -79,6 +89,7 @@ struct BatchResponseSerial {
 
   // {responses: responses, message: message, code: code}
   MSGPACK_DEFINE_MAP(responses, message, code);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(BatchResponseSerial, responses, message, code);
 };
 
 }  // namespace ksana_llm

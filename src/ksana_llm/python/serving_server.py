@@ -28,7 +28,7 @@ except ImportError as e:
 # 配置常量
 CONFIG = {
     "TIMEOUT_KEEP_ALIVE": 200,
-    "FIELDS_TO_EXTRACT": ["x-remote-ip", "kv-comm-group-key", "kv-comm-request-id"],
+    "FIELDS_TO_EXTRACT": ["x-remote-ip", "kv-comm-group-key", "kv-comm-request-id", 'Content-Type'],
     "DEFAULT_LOG_LEVEL": "INFO",
 }
 

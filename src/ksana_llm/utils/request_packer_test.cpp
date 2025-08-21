@@ -40,7 +40,9 @@ class RequestPackerTest : public testing::Test {
 // Test for empty unpacking.
 TEST_F(RequestPackerTest, EmptyUnpack) {
   std::string request_bytes;
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs).GetMessage().find("Request content is empty."),
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
+                .GetMessage()
+                .find("Request content is empty."),
             std::string::npos);
 }
 
@@ -57,7 +59,7 @@ TEST_F(RequestPackerTest, SimpleUnpack) {
 
   // Parse request
   std::string request_bytes(sbuf.data(), sbuf.size());
-  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack").OK());
   ASSERT_EQ(ksana_python_inputs.size(), 1ul);
   ASSERT_EQ(ksana_python_inputs[0]->sampling_config.max_new_tokens, 1);  // forward interface
   ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1);
@@ -93,7 +95,7 @@ TEST_F(RequestPackerTest, ComplexUnpack) {
 
   // Parse request
   std::string request_bytes(sbuf.data(), sbuf.size());
-  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack").OK());
   ASSERT_EQ(ksana_python_inputs.size(), 2ul);
   for (const auto& ksana_python_input : ksana_python_inputs) {
     ASSERT_EQ(ksana_python_input->sampling_config.max_new_tokens, 1);
@@ -135,7 +137,7 @@ TEST_F(RequestPackerTest, RedundantFileds) {
 
   // Parse request
   std::string request_bytes(sbuf.data(), sbuf.size());
-  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack").OK());
   ASSERT_EQ(ksana_python_inputs.size(), 1ul);
   ASSERT_EQ(ksana_python_inputs[0]->input_tokens, request.input_tokens);
   ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1);
@@ -152,7 +154,7 @@ TEST_F(RequestPackerTest, WrongInput) {
 
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Missing 'target_name' in target description."),
             std::string::npos);
@@ -165,7 +167,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Error: The end position of interval [0, 1] exceeds the total number of input tokens (1)."),
             std::string::npos);
@@ -175,7 +177,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Error: Interval [1, 2] overlaps with the previous interval ending at position 1."),
             std::string::npos);
@@ -185,7 +187,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Error: The end position of interval [4, 3] is less than its start position."),
             std::string::npos);
@@ -195,7 +197,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
   ASSERT_NE(
-      request_packer_.Unpack(request_bytes, ksana_python_inputs)
+      request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
           .GetMessage()
           .find("Get the last position is not supported for logits in the 'GATHER_TOKEN_ID' token reduction mode."),
       std::string::npos);
@@ -205,7 +207,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Unable to set both token_id and slice_pos at the same time."),
             std::string::npos);
@@ -214,7 +216,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find("Specifying token_id for logits output is not supported."),
             std::string::npos);
@@ -223,7 +225,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find(fmt::format("The specified token reduce mode in {} is invalid.", target.target_name)),
             std::string::npos);
@@ -233,7 +235,7 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find(fmt::format("The output of the {} does not support 'GATHER_TOKEN_ID'.", target.target_name)),
             std::string::npos);
@@ -242,15 +244,16 @@ TEST_F(RequestPackerTest, WrongInput) {
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs)
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
                 .GetMessage()
                 .find(fmt::format("Invalid target name {}.", target.target_name)),
             std::string::npos);
 
   request_bytes = "bad request";
-  ASSERT_NE(
-      request_packer_.Unpack(request_bytes, ksana_python_inputs).GetMessage().find("Failed to parse the request."),
-      std::string::npos);
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
+                .GetMessage()
+                .find("Failed to parse the request."),
+            std::string::npos);
 }
 
 // Test for packing.
@@ -270,7 +273,10 @@ TEST_F(RequestPackerTest, NormalPack) {
   Status response_status;
 
   std::string response_bytes;
-  ASSERT_TRUE(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes).OK());
+  ASSERT_TRUE(
+      request_packer_
+          .Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes, "application/x-msgpack")
+          .OK());
 
   auto handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
   auto object = handle.get();
@@ -306,7 +312,7 @@ TEST_F(RequestPackerTest, LogitsGatherAllTest) {
 
   // Parse request
   std::string request_bytes(sbuf.data(), sbuf.size());
-  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs).OK());
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack").OK());
   ASSERT_EQ(ksana_python_inputs.size(), 1ul);
   ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1);
   ASSERT_TRUE(ksana_python_inputs[0]->request_target.count(target.target_name));
@@ -335,7 +341,10 @@ TEST_F(RequestPackerTest, LogitsGatherAllTest) {
 
   // Step 3: Pack the response
   std::string response_bytes;
-  ASSERT_TRUE(request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes).OK());
+  ASSERT_TRUE(
+      request_packer_
+          .Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes, "application/x-msgpack")
+          .OK());
 
   // Step 4: Unpack and verify the response
   auto handle = msgpack::unpack(response_bytes.data(), response_bytes.size());
@@ -361,6 +370,45 @@ TEST_F(RequestPackerTest, LogitsGatherAllTest) {
   for (size_t i = 0; i < logits_data.size(); ++i) {
     ASSERT_NEAR(logits_response[i], logits_data[i], 1e-6);
   }
+}
+
+// Test for JSON format forward interface
+TEST_F(RequestPackerTest, JsonForward) {
+  // JSON unpack test - cover main JSON parsing functionality
+  nlohmann::json json_request = {
+      {"requests",
+       {{{"input_tokens", {1, 2, 3, 4, 5}},
+         {"request_target",
+          {{{"target_name", "logits"}, {"slice_pos", {{0, 0}}}, {"token_reduce_mode", "GATHER_TOKEN_ID"}}}}}}}};
+
+  std::string request_bytes = json_request.dump();
+  ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/json").OK());
+  ASSERT_EQ(ksana_python_inputs.size(), 1ul);
+  ASSERT_EQ(ksana_python_inputs[0]->input_tokens, std::vector<int>({1, 2, 3, 4, 5}));
+  ASSERT_EQ(ksana_python_inputs[0]->request_target.size(), 1ul);
+  ASSERT_TRUE(ksana_python_inputs[0]->request_target.count("logits"));
+
+  // JSON pack test - cover main JSON generation functionality
+  KsanaPythonOutput ksana_python_output;
+  PythonTensor tensor;
+  std::vector<float> data = {0.1f, 0.2f};
+  tensor.shape = {2};
+  tensor.dtype = GetTypeString(TYPE_FP32);
+  tensor.data.resize(data.size() * sizeof(float));
+  memcpy(tensor.data.data(), data.data(), tensor.data.size());
+  ksana_python_output.response["logits"] = tensor;
+  ksana_python_outputs.push_back(ksana_python_output);
+
+  std::string response_bytes;
+  Status response_status;
+  ASSERT_TRUE(request_packer_
+                  .Pack(ksana_python_inputs, ksana_python_outputs, response_status, response_bytes, "application/json")
+                  .OK());
+
+  // Validate JSON structure
+  nlohmann::json json_response = nlohmann::json::parse(response_bytes);
+  ASSERT_TRUE(json_response.contains("responses"));
+  ASSERT_EQ(json_response["responses"].size(), 1ul);
 }
 
 }  // namespace ksana_llm
