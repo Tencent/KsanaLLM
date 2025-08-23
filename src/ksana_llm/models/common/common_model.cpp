@@ -432,10 +432,16 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
       RecordRequestSchedEventWithFContext(*forwarding_context, "EmbLookup", RequestEventPhase::End);
     }
     forwarding_context->SetIsForwardingLayers(true);
-    LayerForward(*forwarding_context, run_mode);
+    if (!runtime_config_.is_profile_mode) {
+      LayerForward(*forwarding_context, run_mode);
+    } else {
+      // Used for layer forwarding performance profile
+      for (size_t idx = 0; idx < g_profile_layer_forwarding_round; idx++) {
+        LayerForward(*forwarding_context, run_mode);
+      }
+    }
     forwarding_context->SetIsForwardingLayers(false);
   }
-
   // Invode lm head only in standalone mode.
   if (context_->IsStandalone() || epilogue) {
     LmHead(*forwarding_context, base_weight, forward_reqs, run_mode);

@@ -43,6 +43,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
 
   // init context
   env->GetRuntimeConfig(runtime_config_);
+
   constexpr int max_multi_batch_num = 1;
   context_.reset(new Context(runtime_config_.parallel_basic_config.tensor_parallel_size,
                              runtime_config_.parallel_basic_config.attn_data_parallel_size, max_multi_batch_num));
@@ -90,6 +91,9 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
   // init CacheManager
   CacheManagerConfig cache_manager_config;
   env->GetCacheManagerConfig(cache_manager_config);
+  // NOTE: current use with AllocateRequestBlocks DestroyFinishedRequest will cause block leak
+  // if enable_prefix_caching=true. Need to call UpdateRequestTokens.
+  cache_manager_config.enable_prefix_caching = false;
 
   // RuntimeConfig is set in InitializeBlockManagerConfig
   env->GetRuntimeConfig(runtime_config_);
@@ -132,33 +136,31 @@ void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& bloc
 }
 
 size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num, const PerfProfileConfig& max_config) const {
-  size_t tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
   static constexpr size_t kExtraBlockNum = 10;
 
-  size_t single_token_request_num = 0;
-  size_t single_token_request_cached_token_num = 0;
-  size_t multi_token_request_num = 0;
-  size_t multi_token_request_token_num = 0;
+  size_t max_block_num = 0;
 
   for (size_t dp_idx = 0; dp_idx < max_config.req_configs.size(); dp_idx++) {
     auto& req_config = max_config.req_configs[0];
-    single_token_request_num += req_config.single_token_request_num;
-    single_token_request_cached_token_num += req_config.single_token_request_cached_token_num;
-    multi_token_request_num += req_config.multi_token_request_num;
-    multi_token_request_token_num += req_config.multi_token_request_token_num;
+    size_t dp_multi_token_request_block_num =
+        (req_config.multi_token_request_token_num + block_token_num) / block_token_num;
+    size_t dp_single_token_request_block_num =
+        (req_config.single_token_request_cached_token_num + 1 + block_token_num) / block_token_num;
+    size_t dp_max_block_num = dp_multi_token_request_block_num * req_config.multi_token_request_num +
+                              dp_single_token_request_block_num * req_config.single_token_request_num;
+    max_block_num = (dp_max_block_num > max_block_num) ? dp_max_block_num : max_block_num;
   }
 
-  size_t multi_token_request_block_num = (multi_token_request_token_num + block_token_num) / block_token_num;
-  size_t single_token_request_block_num =
-      (single_token_request_cached_token_num + 1 + block_token_num) / block_token_num;
-  return tp_size * (single_token_request_num * single_token_request_block_num +
-                    multi_token_request_num * multi_token_request_block_num + kExtraBlockNum);
+  return max_block_num + kExtraBlockNum;
 }
 
 void ModelPerformanceRunner::LoadModel() {
   std::shared_ptr<WeightInstanceInterface> weight_instance =
       std::make_shared<WeightInstance>(model_config_, runtime_config_, context_);
   weight_instance->Load();
+
+  runtime_config_.is_profile_mode = true;
+  runtime_config_.enable_prefix_caching = true;
   model_instance_ = std::make_shared<ModelInstance>(model_config_, runtime_config_, context_, weight_instance);
   model_instance_->Load();
 }
@@ -193,6 +195,8 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   // run
   KLLM_LOG_INFO << fmt::format("Start run model performance of {} rounds", profile_config.warmup_round);
   EventRecord(start, context_->GetComputeStreams()[device_id]);
+
+  g_profile_layer_forwarding_round = profile_config.layer_forward_round;
   Status result_status = Status();
   for (size_t i = 0; i < profile_config.profile_round; ++i) {
     result_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
@@ -201,6 +205,8 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
       return result_status;
     }
   }
+  g_profile_layer_forwarding_round = 1;
+
   EventRecord(stop, context_->GetComputeStreams()[device_id]);
   EventSynchronize(stop);
   EventElapsedTime(&milliseconds, start, stop);
@@ -211,6 +217,11 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
 }
 
 void ModelPerformanceRunner::ResetInferRequests() {
+  // Free blocks
+  for (auto infer_req : infer_reqs_) {
+    infer_req->cache_manager->DestroyFinishedRequest(infer_req->req_id);
+  }
+
   infer_reqs_.clear();
   input_ids_map_.clear();
   input_refit_pos_.clear();
@@ -234,7 +245,7 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
       std::make_shared<std::unordered_map<std::string, std::string>>();
   std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input_, req_ctx);
-  size_t req_id = 0;
+  static size_t req_id = 0;
   for (size_t dp_idx = 0; dp_idx < profile_config.req_configs.size(); dp_idx++) {
     auto& req_config = profile_config.req_configs[dp_idx];
 
@@ -242,14 +253,16 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
     const size_t single_token_request_cached_token_num = req_config.single_token_request_cached_token_num;
     const size_t multi_token_request_num = req_config.multi_token_request_num;
     const size_t multi_token_request_token_num = req_config.multi_token_request_token_num;
-    const size_t multi_token_cached_token_num = req_config.multi_token_cached_token_num;
+    const size_t multi_token_cached_token_num =
+        req_config.multi_token_request_token_num - req_config.multi_token_forwarding_token_num;
 
     const size_t dp_req_num = single_token_request_num + multi_token_request_num;
     for (size_t req_idx = 0; req_idx < dp_req_num; req_idx++) {
       req_id++;
-      std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, req_id);
+      std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, 0);
 
       infer_reqs_.push_back(infer_req);
+      infer_req->req_id = req_id;
       infer_req->attn_dp_group_id = dp_idx;
       infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
       infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
@@ -257,7 +270,7 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
       infer_req->model_instance = model_instance_;
       infer_req->step = 0;  // not using
 
-      if (req_id < multi_token_request_num) {  // multi_token_request
+      if (req_idx < multi_token_request_num) {  // multi_token_request
         input_ids_map_[req_id].resize(multi_token_request_token_num);
         infer_req->input_tokens = input_ids_map_[req_id];
         std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
@@ -289,17 +302,16 @@ void ModelPerformanceRunner::CheckRequests() const {
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_batch_size >= infer_reqs_.size(),
                        fmt::format("max_batch_size {} should not less than number of requests {}",
                                    batch_scheduler_config.max_batch_size, infer_reqs_.size()));
-  size_t step_tokens = std::accumulate(
-      infer_reqs_.begin(), infer_reqs_.end(), size_t{0}, [](size_t acc, std::shared_ptr<InferRequest> req) {
-        return acc + (req->infer_stage == InferStage::STAGE_CONTEXT ? req->forwarding_tokens.size() : 1);
-      });
+  size_t step_tokens = std::accumulate(infer_reqs_.begin(), infer_reqs_.end(), size_t{0},
+                                       [](size_t acc, std::shared_ptr<InferRequest> req) {
+                                         return acc + (req->infer_stage == InferStage::STAGE_CONTEXT
+                                                           ? (req->forwarding_tokens.size() - req->kv_cached_token_num)
+                                                           : 1);
+                                       });
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_step_token_num >= step_tokens,
                        fmt::format("max_step_token_num {} should not less than step_tokens {}",
                                    batch_scheduler_config.max_step_token_num, step_tokens));
   for (const auto& req : infer_reqs_) {
-    KLLM_CHECK_WITH_INFO(req->prefix_cache_len % runtime_config_.attn_backend_config.block_token_num == 0,
-                         fmt::format("prefix_cache_len {} should be divisible by block_token_num {}",
-                                     req->prefix_cache_len, runtime_config_.attn_backend_config.block_token_num));
     if (!runtime_config_.enable_prefix_caching) {
       KLLM_CHECK_WITH_INFO(req->prefix_cache_len == 0, "prefix_caching is disabled, prefix_cache_len should be 0");
     }

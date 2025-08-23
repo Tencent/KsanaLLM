@@ -11,6 +11,8 @@
 
 namespace ksana_llm {
 
+size_t g_profile_layer_forwarding_round = 1;
+
 static bool ReadEnableProfileEventFlag() {
   if (std::getenv("ENABLE_PROFILE_EVENT") != nullptr) {
     KLLM_LOG_INFO << "PROFILE_EVENT is enabled";

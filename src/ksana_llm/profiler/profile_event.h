@@ -20,4 +20,6 @@ class ProfileEvent {
 #define PROFILE_EVENT_SCOPE(var_name, event_str, ...) \
   ksana_llm::ProfileEvent __profile_event__##var_name((event_str), ##__VA_ARGS__)
 
+extern size_t g_profile_layer_forwarding_round;
+
 }  // namespace ksana_llm

@@ -56,7 +56,8 @@ TEST_F(ModelPerformanceRunnerTest, Test) {
   // test multi token request
   size_t multi_token_req_idx = 0;
   EXPECT_EQ(infer_reqs[multi_token_req_idx]->forwarding_tokens.size(), req_config.multi_token_request_token_num);
-  EXPECT_EQ(infer_reqs[multi_token_req_idx]->prefix_cache_len, req_config.multi_token_cached_token_num);
+  EXPECT_EQ(infer_reqs[multi_token_req_idx]->prefix_cache_len,
+            req_config.multi_token_request_token_num - req_config.multi_token_forwarding_token_num);
   // test single token request
   size_t single_token_req_idx = expect_multi_token_request_num;
   EXPECT_EQ(infer_reqs[single_token_req_idx]->kv_cached_token_num, req_config.single_token_request_cached_token_num);

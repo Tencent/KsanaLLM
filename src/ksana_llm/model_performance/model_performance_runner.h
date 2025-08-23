@@ -13,12 +13,14 @@ struct PerfProfileConfig {
     size_t single_token_request_cached_token_num = 0;
     size_t multi_token_request_num = 0;
     size_t multi_token_request_token_num = 0;
-    size_t multi_token_cached_token_num = 0;
+    size_t multi_token_forwarding_token_num = 0;
   };
+
   uint32_t config_id = 0;
   std::vector<PerfDpReqConfig> req_configs;
   size_t warmup_round = 0;
   size_t profile_round = 1;
+  size_t layer_forward_round = 1;  // used to simulate multiple layer forward
 };
 
 struct PerfProfileResult {

@@ -78,7 +78,7 @@ Status PerfProfileConfigBuilderWithCsv::ParsePerformanceRunnerConfig(const std::
   }
 
   // Parse each data row
-  const size_t kCsvColumnNum = 5;  // Expected number of columns
+  const size_t kCsvColumnNum = 6;  // Expected number of columns
   std::string line;
   uint32_t config_id = 0;
   while (std::getline(file, line)) {
@@ -119,7 +119,11 @@ Status PerfProfileConfigBuilderWithCsv::ParsePerformanceRunnerConfig(const std::
     config.req_configs[0].single_token_request_cached_token_num = values[1];
     config.req_configs[0].multi_token_request_num = values[2];
     config.req_configs[0].multi_token_request_token_num = values[3];
-    config.req_configs[0].multi_token_cached_token_num = values[4];
+    config.req_configs[0].multi_token_forwarding_token_num = values[4];
+
+    config.layer_forward_round = values[5];
+    KLLM_CHECK_WITH_INFO(config.layer_forward_round < 100,
+                         FormatStr("config.layer_forward_round==%d, must <= 100.", config.layer_forward_round));
 
     // Add the config to our list
     csv_configs_.push_back(config);

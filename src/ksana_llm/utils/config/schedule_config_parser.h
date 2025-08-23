@@ -328,6 +328,8 @@ struct RuntimeConfig {
   DataType inter_data_type;
 
   bool enable_o_proj_out_of_dp = false;  // Whether to enable out-of-data-parallelism for o_proj in attention.
+
+  bool is_profile_mode = false;  // Only used for profiling performance
 };
 
 class ScheduleConfigParser {
