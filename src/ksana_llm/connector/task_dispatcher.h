@@ -15,6 +15,7 @@
 #include <vector>
 #include "ksana_llm/connector/communicator/communicator_manager.h"
 #include "ksana_llm/connector/config.h"
+#include "ksana_llm/connector/device_info_manager.h"
 #include "ksana_llm/connector/task_key.h"
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/transfer/transfer_types.h"
@@ -26,6 +27,8 @@
 #endif
 
 namespace ksana_llm {
+
+#define DEFAULT_TRANSFER_CONFIG_SIZE 35
 
 class TaskManager;       // forward declare
 class ZmqCommunicator;   // forward declare
@@ -59,7 +62,12 @@ class TaskDispatcher {
    */
   virtual void Shutdown();
 
-  virtual Status Initialize();
+  virtual Status Initialize(std::shared_ptr<DeviceInfoManager> device_info_manager);
+
+  /**
+   * @brief Send decode device para config to prefill
+   */
+  void SendConfigToPrefill(const std::string& kv_comm_group_key, size_t adp_num, size_t device_num);
 
   /**
    * @brief Send tasks to prefill
@@ -81,7 +89,8 @@ class TaskDispatcher {
    */
   virtual void ProcessPrefillReceivedTasks();
 
-  virtual void HandlePrefillGroupBatch(const std::pair<std::pair<std::string, int>, std::vector<TaskKey>>& group_batch);
+  virtual void HandlePrefillGroupBatch(
+      const std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>>& group_batch);
 
   /**
    * @brief Retry failed tasks for a specific group
@@ -98,8 +107,8 @@ class TaskDispatcher {
    * @param device_idx 设备索引
    * @return 连接的唯一标识符字符串
    */
-  std::string MakeConnectionId(const std::string& group_key, int device_idx) const;
-  std::pair<std::string, int> ParseConnectionId(const std::string& connection_id);
+  std::string MakeConnectionId(const std::string& group_key, int src_device_idx, int dst_device_idx = -1) const;
+  std::pair<std::string, std::pair<int, int>> ParseConnectionId(const std::string& connection_id);
 
   /**
    * @brief 检查连接是否准备就绪，首次连接会尝试等待
@@ -147,9 +156,10 @@ class TaskDispatcher {
    * @param group_vec Vector of TaskKeys to process
    * @return Status of the operation
    */
-  void SendDataToDecodeWithNccl(const std::string& group_key, int device_idx, const std::vector<TaskKey>& group_vec);
+  void SendDataToDecodeWithNccl(const std::string& group_key, int src_device_idx, int dst_device_idx,
+                                const std::vector<TaskKey>& group_vec);
 
-  void RecvTaskDataWithNccl(const std::string& group_key, int device_idx, size_t count);
+  void RecvTaskDataWithNccl(const std::string& group_key, int src_device_idx, int dst_device_idx, size_t count);
 #endif
 
  private:  // Changed from private to protected to allow test access
@@ -183,6 +193,8 @@ class TaskDispatcher {
 
   /** @brief Task manager instance */
   std::shared_ptr<TaskManager> task_manager_;
+
+  std::shared_ptr<DeviceInfoManager> device_info_manager_;
 
   /** @brief Communicator manager（所有权转移） */
   std::shared_ptr<CommunicatorManager> comm_manager_;

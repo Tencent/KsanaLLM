@@ -91,7 +91,9 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
       req->output_tokens.size() >= batch_scheduler_config_.max_token_len ||
       (req->req_fsm != nullptr && req->req_fsm->IsStopState(req->fsm_state_id))) {
     stop_checker_->CheckCompleteStopStrings(req);
-
+    KLLM_LOG_DEBUG << "Request " << req->req_id << " had finished."
+                   << " req output_tokens size: " << req->output_tokens.size()
+                   << " input_tokens size: " << req->input_tokens.size();
     return true;
   }
 
@@ -405,6 +407,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
       StopRequest(req, Status(RET_SUCCESS), false);
       if (connector_config_.group_role == GroupRole::PREFILL) {
+        KLLM_LOG_DEBUG << "Prefill enter transfer queue for tranfer task to Decode, req id:" << req->kv_comm_request_id;
         batch_state_->transfer_queue.emplace_back(req);
       }
 
@@ -1013,9 +1016,11 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           if (connector_config_.group_role == GroupRole::DECODE) {
             batch_state_->transfer_queue.emplace_back(req);
             it = batch_state_->waiting_queue.erase(it);
+            KLLM_LOG_DEBUG << "Decode put req to transfer queue, req id: " << req->kv_comm_request_id;
             continue;
           } else {
             batch_state_->schedule_output->running_reqs.emplace_back(req);
+            KLLM_LOG_DEBUG << "Prefill put req to running queue, req id: " << req->kv_comm_request_id;
             DetermineDraftNum(req);
           }
         }

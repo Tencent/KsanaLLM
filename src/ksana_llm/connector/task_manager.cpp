@@ -218,8 +218,12 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
 
                             // Check if this task was waiting in prefill pending
                             typename decltype(shard.prefill_pending_tasks)::accessor prefill_accessor;
+                            KLLM_LOG_DEBUG << "RegisterDecodeConfirmedTasks: " << task_key.ToString();
                             if (shard.prefill_pending_tasks.find(prefill_accessor, task_key)) {
                               TaskKey actual_key = prefill_accessor->first;
+                              actual_key.decode_device_id = task_key.decode_device_id;
+                              actual_key.decode_device_offset = task_key.decode_device_offset;
+                              KLLM_LOG_DEBUG << "prefill_pending_tasks find and update: " << actual_key.ToString();
                               prefill_accessor.release();
                               shard.prefill_pending_tasks.erase(task_key);
 
@@ -246,12 +250,20 @@ void TaskManager::AddPrefillPendingTask(const TaskKey& task_key) {
   accessor->second = now;
 }
 
-bool TaskManager::TryActivatePendingTask(const TaskKey& task_key) {
+bool TaskManager::TryActivatePendingTask(TaskKey& task_key) {
   auto& shard = GetShard(task_key.req_id);
 
   // Check if confirmed by decode phase
   typename decltype(shard.decode_confirmed_tasks)::const_accessor decode_accessor;
+  KLLM_LOG_DEBUG << "Start find prefill Taskkey in decode_confirmed_tasks: " << task_key.ToString();
   if (shard.decode_confirmed_tasks.find(decode_accessor, task_key)) {
+    if (task_key.decode_device_id == -1 || task_key.decode_device_offset == -1) {
+      KLLM_LOG_DEBUG << "Invalid decode device id need assigned for task_key: " << task_key.ToString();
+      const TaskKey& decode_task_key = decode_accessor->first;
+      task_key.decode_device_id = decode_task_key.decode_device_id;
+      task_key.decode_device_offset = decode_task_key.decode_device_offset;
+      KLLM_LOG_DEBUG << "Assigned decode device id for task_key: " << task_key.ToString();
+    }
     decode_accessor.release();
 
     // Remove from both maps
@@ -269,7 +281,7 @@ bool TaskManager::TryActivatePendingTask(const TaskKey& task_key) {
 //=============================================================================
 
 std::unordered_map<TaskManager::GroupDevKey, std::vector<TaskKey>, TaskManager::GroupDevKeyHash>
-TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch) {
+TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is_prefill) {
   std::unordered_map<GroupDevKey, std::vector<TaskKey>, GroupDevKeyHash> grouped;
   auto tasks = GetTasksBatch(batch);
 
@@ -283,8 +295,13 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch) {
     }
 
     const std::string& group_key = task->addr;
-    int device_idx = task_key.device_idx;
-    grouped[{group_key, device_idx}].push_back(task_key);
+    int prefill_device_id = task_key.prefill_device_id;
+    int decode_device_id = task_key.decode_device_id;
+    if (is_prefill) {
+      grouped[{group_key, {prefill_device_id, decode_device_id}}].push_back(task_key);
+    } else {
+      grouped[{group_key, {decode_device_id, prefill_device_id}}].push_back(task_key);
+    }
   }
 
   return grouped;
@@ -305,22 +322,24 @@ void TaskManager::CleanupExpiredTasks(int timeout_seconds) {
             auto& shard = *shards_[shard_idx];
 
             // Cleanup prefill pending tasks (erase by key, increment before erase)
-            for (auto it = shard.prefill_pending_tasks.begin(); it != shard.prefill_pending_tasks.end(); ) {
+            for (auto it = shard.prefill_pending_tasks.begin(); it != shard.prefill_pending_tasks.end();) {
               if (now - it->second >= timeout_threshold) {
                 auto key = it->first;
                 ++it;
                 shard.prefill_pending_tasks.erase(key);
+                KLLM_LOG_DEBUG << "Cleanup expired prefill pending task key: " << key.ToString();
               } else {
                 ++it;
               }
             }
 
             // Cleanup decode confirmed tasks (erase by key, increment before erase)
-            for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end(); ) {
+            for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end();) {
               if (now - it->second >= timeout_threshold) {
                 auto key = it->first;
                 ++it;
                 shard.decode_confirmed_tasks.erase(key);
+                KLLM_LOG_DEBUG << "Cleanup expired decode confirmed task key: " << key.ToString();
               } else {
                 ++it;
               }

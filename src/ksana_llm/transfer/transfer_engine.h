@@ -12,9 +12,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-#include "ksana_llm/transfer/transfer_types.h"
-
 #include "ksana_llm/connector/connector.h"
+#include "ksana_llm/transfer/transfer_types.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/status.h"
@@ -31,6 +30,9 @@ namespace ksana_llm {
 struct TransferMeta {
   size_t shared_token_num = 0;  // 共享token数量
   int first_token = -1;         // 第一个token的值，-1表示尚未接收到
+
+  // 节点内KV存储使用的Rank号
+  std::vector<int> kv_ranks_in_node;
 
   // 多个设备上的GPU物理内存块信息 [device_idx][block_idx]
   std::vector<std::vector<void*>> gpu_blocks;
@@ -56,7 +58,9 @@ class TransferConnector : public Connector {
   TransferConnector(const ConnectorConfig& config, size_t tp_size, size_t node_rank, std::shared_ptr<Environment> env)
       : Connector(config, tp_size, node_rank, env) {}
 
-  Status Initialize(GroupRole group_role) override { return Status(); }
+  Status Initialize(GroupRole group_role, std::shared_ptr<DeviceInfoManager> device_info_manager) override {
+    return Status();
+  }
 
   // 启动传输任务处理线程
   void Start() override {}
@@ -95,7 +99,7 @@ class TransferEngine {
    * @param gpu_blocks GPU内存块信息
    */
   void AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_token_num,
-                       std::vector<std::vector<void*>>& gpu_blocks);
+                       std::vector<std::vector<void*>>& gpu_blocks, std::vector<int>& kv_occupied_devices);
 
   /**
    * @brief 检查指定请求的发送操作是否完成
@@ -148,6 +152,8 @@ class TransferEngine {
     return meta_map_.erase(request_id) > 0;
   }
 
+  void SetGroupRole(GroupRole group_role) { group_role_ = group_role; }
+
  private:
   /**
    * @brief 为decode节点创建传输任务
@@ -163,6 +169,8 @@ class TransferEngine {
 
   // 张量并行大小
   size_t tensor_parallel_size_ = 0;
+
+  size_t attn_data_parallel_size_ = 0;
 
   // 保护元数据映射的互斥锁
   std::mutex meta_map_mutex_;
@@ -187,8 +195,13 @@ class TransferEngine {
   // 传输连接器
   std::shared_ptr<Connector> connector_;
 
+  // 设备信息管理器
+  std::shared_ptr<DeviceInfoManager> device_info_manager_ = std::make_shared<DeviceInfoManager>();
+
   // 不需要prefill的decode节点状态
   bool decode_node_benchmark = false;
+
+  std::once_flag init_once_flag_;
 
   /**
    * @brief 验证层索引是否有效

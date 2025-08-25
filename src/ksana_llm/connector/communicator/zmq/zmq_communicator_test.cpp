@@ -90,20 +90,20 @@ TEST_F(ZmqCommunicatorTest, TestCommunicatorInterface) {
   EXPECT_TRUE(status.OK());
 
   // Test Send method
-  status = communicator_->Send("test_group", 0, 0, test_data, data_size, DataType::TYPE_BYTES);
+  status = communicator_->Send("test_group", 0, 0, 0, test_data, data_size, DataType::TYPE_BYTES);
   // Note: In a real test we would expect OK, but since we're using a mock and don't have an actual
   // ZMQ socket listening, we expect this to fail in a controlled manner
   EXPECT_FALSE(status.OK());
 
   // Test Recv method
-  status = communicator_->Recv("test_group", 0, 0, recv_buffer, sizeof(recv_buffer), DataType::TYPE_BYTES);
+  status = communicator_->Recv("test_group", 0, 0, 0, recv_buffer, sizeof(recv_buffer), DataType::TYPE_BYTES);
   // Again, we expect a controlled failure since there's no actual ZMQ socket sending data
   EXPECT_FALSE(status.OK());
 
   // Test SendGroup method
   std::vector<const void*> buffers = {test_data, test_data + 5};
   std::vector<size_t> counts = {5, 5};
-  status = communicator_->SendGroup("test_group", 0, 0, buffers, counts, DataType::TYPE_BYTES);
+  status = communicator_->SendGroup("test_group", 0, 0, 0, buffers, counts, DataType::TYPE_BYTES);
   // Expect controlled failure
   EXPECT_FALSE(status.OK());
 }
@@ -224,11 +224,11 @@ class MockZmqCommunicator : public ZmqCommunicator {
   explicit MockZmqCommunicator(const ConnectorConfig& config) : ZmqCommunicator(config) {}
 
   // Override Send method to use mock socket
-  Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-              DataType dtype) override {
+  Status Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, const void* buf,
+              size_t count, DataType dtype) override {
     // Record call parameters
     last_send_group_key_ = group_key;
-    last_send_dev_id_ = dev_id;
+    last_send_dev_id_ = src_dev_id;
     last_send_buf_ = buf;
     last_send_count_ = count;
     last_send_dtype_ = dtype;
@@ -241,12 +241,12 @@ class MockZmqCommunicator : public ZmqCommunicator {
     // Find communication group and device resource
     std::lock_guard<std::mutex> lock(comm_group_mutex_);
     auto it = comm_groups_.find(group_key);
-    if (it == comm_groups_.end() || !it->second || dev_id < 0 ||
-        static_cast<size_t>(dev_id) >= it->second->device_resources.size()) {
+    if (it == comm_groups_.end() || !it->second || src_dev_id < 0 ||
+        static_cast<size_t>(src_dev_id) >= it->second->device_resources.size()) {
       return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid group_key or dev_id for Send");
     }
 
-    auto& device_resource = it->second->device_resources[dev_id];
+    auto& device_resource = it->second->device_resources[src_dev_id];
     if (!device_resource) {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Send socket not initialized");
     }
@@ -465,7 +465,7 @@ TEST_F(ZmqCommunicatorSendTest, Send_ValidParameters) {
   size_t count = test_data.size();
 
   // Execute Send operation
-  status = communicator_->Send(group_key, dev_id, 0, test_data.data(), count, DataType::TYPE_BYTES);
+  status = communicator_->Send(group_key, dev_id, dev_id, 0, test_data.data(), count, DataType::TYPE_BYTES);
 
   // Verify results
   EXPECT_TRUE(status.OK()) << "Send should succeed: " << status.GetMessage();
@@ -484,7 +484,7 @@ TEST_F(ZmqCommunicatorSendTest, Send_ValidParameters) {
 TEST_F(ZmqCommunicatorSendTest, Send_InvalidGroupKey) {
   std::string test_data = "test";
   Status status =
-      communicator_->Send("non_existent_group", 0, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
+      communicator_->Send("non_existent_group", 0, 0, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
@@ -501,12 +501,12 @@ TEST_F(ZmqCommunicatorSendTest, Send_InvalidDeviceId) {
   std::string test_data = "test";
 
   // Test negative device ID
-  Status status = communicator_->Send(group_key, -1, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, -1, -1, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 
   // Test out-of-range device ID
-  status = communicator_->Send(group_key, 10, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
+  status = communicator_->Send(group_key, 10, 10, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 }
@@ -516,14 +516,14 @@ TEST_F(ZmqCommunicatorSendTest, Send_InvalidBuffer) {
   communicator_->CreateTestCommGroup(group_key, 1);
 
   // Test null buffer
-  Status status = communicator_->Send(group_key, 0, 0, nullptr, 10, DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 0, 0, 0, nullptr, 10, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
   EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("Invalid buffer or count"));
 
   // Test zero count
   std::string test_data = "test";
-  status = communicator_->Send(group_key, 0, 0, test_data.data(), 0, DataType::TYPE_BYTES);
+  status = communicator_->Send(group_key, 0, 0, 0, test_data.data(), 0, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 }
@@ -536,7 +536,7 @@ TEST_F(ZmqCommunicatorSendTest, Send_SocketSendError) {
   mock_socket_->SetSimulateSendError(true);
 
   std::string test_data = "test";
-  Status status = communicator_->Send(group_key, 0, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 0, 0, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
@@ -549,7 +549,7 @@ TEST_F(ZmqCommunicatorSendTest, Send_LargeData) {
 
   // Test large data transfer
   std::vector<char> large_data(10000, 'A');
-  Status status = communicator_->Send(group_key, 0, 0, large_data.data(), large_data.size(), DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 0, 0, 0, large_data.data(), large_data.size(), DataType::TYPE_BYTES);
 
   EXPECT_TRUE(status.OK());
   EXPECT_EQ(communicator_->GetLastSendCount(), large_data.size());
@@ -570,7 +570,8 @@ TEST_F(ZmqCommunicatorSendTest, Send_MultipleDevices) {
     communicator_->ResetCallCounts();
     mock_socket_->ResetCallCounts();
 
-    Status status = communicator_->Send(group_key, dev_id, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
+    Status status =
+        communicator_->Send(group_key, dev_id, dev_id, 0, test_data.data(), test_data.size(), DataType::TYPE_BYTES);
 
     EXPECT_TRUE(status.OK()) << "Send failed for device " << dev_id;
     EXPECT_EQ(communicator_->GetLastSendDevId(), dev_id);
@@ -1634,7 +1635,7 @@ TEST_F(ZmqCommunicatorSendRealTest, Send_InvalidBuffer) {
   std::string group_key = "send_test_group";
 
   // Test with null buffer
-  Status status = communicator_->Send(group_key, 0, 0, nullptr, 100, DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 0, 0, 0, nullptr, 100, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
   EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("Invalid buffer"));
@@ -1645,7 +1646,7 @@ TEST_F(ZmqCommunicatorSendRealTest, Send_ZeroCount) {
   char buffer[100];
 
   // Test with zero count
-  Status status = communicator_->Send(group_key, 0, 0, buffer, 0, DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 0, 0, 0, buffer, 0, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
   EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("Invalid buffer or count"));
@@ -1655,7 +1656,7 @@ TEST_F(ZmqCommunicatorSendRealTest, Send_InvalidGroupKey) {
   char buffer[100] = "test data";
 
   // Test with non-existent group
-  Status status = communicator_->Send("non_existent_group", 0, 0, buffer, 9, DataType::TYPE_BYTES);
+  Status status = communicator_->Send("non_existent_group", 0, 0, 0, buffer, 9, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
   EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("Invalid group_key"));
@@ -1666,7 +1667,7 @@ TEST_F(ZmqCommunicatorSendRealTest, Send_InvalidDeviceId) {
   char buffer[100] = "test data";
 
   // Test with invalid device ID
-  Status status = communicator_->Send(group_key, 999, 0, buffer, 9, DataType::TYPE_BYTES);
+  Status status = communicator_->Send(group_key, 999, 0, 0, buffer, 9, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
   EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("Invalid group_key or dev_id"));

@@ -38,14 +38,14 @@ int MockGetTypeSize(DataType dtype) {
 }
 
 /// 创建测试用的TransferTask
-std::shared_ptr<TransferTask> CreateTestTask(int req_id, int block_idx, int layer_idx, int device_idx,
+std::shared_ptr<TransferTask> CreateTestTask(int req_id, int block_idx, int layer_idx, int hash_device_id,
                                              int tensor_size = 0, int token = 0,
                                              const std::string& addr = "127.0.0.1:50051") {
   auto task = std::make_shared<TransferTask>();
   task->req_id = req_id;
   task->tensor.block_idx = block_idx;
   task->tensor.layer_idx = layer_idx;
-  task->tensor.device_idx = device_idx;
+  task->tensor.hash_device_id = hash_device_id;
   task->token = token;
   task->addr = addr;
   task->is_completed = false;
@@ -86,8 +86,14 @@ class TaskManagerTest : public ::testing::Test {
   }
 
   // 辅助方法：创建TaskKey
-  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int device_idx, int tensor_size = 0, int token = 0) {
-    return TaskKey(req_id, block_idx, layer_idx, device_idx, tensor_size, token, ProfileTimer::GetCurrentTimeInUs());
+  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
+                        int token = 0) {
+    int decode_device_id = -1;
+    int decode_device_offset = -1;
+    int prefill_device_id = -1;
+    int prefill_device_offset = -1;
+    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size, token, decode_device_id,
+                   decode_device_offset, prefill_device_id, prefill_device_offset, ProfileTimer::GetCurrentTimeInUs());
   }
 
   // 辅助方法：创建任务批次
@@ -102,7 +108,8 @@ class TaskManagerTest : public ::testing::Test {
   // 辅助方法：添加任务到管理器
   void AddTasksToManager(const std::vector<TaskKey>& task_keys) {
     for (const auto& key : task_keys) {
-      auto task = CreateTestTask(key.req_id, key.block_idx, key.layer_idx, key.device_idx, key.tensor_size, key.token);
+      auto task =
+          CreateTestTask(key.req_id, key.block_idx, key.layer_idx, key.hash_device_id, key.tensor_size, key.token);
       task_manager_->AddTask(key, task);
     }
   }
@@ -153,16 +160,20 @@ TEST_F(TaskManagerBasicTest, TaskKeyBasicOperations) {
   EXPECT_EQ(key1.tensor_size, 0);
   EXPECT_EQ(key1.block_idx, 0);
   EXPECT_EQ(key1.layer_idx, 0);
-  EXPECT_EQ(key1.device_idx, 0);
+  EXPECT_EQ(key1.hash_device_id, 0);
   EXPECT_EQ(key1.token, 0);
   EXPECT_EQ(key1.start_time_us, 0);
 
-  TaskKey key2(123, 1, 2, 3, 1024, 456, 789);
+  TaskKey key2(123, 1, 2, 3, 1024, 456, 4, 5, 6, 7, 789);
   EXPECT_EQ(key2.req_id, 123);
   EXPECT_EQ(key2.tensor_size, 1024);
   EXPECT_EQ(key2.block_idx, 1);
   EXPECT_EQ(key2.layer_idx, 2);
-  EXPECT_EQ(key2.device_idx, 3);
+  EXPECT_EQ(key2.hash_device_id, 3);
+  EXPECT_EQ(key2.decode_device_id, 4);
+  EXPECT_EQ(key2.decode_device_offset, 5);
+  EXPECT_EQ(key2.prefill_device_id, 6);
+  EXPECT_EQ(key2.prefill_device_offset, 7);
   EXPECT_EQ(key2.token, 456);
   EXPECT_EQ(key2.start_time_us, 789);
 }
@@ -186,19 +197,19 @@ TEST_F(TaskManagerBasicTest, TaskKeyShardIndex) {
 }
 
 TEST_F(TaskManagerBasicTest, TaskKeyEquality) {
-  TaskKey key1(123, 1, 2, 3, 1024, 456, 789);
-  TaskKey key2(123, 1, 2, 3, 1024, 999, 888);  // 不同的token和timestamp
+  TaskKey key1(123, 1, 2, 3, 1024, 456, 1, 0, 1, 0, 789);
+  TaskKey key2(123, 1, 2, 3, 1024, 999, 2, 1, 2, 1, 888);  // 不同的token和timestamp
 
-  // 比较操作符应该忽略token和timestamp
+  // 比较操作符应该忽略token, 所在设备信息和timestamp
   EXPECT_TRUE(key1 == key2);
 
-  TaskKey key3(124, 1, 2, 3, 1024, 456, 789);  // 不同的req_id
+  TaskKey key3(124, 1, 2, 3, 1024, 456, 1, 0, 1, 0, 789);  // 不同的req_id
   EXPECT_FALSE(key1 == key3);
 }
 
 TEST_F(TaskManagerBasicTest, TaskKeyPriorityComparison) {
-  TaskKey key1(123, 1, 2, 3, 1024, 456, 1000);
-  TaskKey key2(123, 1, 2, 3, 1024, 456, 2000);
+  TaskKey key1(123, 1, 2, 3, 1024, 456, 1, 0, 1, 0, 1000);
+  TaskKey key2(123, 1, 2, 3, 1024, 456, 1, 0, 1, 0, 2000);
 
   // 较早的时间戳应该有更高的优先级
   // priority_queue 里，operator< 实现为 start_time_us > other.start_time_us
@@ -215,7 +226,7 @@ TEST_F(TaskManagerBasicTest, TaskKeyCreateFromTransferTask) {
   EXPECT_EQ(key.req_id, 123);
   EXPECT_EQ(key.block_idx, 1);
   EXPECT_EQ(key.layer_idx, 2);
-  EXPECT_EQ(key.device_idx, 3);
+  EXPECT_EQ(key.hash_device_id, 3);
   EXPECT_EQ(key.tensor_size, 400);  // 100 elements * 4 bytes
   EXPECT_EQ(key.token, 456);
   EXPECT_GT(key.start_time_us, 0);
@@ -235,7 +246,7 @@ TEST_F(TaskManagerBasicTest, TaskKeyCreateFromNullTask) {
 //=============================================================================
 
 TEST_F(TaskManagerBasicTest, TaskKeySerialization) {
-  TaskKey original(123, 1, 2, 3, 1024, 456, 789);
+  TaskKey original(123, 1, 2, 3, 1024, 456, 1, 0, 2, 1, 789);
 
   // 测试序列化
   std::vector<uint8_t> serialized = original.Serialize();
@@ -247,7 +258,7 @@ TEST_F(TaskManagerBasicTest, TaskKeySerialization) {
   EXPECT_EQ(original.tensor_size, deserialized.tensor_size);
   EXPECT_EQ(original.block_idx, deserialized.block_idx);
   EXPECT_EQ(original.layer_idx, deserialized.layer_idx);
-  EXPECT_EQ(original.device_idx, deserialized.device_idx);
+  EXPECT_EQ(original.hash_device_id, deserialized.hash_device_id);
   EXPECT_EQ(original.token, deserialized.token);
   EXPECT_EQ(original.start_time_us, deserialized.start_time_us);
 }
@@ -561,7 +572,7 @@ TEST_F(TaskManagerBasicTest, CreateTaskKeyDeprecated) {
   EXPECT_EQ(key.req_id, 123);
   EXPECT_EQ(key.block_idx, 1);
   EXPECT_EQ(key.layer_idx, 2);
-  EXPECT_EQ(key.device_idx, 3);
+  EXPECT_EQ(key.hash_device_id, 3);
   EXPECT_EQ(key.tensor_size, 400);
   EXPECT_EQ(key.token, 456);
   EXPECT_GT(key.start_time_us, 0);
@@ -581,31 +592,51 @@ TEST_F(TaskManagerBasicTest, GroupByGroupKeyAndDevice) {
   auto task4 = CreateTestTask(3, 3, 0, 1, 400, 0, "group2:50052");
 
   // 更新TaskKey的device_idx以匹配任务
-  keys[0].device_idx = 0;
-  keys[1].device_idx = 1;
-  keys[2].device_idx = 0;
-  keys[3].device_idx = 1;
+  keys[0].hash_device_id = 0;
+  keys[0].decode_device_id = 0;
+  keys[0].prefill_device_id = 1;
+
+  keys[1].hash_device_id = 1;
+  keys[1].decode_device_id = 0;
+  keys[1].prefill_device_id = 1;
+
+  keys[2].hash_device_id = 0;
+  keys[2].decode_device_id = 0;
+  keys[2].prefill_device_id = 1;
+
+  keys[3].hash_device_id = 1;
+  keys[3].decode_device_id = 0;
+  keys[3].prefill_device_id = 1;
 
   task_manager_->AddTask(keys[0], task1);
   task_manager_->AddTask(keys[1], task2);
   task_manager_->AddTask(keys[2], task3);
   task_manager_->AddTask(keys[3], task4);
 
-  auto grouped = task_manager_->GroupByGroupKeyAndDevice(keys);
+  bool is_prefill = true;
+  // For prefill
+  auto grouped = task_manager_->GroupByGroupKeyAndDevice(keys, is_prefill);
 
-  // 应该有4个组
-  EXPECT_EQ(grouped.size(), 4);
+  // 应该有2个组
+  EXPECT_EQ(grouped.size(), 2);
 
   // 检查分组结果
-  TaskManager::GroupDevKey key1("group1:50051", 0);
-  TaskManager::GroupDevKey key2("group1:50051", 1);
-  TaskManager::GroupDevKey key3("group2:50052", 0);
-  TaskManager::GroupDevKey key4("group2:50052", 1);
+  TaskManager::GroupDevKey key1("group1:50051", {1, 0});
+  TaskManager::GroupDevKey key2("group2:50052", {1, 0});
 
-  EXPECT_EQ(grouped[key1].size(), 1);
-  EXPECT_EQ(grouped[key2].size(), 1);
-  EXPECT_EQ(grouped[key3].size(), 1);
-  EXPECT_EQ(grouped[key4].size(), 1);
+  EXPECT_EQ(grouped[key1].size(), 2);
+  EXPECT_EQ(grouped[key2].size(), 2);
+
+  // For decode
+  grouped = task_manager_->GroupByGroupKeyAndDevice(keys, !is_prefill);
+
+  EXPECT_EQ(grouped.size(), 2);
+
+  key1 = {"group1:50051", {0, 1}};
+  key2 = {"group2:50052", {0, 1}};
+
+  EXPECT_EQ(grouped[key1].size(), 2);
+  EXPECT_EQ(grouped[key2].size(), 2);
 }
 
 TEST_F(TaskManagerBasicTest, GroupByGroupKeyAndDeviceWithMissingTask) {
@@ -615,7 +646,7 @@ TEST_F(TaskManagerBasicTest, GroupByGroupKeyAndDeviceWithMissingTask) {
   auto task1 = CreateTestTask(0, 0, 0, 0, 100, 0, "group1:50051");
   task_manager_->AddTask(keys[0], task1);
 
-  auto grouped = task_manager_->GroupByGroupKeyAndDevice(keys);
+  auto grouped = task_manager_->GroupByGroupKeyAndDevice(keys, true);
 
   // 应该只有一个组，因为第二个任务不存在
   EXPECT_EQ(grouped.size(), 1);
@@ -783,7 +814,7 @@ TEST_F(TaskManagerPromiseTest, ConcurrentTaskOperations) {
   // 线程1: 添加任务
   threads.emplace_back([this, &all_keys]() {
     for (const auto& key : all_keys) {
-      auto task = CreateTestTask(key.req_id, key.block_idx, key.layer_idx, key.device_idx, key.tensor_size);
+      auto task = CreateTestTask(key.req_id, key.block_idx, key.layer_idx, key.hash_device_id, key.tensor_size);
       task_manager_->AddTask(key, task);
     }
   });
@@ -830,7 +861,7 @@ TEST_F(TaskManagerBasicTest, EmptyOperations) {
   auto empty_tasks = task_manager_->GetTasksBatch(empty_keys);
   EXPECT_TRUE(empty_tasks.empty());
 
-  auto empty_grouped = task_manager_->GroupByGroupKeyAndDevice(empty_keys);
+  auto empty_grouped = task_manager_->GroupByGroupKeyAndDevice(empty_keys, true);
   EXPECT_TRUE(empty_grouped.empty());
 
   // 测试空的confirmed任务

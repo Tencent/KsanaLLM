@@ -61,19 +61,28 @@ class MockTransferEngine : public TransferEngine {
     connector_ = std::make_shared<TransferConnector>(ConnectorConfig{}, 2, 0, env);
 
     // 初始化并启动传输连接器
-    connector_->Initialize(group_role);
+    connector_->Initialize(group_role, device_info_manager_);
     connector_->Start();
 
     // 从环境中获取配置
     env->GetPipelineConfig(pipeline_config_);
     env->GetBlockManagerConfig(block_manager_config_);
     tensor_parallel_size_ = 2;
-
+    attn_data_parallel_size_ = 2;
     // 计算派生值
     layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
     block_size_ = block_manager_config_.device_allocator_config.block_size;
     kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
     transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
+  }
+
+  void InsertReciveDeviceInfo(const std::string& group_key, int adp_num, int dev_total_num) {
+    device_info_manager_->Insert(group_key, adp_num, dev_total_num);
+  }
+
+  void SetSelfDeviceInfo(int adp_num, int dev_total_num) {
+    attn_data_parallel_size_ = adp_num;
+    tensor_parallel_size_ = dev_total_num;
   }
 };
 
@@ -109,12 +118,13 @@ TEST(TransferEngineTestInitialize, Initialize) {
 TEST_F(TransferEngineTest, AddTransferMeta) {
   // 初始化引擎
   transfer_engine_->Initialize(GroupRole::DECODE);
+  KLLM_LOG_INFO << "transfer_engine_ initialized";
 
   // 创建测试数据
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -125,7 +135,7 @@ TEST_F(TransferEngineTest, AddTransferMeta) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 验证元数据是否正确添加
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -151,7 +161,7 @@ TEST_F(TransferEngineTest, AddTransferMetaInvalidRequestId) {
   int request_id = -1;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -162,7 +172,7 @@ TEST_F(TransferEngineTest, AddTransferMetaInvalidRequestId) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 验证元数据是否未添加（因为请求ID无效）
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -183,14 +193,14 @@ TEST_F(TransferEngineTest, AddTransferMetaEmptyBlocks) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 添加空的GPU块，但至少有一个设备和一个块
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 验证元数据是否正确添加
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -217,7 +227,7 @@ TEST_F(TransferEngineTest, SendWithPrefillRole) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -228,11 +238,13 @@ TEST_F(TransferEngineTest, SendWithPrefillRole) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 发送特定设备和层的数据
   int device_idx = 0;
   int layer_idx = 1;  // 确保在有效范围内
+  transfer_engine_->InsertReciveDeviceInfo("", 2, 2);
+
   transfer_engine_->Send(device_idx, layer_idx);
 
   // 验证元数据是否存在
@@ -242,8 +254,135 @@ TEST_F(TransferEngineTest, SendWithPrefillRole) {
   // 验证元数据中的shared_token_num是否正确
   ASSERT_EQ(meta->shared_token_num, shared_token_num);
 
+  // 验证创建的TransferTask数量是否正确
+  ASSERT_EQ(meta->transfer_tasks_deque_.size(), 3);
+
   // 清理分配的内存
   for (size_t i = 0; i < 2; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      free(meta->gpu_blocks[i][j]);
+    }
+  }
+}
+
+// 测试P端adp > D端adp时的发送功能（PREFILL角色）
+TEST_F(TransferEngineTest, SendWithPrefillAdpMoreRole) {
+  int total_device_num = 2;
+  int prefill_adp = 2;
+  int decode_adp = 1;
+  // 初始化引擎为PREFILL角色
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 修改 pipeline_config_ 以使 ValidateLayerIndex 返回 true
+  mock_env_->pipeline_config_.lower_layer_idx = 0;
+  mock_env_->pipeline_config_.upper_layer_idx = 3;
+
+  // 重新初始化引擎以应用新的配置
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  transfer_engine_->SetSelfDeviceInfo(prefill_adp, total_device_num);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  // 创建两个设备，每个设备有3个块
+  int prefill_atp = total_device_num / prefill_adp;
+  gpu_blocks.resize(prefill_atp);
+  for (size_t i = 0; i < prefill_atp; ++i) {
+    gpu_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      gpu_blocks[i][j] = malloc(4096);
+    }
+  }
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
+
+  // 发送特定设备和层的数据
+  int device_idx = 0;
+  int layer_idx = 1;  // 确保在有效范围内
+  transfer_engine_->InsertReciveDeviceInfo("", decode_adp, total_device_num);
+
+  transfer_engine_->Send(device_idx, layer_idx);
+
+  // 验证元数据是否存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 验证元数据中的shared_token_num是否正确
+  ASSERT_EQ(meta->shared_token_num, shared_token_num);
+
+  // 验证创建的TransferTask数量是否正确
+  ASSERT_EQ(meta->transfer_tasks_deque_.size(), 6);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < prefill_atp; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      free(meta->gpu_blocks[i][j]);
+    }
+  }
+}
+
+// 测试P端adp < D端adp时的发送功能（PREFILL角色）
+TEST_F(TransferEngineTest, SendWithPrefillAdpLessRole) {
+  int total_device_num = 2;
+  int prefill_adp = 1;
+  int decode_adp = 2;
+  // 初始化引擎为PREFILL角色
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 修改 pipeline_config_ 以使 ValidateLayerIndex 返回 true
+  mock_env_->pipeline_config_.lower_layer_idx = 0;
+  mock_env_->pipeline_config_.upper_layer_idx = 3;
+
+  // 重新初始化引擎以应用新的配置
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  transfer_engine_->SetSelfDeviceInfo(prefill_adp, total_device_num);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_token_num = 2;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0, 1};
+  // 创建两个设备，每个设备有3个块
+  int prefill_atp = total_device_num / prefill_adp;
+  gpu_blocks.resize(prefill_atp);
+  for (size_t i = 0; i < prefill_atp; ++i) {
+    gpu_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      gpu_blocks[i][j] = malloc(4096);
+    }
+  }
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
+
+  // 发送特定设备和层的数据
+  int device_idx = 0;
+  int layer_idx = 1;  // 确保在有效范围内
+  transfer_engine_->InsertReciveDeviceInfo("", decode_adp, total_device_num);
+
+  transfer_engine_->Send(device_idx, layer_idx);
+
+  device_idx = 1;
+  // 第二次发送
+  transfer_engine_->Send(device_idx, layer_idx);
+
+  // 验证元数据是否存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+
+  // 验证元数据中的shared_token_num是否正确
+  ASSERT_EQ(meta->shared_token_num, shared_token_num);
+
+  // 验证创建的TransferTask数量是否正确
+  ASSERT_EQ(meta->transfer_tasks_deque_.size(), 3);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < prefill_atp; ++i) {
     for (size_t j = 0; j < 3; ++j) {
       free(meta->gpu_blocks[i][j]);
     }
@@ -300,7 +439,7 @@ TEST_F(TransferEngineTest, SendTokens) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 创建一个设备，一个块
   gpu_blocks.resize(2);
   gpu_blocks[0].resize(1);
@@ -309,7 +448,7 @@ TEST_F(TransferEngineTest, SendTokens) {
   gpu_blocks[1][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
   auto meta = transfer_engine_->GetTransferMeta(request_id);
   ASSERT_NE(meta, nullptr);
   gpu_blocks = meta->gpu_blocks;
@@ -350,14 +489,14 @@ TEST_F(TransferEngineTest, SendTokensWithDecodeRole) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 创建一个设备，一个块
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 检查发送是否完成 - 对于DECODE角色，这应该返回false
   bool is_done = transfer_engine_->IsSendDone(request_id);
@@ -399,7 +538,7 @@ TEST_F(TransferEngineTest, IsRecvDone) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -410,7 +549,7 @@ TEST_F(TransferEngineTest, IsRecvDone) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 检查接收是否完成
   int first_token = transfer_engine_->IsRecvDone(request_id);
@@ -448,7 +587,7 @@ TEST_F(TransferEngineTest, IsSendDone) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -459,7 +598,7 @@ TEST_F(TransferEngineTest, IsSendDone) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 检查发送是否完成
   bool is_done = transfer_engine_->IsSendDone(request_id);
@@ -486,7 +625,7 @@ TEST_F(TransferEngineTest, CleanupTransferMeta) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建两个设备，每个设备有3个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -497,7 +636,7 @@ TEST_F(TransferEngineTest, CleanupTransferMeta) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 验证元数据是否存在
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -547,14 +686,14 @@ TEST_F(TransferEngineTest, ChunkTransferConfiguration) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 创建一个设备，一个块
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 验证元数据存在
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -576,14 +715,14 @@ TEST_F(TransferEngineTest, ChunkTransferSendLogic) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 创建一个设备，一个块
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 测试发送不同层的数据
   // 根据chunk逻辑，只有chunk的最后一层或模型的最后一层才会触发传输
@@ -620,7 +759,7 @@ TEST_F(TransferEngineTest, ChunkTransferReceiveTaskCount) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0, 1};
   // 创建2个设备，每个设备2个块
   gpu_blocks.resize(2);
   for (size_t i = 0; i < 2; ++i) {
@@ -631,7 +770,7 @@ TEST_F(TransferEngineTest, ChunkTransferReceiveTaskCount) {
   }
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 检查接收是否完成
   // 对于4层（layer_num_=4）和chunk_size=3，应该有2个chunk：
@@ -665,13 +804,13 @@ TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeEqualsLayerNum) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 只有最后一层应该触发传输
   transfer_engine_->Send(0, 0);  // 不应该发送
@@ -699,13 +838,13 @@ TEST_F(TransferEngineTest, ChunkTransferBoundaryCase_ChunkSizeGreaterThanLayerNu
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 只有最后一层应该触发传输
   transfer_engine_->Send(0, 0);  // 不应该发送
@@ -733,13 +872,13 @@ TEST_F(TransferEngineTest, ChunkTransferDefaultBehavior) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 每一层都应该触发传输（因为每个chunk只有1层）
   transfer_engine_->Send(0, 0);  // 应该发送
@@ -767,14 +906,14 @@ TEST_F(TransferEngineTest, ChunkTransferCreateTasksForDecodeNode) {
   int request_id = 123;
   size_t shared_token_num = 2;
   std::vector<std::vector<void*>> gpu_blocks;
-
+  std::vector<int> kv_occupied_devices = {0};
   // 创建1个设备，1个块
   gpu_blocks.resize(1);
   gpu_blocks[0].resize(1);
   gpu_blocks[0][0] = malloc(4096);
 
   // 添加传输元数据
-  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks);
+  transfer_engine_->AddTransferMeta("", request_id, shared_token_num, gpu_blocks, kv_occupied_devices);
 
   // 获取元数据并验证
   auto meta = transfer_engine_->GetTransferMeta(request_id);

@@ -54,7 +54,8 @@ void TaskDispatcher::Shutdown() {
   if (comm_manager_) comm_manager_->Shutdown();
 }
 
-Status TaskDispatcher::Initialize() {
+Status TaskDispatcher::Initialize(std::shared_ptr<DeviceInfoManager> device_info_manager) {
+  device_info_manager_ = device_info_manager;
   // Check required dependencies first
   if (!comm_manager_ || !task_manager_) {
     return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "TaskDispatcher initialize failed");
@@ -116,6 +117,21 @@ Status TaskDispatcher::Initialize() {
   return Status();
 }
 
+void TaskDispatcher::SendConfigToPrefill(const std::string& group_key, size_t adp_num, size_t device_num) {
+  std::string signal = MakeConnectionId(group_key, adp_num, device_num);
+  if (group_key.empty()) {
+    KLLM_LOG_ERROR << "Send device config info failed, group_key is empty";
+    return;
+  }
+  Status status = zmq_communicator_->Send(group_key, 0, 0, 0, signal.data(), signal.size(), DataType::TYPE_BYTES);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "Failed to send device config info to Prefill: " << status.ToString();
+    return;
+  }
+  KLLM_LOG_DEBUG << "Step_Prepare_0: Decode config info sent to Prefill for group_key=" << group_key
+                 << ", adp_num=" << adp_num << ", device_num=" << device_num;
+}
+
 void TaskDispatcher::SendToPrefill() {
   while (running_) {
     if (task_manager_->IsProcessingBufferEmpty()) {
@@ -129,7 +145,7 @@ void TaskDispatcher::SendToPrefill() {
                    << " GetTask batch time is: " << ProfileTimer::GetCurrentTimeInUs() - start_time;
     if (batch.empty()) continue;
 
-    auto group_batches = task_manager_->GroupByGroupKeyAndDevice(batch);
+    auto group_batches = task_manager_->GroupByGroupKeyAndDevice(batch, false);
     if (!send_thread_pool_) {
       KLLM_LOG_ERROR << "Thread pool is not initialized. Cannot process task batches.";
       continue;
@@ -138,15 +154,21 @@ void TaskDispatcher::SendToPrefill() {
     for (const auto& [key, group_vec] : group_batches) {
       auto future = send_thread_pool_->Submit([this, key, group_vec] {
         const std::string& group_key = key.first;
-        int device_idx = key.second;
-        if (!CheckConnection(group_key, device_idx)) {
+        int src_device_idx = key.second.first;
+        int dst_device_idx = key.second.second;
+        KLLM_LOG_DEBUG << "SendToPrefill src_device_idx: " << src_device_idx << ", dst_device_idx: " << dst_device_idx;
+        if (!CheckConnection(group_key, src_device_idx)) {
+          KLLM_LOG_ERROR << "Connection not found for group key: " << group_key
+                         << ", src_device_idx: " << src_device_idx;
           return;
         }
         std::vector<uint8_t> buf = TaskKey::BatchSerialize(group_vec);
-        Status status = zmq_communicator_->Send(group_key, device_idx, 0, buf.data(), buf.size(), DataType::TYPE_BYTES);
+        Status status = zmq_communicator_->Send(group_key, src_device_idx, dst_device_idx, 0, buf.data(), buf.size(),
+                                                DataType::TYPE_BYTES);
         KLLM_LOG_DEBUG << "Step_1 Decode task_keys sent to Prefill for group key: " << group_key
                        << " and first task_key is: " << group_vec[0].ToString();
         if (!status.OK()) {
+          KLLM_LOG_ERROR << "Failed to send task_keys to Prefill, info: " << status.ToString();
           return;
         }
       });
@@ -155,10 +177,11 @@ void TaskDispatcher::SendToPrefill() {
 }
 
 void TaskDispatcher::HandlePrefillGroupBatch(
-    const std::pair<std::pair<std::string, int>, std::vector<TaskKey>>& group_batch) {
+    const std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>>& group_batch) {
   const std::string& group_key = group_batch.first.first;
-  int device_idx = group_batch.first.second;
-  if (!CheckConnection(group_key, device_idx)) {
+  int src_device_idx = group_batch.first.second.first;
+  int dst_device_idx = group_batch.first.second.second;
+  if (!CheckConnection(group_key, src_device_idx)) {
     return;
   }
   const std::vector<TaskKey>& group_vec = group_batch.second;
@@ -172,13 +195,14 @@ void TaskDispatcher::HandlePrefillGroupBatch(
         memcpy(buf.data(), &tk, sizeof(TaskKey));
         if (tk.tensor_size > 0) {
 #ifdef ENABLE_CUDA
-          cudaStream_t cur_stream = device_streams_[device_idx];
+          cudaStream_t cur_stream = device_streams_[src_device_idx];
           CUDA_CHECK(cudaMemcpyAsync(buf.data() + sizeof(TaskKey), task->tensor.src_ptr, tk.tensor_size,
                                      cudaMemcpyDeviceToHost, cur_stream));
           CUDA_CHECK(cudaStreamSynchronize(cur_stream));
 #endif
         }
-        Status status = zmq_communicator_->Send(group_key, device_idx, 0, buf.data(), buf.size(), DataType::TYPE_BYTES);
+        Status status = zmq_communicator_->Send(group_key, src_device_idx, dst_device_idx, 0, buf.data(), buf.size(),
+                                                DataType::TYPE_BYTES);
         if (!status.OK()) {
           KLLM_LOG_WARNING << "Failed to send task_keys to Decode";
           return;
@@ -187,19 +211,20 @@ void TaskDispatcher::HandlePrefillGroupBatch(
     }
     return;
   }
-  std::string connection_id = MakeConnectionId(group_key, device_idx);
+  std::string connection_id = MakeConnectionId(group_key, src_device_idx, dst_device_idx);
   std::string signal = connection_id + "|" + std::to_string(group_vec.size());
-  Status status = zmq_communicator_->Send(group_key, device_idx, 0, signal.data(), signal.size(), DataType::TYPE_BYTES);
+  Status status = zmq_communicator_->Send(group_key, src_device_idx, dst_device_idx, 0, signal.data(), signal.size(),
+                                          DataType::TYPE_BYTES);
   KLLM_LOG_INFO << "Fetched batch of size: " << group_vec.size();
   if (!status.OK()) {
     KLLM_LOG_WARNING << "Failed to send signal to Decode";
     return;
   }
-  KLLM_LOG_DEBUG << "Step_3: Prefill signal sent to Decode for group_key=" << group_key << ", device_idx=" << device_idx
-                 << ", first task_keys is: =" << group_vec[0].ToString();
+  KLLM_LOG_DEBUG << "Step_3: Prefill signal sent to Decode for group_key=" << group_key
+                 << ", device_idx=" << src_device_idx << ", first task_keys is: =" << group_vec[0].ToString();
   if (config_.communication_type == CommunicationType::NCCL) {
 #ifdef ENABLE_CUDA
-    SendDataToDecodeWithNccl(group_key, device_idx, group_vec);
+    SendDataToDecodeWithNccl(group_key, src_device_idx, dst_device_idx, group_vec);
     return;
 #endif
   } else if (config_.communication_type == CommunicationType::ZMQ) {
@@ -217,14 +242,26 @@ void TaskDispatcher::RegisterPrefillRecv() {
     return;
   }
   zmq_communicator_->SetReceiveCallback([this](const char* data, size_t size, uint64_t job_id, void* /*user_data*/) {
-    std::vector<TaskKey> received = TaskKey::DeserializeBatch(data, size);
-    if (received.empty()) {
-      return;
-    }
+    std::string signal(data, size);
+    if (signal.find('_') != std::string::npos && signal.find('-') != std::string::npos &&
+        size == DEFAULT_TRANSFER_CONFIG_SIZE) {
+      KLLM_LOG_DEBUG << "Step_Prepare_1: Prefill received device config signal from Decode: " << signal
+                     << ", size: " << size;
+      auto [group_key, device_config_pair] = ParseConnectionId(signal);
+      auto [decode_dev_num, decode_adp_num] = device_config_pair;
+      device_info_manager_->Insert(group_key, decode_adp_num, decode_dev_num);
+      KLLM_LOG_DEBUG << "Step_Prepare_2: Prefill insert device config signal to device_info_manager with group_key:"
+                     << group_key << ", decode_adp_num:" << decode_adp_num << ", decode_dev_num:" << decode_dev_num;
+    } else {
+      std::vector<TaskKey> received = TaskKey::DeserializeBatch(data, size);
+      if (received.empty()) {
+        return;
+      }
 
-    // 使用TaskManager的封装方法来处理接收到的Decode确认
-    KLLM_LOG_DEBUG << "Step_2 Prefill received " << received.size() << " task_keys from Decode";
-    task_manager_->RegisterDecodeConfirmedTasks(received);
+      // 使用TaskManager的封装方法来处理接收到的Decode确认
+      KLLM_LOG_DEBUG << "Step_2 Prefill received " << received.size() << " task_keys from Decode";
+      task_manager_->RegisterDecodeConfirmedTasks(received);
+    }
   });
 }
 
@@ -270,7 +307,7 @@ void TaskDispatcher::RegisterDecodeRecv() {
         std::memcpy(task->dst_ptr, &tk.token, sizeof(int32_t));
       } else {
 #ifdef ENABLE_CUDA
-        cudaStream_t cur_stream = device_streams_[tk.device_idx];
+        cudaStream_t cur_stream = device_streams_[tk.decode_device_id];
         CUDA_CHECK(
             cudaMemcpyAsync(task->dst_ptr, data + sizeof(TaskKey), tk.tensor_size, cudaMemcpyHostToDevice, cur_stream));
         CUDA_CHECK(cudaStreamSynchronize(cur_stream));
@@ -288,13 +325,15 @@ void TaskDispatcher::RegisterDecodeRecv() {
     }
     std::string connection_id = signal.substr(0, sep);
     size_t count = std::stoul(signal.substr(sep + 1));
-    auto [group_key, device_idx] = TaskDispatcher::ParseConnectionId(connection_id);
+    auto [group_key, device_idx_pair] = TaskDispatcher::ParseConnectionId(connection_id);
+    auto [src_device_idx, dst_device_idx] = device_idx_pair;
     KLLM_LOG_DEBUG << "Step_4: Decode signal recved from Prefill for group_key=" << group_key
-                   << ", device_idx=" << device_idx << ", count=" << count;
+                   << ", src_device_idx=" << src_device_idx << ", dst_device_idx=" << dst_device_idx
+                   << ", count=" << count;
     switch (config_.communication_type) {
       case CommunicationType::NCCL:
 #ifdef ENABLE_CUDA
-        RecvTaskDataWithNccl(group_key, device_idx, count);
+        RecvTaskDataWithNccl(group_key, src_device_idx, dst_device_idx, count);
 #endif
         break;
       case CommunicationType::ZMQ:
@@ -352,18 +391,25 @@ void TaskDispatcher::RetryFailedTasks(const std::string& group_key, int device_i
   }
 }
 
-std::string TaskDispatcher::MakeConnectionId(const std::string& group_key, int device_idx) const {
-  return group_key + "_" + std::to_string(device_idx);
+std::string TaskDispatcher::MakeConnectionId(const std::string& group_key, int src_device_idx,
+                                             int dst_device_idx) const {
+  if (dst_device_idx != -1) {
+    return group_key + "_" + std::to_string(src_device_idx) + "-" + std::to_string(dst_device_idx);
+  }
+  return group_key + "_" + std::to_string(src_device_idx);
 }
 
-std::pair<std::string, int> TaskDispatcher::ParseConnectionId(const std::string& connection_id) {
+std::pair<std::string, std::pair<int, int>> TaskDispatcher::ParseConnectionId(const std::string& connection_id) {
   auto pos = connection_id.rfind('_');
   if (pos == std::string::npos) {
     throw std::invalid_argument("Invalid connection_id format: " + connection_id);
   }
   std::string group_key = connection_id.substr(0, pos);
-  int device_idx = std::stoi(connection_id.substr(pos + 1));
-  return {group_key, device_idx};
+  int dst_device_idx = std::stoi(connection_id.substr(pos + 1, pos + 2));
+  int src_device_idx = std::stoi(connection_id.substr(pos + 3));
+  KLLM_LOG_DEBUG << "ParseConnectionId " << "group_key: " << group_key << ", src_device_idx: " << src_device_idx
+                 << ", dst_device_idx: " << dst_device_idx;
+  return {group_key, {src_device_idx, dst_device_idx}};
 }
 
 bool TaskDispatcher::IsFirstAttempt(const std::string& conn_key) {
@@ -480,19 +526,21 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
 
   // Group by req_id for parallel processing
   std::unordered_map<uint64_t, std::vector<TaskKey>> grouped_by_req_id;
-  for (const auto& task_key : raw_tasks) {
+  for (auto& task_key : raw_tasks) {
     grouped_by_req_id[task_key.req_id].push_back(task_key);
   }
 
   // Use adaptive threshold: parallel processing for multiple req_id groups
   if (grouped_by_req_id.size() <= 1) {
     // Serial processing for single req_id group
-    for (const auto& task_key : raw_tasks) {
+    for (auto& task_key : raw_tasks) {
       KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
       if (task_manager_->TryActivatePendingTask(task_key)) {
+        KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
         batch.push_back(task_key);
       } else {
         task_manager_->AddPrefillPendingTask(task_key);
+        KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to pending: " << task_key.ToString();
       }
     }
   } else {
@@ -500,16 +548,18 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
     tbb::concurrent_vector<TaskKey> concurrent_batch;
 
     // Process each req_id group in parallel
-    tbb::parallel_for_each(grouped_by_req_id.begin(), grouped_by_req_id.end(), [&](const auto& req_group) {
-      const auto& req_tasks = req_group.second;
+    tbb::parallel_for_each(grouped_by_req_id.begin(), grouped_by_req_id.end(), [&](auto& req_group) {
+      auto& req_tasks = req_group.second;
 
       // Process all tasks for this req_id serially (maintain order within req_id)
-      for (const auto& task_key : req_tasks) {
+      for (auto& task_key : req_tasks) {
         KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
         if (task_manager_->TryActivatePendingTask(task_key)) {
+          KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
           concurrent_batch.push_back(task_key);
         } else {
           task_manager_->AddPrefillPendingTask(task_key);
+          KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to batch: " << task_key.ToString();
         }
       }
     });
@@ -526,7 +576,8 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
 }
 
 void TaskDispatcher::PrefillProcessGroupBatches(const std::vector<TaskKey>& batch) {
-  auto group_batches = task_manager_->GroupByGroupKeyAndDevice(batch);
+  // 已经有了decode的相关信息
+  auto group_batches = task_manager_->GroupByGroupKeyAndDevice(batch, true);
   if (group_batches.empty()) {
     return;
   }
@@ -558,13 +609,13 @@ void TaskDispatcher::PrefillProcessGroupBatches(const std::vector<TaskKey>& batc
 
 #ifdef ENABLE_CUDA
 
-void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int device_idx,
+void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int src_device_idx, int dst_device_idx,
                                               const std::vector<TaskKey>& group_vec) {
-  CUDA_CHECK(cudaSetDevice(device_idx));
+  CUDA_CHECK(cudaSetDevice(src_device_idx));
   size_t task_keys_bytes = group_vec.size() * sizeof(TaskKey);
-  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(device_idx);
+  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(src_device_idx);
   if (!block) {
-    KLLM_LOG_ERROR << "Failed to get buffer block for device_idx: " << device_idx;
+    KLLM_LOG_ERROR << "Failed to get buffer block for src_device_idx: " << src_device_idx;
     return;
   }
 
@@ -590,7 +641,8 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
     }
   }
 
-  nccl_communicator_->Send(group_key, device_idx, 0, block->device_ptr, task_keys_bytes, DataType::TYPE_BYTES);
+  nccl_communicator_->Send(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), block->device_ptr,
+                           task_keys_bytes, DataType::TYPE_BYTES);
 
   buffer_pool_->put_block(block);
 
@@ -600,27 +652,29 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
 
   std::vector<const void*> const_tensors;
   for (auto ptr : tensors) const_tensors.push_back(ptr);
-  nccl_communicator_->SendGroup(group_key, device_idx, 0, const_tensors, tensor_sizes, data_types[0]);
+  nccl_communicator_->SendGroup(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), const_tensors,
+                                tensor_sizes, data_types[0]);
 
   KLLM_LOG_DEBUG << "Step_8: Prefill task data sent to Decode and task_key[0]= "
                  << (group_vec.empty() ? "" : group_vec[0].ToString()) << " batch size: " << group_vec.size();
   return;
 }
 
-void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int device_idx, size_t count) {
-  CUDA_CHECK(cudaSetDevice(device_idx));
-  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(device_idx);
+void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_device_idx, int dst_device_idx,
+                                          size_t count) {
+  CUDA_CHECK(cudaSetDevice(src_device_idx));
+  PinnedMemoryBufferBlock* block = buffer_pool_->get_block(src_device_idx);
   if (!block) {
-    KLLM_LOG_WARNING << "Failed to get buffer block for device_idx: " << device_idx;
+    KLLM_LOG_WARNING << "Failed to get buffer block for device_idx: " << src_device_idx;
     return;
   }
 
-  Status recv_status = nccl_communicator_->Recv(group_key, device_idx, 0, block->device_ptr, count * sizeof(TaskKey),
-                                                DataType::TYPE_BYTES);
+  Status recv_status = nccl_communicator_->Recv(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0),
+                                                block->device_ptr, count * sizeof(TaskKey), DataType::TYPE_BYTES);
   if (!recv_status.OK()) {
     buffer_pool_->put_block(block);
     KLLM_LOG_ERROR << "Failed to receive task_keys with NCCL for group_key: " << group_key
-                   << ", device_idx: " << device_idx << ", error: " << recv_status.GetMessage();
+                   << ", src_device_idx: " << src_device_idx << ", error: " << recv_status.GetMessage();
     return;
   }
 
@@ -647,7 +701,8 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int devi
   }
 
   if (!recv_ptrs.empty()) {
-    nccl_communicator_->RecvGroup(group_key, device_idx, 0, recv_ptrs, recv_sizes, data_types[0]);
+    nccl_communicator_->RecvGroup(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), recv_ptrs,
+                                  recv_sizes, data_types[0]);
   }
 
   for (size_t i = 0; i < count; ++i) {

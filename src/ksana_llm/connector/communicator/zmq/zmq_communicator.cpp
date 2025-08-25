@@ -237,12 +237,12 @@ Status ZmqCommunicator::CreateDeviceResources(const std::string& group_key) {
 }
 
 // Communicator 接口实现 - 发送数据
-Status ZmqCommunicator::Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-                             DataType dtype) {
+Status ZmqCommunicator::Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                             const void* buf, size_t count, DataType dtype) {
   if (!buf || count == 0) {
     return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid buffer or count for Send");
   }
-
+  int dev_id = src_dev_id;  // ZMQ通信只需要local device的相关信息
   // 查找通信组和设备资源
   std::lock_guard<std::mutex> lock(comm_group_mutex_);
   auto it = comm_groups_.find(group_key);

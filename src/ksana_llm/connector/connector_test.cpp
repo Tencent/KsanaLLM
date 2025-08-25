@@ -39,7 +39,7 @@ TEST_F(ConnectorPushTaskTest, PushTaskBasic) {
   task->req_id = 42;
   task->tensor.block_idx = 1;
   task->tensor.layer_idx = 2;
-  task->tensor.device_idx = 3;
+  task->tensor.hash_device_id = 3;
   task->tensor.shape = {1, 2, 3};
   task->tensor.dtype = DataType::TYPE_FP32;
   task->addr = "127.0.0.1:50051";

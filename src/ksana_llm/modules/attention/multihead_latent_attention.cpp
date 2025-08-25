@@ -548,7 +548,7 @@ Status MultiHeadLatentAttention::ContextForward(std::vector<Tensor>& input_tenso
   std::vector<Tensor> q_b_nope_rope_output_tmps = {q_b_nope_rope_output_tmp};
 
   const size_t context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
-  KLLM_LOG_DEBUG << "context token " << context_tokens;
+  KLLM_LOG_DEBUG << "context token " << context_tokens << " on rank " << rank;
 
   q_b_input.shape[0] = context_tokens;
   std::vector<Tensor> prefill_q_nope_tensors{1};

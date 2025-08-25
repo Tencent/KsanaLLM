@@ -119,14 +119,14 @@ class NcclCommunicator : public Communicator {
                                                                int world_size, int device_count, int dev_id);
 
   // Communicator 接口实现
-  Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
+  Status Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, const void* buf,
+              size_t count, DataType dtype) override;
+  Status Recv(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, void* buf, size_t count,
               DataType dtype) override;
-  Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
-              DataType dtype) override;
-  Status SendGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<const void*>& buffers,
-                   const std::vector<size_t>& counts, DataType dtype) override;
-  Status RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<void*>& buffers,
-                   const std::vector<size_t>& counts, DataType dtype) override;
+  Status SendGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                   const std::vector<const void*>& buffers, const std::vector<size_t>& counts, DataType dtype) override;
+  Status RecvGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                   const std::vector<void*>& buffers, const std::vector<size_t>& counts, DataType dtype) override;
 
   // Communicator 接口实现
   Status Send(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream, const void* buf,

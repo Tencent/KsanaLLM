@@ -57,7 +57,7 @@ Connector::Connector(const ConnectorConfig& config, int attn_tensor_para_size, i
 // 启动传输任务处理线程，为兼容性添加
 void Connector::Start() {}
 
-Status Connector::Initialize(GroupRole group_role) {
+Status Connector::Initialize(GroupRole group_role, std::shared_ptr<DeviceInfoManager> device_info_manager) {
   if (group_role == GroupRole::NONE) {
     KLLM_LOG_ERROR << "Group role is NONE, cannot initialize connector";
     return Status(RetCode::RET_INVALID_ARGUMENT, "Group role is NONE");
@@ -71,11 +71,15 @@ Status Connector::Initialize(GroupRole group_role) {
     return status;
   }
 
-  status = task_dispatcher_->Initialize();
+  status = task_dispatcher_->Initialize(device_info_manager);
   if (!status.OK()) {
     return status;
   }
   return Status();
+}
+
+void Connector::SendConfigToPrefill(const std::string& kv_comm_group_key, size_t adp_num, size_t device_num) {
+  task_dispatcher_->SendConfigToPrefill(kv_comm_group_key, adp_num, device_num);
 }
 
 void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {

@@ -66,42 +66,46 @@ class Communicator {
    * @brief Send data to a peer
    *
    * @param group_key Key identifying the communication group
-   * @param dev_id Device ID within the node
+   * @param src_dev_id Src Device ID within the node
+   * @param dst_dev_id Dst Device ID within the node
    * @param buf Pointer to data to be sent
+   * @param job_id Job ID (Not in use for the time being)
    * @param count Number of elements to send
    * @param dtype Data type of elements (may be nullptr)
-   * @param stream CUDA stream to use (may be nullptr)
    * @return Status indicating success or failure
    */
-  virtual Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-                      DataType dtype) = 0;
+  virtual Status Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, const void* buf,
+                      size_t count, DataType dtype) = 0;
 
   /**
    * @brief Receive data from a peer
    *
    * @param group_key Key identifying the communication group
-   * @param dev_id Device ID within the node
+   * @param src_dev_id Src Device ID within the node
+   * @param dst_dev_id Dst Device ID within the node
+   * @param job_id Job ID (Not in use for the time being)
    * @param buf Pointer to buffer for received data
    * @param count Number of elements to receive
    * @param dtype Data type of elements (may be nullptr)
    * @param stream CUDA stream to use (may be nullptr)
    * @return Status indicating success or failure
    */
-  virtual Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
-                      DataType dtype) = 0;
+  virtual Status Recv(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, void* buf,
+                      size_t count, DataType dtype) = 0;
 
   /**
    * @brief Send a group of data items in a single operation
    *
    * @param group_key Key identifying the communication group
-   * @param dev_id Device ID within the node
+   * @param src_dev_id Src Device ID within the node
+   * @param dst_dev_id Dst Device ID within the node
+   * @param job_id Job ID (Not in use for the time being)
    * @param buffers Vector of data buffers to send
    * @param counts Vector of element counts for each buffer
    * @param dtype Data type of elements (may be nullptr)
-   * @param stream CUDA stream to use (may be nullptr)
    * @return Status indicating success or failure
    */
-  virtual Status SendGroup(const std::string& group_key, int dev_id, uint64_t job_id,
+  virtual Status SendGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
                            const std::vector<const void*>& buffers, const std::vector<size_t>& counts,
                            DataType dtype) = 0;
 
@@ -109,15 +113,16 @@ class Communicator {
    * @brief Receive a group of data items in a single operation
    *
    * @param group_key Key identifying the communication group
-   * @param dev_id Device ID within the node
+   * @param src_dev_id Src Device ID within the node
+   * @param dst_dev_id Dst Device ID within the node
+   * @param job_id Job ID (Not in use for the time being)
    * @param buffers Vector of data buffers to receive into
    * @param counts Vector of element counts for each buffer
    * @param dtype Data type of elements (may be nullptr)
-   * @param stream CUDA stream to use (may be nullptr)
    * @return Status indicating success or failure
    */
-  virtual Status RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<void*>& buffers,
-                           const std::vector<size_t>& counts, DataType dtype) = 0;
+  virtual Status RecvGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                           const std::vector<void*>& buffers, const std::vector<size_t>& counts, DataType dtype) = 0;
 
   virtual bool IsConnectionReady(const std::string& group_key, int dev_id) const = 0;
   /**

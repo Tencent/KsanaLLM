@@ -31,6 +31,7 @@ class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
   void SetConnectorRole(GroupRole role) {
     connector_config_.group_role = role;
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
+    TransferEngine::GetInstance()->SetGroupRole(role);
   }
 };
 
@@ -233,50 +234,11 @@ TEST_F(ContinuousBatchingTest, ProcessSplitFuseTokenTest) {
   }
 }
 
-// 测试AddTransferMeta函数
-TEST_F(ContinuousBatchingTest, AddTransferMetaTest) {
-  // 设置为PREFILL节点
-  continuous_batching_strategy_->SetConnectorRole(GroupRole::PREFILL);
-
-  // 创建测试请求
-  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
-  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
-  auto req = std::make_shared<InferRequest>(request, 0);
-  req->kv_comm_request_id = 123;  // 设置请求ID
-  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
-
-  // 设置KV缓存块
-  req->kv_cache_blocks.resize(2);
-  for (size_t i = 0; i < 2; ++i) {
-    req->kv_cache_blocks[i].resize(3);
-    for (size_t j = 0; j < 3; ++j) {
-      req->kv_cache_blocks[i][j] = j + i * 10;
-    }
-  }
-
-  // 设置已缓存的token数量
-  req->kv_cached_token_num = 10;
-
-  // 创建请求队列
-  std::vector<std::shared_ptr<InferRequest>> queue;
-  queue.push_back(req);
-
-  // 调用AddTransferMeta函数
-  continuous_batching_strategy_->AddTransferMeta(queue);
-
-  // 验证结果
-  // 对于PREFILL节点，max_new_tokens应该被设置为1
-  ASSERT_EQ(req->sampling_config.max_new_tokens, 1);
-
-  // 验证传输元数据是否已添加
-  auto transfer_engine = TransferEngine::GetInstance();
-  auto meta = transfer_engine->GetTransferMeta(req->kv_comm_request_id);
-  ASSERT_NE(meta, nullptr);
-}
-
 // 测试ProcessDecodeTransferQueue函数
 TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
+  // 设置为DECODE节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
+
   // 创建测试请求
   auto ksana_python_input = std::make_shared<KsanaPythonInput>();
   auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
@@ -324,6 +286,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   }
   // 调用ProcessDecodeTransferQueue函数
   continuous_batching_strategy_->ProcessDecodeTransferQueue();
+
   // 验证结果, 计算8个预传输12个
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 12);
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 8);
@@ -332,6 +295,49 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
     TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
   }
 }
+
+// 测试AddTransferMeta函数
+TEST_F(ContinuousBatchingTest, AddTransferMetaTest) {
+  // 设置为PREFILL节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::PREFILL);
+
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->kv_comm_request_id = 123;  // 设置请求ID
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置KV缓存块
+  req->kv_cache_blocks.resize(2);
+  for (size_t i = 0; i < 2; ++i) {
+    req->kv_cache_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      req->kv_cache_blocks[i][j] = j + i * 10;
+    }
+  }
+
+  // 设置已缓存的token数量
+  req->kv_cached_token_num = 10;
+
+  // 创建请求队列
+  std::vector<std::shared_ptr<InferRequest>> queue;
+  queue.push_back(req);
+
+  // 调用AddTransferMeta函数
+  continuous_batching_strategy_->AddTransferMeta(queue);
+
+  // 验证结果
+  // 对于PREFILL节点，max_new_tokens应该被设置为1
+  ASSERT_EQ(req->sampling_config.max_new_tokens, 1);
+
+  // 验证传输元数据是否已添加
+  auto transfer_engine = TransferEngine::GetInstance();
+  auto meta = transfer_engine->GetTransferMeta(req->kv_comm_request_id);
+  ASSERT_NE(meta, nullptr);
+}
+
 
 // 测试ProcessPrefillTransferQueue函数
 TEST_F(ContinuousBatchingTest, ProcessPrefillTransferQueueTest) {

@@ -154,4 +154,12 @@ std::vector<std::vector<void *>> InferRequest::GetBlockPtrs() {
   return block_ptrs;
 }
 
+std::vector<int> InferRequest::GetKVOccupiedDevices() {
+  std::vector<int> kv_occupied_devices;
+  kv_occupied_devices = cache_manager->GetBlockAllocatorGroup()->GetBlockAllocatorDevices();
+  KLLM_LOG_DEBUG << "req_id: " << kv_comm_request_id << ", kv_occupied_devices: " << Vector2Str(kv_occupied_devices)
+                 << ".";
+  return kv_occupied_devices;
+}
+
 }  // namespace ksana_llm

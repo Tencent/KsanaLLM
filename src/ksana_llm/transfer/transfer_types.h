@@ -40,7 +40,7 @@ struct NetworkAddr {
 struct TransferTensor {
   int block_idx = 0;           // 块索引，标识批处理中的块位置
   int layer_idx = 0;           // 层索引，标识模型中的层位置
-  int device_idx = 0;          // 设备索引，标识目标设备
+  int hash_device_id = 0;      // 设备在DP组中的偏移编号 (逻辑设备编号，用于hash查找)
   void* src_ptr = nullptr;     // 源数据指针，指向需要传输的张量数据
   std::vector<int64_t> shape;  // 张量形状，描述张量的维度
   DataType dtype;              // 数据类型
@@ -69,6 +69,14 @@ struct TransferTask {
   void* dst_ptr = nullptr;    // 目标指针，指向接收数据的内存或显存地址
   bool is_completed = false;  // 是否完成传输，标记任务完成状态
   std::string addr;           // 目标地址
+
+  // decode 设备信息
+  int decode_device_id = -1;      // decode组内的物理rank号
+  int decode_device_offset = -1;  // Task所在decode DP组内的逻辑ID
+
+  // prefill 设备信息
+  int prefill_device_id = -1;      // prefill组内的物理rank号
+  int prefill_device_offset = -1;  // Task所在prefill DP组内的逻辑ID
 };
 
 }  // namespace ksana_llm

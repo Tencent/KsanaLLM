@@ -1,12 +1,13 @@
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/transfer/transfer_engine.h"
 
 #include <cstring>
 #include <future>
 #include <mutex>
 
+#include "ksana_llm/connector/device_info_manager.h"
+#include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 
@@ -21,38 +22,39 @@ namespace ksana_llm {
  */
 template <typename EnvType, typename ConnectorType>
 void TransferEngine::Initialize(GroupRole group_role) {
-  group_role_ = group_role;
+  std::call_once(init_once_flag_, [this, group_role]() {
+    group_role_ = group_role;
 
-  auto env = Singleton<EnvType>::GetInstance();
+    auto env = Singleton<EnvType>::GetInstance();
 
-  // 从环境中获取配置
-  env->GetPipelineConfig(pipeline_config_);
-  env->GetBlockManagerConfig(block_manager_config_);
-  RuntimeConfig runtime_config;
-  env->GetRuntimeConfig(runtime_config);
-  tensor_parallel_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+    // 从环境中获取配置
+    env->GetPipelineConfig(pipeline_config_);
+    env->GetBlockManagerConfig(block_manager_config_);
+    RuntimeConfig runtime_config;
+    env->GetRuntimeConfig(runtime_config);
+    tensor_parallel_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
+    attn_data_parallel_size_ = runtime_config.parallel_basic_config.attn_data_parallel_size;
+    // 获取连接器配置
+    ConnectorConfig connector_config;
+    env->GetConnectorConfigs(connector_config);
 
-  // 获取连接器配置
-  ConnectorConfig connector_config;
-  env->GetConnectorConfigs(connector_config);
+    // 创建连接器单例
+    connector_ = ConnectorType::GetInstance(connector_config, tensor_parallel_size_, pipeline_config_.node_rank, env);
 
-  // 创建连接器实例
-  connector_ =
-      std::make_shared<ConnectorType>(connector_config, tensor_parallel_size_, pipeline_config_.node_rank, env);
+    // 初始化并启动传输连接器
+    connector_->Initialize(group_role, device_info_manager_);
 
-  // 初始化并启动传输连接器
-  connector_->Initialize(group_role);
+    // 计算派生值
+    layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+    block_size_ = block_manager_config_.device_allocator_config.block_size;
+    kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
+    transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
+    // 判断是否处于不需要prefill的decode状态
+    decode_node_benchmark =
+        (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) && (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
 
-  // 计算派生值
-  layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
-  block_size_ = block_manager_config_.device_allocator_config.block_size;
-  kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
-  transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
-  // 判断是否处于不需要prefill的decode状态
-  decode_node_benchmark =
-      (std::getenv("DECODE_NODE_BENCHMARK") != nullptr) && (strcmp(std::getenv("DECODE_NODE_BENCHMARK"), "1") == 0);
-
-  KLLM_LOG_DEBUG << "TransferEngine initialized";
+    KLLM_LOG_DEBUG << "TransferEngine initialized";
+  });
 }
 
 // 显式实例化默认模板参数的版本
@@ -68,7 +70,13 @@ template void TransferEngine::Initialize<Environment, TransferConnector>(GroupRo
  * @param gpu_blocks 每个设备的GPU内存块
  */
 void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_token_num,
-                                     std::vector<std::vector<void*>>& gpu_blocks) {
+                                     std::vector<std::vector<void*>>& gpu_blocks,
+                                     std::vector<int>& kv_occupied_devices) {
+  if (group_role_ == GroupRole::PREFILL && request_id == -1) {
+    KLLM_LOG_WARNING << "Invalid request_id: " << request_id << " to avoid warmup failed";
+    return;
+  }
+
   if (request_id < 0) {
     KLLM_LOG_ERROR << "Invalid request_id: " << request_id;
     return;
@@ -76,13 +84,20 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
 
   auto transfer_meta = std::make_shared<TransferMeta>();
   transfer_meta->shared_token_num = shared_token_num;
+  transfer_meta->kv_ranks_in_node = kv_occupied_devices;
   transfer_meta->gpu_blocks = std::move(gpu_blocks);
   transfer_meta->kv_comm_group_key = kv_comm_group_key;
+
+  if (group_role_ == GroupRole::DECODE &&
+      !device_info_manager_->FindAndInsert(kv_comm_group_key, attn_data_parallel_size_, tensor_parallel_size_)) {
+    connector_->SendConfigToPrefill(kv_comm_group_key, attn_data_parallel_size_, tensor_parallel_size_);
+    KLLM_LOG_DEBUG << "SendConfigToPrefill for kv_comm_group_key: " << kv_comm_group_key
+                   << ", ADP: " << attn_data_parallel_size_ << ", total_dev: " << tensor_parallel_size_;
+  }
 
   // 初始化sent_tasks_跟踪矩阵
   const size_t device_num = transfer_meta->gpu_blocks.size();
   const size_t block_num = device_num > 0 ? transfer_meta->gpu_blocks[0].size() : 0;
-
   // 验证device_num和block_num
   if (device_num == 0 || block_num == 0) {
     KLLM_LOG_WARNING << "Invalid device_num or block_num in AddTransferMeta: " << device_num << ", " << block_num;
@@ -104,14 +119,15 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
     transfer_meta->first_token = 0;
   }
 
+  KLLM_LOG_DEBUG << "TransferMeta added for request ID: " << request_id << ", shared_token_num: " << shared_token_num
+                 << ", gpu_blocks size: " << transfer_meta->gpu_blocks.size()
+                 << ", kv_comm_group_key: " << kv_comm_group_key;
+
   // 将元数据添加到映射
   {
     std::lock_guard<std::mutex> lock(meta_map_mutex_);
     meta_map_[request_id] = std::move(transfer_meta);
   }
-
-  KLLM_LOG_DEBUG << "TransferMeta added for request ID: " << request_id << ", shared_token_num: " << shared_token_num
-                 << ", gpu_blocks size: " << gpu_blocks.size() << ", kv_comm_group_key: " << kv_comm_group_key;
 }
 
 /**
@@ -154,7 +170,20 @@ int TransferEngine::IsRecvDone(int request_id) {
     const int block_num = meta->gpu_blocks[0].size();
     const size_t chunks_per_device =
         (layer_num_ + transfer_layer_chunk_size_ - 1) / transfer_layer_chunk_size_;  // 向上取整
-    const size_t expected_tasks = block_num * chunks_per_device * device_num;
+
+    size_t expected_tasks = block_num * chunks_per_device * device_num;
+    if (group_role_ == GroupRole::PREFILL) {
+      std::pair<int, int> decode_dev_config;
+      if (!device_info_manager_->TryGet(meta->kv_comm_group_key, decode_dev_config)) {
+        device_info_manager_->WaitFor(meta->kv_comm_group_key, decode_dev_config);
+      }
+      KLLM_LOG_DEBUG << "Wait for config from Decode for kv_comm_group_key: " << meta->kv_comm_group_key
+                     << ", ADP: " << decode_dev_config.first << ", total_dev: " << decode_dev_config.second;
+      int decode_dp_num = decode_dev_config.first;
+      int deocode_device_num = decode_dev_config.second;
+
+      expected_tasks = block_num * chunks_per_device * (deocode_device_num / decode_dp_num);
+    }
 
     KLLM_LOG_DEBUG << "TransferTask IsDone? request id:" << request_id
                    << " finished:" << meta->finished_tasks_deque_.size() << " expected:" << expected_tasks
@@ -189,9 +218,16 @@ bool TransferEngine::IsSendDone(int request_id) { return IsRecvDone(request_id) 
  * @param layer_idx 层索引
  */
 void TransferEngine::Send(int device_idx, int layer_idx) {
+  int device_dp_offset = device_idx % (static_cast<int>(tensor_parallel_size_ / attn_data_parallel_size_));
+  KLLM_LOG_DEBUG << "TransferEngine Send called for device_idx: " << device_idx
+                 << ", device_dp_offset: " << device_dp_offset << ", layer_idx: " << layer_idx;
+
   if (group_role_ != GroupRole::PREFILL) {
     return;
   }
+
+  int prefill_dp_num = attn_data_parallel_size_;
+  int prefill_device_num = tensor_parallel_size_;
 
   // 验证layer_idx参数
   if (!ValidateLayerIndex(layer_idx)) {
@@ -222,9 +258,17 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
   std::lock_guard<std::mutex> meta_lock(meta_map_mutex_);
   for (auto& meta_pair : meta_map_) {
     const int request_id = meta_pair.first;
+    KLLM_LOG_DEBUG << " Send Processing request id: " << request_id << " on device_idx: " << device_idx;
     std::shared_ptr<TransferMeta> meta = meta_pair.second;
 
     if (!meta) {
+      continue;
+    }
+    // 避免构建的task的设备号不对应
+    if (std::find(meta->kv_ranks_in_node.begin(), meta->kv_ranks_in_node.end(), device_idx) ==
+        meta->kv_ranks_in_node.end()) {
+      // TODO(winminkong): 后续优化为hash查找
+      KLLM_LOG_DEBUG << "Device " << device_idx << " not used in request " << request_id;
       continue;
     }
 
@@ -234,8 +278,8 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
       continue;
     }
 
-    if (device_idx >= meta->gpu_blocks.size()) {
-      KLLM_LOG_DEBUG << "Invalid device_idx: " << device_idx << ", max: " << meta->gpu_blocks.size() - 1;
+    if (device_dp_offset >= meta->gpu_blocks.size()) {
+      KLLM_LOG_DEBUG << "Invalid device_dp_offset: " << device_dp_offset << ", max: " << meta->gpu_blocks.size() - 1;
       continue;
     }
 
@@ -244,62 +288,88 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
       continue;
     }
 
-    // 处理此设备和层的所有块
-    for (size_t block_idx = 0; block_idx < meta->gpu_blocks[0].size(); ++block_idx) {
-      // 检查是否已发送
-      bool already_sent = false;
-      {
-        std::lock_guard<std::mutex> lock(meta->mutex_);
-        if (device_idx < meta->sent_tasks_.size() && block_idx < meta->sent_tasks_[device_idx].size() &&
-            layer_offset < meta->sent_tasks_[device_idx][block_idx].size()) {
-          already_sent = meta->sent_tasks_[device_idx][block_idx][layer_offset];
-        }
-      }
-
-      if (already_sent) {
+    std::pair<int, int> decode_dev_config;
+    if (!device_info_manager_->Find(meta->kv_comm_group_key, decode_dev_config)) {
+      device_info_manager_->WaitFor(meta->kv_comm_group_key, decode_dev_config);
+      KLLM_LOG_DEBUG << "WaitForConfigFromDecode for kv_comm_group_key: " << meta->kv_comm_group_key
+                     << ", ADP: " << decode_dev_config.first << ", total_dev: " << decode_dev_config.second;
+    }
+    int decode_dp_num = decode_dev_config.first;
+    int deocode_device_num = decode_dev_config.second;
+    // 判断P端的taskkey是否复制或跳过
+    int dp_ratio = 1;
+    if ((deocode_device_num / decode_dp_num) < (prefill_device_num / prefill_dp_num)) {
+      // 跳过某些task的创建
+      if (device_dp_offset >= (deocode_device_num / decode_dp_num)) {
+        // TODO(winminkong): 优化某个设备通信负载高,某个设备没有通信负载的问题
+        KLLM_LOG_DEBUG << "Skip sending for device_dp_offset: " << device_dp_offset << " on device_idx: " << device_idx;
         continue;
       }
-
-      // 创建传输任务
-      auto task = std::make_shared<TransferTask>();
-      task->req_id = request_id;
-      task->addr = meta->kv_comm_group_key;  // 设置通信组键
-      task->tensor.block_idx = block_idx;
-      task->tensor.layer_idx = layer_idx;  // 保持原始layer_idx用于标识
-      task->tensor.device_idx = device_idx;
-
-      // 设置张量属性 - 现在传输多层数据
-      task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
-      task->tensor.dtype = kv_cache_dtype_;
-
-      // 如果block_idx有效，设置源指针 - 从chunk起始层开始
-      if (block_idx < meta->gpu_blocks[device_idx].size()) {
-        task->tensor.src_ptr =
-            static_cast<char*>(meta->gpu_blocks[device_idx][block_idx]) + chunk_start_layer_offset * element_size;
-      } else {
-        KLLM_LOG_WARNING << "Invalid block_idx: " << block_idx << " for device: " << device_idx;
-        continue;
-      }
-
-      // 将chunk中的所有层标记为已发送
-      {
-        std::lock_guard<std::mutex> lock(meta->mutex_);
-        for (size_t i = 0; i < actual_chunk_size; ++i) {
-          const int chunk_layer_offset = chunk_start_layer_offset + i;
-          if (chunk_layer_offset < layer_num_) {
-            meta->sent_tasks_[device_idx][block_idx][chunk_layer_offset] = true;
+    } else if ((deocode_device_num / decode_dp_num) > (prefill_device_num / prefill_dp_num)) {
+      dp_ratio = (deocode_device_num / decode_dp_num) / (prefill_device_num / prefill_dp_num);
+    }
+    KLLM_LOG_DEBUG << "dp_ratio: " << dp_ratio;
+    for (int cp_idx = 0; cp_idx < dp_ratio; ++cp_idx) {
+      // 处理此设备和层的所有块
+      for (size_t block_idx = 0; block_idx < meta->gpu_blocks[0].size(); ++block_idx) {
+        // 检查是否已发送
+        bool already_sent = false;
+        {
+          std::lock_guard<std::mutex> lock(meta->mutex_);
+          if (device_dp_offset < meta->sent_tasks_.size() && block_idx < meta->sent_tasks_[device_dp_offset].size() &&
+              layer_offset < meta->sent_tasks_[device_dp_offset][block_idx].size()) {
+            already_sent = meta->sent_tasks_[device_dp_offset][block_idx][layer_offset];
           }
         }
-        meta->transfer_tasks_deque_.push_back(task);
-      }
 
-      // 将任务推送到连接器队列
-      connector_->PushTask(task);
-      KLLM_LOG_DEBUG << "Sent chunk transfer task for request " << request_id << ", device: " << device_idx
-                     << ", trigger layer: " << layer_idx << " (offset " << layer_offset << ")"
-                     << ", chunk range: [" << chunk_start_layer_offset << "-" << chunk_end_layer_offset << "]"
-                     << ", chunk size: " << actual_chunk_size << ", block: " << block_idx
-                     << ", is_model_last_layer: " << is_model_last_layer;
+        if (already_sent) {
+          continue;
+        }
+
+        // 创建传输任务
+        auto task = std::make_shared<TransferTask>();
+        task->req_id = request_id;
+        task->addr = meta->kv_comm_group_key;  // 设置通信组键
+        task->tensor.block_idx = block_idx;
+        task->tensor.layer_idx = layer_idx;  // 保持原始layer_idx用于标识
+        task->tensor.hash_device_id = device_dp_offset * dp_ratio + cp_idx;
+        // 额外附带信息
+        task->prefill_device_id = device_idx;
+        task->prefill_device_offset = device_dp_offset;
+
+        // 设置张量属性 - 现在传输多层数据
+        task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
+        task->tensor.dtype = kv_cache_dtype_;
+
+        // 如果block_idx有效，设置源指针 - 从chunk起始层开始
+        if (block_idx < meta->gpu_blocks[device_dp_offset].size()) {
+          task->tensor.src_ptr = static_cast<char*>(meta->gpu_blocks[device_dp_offset][block_idx]) +
+                                 chunk_start_layer_offset * element_size;
+        } else {
+          KLLM_LOG_WARNING << "Invalid block_idx: " << block_idx << " for device: " << device_idx;
+          continue;
+        }
+
+        // 将chunk中的所有层标记为已发送
+        {
+          std::lock_guard<std::mutex> lock(meta->mutex_);
+          for (size_t i = 0; i < actual_chunk_size; ++i) {
+            const int chunk_layer_offset = chunk_start_layer_offset + i;
+            if (chunk_layer_offset < layer_num_ && (cp_idx == dp_ratio - 1)) {
+              meta->sent_tasks_[device_dp_offset][block_idx][chunk_layer_offset] = true;
+            }
+          }
+          meta->transfer_tasks_deque_.push_back(task);
+        }
+
+        // 将任务推送到连接器队列
+        connector_->PushTask(task);
+        KLLM_LOG_DEBUG << "Sent chunk transfer task for request " << request_id << ", device: " << device_idx
+                       << ", trigger layer: " << layer_idx << " (offset " << layer_offset << ")"
+                       << ", chunk range: [" << chunk_start_layer_offset << "-" << chunk_end_layer_offset << "]"
+                       << ", chunk size: " << actual_chunk_size << ", block: " << block_idx
+                       << ", is_model_last_layer: " << is_model_last_layer;
+      }
     }
   }
 }
@@ -331,6 +401,10 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_t
     task->req_id = request_id;
     task->addr = kv_comm_group_key;
     task->token = token;
+
+    // 额外附带信息
+    task->prefill_device_id = 0;
+    task->prefill_device_offset = 0;
 
     // 将任务推送到连接器队列
     connector_->PushTask(task);
@@ -372,7 +446,10 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
         task->addr = transfer_meta->kv_comm_group_key;
         task->tensor.block_idx = block_idx;
         task->tensor.layer_idx = layer_idx + actual_chunk_size - 1;  // chunk的最后一层layer_idx用于标识
-        task->tensor.device_idx = device_idx;
+        task->tensor.hash_device_id = device_idx;
+        // 额外附带信息
+        task->decode_device_id = transfer_meta->kv_ranks_in_node[device_idx];
+        task->decode_device_offset = device_idx;
 
         // 设置张量形状和数据类型 - 现在接收多层数据
         task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
@@ -407,6 +484,10 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
   token_task->req_id = request_id;
   token_task->dst_ptr = &transfer_meta->first_token;
   token_task->addr = transfer_meta->kv_comm_group_key;
+
+  // 额外附带信息
+  token_task->decode_device_id = 0;
+  token_task->decode_device_offset = 0;
 
   connector_->PushTask(token_task);
   KLLM_LOG_DEBUG << "Creating transfer tasks for decode node, request_id: " << request_id

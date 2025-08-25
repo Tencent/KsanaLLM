@@ -726,16 +726,16 @@ class MockNcclCommunicatorForSendRecv : public NcclCommunicator {
   using NcclCommunicator::SetCommGroupForTest;
 
   // Mock Send method to avoid real ncclSend calls
-  Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-              DataType dtype) override {
-    return Send(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+  Status Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, const void* buf,
+              size_t count, DataType dtype) override {
+    return Send(group_key, src_dev_id, dst_dev_id, nullptr, buf, count, dtype);
   }
 
   // Mock Recv method to avoid real ncclRecv calls
-  Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
+  Status Recv(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, void* buf, size_t count,
               DataType dtype) override {
-    // 默认用 dev_id 作为 local/peer，stream 传 nullptr
-    return Recv(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+    // stream 传 nullptr
+    return Recv(group_key, src_dev_id, dst_dev_id, nullptr, buf, count, dtype);
   }
 
   // Mock Send method (overloaded) - for testing purpose
@@ -959,7 +959,8 @@ TEST(NcclCommunicatorTest, Send_ValidParameters) {
   size_t count = 1;
 
   // 执行Send操作
-  Status status = communicator.Send(group_key, dev_id, 0, &test_data, count, DataType::TYPE_UINT32);
+  Status status =
+      communicator.Send(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &test_data, count, DataType::TYPE_UINT32);
 
   // 验证结果
   EXPECT_TRUE(status.OK()) << "Send should succeed: " << status.GetMessage();
@@ -977,7 +978,8 @@ TEST(NcclCommunicatorTest, Send_InvalidGroupKey) {
   MockNcclCommunicatorForSendRecv communicator(config);
 
   int test_data = 42;
-  Status status = communicator.Send("non_existent_group", 0, 0, &test_data, 1, DataType::TYPE_BYTES);
+  Status status =
+      communicator.Send("non_existent_group", 0, 0, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
@@ -995,12 +997,12 @@ TEST(NcclCommunicatorTest, Send_InvalidDeviceId) {
   int test_data = 42;
 
   // 测试负数设备ID
-  Status status = communicator.Send(group_key, -1, 0, &test_data, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Send(group_key, -1, -1, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 
   // 测试超出范围的设备ID
-  status = communicator.Send(group_key, 5, 0, &test_data, 1, DataType::TYPE_BYTES);
+  status = communicator.Send(group_key, 5, 5, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 }
@@ -1020,7 +1022,7 @@ TEST(NcclCommunicatorTest, Send_UninitializedCommunicator) {
   communicator.SetCommGroupForTest(group_key, std::move(group));
 
   int test_data = 42;
-  Status status = communicator.Send(group_key, 0, 0, &test_data, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
@@ -1036,7 +1038,7 @@ TEST(NcclCommunicatorTest, Send_SimulatedError) {
   communicator.SetSimulateSendError(true);
 
   int test_data = 42;
-  Status status = communicator.Send(group_key, 0, 0, &test_data, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
@@ -1058,7 +1060,8 @@ TEST(NcclCommunicatorTest, Recv_ValidParameters) {
   int recv_buffer = 0;
   size_t count = 1;
   // 执行Recv操作
-  Status status = communicator.Recv(group_key, dev_id, 0, &recv_buffer, count, DataType::TYPE_INT32);
+  Status status =
+      communicator.Recv(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &recv_buffer, count, DataType::TYPE_INT32);
 
   // 验证结果
   EXPECT_TRUE(status.OK()) << "Recv should succeed: " << status.GetMessage();
@@ -1076,7 +1079,8 @@ TEST(NcclCommunicatorTest, Recv_InvalidGroupKey) {
   MockNcclCommunicatorForSendRecv communicator(config);
 
   int recv_buffer = 0;
-  Status status = communicator.Recv("non_existent_group", 0, 0, &recv_buffer, 1, DataType::TYPE_BYTES);
+  Status status =
+      communicator.Recv("non_existent_group", 0, 0, static_cast<uint64_t>(0), &recv_buffer, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
@@ -1093,12 +1097,12 @@ TEST(NcclCommunicatorTest, Recv_InvalidDeviceId) {
   int recv_buffer = 0;
 
   // 测试负数设备ID
-  Status status = communicator.Recv(group_key, -1, 0, &recv_buffer, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Recv(group_key, -1, -1, static_cast<uint64_t>(0), &recv_buffer, 1, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 
   // 测试超出范围的设备ID
-  status = communicator.Recv(group_key, 10, 0, &recv_buffer, 1, DataType::TYPE_BYTES);
+  status = communicator.Recv(group_key, 10, 10, static_cast<uint64_t>(0), &recv_buffer, 1, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 }
@@ -1118,7 +1122,7 @@ TEST(NcclCommunicatorTest, Recv_UninitializedCommunicator) {
   communicator.SetCommGroupForTest(group_key, std::move(group));
 
   int recv_buffer = 0;
-  Status status = communicator.Recv(group_key, 0, 0, &recv_buffer, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), &recv_buffer, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
@@ -1134,7 +1138,7 @@ TEST(NcclCommunicatorTest, Recv_SimulatedError) {
   communicator.SetSimulateRecvError(true);
 
   int recv_buffer = 0;
-  Status status = communicator.Recv(group_key, 0, 0, &recv_buffer, 1, DataType::TYPE_BYTES);
+  Status status = communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), &recv_buffer, 1, DataType::TYPE_BYTES);
 
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RetCode::RET_INTERNAL_UNKNOWN_ERROR);
@@ -1166,7 +1170,8 @@ TEST(NcclCommunicatorTest, Recv_WithCallback) {
   int recv_buffer = 0;
   size_t count = 1;
 
-  Status status = communicator.Recv(group_key, 0, 0, &recv_buffer, count, DataType::TYPE_INT32);
+  Status status =
+      communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), &recv_buffer, count, DataType::TYPE_INT32);
 
   // 验证回调被调用
   EXPECT_TRUE(status.OK());
@@ -1212,11 +1217,11 @@ TEST(NcclCommunicatorTest, SendRecv_DifferentDataTypes) {
     EXPECT_EQ(nccl_dtype, test.nccl_dtype);
 
     // 测试发送
-    Status send_status = communicator.Send(group_key, 0, 0, buffer, count, test.ksana_dtype);
+    Status send_status = communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), buffer, count, test.ksana_dtype);
     EXPECT_TRUE(send_status.OK()) << "Send failed for " << test.name;
 
     // 测试接收
-    Status recv_status = communicator.Recv(group_key, 0, 0, buffer, count, test.ksana_dtype);
+    Status recv_status = communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), buffer, count, test.ksana_dtype);
     EXPECT_TRUE(recv_status.OK()) << "Recv failed for " << test.name;
 
     EXPECT_EQ(communicator.GetSendCallCount(), 1);
@@ -1243,12 +1248,14 @@ TEST(NcclCommunicatorTest, SendRecv_LargeData) {
     std::vector<float> large_buffer(count, 3.14f);
 
     // 测试发送大数据
-    Status send_status = communicator.Send(group_key, 0, 0, large_buffer.data(), count, DataType::TYPE_FP32);
+    Status send_status =
+        communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), large_buffer.data(), count, DataType::TYPE_FP32);
     EXPECT_TRUE(send_status.OK()) << "Send failed for count " << count;
     EXPECT_EQ(communicator.GetLastSendCount(), count);
 
     // 测试接收大数据
-    Status recv_status = communicator.Recv(group_key, 0, 0, large_buffer.data(), count, DataType::TYPE_FP32);
+    Status recv_status =
+        communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), large_buffer.data(), count, DataType::TYPE_FP32);
     EXPECT_TRUE(recv_status.OK()) << "Recv failed for count " << count;
     EXPECT_EQ(communicator.GetLastRecvCount(), count);
   }
@@ -1272,12 +1279,14 @@ TEST(NcclCommunicatorTest, SendRecv_MultipleDevices) {
     communicator.ResetCallCounts();
 
     // 发送操作
-    Status send_status = communicator.Send(group_key, dev_id, 0, &test_data, 1, DataType::TYPE_INT32);
+    Status send_status =
+        communicator.Send(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_INT32);
     EXPECT_TRUE(send_status.OK()) << "Send failed for device " << dev_id;
     EXPECT_EQ(communicator.GetLastSendDevId(), dev_id);
 
     // 接收操作
-    Status recv_status = communicator.Recv(group_key, dev_id, 0, &test_data, 1, DataType::TYPE_INT32);
+    Status recv_status =
+        communicator.Recv(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &test_data, 1, DataType::TYPE_INT32);
     EXPECT_TRUE(recv_status.OK()) << "Recv failed for device " << dev_id;
     EXPECT_EQ(communicator.GetLastRecvDevId(), dev_id);
   }
@@ -1301,10 +1310,12 @@ TEST(NcclCommunicatorTest, SendRecv_ConcurrentOperations) {
     // 交替在两个设备上执行发送和接收
     int dev_id = i % 2;
 
-    Status send_status = communicator.Send(group_key, dev_id, 0, &buffers[i], 1, DataType::TYPE_FP32);
+    Status send_status =
+        communicator.Send(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &buffers[i], 1, DataType::TYPE_FP32);
     EXPECT_TRUE(send_status.OK()) << "Send failed for operation " << i;
 
-    Status recv_status = communicator.Recv(group_key, dev_id, 0, &buffers[i], 1, DataType::TYPE_FP32);
+    Status recv_status =
+        communicator.Recv(group_key, dev_id, dev_id, static_cast<uint64_t>(0), &buffers[i], 1, DataType::TYPE_FP32);
     EXPECT_TRUE(recv_status.OK()) << "Recv failed for operation " << i;
   }
 
@@ -1323,17 +1334,19 @@ TEST(NcclCommunicatorTest, SendRecv_EdgeCases) {
 
   // 测试零大小传输
   int dummy_buffer = 0;
-  Status send_status = communicator.Send(group_key, 0, 0, &dummy_buffer, 0, DataType::TYPE_INT32);
+  Status send_status =
+      communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), &dummy_buffer, 0, DataType::TYPE_INT32);
   EXPECT_TRUE(send_status.OK()) << "Send should handle zero count";
 
-  Status recv_status = communicator.Recv(group_key, 0, 0, &dummy_buffer, 0, DataType::TYPE_INT32);
+  Status recv_status =
+      communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), &dummy_buffer, 0, DataType::TYPE_INT32);
   EXPECT_TRUE(recv_status.OK()) << "Recv should handle zero count";
 
   // 测试nullptr缓冲区（对于零大小）
-  send_status = communicator.Send(group_key, 0, 0, nullptr, 0, DataType::TYPE_INT32);
+  send_status = communicator.Send(group_key, 0, 0, static_cast<uint64_t>(0), nullptr, 0, DataType::TYPE_INT32);
   EXPECT_TRUE(send_status.OK()) << "Send should handle nullptr with zero count";
 
-  recv_status = communicator.Recv(group_key, 0, 0, nullptr, 0, DataType::TYPE_INT32);
+  recv_status = communicator.Recv(group_key, 0, 0, static_cast<uint64_t>(0), nullptr, 0, DataType::TYPE_INT32);
   EXPECT_TRUE(recv_status.OK()) << "Recv should handle nullptr with zero count";
 }
 TEST(NcclCommunicatorTest, SendRecv_OverloadedMethod_IntegrationTest) {
@@ -1420,20 +1433,20 @@ TEST(NcclCommunicatorTest, SendRecv_IntegrationTest) {
   double recv_data = 0.0;
 
   // Prefill -> Decode
-  Status send_status = prefill_comm.Send(group_key, 0, 0, &send_data, 1, DataType::TYPE_FP64);
+  Status send_status = prefill_comm.Send(group_key, 0, 0, static_cast<uint64_t>(0), &send_data, 1, DataType::TYPE_FP64);
   EXPECT_TRUE(send_status.OK());
 
-  Status recv_status = decode_comm.Recv(group_key, 0, 0, &recv_data, 1, DataType::TYPE_FP64);
+  Status recv_status = decode_comm.Recv(group_key, 0, 0, static_cast<uint64_t>(0), &recv_data, 1, DataType::TYPE_FP64);
   EXPECT_TRUE(recv_status.OK());
 
   // Decode -> Prefill
   double return_data = 2.718281828459045;
   double recv_return = 0.0;
 
-  send_status = decode_comm.Send(group_key, 1, 0, &return_data, 1, DataType::TYPE_FP64);
+  send_status = decode_comm.Send(group_key, 1, 1, static_cast<uint64_t>(0), &return_data, 1, DataType::TYPE_FP64);
   EXPECT_TRUE(send_status.OK());
 
-  recv_status = prefill_comm.Recv(group_key, 1, 0, &recv_return, 1, DataType::TYPE_FP64);
+  recv_status = prefill_comm.Recv(group_key, 1, 1, static_cast<uint64_t>(0), &recv_return, 1, DataType::TYPE_FP64);
   EXPECT_TRUE(recv_status.OK());
 
   // 验证调用参数
@@ -1972,7 +1985,8 @@ TEST(NcclCommunicatorTest, SendGroup_EmptyBuffers) {
   std::vector<const void*> empty_buffers;
   std::vector<size_t> empty_counts;
 
-  Status status = communicator.SendGroup("test_group", 0, 0, empty_buffers, empty_counts, DataType::TYPE_FP32);
+  Status status = communicator.SendGroup("test_group", 0, 0, static_cast<uint64_t>(0), empty_buffers, empty_counts,
+                                         DataType::TYPE_FP32);
   EXPECT_TRUE(status.OK()) << "Empty buffers should be handled gracefully";
 
   ksana_llm::testing_internal::EnableNcclMock(false);
@@ -1989,7 +2003,8 @@ TEST(NcclCommunicatorTest, SendGroup_MismatchedBuffersAndCounts) {
   std::vector<const void*> buffers = {reinterpret_cast<const void*>(0x1000)};
   std::vector<size_t> counts = {100, 200};  // Mismatch: 1 buffer, 2 counts
 
-  Status status = communicator.SendGroup("test_group", 0, 0, buffers, counts, DataType::TYPE_FP32);
+  Status status =
+      communicator.SendGroup("test_group", 0, 0, static_cast<uint64_t>(0), buffers, counts, DataType::TYPE_FP32);
   EXPECT_FALSE(status.OK()) << "Mismatched buffers and counts should return error";
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 
@@ -2023,7 +2038,8 @@ TEST(NcclCommunicatorTest, SendGroup_ValidParameters) {
   std::vector<const void*> buffers = {reinterpret_cast<const void*>(0x1000), reinterpret_cast<const void*>(0x2000)};
   std::vector<size_t> counts = {100, 200};
 
-  Status status = communicator.SendGroup(group_key, 0, 0, buffers, counts, DataType::TYPE_FP32);
+  Status status =
+      communicator.SendGroup(group_key, 0, 0, static_cast<uint64_t>(0), buffers, counts, DataType::TYPE_FP32);
   EXPECT_TRUE(status.OK()) << "Valid SendGroup should succeed";
 
   ksana_llm::testing_internal::EnableNcclMock(false);
@@ -2040,7 +2056,8 @@ TEST(NcclCommunicatorTest, RecvGroup_MismatchedBuffersAndCounts) {
   std::vector<void*> buffers = {reinterpret_cast<void*>(0x1000)};
   std::vector<size_t> counts = {100, 200};  // Mismatch: 1 buffer, 2 counts
 
-  Status status = communicator.RecvGroup("test_group", 0, 0, buffers, counts, DataType::TYPE_FP32);
+  Status status =
+      communicator.RecvGroup("test_group", 0, 0, static_cast<uint64_t>(0), buffers, counts, DataType::TYPE_FP32);
   EXPECT_FALSE(status.OK()) << "Mismatched buffers and counts should return error";
   EXPECT_EQ(status.GetCode(), RetCode::RET_INVALID_ARGUMENT);
 
@@ -2073,7 +2090,8 @@ TEST(NcclCommunicatorTest, RecvGroup_ValidParameters) {
 
   std::vector<void*> buffers = {reinterpret_cast<void*>(0x1000), reinterpret_cast<void*>(0x2000)};
   std::vector<size_t> counts = {100, 200};
-  Status status = communicator.RecvGroup(group_key, 0, 0, buffers, counts, DataType::TYPE_FP32);
+  Status status =
+      communicator.RecvGroup(group_key, 0, 0, static_cast<uint64_t>(0), buffers, counts, DataType::TYPE_FP32);
   EXPECT_TRUE(status.OK()) << "Valid RecvGroup should succeed";
 
   ksana_llm::testing_internal::EnableNcclMock(false);
@@ -2112,7 +2130,7 @@ TEST(NcclCommunicatorTest, Send_NullBuffer) {
   config.device_count = 2;  // Set device_count to match the test scenario
   NcclCommunicator communicator(config);
   // 初始化 communicator，略（可参考已有测试）
-  Status status = communicator.Send("group0", 0, 1, nullptr, 128, DataType::TYPE_BYTES);
+  Status status = communicator.Send("group0", 0, 0, 1, nullptr, 128, DataType::TYPE_BYTES);
   EXPECT_FALSE(status.OK());
 }
 

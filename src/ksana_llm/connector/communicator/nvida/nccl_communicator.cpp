@@ -215,29 +215,29 @@ bool NcclCommunicator::IsConnectionReady(const std::string& group_key, int dev_i
 }
 
 // Communicator 接口实现 - 发送数据
-Status NcclCommunicator::Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-                              DataType dtype) {
-  return Send(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+Status NcclCommunicator::Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                              const void* buf, size_t count, DataType dtype) {
+  return Send(group_key, src_dev_id, dst_dev_id, nullptr, buf, count, dtype);
 }
 
 // Communicator 接口实现 - 接收数据
-Status NcclCommunicator::Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
-                              DataType dtype) {
-  return Recv(group_key, dev_id, dev_id, nullptr, buf, count, dtype);
+Status NcclCommunicator::Recv(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, void* buf,
+                              size_t count, DataType dtype) {
+  return Recv(group_key, src_dev_id, dst_dev_id, nullptr, buf, count, dtype);
 }
 
 // Communicator 接口实现 - 批量发送数据
-Status NcclCommunicator::SendGroup(const std::string& group_key, int dev_id, uint64_t job_id,
+Status NcclCommunicator::SendGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
                                    const std::vector<const void*>& buffers, const std::vector<size_t>& counts,
                                    DataType dtype) {
-  return SendGroup(group_key, dev_id, dev_id, nullptr, buffers, counts, dtype);
+  return SendGroup(group_key, src_dev_id, dst_dev_id, nullptr, buffers, counts, dtype);
 }
 
 // Communicator 接口实现 - 批量接收数据
-Status NcclCommunicator::RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id,
+Status NcclCommunicator::RecvGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
                                    const std::vector<void*>& buffers, const std::vector<size_t>& counts,
                                    DataType dtype) {
-  return RecvGroup(group_key, dev_id, dev_id, nullptr, buffers, counts, dtype);
+  return RecvGroup(group_key, src_dev_id, dst_dev_id, nullptr, buffers, counts, dtype);
 }
 
 Status NcclCommunicator::Send(const std::string& group_key, int local_dev_id, int peer_dev_id, cudaStream_t stream,

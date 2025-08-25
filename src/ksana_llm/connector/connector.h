@@ -15,6 +15,7 @@
 #include "ksana_llm/connector/task_dispatcher.h"
 #include "ksana_llm/transfer/transfer_types.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -30,10 +31,17 @@ class Connector {
   Connector() = default;  // 新增，允许子类默认构造
   virtual ~Connector();   // 声明为虚析构函数
 
-  virtual Status Initialize(GroupRole group_role);
+  static std::shared_ptr<Connector> GetInstance(const ConnectorConfig& config, int attn_tensor_para_size, int node_rank,
+                                                std::shared_ptr<Environment> env) {
+    return Singleton<Connector>::GetInstance(config, attn_tensor_para_size, node_rank, env);
+  }
+
+  virtual Status Initialize(GroupRole group_role, std::shared_ptr<DeviceInfoManager> device_info_manager);
 
   // 启动传输任务处理线程，为兼容性添加
   virtual void Start();
+
+  void SendConfigToPrefill(const std::string& kv_comm_group_key, size_t adp_num, size_t device_num);
 
   virtual void PushTask(const std::shared_ptr<TransferTask>& task);
 

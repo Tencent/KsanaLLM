@@ -26,6 +26,7 @@ bool StopChecker::CheckIncrementalStopStrings(const std::shared_ptr<InferRequest
         req->output_tokens.erase(req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end());
         req->output_tokens.insert(req->output_tokens.begin() + req->input_tokens.size(),
                                   truncated_output_tokens.begin(), truncated_output_tokens.end());
+        KLLM_LOG_DEBUG << "CheckRequestFinish Request " << req->req_id << " finished.";
         return true;
       }
     }

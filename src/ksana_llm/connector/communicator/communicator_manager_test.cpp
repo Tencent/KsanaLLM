@@ -32,7 +32,7 @@ class MockZmqCommunicator : public ZmqCommunicator {
  public:
   explicit MockZmqCommunicator(const ConnectorConfig& config) : ZmqCommunicator(config) {}
   Status Initialize() override { return Status(); }
-  Status Send(const std::string&, int, size_t, const void*, size_t, DataType) override { return Status(); }
+  Status Send(const std::string&, int, int, size_t, const void*, size_t, DataType) override { return Status(); }
 };
 #ifdef ENABLE_CUDA
 // mock NcclCommunicator，避免真实 NCCL 初始化
@@ -44,7 +44,7 @@ class MockNcclCommunicator : public NcclCommunicator {
                                const std::string&) {
     return Status();
   }
-  Status Send(const std::string&, int, size_t, const void*, size_t, DataType) override { return Status(); }
+  Status Send(const std::string&, int, int, size_t, const void*, size_t, DataType) override { return Status(); }
 };
 #endif
 
@@ -120,10 +120,10 @@ TEST_F(CommunicatorManagerTest, UseMultipleCommunicatorTypes) {
   // 可选：验证 mock 的 Send/Recv 行为（应为 no-op 或返回 Status）
   const char test_data[] = "Test data";
   const size_t data_size = strlen(test_data) + 1;
-  Status status = zmq_comm->Send("test_group", 0, 0, test_data, data_size, DataType::TYPE_BYTES);
+  Status status = zmq_comm->Send("test_group", 0, 0, 0, test_data, data_size, DataType::TYPE_BYTES);
   EXPECT_TRUE(status.OK());
 #ifdef ENABLE_CUDA
-  status = nccl_comm->Send("test_group", 0, 0, test_data, data_size, DataType::TYPE_BYTES);
+  status = nccl_comm->Send("test_group", 0, 0, static_cast<uint64_t>(0), test_data, data_size, DataType::TYPE_BYTES);
   EXPECT_TRUE(status.OK());
 #endif
 }
@@ -220,7 +220,7 @@ TEST_F(CommunicatorManagerTest, ProcessHeartbeatData_ErrorHandling) {
         const std::unordered_map<std::string, std::vector<std::tuple<int, int, std::string>>>&) override {
       return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Mock error");
     }
-    Status Send(const std::string&, int, size_t, const void*, size_t, DataType) override { return Status(); }
+    Status Send(const std::string&, int, int, size_t, const void*, size_t, DataType) override { return Status(); }
   };
 
   // Replace with error-returning communicator
@@ -242,7 +242,7 @@ class MockZmqCommunicatorWithException : public ZmqCommunicator {
   explicit MockZmqCommunicatorWithException(const ConnectorConfig& config) : ZmqCommunicator(config) {}
   Status Initialize() override { return Status(); }
   void Shutdown() override { throw std::runtime_error("Mock shutdown exception"); }
-  Status Send(const std::string&, int, size_t, const void*, size_t, DataType) override { return Status(); }
+  Status Send(const std::string&, int, int, size_t, const void*, size_t, DataType) override { return Status(); }
 };
 
 TEST_F(CommunicatorManagerTest, Shutdown_ExceptionHandling) {

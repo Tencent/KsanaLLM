@@ -46,6 +46,9 @@ class InferRequest {
   // Get addr ptr of blocks.
   std::vector<std::vector<void *>> GetBlockPtrs();
 
+  // Get this infer request's KV occupied devices.
+  std::vector<int> GetKVOccupiedDevices();
+
   std::vector<int> GetVerifiedTokens();
 
   std::string PrintKVBlockIds(bool print_details = false) const;

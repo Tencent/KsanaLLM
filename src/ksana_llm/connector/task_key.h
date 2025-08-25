@@ -23,26 +23,55 @@ namespace ksana_llm {
  */
 struct TaskKey {
   // Core identifiers
-  int req_id;       ///< Request ID for grouping related tasks (primary sharding key)
-  int block_idx;    ///< Block index in the computation pipeline
-  int layer_idx;    ///< Layer index in the neural network
-  int device_idx;   ///< Target device index
-  int tensor_size;  ///< Size of the tensor data in bytes
-  int token;        ///< Token identifier for sequencing
+  int req_id;          ///< Request ID for grouping related tasks (primary sharding key)
+  int block_idx;       ///< Block index in the computation pipeline
+  int layer_idx;       ///< Layer index in the neural network
+  int tensor_size;     ///< Size of the tensor data in bytes
+  int token;           ///< Token identifier for sequencing
+  int hash_device_id;  ///< Critical parameters for checking if Taskkeys are the same
+
+  int decode_device_id = -1;      ///< The physical rank ID within the decode group
+  int decode_device_offset = -1;  ///< The logical ID of the request within its DP group
+
+  int prefill_device_id = -1;      ///< The physical rank ID within the prefill group
+  int prefill_device_offset = -1;  ///< The logical ID of the request within its DP group
 
   // Timing information
   std::time_t start_time_us;  ///< Task creation timestamp in microseconds
 
-  // Constructors
-  TaskKey() : req_id(0), block_idx(0), layer_idx(0), device_idx(0), tensor_size(0), token(0), start_time_us(0) {}
+  /*
+  Diagram: Node Configuration
+  For example: The P node and D node have a total of 4 ranks. The P node is divided into 2 DP groups,
+  while the D node is divided into 4 DP groups
 
-  TaskKey(int req, int block, int layer, int device, int tsize = 0, int ttoken = 0, std::time_t timestamp_us = 0)
+                    [P Node]                                       [D Node]
+  ---------------------------------------------------------------------------------------------
+  | prefill_device_id 0 | --> hash_device_id 0    | decode_device_id 0 | --> hash_device_id 0
+  |---------------------|                         |--------------------|
+  | prefill_device_id 1 | --> hash_device_id 1    | decode_device_id 1 | --> hash_device_id 0
+  |---------------------|                         |--------------------|
+  | prefill_device_id 2 | --> hash_device_id 0    | decode_device_id 2 | --> hash_device_id 0
+  |---------------------|                         |--------------------|
+  | prefill_device_id 3 | --> hash_device_id 1    | decode_device_id 3 | --> hash_device_id 0
+  ----------------------------------------------------------------------------------------------
+  */
+
+  // Constructors
+  TaskKey() : req_id(0), block_idx(0), layer_idx(0), hash_device_id(0), tensor_size(0), token(0), start_time_us(0) {}
+
+  TaskKey(int req, int block, int layer, int hash_device_id, int tsize = 0, int ttoken = 0, int decode_device_id = -1,
+          int decode_device_offset = -1, int prefill_device_id = -1, int prefill_device_offset = -1,
+          std::time_t timestamp_us = 0)
       : req_id(req),
         block_idx(block),
         layer_idx(layer),
-        device_idx(device),
         tensor_size(tsize),
         token(ttoken),
+        hash_device_id(hash_device_id),
+        decode_device_id(decode_device_id),
+        decode_device_offset(decode_device_offset),
+        prefill_device_id(prefill_device_id),
+        prefill_device_offset(prefill_device_offset),
         start_time_us(timestamp_us) {}
 
   // Default copy/move semantics
@@ -54,7 +83,7 @@ struct TaskKey {
   // Equality comparison (excludes token and timestamp for logical equality)
   bool operator==(const TaskKey& other) const {
     return req_id == other.req_id && block_idx == other.block_idx && layer_idx == other.layer_idx &&
-           device_idx == other.device_idx && tensor_size == other.tensor_size;
+           hash_device_id == other.hash_device_id && tensor_size == other.tensor_size;
   }
 
   // Priority comparison for priority queue (earlier timestamp = higher priority)
@@ -66,7 +95,9 @@ struct TaskKey {
   std::string ToString() const {
     std::ostringstream oss;
     oss << "req_id=" << req_id << ", block_idx=" << block_idx << ", layer_idx=" << layer_idx
-        << ", device_idx=" << device_idx << ", tensor_size=" << tensor_size << ", token=" << token;
+        << ", tensor_size=" << tensor_size << ", token=" << token << ", hash_device_id=" << hash_device_id
+        << ", decode_device_id=" << decode_device_id << ", decode_device_offset=" << decode_device_offset
+        << ", prefill_device_id=" << prefill_device_id << ", prefill_device_offset=" << prefill_device_offset;
     return oss.str();
   }
 
@@ -82,7 +113,7 @@ struct TaskKey {
     size_t operator()(const TaskKey& key) const {
       uint64_t combined = (static_cast<uint64_t>(key.req_id) << 32) | ((key.tensor_size > 0 ? 1ULL : 0ULL) << 16) |
                           (static_cast<uint64_t>(key.block_idx) << 8) | (static_cast<uint64_t>(key.layer_idx) << 4) |
-                          (static_cast<uint64_t>(key.device_idx));
+                          (static_cast<uint64_t>(key.hash_device_id));
       return std::hash<uint64_t>()(combined);
     }
   };
@@ -152,8 +183,9 @@ struct TaskKey {
       tensor_size = task->tensor.GetElementNumber() * GetTypeSize(task->tensor.dtype);
     }
 
-    return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.device_idx, tensor_size,
-                   task->token, ProfileTimer::GetCurrentTimeInUs());
+    return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.hash_device_id,
+                   tensor_size, task->token, task->decode_device_id, task->decode_device_offset,
+                   task->prefill_device_id, task->prefill_device_offset, ProfileTimer::GetCurrentTimeInUs());
   }
 
   static const TaskKey* DeserializeBatchPtr(const uint8_t* data, size_t size, size_t& out_count) {

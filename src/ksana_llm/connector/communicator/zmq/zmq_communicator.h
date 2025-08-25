@@ -86,19 +86,20 @@ class ZmqCommunicator : public Communicator {
   Status Initialize() override;
 
   // Communicator 接口实现
-  Status Send(const std::string& group_key, int dev_id, uint64_t job_id, const void* buf, size_t count,
-              DataType dtype) override;
-  Status Recv(const std::string& group_key, int dev_id, uint64_t job_id, void* buf, size_t count,
+  Status Send(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, const void* buf,
+              size_t count, DataType dtype) override;
+  Status Recv(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id, void* buf, size_t count,
               DataType dtype) override {
     return Status(RetCode::RET_NOT_IMPLEMENTED, "Recv not implemented in ZmqCommunicator");
   };
 
-  Status SendGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<const void*>& buffers,
-                   const std::vector<size_t>& counts, DataType dtype) override {
+  Status SendGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                   const std::vector<const void*>& buffers, const std::vector<size_t>& counts,
+                   DataType dtype) override {
     return Status(RetCode::RET_NOT_IMPLEMENTED, "SendGroup not implemented in ZmqCommunicator");
   }
-  Status RecvGroup(const std::string& group_key, int dev_id, uint64_t job_id, const std::vector<void*>& buffers,
-                   const std::vector<size_t>& counts, DataType dtype) override {
+  Status RecvGroup(const std::string& group_key, int src_dev_id, int dst_dev_id, uint64_t job_id,
+                   const std::vector<void*>& buffers, const std::vector<size_t>& counts, DataType dtype) override {
     return Status(RetCode::RET_NOT_IMPLEMENTED, "RecvGroup not implemented in ZmqCommunicator");
   };
 

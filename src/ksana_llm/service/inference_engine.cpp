@@ -454,6 +454,13 @@ Status InferenceEngine::DoWarmupRun() {
 
     auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
     auto req = std::make_shared<Request>(warmup_run_input, req_ctx);
+
+    ConnectorConfig connector_config;
+    Singleton<Environment>::GetInstance()->GetConnectorConfigs(connector_config);
+    // NOTE(winminkong): To prevent PD disaggregate waiting in a loop for the configuration to be transmitted.
+    if (connector_config.group_role == GroupRole::PREFILL) {
+      req->kv_comm_request_id = -1;
+    }
     req->waiter = std::make_shared<Waiter>(1);
     HandleRequest(req);
 

@@ -66,14 +66,14 @@ class MockCommunicator : public Communicator {
 
   MOCK_METHOD(void, Shutdown, (), (override));
   MOCK_METHOD(Status, Initialize, (), (override));
-  MOCK_METHOD(Status, Send, (const std::string&, int, uint64_t, const void*, size_t, DataType), (override));
-  MOCK_METHOD(Status, Recv, (const std::string&, int, uint64_t, void*, size_t, DataType), (override));
+  MOCK_METHOD(Status, Send, (const std::string&, int, int, uint64_t, const void*, size_t, DataType), (override));
+  MOCK_METHOD(Status, Recv, (const std::string&, int, int, uint64_t, void*, size_t, DataType), (override));
   MOCK_METHOD(Status, SendGroup,
-              (const std::string&, int, uint64_t, const std::vector<const void*>&, const std::vector<size_t>&,
+              (const std::string&, int, int, uint64_t, const std::vector<const void*>&, const std::vector<size_t>&,
                DataType),
               (override));
   MOCK_METHOD(Status, RecvGroup,
-              (const std::string&, int, uint64_t, const std::vector<void*>&, const std::vector<size_t>&, DataType),
+              (const std::string&, int, int, uint64_t, const std::vector<void*>&, const std::vector<size_t>&, DataType),
               (override));
   MOCK_METHOD(bool, IsConnectionReady, (const std::string&, int), (const, override));
   MOCK_METHOD((Status), ProcessHeartbeatData,
@@ -163,7 +163,8 @@ class TaskDispatcherTest : public ::testing::Test {
     EXPECT_CALL(*mock_zmq_communicator_, DoSetReceiveCallback(testing::_)).WillRepeatedly(testing::Return());
     EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_))
         .WillRepeatedly(testing::Return(true));
-    EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+    EXPECT_CALL(*mock_zmq_communicator_,
+                Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Return(Status()));
     // NCCL communicator
     EXPECT_CALL(*mock_nccl_communicator_, Shutdown()).WillRepeatedly(testing::Return());
@@ -171,7 +172,8 @@ class TaskDispatcherTest : public ::testing::Test {
     EXPECT_CALL(*mock_nccl_communicator_, DoSetReceiveCallback(testing::_)).WillRepeatedly(testing::Return());
     EXPECT_CALL(*mock_nccl_communicator_, IsConnectionReady(testing::_, testing::_))
         .WillRepeatedly(testing::Return(true));
-    EXPECT_CALL(*mock_nccl_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+    EXPECT_CALL(*mock_nccl_communicator_,
+                Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Return(Status()));
     // CommunicatorManager
     EXPECT_CALL(*mock_comm_manager_, IsInitialized()).WillRepeatedly(testing::Return(true));
@@ -197,7 +199,7 @@ class TaskDispatcherTest : public ::testing::Test {
     task->req_id = req_id;
     task->tensor.block_idx = block_idx;
     task->tensor.layer_idx = layer_idx;
-    task->tensor.device_idx = device_idx;
+    task->tensor.hash_device_id = device_idx;
     // token 字段已移除，使用 tensor_size 代替
     task->tensor.shape = std::vector<int64_t>(tensor_size, 1);
     task->addr = addr;
@@ -214,21 +216,21 @@ class TaskDispatcherTest : public ::testing::Test {
     return task;
   }
 
-  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int device_idx, int tensor_size = 0) {
-    return TaskKey(req_id, block_idx, layer_idx, device_idx, tensor_size);
+  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0) {
+    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size);
   }
 
-  std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int device_idx = 0) {
+  std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int hash_device_id = 0) {
     std::vector<TaskKey> batch;
     for (int i = 0; i < batch_size; ++i) {
-      batch.push_back(CreateTaskKey(i, i, 0, device_idx, 0));
+      batch.push_back(CreateTaskKey(i, i, 0, hash_device_id, 0));
     }
     return batch;
   }
 
   void AddTasksToManager(const std::vector<TaskKey>& task_keys) {
     for (const auto& key : task_keys) {
-      auto task = CreateMockTask(key.req_id, key.block_idx, key.layer_idx, key.device_idx, key.tensor_size);
+      auto task = CreateMockTask(key.req_id, key.block_idx, key.layer_idx, key.hash_device_id, key.tensor_size);
       task_manager_->AddTask(key, task);
       // Add to processing buffer to simulate pending tasks
       task_manager_->PutProcessingBuffer(key);
@@ -242,6 +244,7 @@ class TaskDispatcherTest : public ::testing::Test {
   std::shared_ptr<MockCommunicator> mock_zmq_communicator_;
   std::shared_ptr<MockCommunicator> mock_nccl_communicator_;
   std::unique_ptr<TaskDispatcher> task_dispatcher_;
+  std::shared_ptr<DeviceInfoManager> device_info_manager_ = std::make_shared<DeviceInfoManager>();
 };
 
 // TEST_F(TaskDispatcherTest, Constructor) { std::cout << "TaskDispatcherTest Constructor called" << std::endl; }
@@ -294,7 +297,7 @@ TEST_F(TaskDispatcherTest, InitializeSuccess) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  Status status = task_dispatcher_->Initialize();
+  Status status = task_dispatcher_->Initialize(device_info_manager_);
   EXPECT_TRUE(status.OK());
 }
 
@@ -305,7 +308,7 @@ TEST_F(TaskDispatcherTest, InitializeFailure) {
   EXPECT_CALL(*mock_comm_manager_, Initialize())
       .WillOnce(testing::Return(Status(RetCode::RET_INIT_FAILED, "Communication manager init failed")));
 
-  Status status = task_dispatcher_->Initialize();
+  Status status = task_dispatcher_->Initialize(device_info_manager_);
   EXPECT_FALSE(status.OK());
 }
 
@@ -342,7 +345,8 @@ TEST_F(TaskDispatcherTest, SendToPrefillWithTasks) {
   EXPECT_CALL(*mock_zmq_communicator_, Initialize()).WillRepeatedly(testing::Return(Status()));
   EXPECT_CALL(*mock_zmq_communicator_, DoSetReceiveCallback(testing::_)).WillRepeatedly(testing::Return());
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
 
   // NCCL communicator will be created and checked in NCCL mode
@@ -356,14 +360,15 @@ TEST_F(TaskDispatcherTest, SendToPrefillWithTasks) {
   EXPECT_CALL(*mock_nccl_communicator_, DoSetReceiveCallback(testing::_)).WillRepeatedly(testing::Return());
   EXPECT_CALL(*mock_nccl_communicator_, IsConnectionReady(testing::_, testing::_))
       .WillRepeatedly(testing::Return(true));  // 关键：让连接检查返回成功
-  EXPECT_CALL(*mock_nccl_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_nccl_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
   // Additional expectations for other methods that might be called
   EXPECT_CALL(*mock_comm_manager_, ProcessHeartbeatData(testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, Shutdown()).WillRepeatedly(testing::Return());
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Add tasks to real task manager
   std::vector<TaskKey> task_batch = CreateTaskKeyBatch(3, 0);
@@ -402,7 +407,7 @@ TEST_F(TaskDispatcherTest, SendToPrefillNoTasks) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // No tasks in task manager
   // Run SendToPrefill in a separate thread to avoid blocking
@@ -429,7 +434,7 @@ TEST_F(TaskDispatcherTest, RegisterPrefillRecv) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Should not crash when called
   task_dispatcher_->RegisterPrefillRecv();
@@ -443,10 +448,19 @@ TEST_F(TaskDispatcherTest, RegisterDecodeRecv) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Should not crash when called
   task_dispatcher_->RegisterDecodeRecv();
+
+  std::string connection_id = "prefill_group_1__decode_group_1_1-2";
+
+  auto [group_key, device_config_pair] = task_dispatcher_->ParseConnectionId(connection_id);
+  auto [src_device_idx, dst_device_idx] = device_config_pair;
+
+  EXPECT_EQ(group_key, "prefill_group_1__decode_group_1");
+  EXPECT_EQ(src_device_idx, 2);
+  EXPECT_EQ(dst_device_idx, 1);
 }
 
 // ProcessPrefillReceivedTasks Tests
@@ -458,7 +472,7 @@ TEST_F(TaskDispatcherTest, ProcessPrefillReceivedTasks) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // ProcessPrefillReceivedTasks() contains an infinite loop, so run it in a separate thread
   std::thread process_thread([this]() { task_dispatcher_->ProcessPrefillReceivedTasks(); });
@@ -489,17 +503,18 @@ TEST_F(TaskDispatcherTest, ZMQSendAndRecv) {
 
   // Set up ZMQ communicator expectations
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // 创建测试任务和group batch
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // 测试发送
   EXPECT_NO_THROW(task_dispatcher_->HandlePrefillGroupBatch(group_batch));
@@ -560,14 +575,14 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(3, 0);
   // Add tasks to manager first
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should not crash when called
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -588,13 +603,13 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_ConnectionFailure) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_))
       .WillRepeatedly(testing::Return(false));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle connection failure gracefully and retry failed tasks
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -614,14 +629,14 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_EmptyTensors) {
   // Set up connection to succeed
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create tasks with token != 0 to trigger "Invalid or missing task" path
   std::vector<TaskKey> task_keys;
   task_keys.push_back(CreateTaskKey(1, 0, 0, 0, 1));  // token = 1, will be invalid
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle empty tensors gracefully by returning early
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -642,26 +657,28 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_SuccessfulSend) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
 
   // Set up ZMQ send to succeed
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
 
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
   // Set up NCCL sends to succeed
-  EXPECT_CALL(*mock_nccl_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_nccl_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should complete successfully with all sends working
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -682,16 +699,17 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_ZmqSendFailure) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
 
   // Set up ZMQ send to fail
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "ZMQ send failed")));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle ZMQ send failure and retry tasks
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -715,18 +733,20 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_NcclSendFailure) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
 
   // Set up ZMQ send to succeed but NCCL sends to fail
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
-  EXPECT_CALL(*mock_nccl_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_nccl_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "NCCL send failed")));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle NCCL send failure and retry tasks
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -750,21 +770,23 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_NcclSendGroupFailure) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady(testing::_, testing::_)).WillRepeatedly(testing::Return(true));
 
   // Set up ZMQ send and NCCL task key send to succeed, but SendGroup to fail
-  EXPECT_CALL(*mock_zmq_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillRepeatedly(testing::Return(Status()));
-  EXPECT_CALL(*mock_nccl_communicator_, Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+  EXPECT_CALL(*mock_zmq_communicator_,
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status()));
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              Send(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillRepeatedly(testing::Return(Status()));
+  EXPECT_CALL(*mock_nccl_communicator_,
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "NCCL SendGroup failed")));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
   AddTasksToManager(task_keys);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle NCCL SendGroup failure gracefully
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -779,7 +801,7 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_MixedTasks) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create a mix of valid (token=0) and invalid (token!=0) tasks
   std::vector<TaskKey> task_keys;
@@ -793,8 +815,8 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_MixedTasks) {
   task_manager_->AddTask(task_keys[0], valid_task1);
   task_manager_->AddTask(task_keys[2], valid_task3);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), task_keys);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), task_keys);
 
   // Should handle mixed tasks correctly - process valid ones, skip invalid ones
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -809,12 +831,12 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_EmptyTaskVector) {
   EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
   EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create empty task vector
   std::vector<TaskKey> empty_tasks;
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), empty_tasks);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), empty_tasks);
 
   // Should handle empty task vector gracefully by returning early
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -831,14 +853,14 @@ TEST_F(TaskDispatcherTest, HandlePrefillGroupBatch_LargeBatch) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create a large batch of tasks
   std::vector<TaskKey> large_batch = CreateTaskKeyBatch(16, 0);
   AddTasksToManager(large_batch);
 
-  std::pair<std::pair<std::string, int>, std::vector<TaskKey>> group_batch =
-      std::make_pair(std::make_pair("test_group", 0), large_batch);
+  std::pair<std::pair<std::string, std::pair<int, int>>, std::vector<TaskKey>> group_batch =
+      std::make_pair(std::make_pair("test_group", std::make_pair(0, 0)), large_batch);
 
   // Should handle large batch efficiently
   task_dispatcher_->HandlePrefillGroupBatch(group_batch);
@@ -861,7 +883,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_Success) {
   // Note: No NCCL expectations needed because BufferPools won't be initialized
   // in test environment (no CUDA), so method will return early
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create test tasks with token = 0 (valid tensors)
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(3, 0);
@@ -872,7 +894,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_Success) {
 
   // In test environment without CUDA, BufferPools won't be initialized
   // so the method should return gracefully without attempting NCCL operations
-  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, task_keys.size());
+  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, device_idx, task_keys.size());
 
   // Test passes if no segmentation fault occurs (which was the original issue)
 }
@@ -890,7 +912,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_EmptyTaskKeys) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Empty task keys vector
   std::vector<TaskKey> empty_task_keys;
@@ -898,7 +920,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_EmptyTaskKeys) {
   int device_idx = 0;
 
   // Should handle empty task keys gracefully
-  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, empty_task_keys.size());
+  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, device_idx, empty_task_keys.size());
 }
 
 TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_MixedTokenTypes) {
@@ -917,7 +939,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_MixedTokenTypes) {
   // Note: No NCCL expectations needed because BufferPools won't be initialized
   // in test environment (no CUDA), so method will return early
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create mixed task keys - some with token=0, some with token!=0
   std::vector<TaskKey> task_keys;
@@ -932,7 +954,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_MixedTokenTypes) {
 
   // In test environment without CUDA, BufferPools won't be initialized
   // so the method should return gracefully without attempting NCCL operations
-  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, task_keys.size());
+  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, device_idx, task_keys.size());
 
   // Test passes if no segmentation fault occurs
 }
@@ -953,7 +975,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_NcclRecvGroupFailure) {
   // Note: No NCCL expectations needed because BufferPools won't be initialized
   // in test environment (no CUDA), so method will return early
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create test tasks
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
@@ -964,7 +986,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_NcclRecvGroupFailure) {
 
   // In test environment without CUDA, BufferPools won't be initialized
   // so the method should return gracefully without attempting NCCL operations
-  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, task_keys.size());
+  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, device_idx, task_keys.size());
 
   // Test passes if no segmentation fault occurs
 }
@@ -982,7 +1004,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_NonExistentTasks) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create task keys but don't add them to manager (simulate non-existent tasks)
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
@@ -990,7 +1012,7 @@ TEST_F(TaskDispatcherTest, RecvTaskDataWithNccl_NonExistentTasks) {
   int device_idx = 0;
 
   // Should handle non-existent tasks gracefully without crashing
-  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, task_keys.size());
+  task_dispatcher_->RecvTaskDataWithNccl(group_key, device_idx, device_idx, task_keys.size());
 }
 
 // SendDataToDecodeWithNccl Tests
@@ -1009,7 +1031,7 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_Success) {
 
   // New: Expect SendGroup to be called once for the batch
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(1)
       .WillOnce(testing::Return(Status()));
   std::vector<TaskKey> task_keys;
@@ -1019,13 +1041,13 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_Success) {
   // Only add some tasks to manager
   std::vector<TaskKey> valid_tasks = {task_keys[0], task_keys[2]};
   AddTasksToManager(valid_tasks);
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::string group_key = "test_group";
   int device_idx = 0;
 
   // Should call SendGroup and not crash
-  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, valid_tasks);
+  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, device_idx, valid_tasks);
 }
 
 TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_EmptyTaskKeys) {
@@ -1043,10 +1065,10 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_EmptyTaskKeys) {
 
   // New: Should not call SendGroup at all
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Empty task keys vector
   std::vector<TaskKey> empty_task_keys;
@@ -1054,7 +1076,7 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_EmptyTaskKeys) {
   int device_idx = 0;
 
   // Should return early and not crash
-  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, empty_task_keys);
+  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, device_idx, empty_task_keys);
 }
 
 TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_NonExistentTasks) {
@@ -1072,10 +1094,10 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_NonExistentTasks) {
 
   // New: Should not call SendGroup if no valid tasks
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create task keys but don't add them to manager (simulate non-existent tasks)
   std::vector<TaskKey> task_keys = CreateTaskKeyBatch(2, 0);
@@ -1083,7 +1105,7 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_NonExistentTasks) {
   int device_idx = 0;
 
   // Should skip and not crash
-  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, task_keys);
+  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, device_idx, task_keys);
 }
 
 TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_MixedValidInvalidTasks) {
@@ -1101,11 +1123,11 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_MixedValidInvalidTasks) {
 
   // Only valid tasks should be sent
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(1)
       .WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Create mixed task keys - some valid, some invalid
   std::vector<TaskKey> task_keys;
@@ -1121,7 +1143,7 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_MixedValidInvalidTasks) {
   int device_idx = 0;
 
   // Should only send valid tasks
-  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, task_keys);
+  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, device_idx, task_keys);
 }
 
 TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_LargeBatch) {
@@ -1139,11 +1161,11 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_LargeBatch) {
 
   // Should call SendGroup once for the large batch
   EXPECT_CALL(*mock_nccl_communicator_,
-              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+              SendGroup(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .Times(1)
       .WillOnce(testing::Return(Status()));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   std::vector<TaskKey> task_keys;
   for (int i = 0; i < 10; ++i) {
@@ -1154,7 +1176,7 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_LargeBatch) {
   int device_idx = 0;
 
   // Should handle large batch without crashing
-  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, task_keys);
+  task_dispatcher_->SendDataToDecodeWithNccl(group_key, device_idx, device_idx, task_keys);
 }
 
 // CheckConnection Tests
@@ -1168,7 +1190,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_SuccessZmqOnly) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up ZMQ connection to succeed - allow multiple calls since CheckConnection may call it multiple times
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0)).WillRepeatedly(testing::Return(true));
@@ -1192,7 +1214,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_SuccessZmqAndNccl) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up both ZMQ and NCCL connections to succeed
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0)).WillRepeatedly(testing::Return(true));
@@ -1212,7 +1234,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_ZmqConnectionFailure) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up ZMQ connection to fail - allow multiple calls since CheckConnection may call it multiple times
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0)).WillRepeatedly(testing::Return(false));
@@ -1236,7 +1258,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_NcclConnectionFailure) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up ZMQ to succeed but NCCL to fail
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0)).WillRepeatedly(testing::Return(true));
@@ -1258,7 +1280,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_FirstAttemptWithTimeout) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up ZMQ connection to fail initially, then succeed
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0))
@@ -1285,7 +1307,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_RetryAfterFirstAttempt) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // First attempt - fails (allow multiple calls during timeout waiting and final check)
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("failing_group", 0))
@@ -1313,7 +1335,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_NullZmqCommunicator) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(nullptr));  // Return null communicator
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Should handle null communicator gracefully
   bool result = task_dispatcher_->CheckConnection("test_group", 0);
@@ -1336,7 +1358,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_NullNcclCommunicator) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(nullptr));  // Return null NCCL communicator
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Should handle null NCCL communicator gracefully
   bool result = task_dispatcher_->CheckConnection("test_group", 0);
@@ -1356,7 +1378,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_ZeroWaitingTime) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // With zero waiting time, should not wait and immediately check connection
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("test_group", 0)).WillOnce(testing::Return(true));
@@ -1381,7 +1403,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_ConcurrentConnections) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Test concurrent connections with different results
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("concurrent_group1", 0)).WillRepeatedly(testing::Return(true));
@@ -1412,7 +1434,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_RepeatedFailures) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up repeated failures for the same connection
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("failing_group", 0)).WillRepeatedly(testing::Return(false));
@@ -1440,7 +1462,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_MixedNcclStates) {
   EXPECT_CALL(*mock_comm_manager_, GetNcclCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<NcclCommunicator*>(mock_nccl_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Set up ZMQ to fail but NCCL to succeed
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("mixed_group", 0)).WillRepeatedly(testing::Return(false));
@@ -1461,7 +1483,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_HighFrequencyChecks) {
   EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
       .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
 
-  task_dispatcher_->Initialize();
+  task_dispatcher_->Initialize(device_info_manager_);
 
   // Test rapid consecutive connection checks
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("rapid_test", 0)).WillRepeatedly(testing::Return(true));
@@ -1510,7 +1532,7 @@ TEST(TaskDispatcherNccl, PinnedMemoryBufferBlockTaskKeyRW) {
     EXPECT_EQ(read_ptr[i].req_id, task_keys[i].req_id);
     EXPECT_EQ(read_ptr[i].block_idx, task_keys[i].block_idx);
     EXPECT_EQ(read_ptr[i].layer_idx, task_keys[i].layer_idx);
-    EXPECT_EQ(read_ptr[i].device_idx, task_keys[i].device_idx);
+    EXPECT_EQ(read_ptr[i].hash_device_id, task_keys[i].hash_device_id);
     EXPECT_EQ(read_ptr[i].tensor_size, task_keys[i].tensor_size);
   }
 

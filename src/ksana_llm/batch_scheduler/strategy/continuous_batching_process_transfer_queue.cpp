@@ -30,8 +30,9 @@ void ContinuousBatchingStrategy::AddTransferMeta(std::vector<std::shared_ptr<Inf
     // 如果该请求尚未添加传输元数据，则添加
     if (!transfer_engine->GetTransferMeta(req->kv_comm_request_id)) {
       std::vector<std::vector<void*>> block_ptrs = req->GetBlockPtrs();
+      std::vector<int> kv_occupied_devices = req->GetKVOccupiedDevices();
       transfer_engine->AddTransferMeta(req->kv_comm_group_key, req->kv_comm_request_id, req->kv_cached_token_num,
-                                       block_ptrs);
+                                       block_ptrs, kv_occupied_devices);
     }
   }
 }
@@ -66,6 +67,7 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       req->prefix_cache_len = req->kv_cached_token_num;
       req->forwarding_tokens.push_back(first_token);
       req->output_tokens.push_back(first_token);
+      KLLM_LOG_DEBUG << "Decode running_reqs insert for compute, req id:" << req->kv_comm_request_id;
       batch_state_->schedule_output->running_reqs.push_back(req);
       it = batch_state_->transfer_queue.erase(it);
       transfer_engine->CleanupTransferMeta(req->kv_comm_request_id);
@@ -91,6 +93,7 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
     // 检查请求是否发送完成
     if (transfer_engine->IsSendDone((*it)->kv_comm_request_id)) {
       // 发送完成，从传输队列中移除该请求
+      KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << (*it)->kv_comm_request_id;
       it = batch_state_->transfer_queue.erase(it);
     } else {
       // 发送未完成，继续检查下一个请求

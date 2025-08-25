@@ -49,7 +49,8 @@ constexpr int TASK_MANAGER_DEFAULT_EXPIRE_SECONDS = 900;  // 15 minutes
 class TaskManager {
  public:
   using TaskNotifyCallback = std::function<void()>;
-  using GroupDevKey = std::pair<std::string, int>;  ///< (group_key, device_idx) pair
+  using GroupDevKey =
+      std::pair<std::string, std::pair<int, int>>;  ///< (group_key, (src_device_idx, dst_device_idx)) pair
 
   /**
    * @brief Task shard containing all data structures for a subset of req_ids
@@ -196,18 +197,19 @@ class TaskManager {
    * @param task_key TaskKey to try to activate
    * @return true if task was activated, false if it needs to wait
    */
-  bool TryActivatePendingTask(const TaskKey& task_key);
+  bool TryActivatePendingTask(TaskKey& task_key);
 
   //=============================================================================
   // Batch Operations and Utilities
   //=============================================================================
 
   /**
-   * @brief Hash function for GroupDevKey (group_key, device_idx) pairs
+   * @brief Hash function for GroupDevKey (group_key, (src_device_idx, dst_device_idx)) pairs
    */
   struct GroupDevKeyHash {
     std::size_t operator()(const GroupDevKey& k) const {
-      return std::hash<std::string>()(k.first) ^ (std::hash<int>()(k.second) << 1);
+      return std::hash<std::string>()(k.first) ^ (std::hash<int>()(k.second.first) << 1) ^
+             (std::hash<int>()(k.second.second) << 2);
     }
   };
 
@@ -217,7 +219,7 @@ class TaskManager {
    * @return Map of (group_key, device_idx) -> vector of TaskKeys
    */
   std::unordered_map<GroupDevKey, std::vector<TaskKey>, GroupDevKeyHash> GroupByGroupKeyAndDevice(
-      const std::vector<TaskKey>& batch);
+      const std::vector<TaskKey>& batch, bool is_prefill);
 
   //=============================================================================
   // Maintenance Operations

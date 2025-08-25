@@ -672,6 +672,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
         dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(), this->mm_quant_mode_);
   }
 
+  KLLM_LOG_DEBUG << "RecordLayerProgress, layer_index: " << this->layer_index_ << ", rank: " << this->rank_;
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(this->rank_, this->layer_index_,
                                                                       this->context_->GetComputeStreams()[this->rank_]);
