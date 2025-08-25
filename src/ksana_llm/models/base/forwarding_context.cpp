@@ -104,12 +104,6 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   if (use_mtp) {
     buffers_shape_map["mtp_hidden_buffer_tensors"] = {token_num * model_config.hidden_units};
   }
-
-  if (runtime_config.parallel_basic_config.attn_data_parallel_size > 1) {
-    buffers_shape_map["dp_input_buffer"] = {token_num * model_config.hidden_units};
-  } else {
-    buffers_shape_map["dp_input_buffer"] = {0};
-  }
 }
 
 void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
@@ -129,8 +123,6 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
                                                    ksana_llm::LOCATION_DEVICE);
   shared_buffer = buffer_mgr->CreateBufferTensor("shared_buffer", buffers_shape_map["shared_buffer"], weight_type,
                                                  ksana_llm::LOCATION_DEVICE);
-  dp_input_buffer = buffer_mgr->CreateBufferTensor("dp_input_buffer", buffers_shape_map["dp_input_buffer"], weight_type,
-                                                   ksana_llm::LOCATION_DEVICE, stream);
   kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
                                                    ksana_llm::LOCATION_DEVICE, stream);
 
@@ -293,7 +285,7 @@ void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_
 }
 
 Status ForwardingContext::AcquireBuffers() {
-  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, dp_input_buffer, kv_cache_buffer
+  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, kv_cache_buffer
   // Reset its shape from batch_size and token_num and hidden_buffer_size and max_seq_len
   // Then allocate memory.
 
@@ -317,7 +309,7 @@ Status ForwardingContext::AcquireBuffers() {
 }
 
 Status ForwardingContext::ReleaseBuffers() {
-  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, dp_input_buffer, kv_cache_buffer
+  // TODO(yancyliu): Get tensor of hidden_buffer_0, hidden_buffer_1, shared_buffer, kv_cache_buffer
   // And then release it's memory.
 
   // TODO(yancyliu): relase mtp_hidden_buffer_tensors

@@ -65,6 +65,9 @@ class Tensor {
   // Get the total bytes of this tensor.
   size_t GetTotalBytes() const;
 
+  // Get a view of the current tensor that shares the underlying storage, possibly with a different shape and offset
+  Tensor GetView(const std::vector<size_t>& shape, const size_t offset = 0) const;
+
   // Get pointer of block
   template <typename T>
   inline T* GetPtr(bool check_empty = true) const {
@@ -98,9 +101,6 @@ class Tensor {
 
   // The data format, for ascend only now.
   DataFormat data_format = DataFormat::FORMAT_DEFAULT;
-
-  // The offset based on data ptr.
-  size_t offset = 0;
 
  private:
   // Get location in string.

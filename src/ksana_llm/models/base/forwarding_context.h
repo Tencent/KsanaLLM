@@ -40,8 +40,6 @@ struct ForwardingBuffers {
   TensorBuffer* shared_buffer;
   TensorBuffer* kv_cache_buffer;
 
-  TensorBuffer* dp_input_buffer;
-
   // This buffer is used among multiple forward calls
   std::vector<Tensor> mtp_hidden_buffer_tensors;
 

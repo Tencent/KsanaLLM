@@ -2,11 +2,13 @@
 
 ==============================================================================*/
 
+#include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
+
 #include <unistd.h>
 
-#include "ksana_llm/layers/custom_all_reduce_sum_layer.h"
+#include "csrc/kernels/nvidia/all_reduce/custom_all_reduce.h"
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
-#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 
@@ -81,9 +83,13 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
 
-void CustomAllReduceSumLayer::ResetInputBuffer(void* input) {
-  input_handles_[rank_] = input;
+void CustomAllReduceSumLayer::Clear() {
+  if (reduce_op_ != nullptr) {
+    delete static_cast<llm_kernels::nvidia::CustomAllreduce*>(reduce_op_);
+  }
 }
+
+void CustomAllReduceSumLayer::ResetInputBuffer(void* input) { input_handles_[rank_] = input; }
 
 void CustomAllReduceSumLayer::ResetSignalBuffer(void* signal, size_t signal_sz) {
   // The threads in reduce group must be barriered, otherwise the reduce myabe hanged.
@@ -93,7 +99,7 @@ void CustomAllReduceSumLayer::ResetSignalBuffer(void* signal, size_t signal_sz) 
 
 template <typename T>
 Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                            std::vector<Tensor>& output_tensors) {
+                                         std::vector<Tensor>& output_tensors) {
   cudaStream_t* stream;
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     stream = &(context_->GetComputeStreams()[rank_].Get());

@@ -4,14 +4,23 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_stage.h"
+#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
+
+// The classified types of forward requests
+enum class ForwardRequestType : uint8_t {
+  kFlash = 0,       // arbitrary input length, use flash attention
+  kPageSingle = 1,  // input length of 1, use paged attention
+  kPageDual = 2,    // input length of 2, use paged attention
+};
 
 // The information used for forward.
 struct ForwardRequest {
@@ -139,6 +148,17 @@ struct ForwardRequest {
   //    layer_idx, b2 * layer_num * 2 + layer_idx, b3 * layer_num * 2 + layer_idx, b4 * layer_num * 2 + layer_idx].
   std::vector<std::vector<int32_t>> atb_kv_cache_base_blk_ids;
 #endif
+
+  // Get the request type, flash for prefill, page_single/page_dual for decode
+  ForwardRequestType GetType() const {
+    if (const size_t input_ids_len = forwarding_tokens->size() - kv_cached_token_num; input_ids_len == 1) {
+      return ForwardRequestType::kPageSingle;
+    } else if (input_ids_len == 2 && kv_cached_token_num > 0 && IsAbsorbWeightsEnabled()) {
+      return ForwardRequestType::kPageDual;
+    } else {
+      return ForwardRequestType::kFlash;
+    }
+  }
 };
 
 }  // namespace ksana_llm

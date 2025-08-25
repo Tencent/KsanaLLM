@@ -9,6 +9,7 @@
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/models/base/model_weight.h"
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
 #include "ksana_llm/runtime/llm_runtime.h"

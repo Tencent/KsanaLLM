@@ -3,12 +3,8 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/utils/barrier.h"
-#ifdef ENABLE_CUDA
-#  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
-#endif
-
 #include "ksana_llm/layers/base_layer.h"
+#include "ksana_llm/utils/barrier.h"
 
 namespace ksana_llm {
 
@@ -19,11 +15,7 @@ class CustomAllReduceSumLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-  void Clear() {
-    if (reduce_op_ != nullptr) {
-      delete reduce_op_;
-    }
-  }
+  void Clear();
 
   void ResetInputBuffer(void* input);
   void ResetSignalBuffer(void* signal, size_t signal_sz);

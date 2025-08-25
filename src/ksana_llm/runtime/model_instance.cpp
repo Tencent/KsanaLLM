@@ -38,7 +38,7 @@ void CreateModelInstance(const std::string model_name, ModelConfig& model_config
                          std::shared_ptr<Context>& context, std::vector<std::shared_ptr<BaseModel>>& models,
                          std::shared_ptr<WeightInstanceInterface>& weight_instance) {
   KLLM_LOG_INFO << "Start to init model instance " << model_name;
-  for (int worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
     KLLM_LOG_INFO << "Start to create model on device " << worker_id;
     models.push_back(std::make_shared<ModelType>(model_config, runtime_config, worker_id, context,
                                                  weight_instance->GetWeight(worker_id)));
@@ -142,7 +142,7 @@ std::vector<float*> ModelInstance::GetLogitsPtr(size_t multi_batch_id) {
 std::vector<Status> ModelInstance::Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
                                            InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   std::vector<Status> results;
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     results.push_back(worker_group->GetWorker(worker_id)->Forward(
         multi_batch_id, models_[worker_id], weight_instance_->GetWeight(worker_id), stage, forward_reqs, epilogue));
   }
@@ -155,7 +155,7 @@ std::vector<std::future<Status>> ModelInstance::ForwardAsync(size_t multi_batch_
                                                              std::vector<ForwardRequest>& forward_reqs, bool epilogue,
                                                              RunMode run_mode) {
   std::vector<std::future<Status>> results;
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
                                                                        weight_instance_->GetWeight(worker_id), stage,
                                                                        forward_reqs, epilogue, run_mode));

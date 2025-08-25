@@ -24,13 +24,13 @@ Tensor::Tensor(const std::string& name) : name(name) {}
 
 Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
                Stream* stream, bool lazy_allocate, const std::string& name)
-    : location(location),
+    : name(name),
+      location(location),
       device_id(device_id),
       dtype(dtype),
       shape(shape),
       data_ptr(data_ptr),
-      stream_(stream),
-      name(name) {
+      stream_(stream) {
   if (dtype == DataType::TYPE_INVALID) {
     // For dummy tensor, with type TYPE_INVALID, checker is disabled.
     return;
@@ -62,7 +62,6 @@ Tensor::~Tensor() {
 
     dtype = DataType::TYPE_INVALID;
     shape.clear();
-    offset = 0;
   }
 }
 
@@ -169,7 +168,6 @@ void Tensor::AssignMembers(const Tensor& other) {
   dtype = other.dtype;
   shape = other.shape;
   data_format = other.data_format;
-  offset = other.offset;
   data_ptr = other.data_ptr;
 
   is_shared_buffer_ = other.is_shared_buffer_;
@@ -189,7 +187,7 @@ uint8_t* Tensor::GetPtrImpl(bool check_empty) const {
   if (check_empty && data_ptr == nullptr) {
     // do nothing now.
   }
-  return reinterpret_cast<uint8_t*>(data_ptr) + static_cast<size_t>(offset);
+  return reinterpret_cast<uint8_t*>(data_ptr);
 }
 
 size_t Tensor::GetElementNumber() const {
@@ -208,6 +206,20 @@ size_t Tensor::GetDTypeSize() const {
 size_t Tensor::GetTotalBytes() const {
   DataType dtype_impl = dtype;
   return GetElementNumber() * GetTypeSize(dtype_impl);
+}
+
+Tensor Tensor::GetView(const std::vector<size_t>& shape, const size_t offset) const {
+  if (MemoryChecker::Enabled()) {
+    KLLM_CHECK_WITH_INFO(
+        offset + std::accumulate(shape.begin(), shape.end(), static_cast<size_t>(1), std::multiplies<size_t>()) <=
+            GetElementNumber(),
+        fmt::format("Check memory {} on device {} error, out of memory bound.", name, device_id));
+  }
+
+  Tensor view = *this;
+  view.shape = shape;
+  view.data_ptr = reinterpret_cast<void*>(GetPtr<uint8_t>() + offset * GetDTypeSize());
+  return view;
 }
 
 std::string Tensor::GetLocationString() const {
@@ -418,7 +430,7 @@ void MemoryChecker::AddMemoryBlock(const std::string& name, int rank, void* head
     return;
   }
 
-  if (rank < 0 || rank >= check_memory_map_.size()) {
+  if (rank < 0 || rank >= static_cast<int>(check_memory_map_.size())) {
     throw std::runtime_error(
         fmt::format("AddMemoryBlock error, invalid device rank {}, device count {}.", rank, check_memory_map_.size()));
   }
@@ -433,7 +445,7 @@ void MemoryChecker::RemoveMemoryBlock(const std::string& name, int rank) {
     return;
   }
 
-  if (rank < 0 || rank >= check_memory_map_.size()) {
+  if (rank < 0 || rank >= static_cast<int>(check_memory_map_.size())) {
     throw std::runtime_error(fmt::format("RemoveMemoryBlock error, invalid device rank {}, device count {}.", rank,
                                          check_memory_map_.size()));
   }
@@ -449,7 +461,7 @@ void MemoryChecker::CheckMemory(int rank, bool synchronize_device) {
     return;
   }
 
-  if (rank < 0 || rank >= check_memory_map_.size()) {
+  if (rank < 0 || rank >= static_cast<int>(check_memory_map_.size())) {
     throw std::runtime_error(
         fmt::format("CheckMemory error, invalid device rank {}, device count {}.", rank, check_memory_map_.size()));
   }

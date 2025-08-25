@@ -6,16 +6,14 @@
 
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
-#include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
 
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
-
+#include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
 #include "ksana_llm/profiler/profile_event.h"
-
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/dynamic_memory_counter.h"
@@ -45,7 +43,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   attn_dp_group_id_ = rank_ / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   attn_dp_rank_id_ = rank_ % runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   attn_dp_group_size_ = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  attn_dp_group_offsets_.assign(attn_dp_group_size_ * 4, 0);
+  attn_dp_group_offsets_.assign(attn_dp_group_size_, 0);
   KLLM_LOG_INFO << "rank:" << rank_ << ", attn_dp_group_id_: " << attn_dp_group_id_
                 << ", attn_dp_rank_id_: " << attn_dp_rank_id_ << ", attn_dp_group_size_: " << attn_dp_group_size_;
 
@@ -210,6 +208,31 @@ void ModelInput::CreateVLTensors() {
   }
 }
 
+void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs) {
+  flash_input.Reset();
+  page_single_input.Reset();
+  page_dual_input.Reset();
+
+  for (const auto& req : forward_reqs) {
+    // select input_info type
+    input_info* target_input = nullptr;
+    switch (req.GetType()) {
+      case ForwardRequestType::kPageSingle:
+        target_input = &page_single_input;
+        break;
+      case ForwardRequestType::kPageDual:
+        target_input = &page_dual_input;
+        break;
+      default:  // ForwardRequestType::kFlash
+        target_input = &flash_input;
+    }
+    target_input->reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+    if (req.attn_dp_group_id == attn_dp_group_id_) {
+      target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+    }
+  }
+}
+
 void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   // NOTE(karlluo): check batch size
   PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
@@ -220,30 +243,25 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
     KLLM_THROW(fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size,
                            runtime_config_.max_batch_size));
   }
-  multi_token_request_total_seq_len = 0;
-  dp_multi_token_request_total_seq_len = 0;
-
-  total_sampling_token_num_ = 0;
-  total_prefix_len = 0;
-  dp_total_prefix_len = 0;
   infer_stage = forward_reqs.front().infer_stage;  // for NPU
 
-  flash_input.Reset();
-  page_single_input.Reset();
-  page_dual_input.Reset();
-
   SetDevice(rank_);
-  for (const auto& req : forward_reqs) {
-    // select input_info type
-    const size_t input_ids_len = req.forwarding_tokens->size() - req.kv_cached_token_num;
-    input_info* target_input = nullptr;
-    if (input_ids_len == 1) {
-      target_input = &page_single_input;
-    } else if (input_ids_len == 2 && IsAbsorbWeightsEnabled() && req.kv_cached_token_num != 0) {
-      target_input = &page_dual_input;
-    } else {
-      target_input = &flash_input;
 
+  PrepareInputInfo(forward_reqs);
+
+  multi_token_request_num = flash_input.reqs.size();
+  dp_multi_token_request_num = flash_input.dp_reqs.size();
+  single_token_request_num = page_single_input.reqs.size() + page_dual_input.reqs.size();
+  dp_single_token_request_num = page_single_input.dp_reqs.size() + page_dual_input.dp_reqs.size();
+  dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
+
+  total_prefix_len = 0;
+  multi_token_request_total_seq_len = 0;
+  dp_total_prefix_len = 0;
+  dp_multi_token_request_total_seq_len = 0;
+  total_sampling_token_num_ = 0;
+  for (const auto& req : forward_reqs) {
+    if (req.GetType() == ForwardRequestType::kFlash) {
       total_prefix_len += req.prefix_cache_len;
       multi_token_request_total_seq_len += req.forwarding_tokens->size();
       if (req.attn_dp_group_id == attn_dp_group_id_) {
@@ -251,19 +269,8 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
         dp_multi_token_request_total_seq_len += req.forwarding_tokens->size();
       }
     }
-
-    target_input->reqs.emplace_back(const_cast<ForwardRequest*>(&req));
-    if (req.attn_dp_group_id == attn_dp_group_id_) {
-      target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
-    }
     total_sampling_token_num_ += req.sampling_token_num;
   }
-
-  multi_token_request_num = flash_input.reqs.size();
-  dp_multi_token_request_num = flash_input.dp_reqs.size();
-  single_token_request_num = page_single_input.reqs.size() + page_dual_input.reqs.size();
-  dp_single_token_request_num = page_single_input.dp_reqs.size() + page_dual_input.dp_reqs.size();
-  dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 
   KLLM_LOG_DEBUG << "run mode: " << (run_mode == RunMode::kMain ? "main" : "next")
                  << ", multi_token_request_num: " << multi_token_request_num
@@ -274,9 +281,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
                  << ", flash_dp_input: " << flash_input.dp_reqs.size()
                  << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
                  << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
-
-  PrepareFlexibleCache(flash_input);
-  CheckUseCache(forward_reqs);
 
   PrepareInputIds(forward_reqs);
 
@@ -347,8 +351,8 @@ void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_r
 
 void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs) {
   PROFILE_EVENT_SCOPE(PrepareVLRequest, "PrepareVLRequest", rank_);
-  is_mask = false;
   if (model_config_.type == "internlmxcomposer2") {
+    is_mask = false;
     size_t pos_num = cpu_input_refit_tensor.pos_pair_tensor.shape[0];
     if ((multi_token_request_num > 0) && (pos_num > 0)) {
 #ifdef ENABLE_CUDA
@@ -464,48 +468,51 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
   int64_t* cpu_input_refit_pos_pair = cpu_input_refit_tensor.pos_pair_tensor.GetPtr<int64_t>();
   float** cpu_input_refit_emb_fp32_ptr = cpu_input_refit_tensor.emb_fp32_ptr_tensor.GetPtr<float*>();
 
-  for (size_t bs_idx = 0; bs_idx < multi_token_request_num; ++bs_idx) {
-    const ForwardRequest& forward_req = forward_reqs[bs_idx];
-    const std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
-    std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req.input_refit_embedding).embeddings;
-    std::vector<py::object>& input_refit_embedding_tensors = (*forward_req.input_refit_embedding).embedding_tensors;
-    KLLM_CHECK_WITH_INFO(input_refit_pos.size() == input_refit_embeddings.size() ||
-                             input_refit_pos.size() == input_refit_embedding_tensors.size(),
-                         "`input_refit_pos.size()` should be equal to `input_refit_embeddings.size()` or "
-                         "`input_refit_embedding_tensors.size()`.");
+  for (const auto& forward_req : forward_reqs) {
+    // Only handle input refit for prefill requests
+    if (forward_req.GetType() == ForwardRequestType::kFlash) {
+      const std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
+      std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req.input_refit_embedding).embeddings;
+      std::vector<py::object>& input_refit_embedding_tensors = (*forward_req.input_refit_embedding).embedding_tensors;
+      KLLM_CHECK_WITH_INFO(input_refit_pos.size() == input_refit_embeddings.size() ||
+                               input_refit_pos.size() == input_refit_embedding_tensors.size(),
+                           "`input_refit_pos.size()` should be equal to `input_refit_embeddings.size()` or "
+                           "`input_refit_embedding_tensors.size()`.");
 
-    // Iterate over the input_refit positions and embeddings
-    for (size_t input_refit_idx = 0; input_refit_idx < input_refit_pos.size(); input_refit_idx++) {
-      int64_t input_refit_pos_offset = input_refit_pos[input_refit_idx] + pos_offset;
-      int64_t input_refit_size = 0;
-      float* input_refit_fp32_ptr = nullptr;
+      // Iterate over the input_refit positions and embeddings
+      for (size_t input_refit_idx = 0; input_refit_idx < input_refit_pos.size(); input_refit_idx++) {
+        int64_t input_refit_pos_offset = input_refit_pos[input_refit_idx] + pos_offset;
+        int64_t input_refit_size = 0;
+        float* input_refit_fp32_ptr = nullptr;
 
-      if (!input_refit_embedding_tensors.empty()) {
-        // Get pointers from input refit embedding tensors first
-        torch::Tensor input_refit_embedding_tensor;
-        {
-          py::gil_scoped_acquire acquire;
-          input_refit_embedding_tensor = THPVariable_Unpack(input_refit_embedding_tensors[input_refit_idx].ptr());
+        if (!input_refit_embedding_tensors.empty()) {
+          // Get pointers from input refit embedding tensors first
+          torch::Tensor input_refit_embedding_tensor;
+          {
+            py::gil_scoped_acquire acquire;
+            input_refit_embedding_tensor = THPVariable_Unpack(input_refit_embedding_tensors[input_refit_idx].ptr());
+          }
+          if (input_refit_embedding_tensor.get_device() != -1) {
+            KLLM_THROW("Input refit embedding tensor on GPU is not supported.");
+          }
+          // The input refit embedding tensor is on CPU.
+          input_refit_size = input_refit_embedding_tensor.numel();
+          input_refit_fp32_ptr = reinterpret_cast<float*>(input_refit_embedding_tensor.data_ptr());
+        } else {
+          // Get pointers from input refit embeddings
+          input_refit_size = input_refit_embeddings[input_refit_idx].size();
+          input_refit_fp32_ptr = input_refit_embeddings[input_refit_idx].data();
         }
-        if (input_refit_embedding_tensor.get_device() != -1) {
-          KLLM_THROW("Input refit embedding tensor on GPU is not supported.");
-        }
-        // The input refit embedding tensor is on CPU.
-        input_refit_size = input_refit_embedding_tensor.numel();
-        input_refit_fp32_ptr = reinterpret_cast<float*>(input_refit_embedding_tensor.data_ptr());
-      } else {
-        // Get pointers from input refit embeddings
-        input_refit_size = input_refit_embeddings[input_refit_idx].size();
-        input_refit_fp32_ptr = input_refit_embeddings[input_refit_idx].data();
+
+        // Store the input refit information
+        cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx] = input_refit_pos_offset;
+        cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx + 1] = input_refit_size;
+        cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx / 2] = input_refit_fp32_ptr;
+        cpu_input_refit_pos_pair_idx += 2;
       }
-
-      // Store the input refit information
-      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx] = input_refit_pos_offset;
-      cpu_input_refit_pos_pair[cpu_input_refit_pos_pair_idx + 1] = input_refit_size;
-      cpu_input_refit_emb_fp32_ptr[cpu_input_refit_pos_pair_idx / 2] = input_refit_fp32_ptr;
-      cpu_input_refit_pos_pair_idx += 2;
     }
-    pos_offset += forward_req.forwarding_tokens->size();
+    pos_offset +=
+        forward_req.forwarding_tokens->size() - std::max(forward_req.kv_cached_token_num, forward_req.prefix_cache_len);
   }
 
   cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape = {cpu_input_refit_pos_pair_idx / 2};
@@ -521,8 +528,10 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
 void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs) {
   int64_t dp_mrotary_embedding_pos_size = 0;
 
-  for (size_t bs_idx = 0; bs_idx < multi_token_request_num; ++bs_idx) {
-    if (forward_reqs[bs_idx].attn_dp_group_id == attn_dp_group_id_) {
+  for (size_t bs_idx = 0; bs_idx < forward_reqs.size(); ++bs_idx) {
+    // qwen2_vl only needs to handle the prefill requests in its dp group
+    if (forward_reqs[bs_idx].GetType() == ForwardRequestType::kFlash &&
+        forward_reqs[bs_idx].attn_dp_group_id == attn_dp_group_id_) {
       auto& additional_tensors = (*forward_reqs[bs_idx].input_refit_embedding).additional_tensors;
       // This is a plain text input.
       if (additional_tensors.empty()) {
@@ -720,20 +729,18 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 
 // If the batch of multi token requests all require the next token (`max_new_tokens = 1`),
 // and all the caching optimizations are disabled, then the kv cache is unnecessary.
-void ModelInput::CheckUseCache(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareUseCache(input_info& input) {
   use_cache = runtime_config_.enable_prefix_caching || runtime_config_.enable_flexible_caching ||
               runtime_config_.separate_prefill_decode;
-
   if (enable_blocked_multi_token_forwarding_kv_) {
     use_cache = true;
   }
-
   if (use_cache) {
     return;
   }
 
-  for (size_t i = 0; i < multi_token_request_num; i++) {
-    if (forward_reqs[i].sampling_config == nullptr || forward_reqs[i].sampling_config->max_new_tokens != 1) {
+  for (const ForwardRequest* dp_req : input.dp_reqs) {
+    if (dp_req->sampling_config == nullptr || dp_req->sampling_config->max_new_tokens != 1) {
       use_cache = true;
       return;
     }
@@ -752,7 +759,7 @@ void ModelInput::PrepareImgMask(size_t pos_num) {
     KLLM_LOG_DEBUG << "PrepareImgMask mask : " << static_cast<int>(input_ids.shape[0]) << " , start pos : " << pos
                    << " , pos len : " << len;
 
-    if (pos + len > input_ids.shape[0]) {
+    if (pos + len > static_cast<int64_t>(input_ids.shape[0])) {
       KLLM_LOG_INFO << "pos + len exceeds input_ids length, set is_mask -> False";
       return;
     }
@@ -1059,7 +1066,9 @@ void ModelInput::PreparePrefill() {
   }
 
   PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
+  PrepareUseCache(flash_input);
   if (use_cache) {
+    PrepareFlexibleCache(flash_input);
     PrepareKVCacheBlocks(flash_input);
     PrepareKVCacheBlockTable(flash_input);
   }
@@ -1137,10 +1146,9 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   std::vector<size_t> logits_idx_list(total_sampling_token_num_);
   size_t logits_idx_list_idx = 0;
   std::vector<size_t> dp_prefill_q_offset(1, 0);
-  std::vector<size_t> group_prefill_count(attn_dp_group_size_, 0);
-  std::vector<size_t> group_decode_count(attn_dp_group_size_, 0);
+  std::vector<size_t> dp_input_ids_lens(attn_dp_group_size_, 0);
 
-  auto process_func = [&](const ForwardRequest& req, const bool is_page) {
+  auto process_func = [&](const ForwardRequest& req) {
     const auto& forwarding_tokens = *(req.forwarding_tokens);
     const size_t input_length = forwarding_tokens.size();
     const bool in_dp_group = req.attn_dp_group_id == attn_dp_group_id_;
@@ -1155,12 +1163,12 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);
+    dp_input_ids_lens[req.attn_dp_group_id] += input_ids_len;
 
-    if (!is_page) {
+    if (req.GetType() == ForwardRequestType::kFlash) {
       multi_token_request_max_tokens = std::max(multi_token_request_max_tokens, input_length);
       input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_length);
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back() + skip_token_num);
-      group_prefill_count[req.attn_dp_group_id] += input_ids_len;
       if (in_dp_group) {
         dp_multi_token_request_max_tokens = std::max(dp_multi_token_request_max_tokens, input_length);
         dp_prefill_q_offset.emplace_back(dp_prefill_q_offset.back() + input_ids_len);
@@ -1171,7 +1179,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
       single_token_request_max_tokens = std::max(single_token_request_max_tokens, input_length);
       input_offset_list_uint64.emplace_back(input_offset_list_uint64.back() + input_ids_len);
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back());
-      group_decode_count[req.attn_dp_group_id] += input_ids_len;
       if (in_dp_group) {
         dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, input_length);
         dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + 1);
@@ -1179,7 +1186,8 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
       }
     }
 
-    if (!is_page && req.logits_custom_length > 0) {  // Specify the range of logits required
+    if (req.GetType() == ForwardRequestType::kFlash &&
+        req.logits_custom_length > 0) {  // Specify the range of logits required
       for (const auto& [l, r] : req.request_target->at("logits").slice_pos) {
         std::iota(logits_idx_list.begin() + logits_idx_list_idx,
                   logits_idx_list.begin() + logits_idx_list_idx + r - l + 1, input_ids_cpu.size() - input_length + l);
@@ -1195,8 +1203,8 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     }
   };
 
-  for (size_t i = 0; i < forward_reqs.size(); ++i) {
-    process_func(forward_reqs[i], i >= multi_token_request_num);
+  for (const auto& req : forward_reqs) {
+    process_func(req);
   }
 
   KLLM_LOG_DEBUG << "input_ids_cpu " << input_ids_cpu;
@@ -1269,15 +1277,10 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
               dp_input_prefix_list_uint64.size() * sizeof(decltype(dp_input_prefix_list_uint64)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 
-  size_t prefill_offset = 0, decode_offset = std::accumulate(group_prefill_count.begin(), group_prefill_count.end(), 0);
-  auto* attn_dp_group_offsets_ptr = attn_dp_group_offsets_.data();
+  size_t attn_dp_group_offset = 0;
   for (size_t i = 0; i < attn_dp_group_size_; ++i) {
-    *attn_dp_group_offsets_ptr++ = prefill_offset;
-    *attn_dp_group_offsets_ptr++ = prefill_offset + group_prefill_count[i];
-    *attn_dp_group_offsets_ptr++ = decode_offset;
-    *attn_dp_group_offsets_ptr++ = decode_offset + group_decode_count[i];
-    prefill_offset += group_prefill_count[i];
-    decode_offset += group_decode_count[i];
+    attn_dp_group_offsets_[i] = attn_dp_group_offset;
+    attn_dp_group_offset += dp_input_ids_lens[i];
   }
   KLLM_LOG_DEBUG << "attn_dp_group_offsets_ " << attn_dp_group_offsets_;
 

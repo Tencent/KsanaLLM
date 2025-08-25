@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/llm_runtime.h"
+
 #include <algorithm>
 #include <execution>
 #include <memory>
@@ -29,7 +30,7 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(),
                                                 batch_scheduler_config.max_pp_batch_num, context_);
 
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     samplers_.push_back(std::make_shared<Sampler>(batch_scheduler_config, worker_id, context_));
   }
   threadpool_ = std::make_shared<ThreadPool>(2);
@@ -258,30 +259,33 @@ void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
   PROFILE_EVENT_SCOPE(ReorderInferRequests, "ReorderInferRequests");
   // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
   // the requests are first sorted to utilize contiguous space for accelerated inference.
-  // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
   std::sort(reqs.begin(), reqs.end(), [this](const auto& a, const auto& b) {
-    // For dp case, the order is: [group1_prefill, group2_prefill, group1_decode, group2_decode]
-    const int a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
-    const int b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
+    // For dp case, the order is: [group1_prefill, group1_decode, group2_prefill, group2_decode, ...]
+    // NOTE: prefill may appear after decode (if they are in different dp groups)
+    if (a->attn_dp_group_id != b->attn_dp_group_id) {
+      return a->attn_dp_group_id < b->attn_dp_group_id;
+    }
 
-    const static size_t decode_threshold_len = IsAbsorbWeightsEnabled() ? 2 : 1;
+    // For non-dp case, the order is: [prefill, decode]
+    const size_t a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
+    const size_t b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
+
+    const static int decode_threshold_len = IsAbsorbWeightsEnabled() ? 2 : 1;
 
     const bool is_a_decode = a_token_num <= decode_threshold_len && a->kv_cached_token_num != 0;
     const bool is_b_decode = b_token_num <= decode_threshold_len && b->kv_cached_token_num != 0;
 
-    // Both prefill or decode, the a_token_num or b_token_num may be zero.
     if (is_a_decode == is_b_decode) {
-      if (a->attn_dp_group_id != b->attn_dp_group_id) {
-        return a->attn_dp_group_id < b->attn_dp_group_id;
-      } else {
-        if (a_token_num != b_token_num) {
-          return a_token_num > b_token_num;
-        }
-        if (a->kv_cached_token_num != b->kv_cached_token_num) {
-          return a->kv_cached_token_num < b->kv_cached_token_num;
-        }
-        return a->req_id < b->req_id;
+      // Both prefill or decode, sort the infer_reqs list based on a_token_num and b_token_num,
+      // i.e., the number of tokens that need to be calculated for the KV cache.
+      // NOTE: a_token_num or b_token_num may be zero
+      if (a_token_num != b_token_num) {
+        return a_token_num > b_token_num;
       }
+      if (a->kv_cached_token_num != b->kv_cached_token_num) {
+        return a->kv_cached_token_num < b->kv_cached_token_num;
+      }
+      return a->req_id < b->req_id;
     } else {
       // One is prefill, another is decode, prefill before decode
       return !is_a_decode;
@@ -375,7 +379,7 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
   BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs);
 
   std::vector<std::future<Status>> results;
-  for (int worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     results.push_back(
         worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs));
   }
@@ -661,8 +665,8 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
   return Status();
 }
 
-template void LlmRuntime::ReorderInferRequests<InferRequest>(std::vector<std::shared_ptr<InferRequest>> &reqs);
+template void LlmRuntime::ReorderInferRequests<InferRequest>(std::vector<std::shared_ptr<InferRequest>>& reqs);
 template void LlmRuntime::ReorderInferRequests<WorkerInferRequest>(
-    std::vector<std::shared_ptr<WorkerInferRequest>> &reqs);
+    std::vector<std::shared_ptr<WorkerInferRequest>>& reqs);
 
 }  // namespace ksana_llm

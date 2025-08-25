@@ -42,24 +42,11 @@ class MultiHeadLatentAttention {
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  ForwardingContext& forwarding_context);
 
-  // do forward.
-  Status DataParallelForward(std::vector<Tensor>& dp_input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
-                             std::vector<Tensor>& reduce_buffer_tensors, ForwardingContext& forwarding_context);
-
   static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
                               const RuntimeConfig& runtime_config, MlaBuffers& mla_buffers);
 
   Status AcquireBuffers(ForwardingContext& forwarding_context);
   Status ReleaseBuffers();
-
-  // Used for 2 stage dp forward.
-  Status ContextForward(std::vector<Tensor>& input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
-                        std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                        ForwardingContext& forwarding_context);
-
-  Status DecodeForward(std::vector<Tensor>& input_tensors, std::vector<Tensor>& hidden_buffer_tensors_0,
-                       std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& reduce_buffer_tensors,
-                       ForwardingContext& forwarding_context);
 
  private:
   Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& workspace_buffer,
@@ -73,7 +60,6 @@ class MultiHeadLatentAttention {
                                ForwardingContext& forwarding_context);
 
  private:
-  int rank_;
   const int layer_idx_;
   const int tensor_parallel_size_;
   MlaBuffers& mla_buffers_;
@@ -103,15 +89,16 @@ class MultiHeadLatentAttention {
   std::shared_ptr<FlashMlaAttention> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention> paged_mla_attention_layers_;
   std::shared_ptr<MemAdjuster> mem_adjuster_;
-  inline static uint32_t qk_nope_head_dim_ = 0;
-  inline static uint32_t qk_rope_head_dim_ = 0;
-  inline static uint32_t kv_lora_rank_ = 0;
-  inline static uint32_t q_lora_rank_ = 0;
-  inline static int head_num_per_tp_ = 0;
-  size_t o_proj_k_dim_ = 0;
-
   std::shared_ptr<Layernorm> kv_a_layernorms_;
   std::shared_ptr<Layernorm> q_a_layernorms_;
+
+  size_t o_proj_k_dim_ = 0;
+
+  inline static size_t qk_nope_head_dim_ = 0;
+  inline static size_t qk_rope_head_dim_ = 0;
+  inline static size_t kv_lora_rank_ = 0;
+  inline static size_t q_lora_rank_ = 0;
+  inline static size_t head_num_per_tp_ = 0;
 
   AbsorbWeightsType absorb_type_ = AbsorbWeightsType::kAbsorbDisabled;
 };

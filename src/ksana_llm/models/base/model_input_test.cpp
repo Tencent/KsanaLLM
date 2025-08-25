@@ -106,7 +106,6 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
     output_tokens.reserve(batch_size);
     embedding_slices.reserve(batch_size);
 
-    model_input->multi_token_request_num = batch_size;
     size_t pos_offset = 0;
 
     // Construct input refit embeddings.
@@ -207,15 +206,18 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   EXPECT_EQ(model_input->cutoff_layer, 7);
 }
 
-TEST_F(ModelInputTest, CheckUseCacheTest) {
-  // Construct forward requests as test input.
+TEST_F(ModelInputTest, PrepareUseCacheTest) {
+  // Dummy tokens
+  std::vector<int> forwarding_tokens = {1, 2, 3};
   SamplingConfig sampling_config1, sampling_config2;
   sampling_config1.max_new_tokens = 1;
   sampling_config2.max_new_tokens = 2;
+  // Construct forward requests as test input.
   ForwardRequest forward_req1, forward_req2;
+  forward_req1.forwarding_tokens = &forwarding_tokens;
+  forward_req2.forwarding_tokens = &forwarding_tokens;
   forward_req1.sampling_config = &sampling_config1;
   forward_req2.sampling_config = &sampling_config2;
-  std::vector<ForwardRequest> forward_reqs = {forward_req1, forward_req2};
 
   const auto& env = Singleton<Environment>::GetInstance();
   CacheManagerConfig cache_manager_config;
@@ -226,13 +228,13 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
   env->GetRuntimeConfig(runtime_config);
   EXPECT_FALSE(runtime_config.enable_prefix_caching);
   EXPECT_FALSE(runtime_config.enable_flexible_caching);
-  model_input->multi_token_request_num = 1;
-  model_input->CheckUseCache(forward_reqs);
+  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_FALSE(model_input->use_cache);
 
   // Test case 2: All the caching is disabled but some requests require more than one token.
-  model_input->multi_token_request_num = 2;
-  model_input->CheckUseCache(forward_reqs);
+  model_input->PrepareInputInfo({forward_req1, forward_req2});
+  model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 
   // Test case 3: Prefix caching is enabled.
@@ -244,8 +246,8 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
   EXPECT_FALSE(runtime_config.enable_flexible_caching);
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->multi_token_request_num = 1;
-  model_input->CheckUseCache(forward_reqs);
+  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 
   // Test case 4: Flexible caching is enabled.
@@ -258,8 +260,8 @@ TEST_F(ModelInputTest, CheckUseCacheTest) {
   EXPECT_TRUE(runtime_config.enable_flexible_caching);
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->multi_token_request_num = 1;
-  model_input->CheckUseCache(forward_reqs);
+  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 }
 
@@ -349,7 +351,7 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   for (size_t i = 0; i < forward_reqs.size(); ++i) {
     const auto& req = forward_reqs[i];
     for (size_t token_i = 0; token_i < req.forwarding_tokens->size(); ++token_i) {
-      if (token_i < req.kv_cached_token_num) {
+      if (token_i < static_cast<size_t>(req.kv_cached_token_num)) {
         continue;
       }
       EXPECT_EQ(host_idx_result[result_i++], counter_i++);
@@ -402,8 +404,6 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
     output_tokens.reserve(batch_size);
     embedding_slices.reserve(batch_size);
     mrotary_offsets.reserve(batch_size);
-
-    model_input->multi_token_request_num = batch_size;
 
     std::vector<int64_t> expected_mrotary_embedding_pos;
     std::vector<int64_t> expected_offsets;
@@ -472,7 +472,6 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
     forward_reqs[0].input_refit_embedding = &embedding_slices[0];
     forward_reqs[0].mrotary_embedding_pos_offset = &mrotary_offsets[0];
 
-    model_input->multi_token_request_num = 1;
     {
       torch::Tensor pos_tensor = torch::randint(0, 100, {30}, torch::kInt64);
       {

@@ -31,11 +31,11 @@ class ModelInput {
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs);
   void CreateVLTensors();
-  void DestroyVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
 
+  // Prepare MRope position for qwen2_vl
   void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
 
 #ifdef ENABLE_CUDA
@@ -49,13 +49,10 @@ class ModelInput {
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
 #endif
 
-  // Determine whether to use cache for the current batch of multi token requests.
-  void CheckUseCache(const std::vector<ForwardRequest>& forward_reqs);
-
  public:
   // The input batch size.
-  size_t batch_size;
-  size_t dp_batch_size;
+  size_t batch_size = 0;
+  size_t dp_batch_size = 0;
 
   // The multi-token forwarding request total sequence length.
   size_t multi_token_request_total_seq_len = 0;
@@ -197,9 +194,8 @@ class ModelInput {
 
   size_t attn_dp_group_size_;
 
-  // The beg and end token offset of every dp group,
-  // in format [dp0_prefill_beg, dp0_prefill_end, dp0_decode_beg, dp0_decode_end,
-  //            dp1_prefill_beg, dp1_prefill_end, dp1_decode_beg, dp1_decode_end ...]
+  // The starting offset of tokens handled by each DP group,
+  // in format [group0_offset, group1_offset, ...]
   std::vector<int> attn_dp_group_offsets_;
 
  private:
@@ -249,13 +245,18 @@ class ModelInput {
   input_info page_single_input;  // input_ids length is 1, use page attention
   input_info page_dual_input;    // input_ids length is 2, use page attention
 
+  // Divide the forward requests into three categories: flash, page_single, page_dual
+  void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);
+  // Prepare information related to tokens of the current batch of requests
+  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
+
   void PreparePrefill();
   void PrepareDualDecode();
   void PrepareSingleDecode();
   void PrepareMetadata();
 
-  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
-
+  // Determine whether to use cache for the current batch of multi token requests
+  void PrepareUseCache(input_info& input);
   void PreparePageInput(input_info& input);
   void PrepareKVCacheBlocks(input_info& info);
   void PrepareKVCacheBlockTable(input_info& info);
