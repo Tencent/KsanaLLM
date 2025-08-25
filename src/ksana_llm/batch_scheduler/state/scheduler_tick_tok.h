@@ -10,6 +10,9 @@
 #include <mutex>
 #include <vector>
 
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
 namespace ksana_llm {
 
 class SchedulerTickTok {
@@ -23,40 +26,40 @@ class SchedulerTickTok {
     }
   }
 
-  void Lock(size_t thread_index) {
+  static void SetThreadIndex(size_t thread_index) { thread_index_ = thread_index; }
+
+  __attribute__((hot)) void Lock() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
     // Blocking on wait only if pred not true.
     // Otherwise, if all other thread is skipped, no notify() invoked.
-    if (is_lockable_.load() && thread_index == visit_order_[current_idx_]) {
-      mutex_.lock();
+    if (is_lockable_.load() && thread_index_ == visit_order_[current_idx_]) {
       is_lockable_.store(false);
       return;
     }
 
     guard_cv_.wait(
-        lock, [this, thread_index]() { return is_lockable_.load() && thread_index == visit_order_[current_idx_]; });
-    mutex_.lock();
+        lock, [this]() { return is_lockable_.load() && thread_index_ == visit_order_[current_idx_]; });
     is_lockable_.store(false);
   }
 
-  void Unlock(size_t thread_index) {
+  __attribute__((hot)) void Unlock() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
     // If not locked, return immediately.
-    if (is_lockable_.load()) {
+    if (unlikely(is_lockable_.load())) {
       return;
     }
 
     // If thread not matched, that is, other thread have change index via Skip(), keep current_idx_ not changed.
-    if (thread_index != visit_order_[current_idx_]) {
+    if (thread_index_ != visit_order_[current_idx_]) {
       is_lockable_.store(true);
       guard_cv_.notify_all();
-      mutex_.unlock();
       return;
     }
 
     // Change current idx to next position.
+#pragma GCC unroll 8
     for (size_t i = current_idx_ + 1; i <= current_idx_ + group_size_; ++i) {
       size_t tmp_current_idx = i % group_size_;
       if (!skipped_groups_[visit_order_[tmp_current_idx]]) {
@@ -67,13 +70,13 @@ class SchedulerTickTok {
 
     is_lockable_.store(true);
     guard_cv_.notify_all();
-    mutex_.unlock();
   }
 
   // Reset all skip list, the vist order will be keepped.
-  void Reset() {
+  __attribute__((hot)) void Reset() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
+#pragma GCC unroll 8
     for (size_t i = 0; i < group_size_; ++i) {
       skipped_groups_[i] = false;
     }
@@ -84,14 +87,15 @@ class SchedulerTickTok {
   }
 
   // The visit list will skip current thread index.
-  void Skip(size_t thread_index) {
+  __attribute__((hot)) void Skip() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
-    if (thread_index < skipped_groups_.size()) {
-      skipped_groups_[thread_index] = true;
+    if (likely(thread_index_ < skipped_groups_.size())) {
+      skipped_groups_[thread_index_] = true;
     }
 
     // Change current idx to next not skipped position.
+#pragma GCC unroll 8
     for (size_t i = current_idx_ + 1; i <= current_idx_ + group_size_; ++i) {
       size_t tmp_current_idx = i % group_size_;
       if (!skipped_groups_[visit_order_[tmp_current_idx]]) {
@@ -104,20 +108,11 @@ class SchedulerTickTok {
     guard_cv_.notify_all();
   }
 
-  // Set the process order, such as {3, 1, 2, 0}
-  void Reorder(const std::vector<size_t>& visit_order) {
-    std::unique_lock<std::mutex> lock(guard_mutex_);
-
-    if (visit_order.size() == group_size_) {
-      visit_order_ = visit_order;
-      current_idx_ = 0;
-    }
-  }
-
-  void Reorder() {
+  __attribute__((hot)) void Reorder() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
     size_t first_val = visit_order_[0];
+#pragma GCC unroll 8
     for (size_t i = 1; i < group_size_; ++i) {
       visit_order_[i - 1] = visit_order_[i];
     }
@@ -126,7 +121,7 @@ class SchedulerTickTok {
   }
 
   // Make all threads arrive same check point.
-  void Barrier() {
+  __attribute__((hot)) void Barrier() {
     std::unique_lock<std::mutex> lock(guard_mutex_);
 
     size_t cur_inst = instance_;
@@ -154,26 +149,12 @@ class SchedulerTickTok {
   std::mutex guard_mutex_;
   std::condition_variable guard_cv_;
 
-  std::mutex mutex_;
   std::condition_variable cv_;
 
   size_t wait_num_ = 0;
   size_t instance_ = 0;
-};
 
-class SchedulerTickTokLockGuard {
- public:
-  SchedulerTickTokLockGuard(std::shared_ptr<SchedulerTickTok> tick_tok, size_t thread_idx) {
-    tick_tok_ = tick_tok;
-    thread_idx_ = thread_idx;
-    tick_tok_->Lock(thread_idx_);
-  }
-
-  ~SchedulerTickTokLockGuard() { tick_tok_->Unlock(thread_idx_); }
-
- private:
-  std::shared_ptr<SchedulerTickTok> tick_tok_;
-  size_t thread_idx_;
+  inline static thread_local size_t thread_index_;
 };
 
 }  // namespace ksana_llm
