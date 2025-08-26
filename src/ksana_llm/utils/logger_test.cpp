@@ -111,6 +111,19 @@ TEST_F(LoggerTest, TestLoggingMAINLevel) {
   EXPECT_TRUE(log_contents.find("This is an MAIN level log") != std::string::npos);
 }
 
+TEST_F(LoggerTest, TestLoggingMULTI_BATCHLevel) {
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
+  ksana_llm::InitLoguru(true);
+  KLLM_LOG_MULTI_BATCH << "This is an MULTI_BATCH level log";
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  std::ifstream file("test_log_file.log");
+  std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  EXPECT_TRUE(log_contents.find("MULTI_BATCH") != std::string::npos);
+  EXPECT_TRUE(log_contents.find("This is an MULTI_BATCH level log") != std::string::npos);
+}
+
 TEST_F(LoggerTest, TestLoggingDEBUGLevel) {
   setenv("KLLM_LOG_LEVEL", "DEBUG", 1);
   ksana_llm::InitLoguru(true);

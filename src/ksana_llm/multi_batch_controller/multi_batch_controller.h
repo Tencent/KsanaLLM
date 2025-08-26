@@ -44,7 +44,7 @@ class MultiBatchController  {
 
   ////// for recv hiddens order
   // Notify last batch id can recv hidden units at current id
-  void NotifyLastBatchHiddenUnitCanRecv(int cur_muilt_batch_id);
+  void NotifyLastBatchHiddenUnitCanRecv(int cur_multi_batch_id);
 
   // Notify current batch id not ready
   void NotifyCurrentBatchThreadNotReady(int multi_batch_id);

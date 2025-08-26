@@ -28,7 +28,8 @@ enum Level {
   MOE = 7,
   MODEL = 8,
   SCHEDULER = 9,
-  MAIN = 10
+  MAIN = 10,
+  MULTI_BATCH = 11
 };
 
 extern std::vector<std::string> g_detail_levels;
@@ -58,6 +59,7 @@ static std::vector<std::string> GetLogLevels() {
                                                                     {"MOE", Level::MOE},
                                                                     {"MODEL", Level::MODEL},
                                                                     {"MAIN", Level::MAIN},
+                                                                    {"MULTI_BATCH", Level::MULTI_BATCH},
                                                                     {"SCHEDULER", Level::SCHEDULER}};
   std::vector<std::string> valid_levels;
   for (auto& lvl : input_levels) {
@@ -99,8 +101,8 @@ inline void InitLoguru(bool force = false) {
   }
 
   // 2. check if have details category
-  const std::vector<std::string> all_details_levels = {"ATTENTION", "COMMUNICATION", "MOE",
-                                                       "MODEL",     "SCHEDULER",     "MAIN"};
+  const std::vector<std::string> all_details_levels = {"ATTENTION", "COMMUNICATION", "MOE",        "MODEL",
+                                                       "SCHEDULER", "MAIN",          "MULTI_BATCH"};
   for (const auto& level : input_log_levels) {
     bool has_details = std::any_of(all_details_levels.begin(), all_details_levels.end(),
                                    [&level](const std::string& str) { return level == str; });
@@ -158,6 +160,7 @@ inline void InitLoguru(bool force = false) {
 #define KLLM_LOG_MODEL LOG_S(1) << "MODEL| " << __FUNCTION__ << " | "
 #define KLLM_LOG_SCHEDULER LOG_S(1) << "SCHEDULER| " << __FUNCTION__ << " | "
 #define KLLM_LOG_MAIN LOG_S(1) << "MAIN| " << __FUNCTION__ << " | "
+#define KLLM_LOG_MULTI_BATCH LOG_S(1) << "MULTI_BATCH| " << __FUNCTION__ << " | "
 
 #define KLLM_LOG_INFO LOG_S(INFO)
 #define KLLM_LOG_WARNING LOG_S(WARNING)

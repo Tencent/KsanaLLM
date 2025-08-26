@@ -17,7 +17,7 @@ using namespace ksana_llm;
 class MultiBatchControllerTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+    setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
     InitLoguru();
   }
 
@@ -227,7 +227,7 @@ class MultiBatchControllerTest : public testing::Test {
 
 // 测试多线程环境下running id的有序执行
 TEST_F(MultiBatchControllerTest, BalancedRunningOrderTest) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 4;
   Reset(max_multi_batch_num);
 
@@ -289,7 +289,7 @@ TEST_F(MultiBatchControllerTest, BalancedRunningOrderTest) {
 }
 
 TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 8;
   Reset(max_multi_batch_num);
 
@@ -317,7 +317,7 @@ TEST_F(MultiBatchControllerTest, DoNotSyncStart) {
 
 // 测试多线程环境下，输入样本不平衡，且不同步启动的情况
 TEST_F(MultiBatchControllerTest, UnBlalancedNotSyncStartOrderTest) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 2;
   Reset(max_multi_batch_num);
 
@@ -345,7 +345,7 @@ TEST_F(MultiBatchControllerTest, UnBlalancedNotSyncStartOrderTest) {
 
 // 测试多线程环境下输入不平衡的情况
 TEST_F(MultiBatchControllerTest, UnBlalancedSyncStartOrderTest) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 2;
   Reset(max_multi_batch_num);
 
@@ -373,7 +373,7 @@ TEST_F(MultiBatchControllerTest, UnBlalancedSyncStartOrderTest) {
 
 // 测试多线程环境任意thread先启动的情况
 TEST_F(MultiBatchControllerTest, AnyThreadFirstStartTest) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 8;
   Reset(max_multi_batch_num);
   // 任意thread先启动
@@ -405,7 +405,7 @@ TEST_F(MultiBatchControllerTest, AnyThreadFirstStartTest) {
 
 // 测试运行一次后，再恢复启动，能否顺利执行
 TEST_F(MultiBatchControllerTest, RunThreadRestartTest) {
-  setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
+  setenv("KLLM_LOG_LEVEL", "MULTI_BATCH", 1);
   int max_multi_batch_num = 8;
   Reset(max_multi_batch_num);
   // 任意thread先启动
