@@ -1,4 +1,4 @@
-# Copyright 2024 Tencent Inc.  All rights reserved.
+# Copyright 2025 Tencent Inc.  All rights reserved.
 
 add_subdirectory(gemm_wrapper)
 add_subdirectory(embedding)
@@ -40,7 +40,6 @@ if(SM VERSION_GREATER_EQUAL "90")
   add_subdirectory(decode_softmax_reducev_fwd)
 endif()
 add_subdirectory(marlin_moe)
-
 # 新逻辑
 add_subdirectory(gemm)
 add_subdirectory(others)

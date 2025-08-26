@@ -38,7 +38,6 @@
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
-#include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"

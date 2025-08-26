@@ -291,6 +291,7 @@ class DeepSeekV3Test : public testing::Test {
     }
     EXPECT_TRUE(match0 || expected_tokens.empty());
     EXPECT_TRUE(match1 || expected_tokens.empty());
+
     (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
     (*forward_reqs[1].forwarding_tokens).push_back(generated_tokens1[0]);
     generated_tokens0.clear();

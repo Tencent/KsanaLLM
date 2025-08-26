@@ -144,25 +144,24 @@ void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void*
 
 // Add-Multiply fused operations
 template <typename T>
-void InvokeAddThenMul(const void* input1, const void* input2, const T scale, const int m, const int n,
+void InvokeAddThenMul(const void* input1, const void* input2, const T scale, const int m, const int n, void* output,
+                      cudaStream_t stream);
+
+template <typename T>
+void InvokeAddMulSecond(const void* input1, const void* input2, const T scale, const int m, const int n, void* output,
+                        cudaStream_t stream);
+
+template <typename T>
+void InvokeAddBiasThenMul(const void* input1, const void* input2, const void* bias, const T scale, const int m,
+                          const int n, void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeMulThenAdd(const void* input1, const void* input2, const T scale1, const T scale2, const int m, const int n,
                       void* output, cudaStream_t stream);
 
 template <typename T>
-void InvokeAddMulSecond(const void* input1, const void* input2, const T scale, const int m, const int n,
-                        void* output, cudaStream_t stream);
-
-template <typename T>
-void InvokeAddBiasThenMul(const void* input1, const void* input2, const void* bias, const T scale,
-                          const int m, const int n, void* output, cudaStream_t stream);
-
-template <typename T>
-void InvokeMulThenAdd(const void* input1, const void* input2, const T scale1, const T scale2,
-                      const int m, const int n, void* output, cudaStream_t stream);
-
-template <typename T>
-void InvokeAddResidualsBiasThenMul(const void* input1, const void* residual1, const void* residual2,
-                                   const void* bias, const T scale, const int m, const int n,
-                                   void* output, cudaStream_t stream);
+void InvokeAddResidualsBiasThenMul(const void* input1, const void* residual1, const void* residual2, const void* bias,
+                                   const T scale, const int m, const int n, void* output, cudaStream_t stream);
 
 // for the tensor input with shape [m, n]
 //  out = act(input[:, :n/2]) * input[:, n/2:]
@@ -241,6 +240,7 @@ void Fp8QuantizedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_
 
 void RescaleFp8E4m3(void* input, void* output, size_t n, const float* input_scale, const float* output_scale,
                     cudaStream_t& stream);
+
 template <typename T>
 void ScaledQuantizeFp8E4m3(T* x, void* output, float* scale, std::vector<size_t> group_shape, int m, int n, int rank);
 
@@ -258,9 +258,8 @@ void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* o
                      cudaStream_t& stream, void* cutlass_buffer = nullptr, size_t cutlass_buffer_size = 0ul);
 
 template <typename T>
-void InvokePerTokenGroupQuantFp8E4m3(void* input, void* output_q, void* output_s, int m, int n, bool is_column_major,
-                                     cudaStream_t stream, int64_t group_size = 128, float eps = 1e-10,
-                                     float min_fp8 = -448.0, float max_fp8 = 448.0);
+void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,
+                                     bool is_column_major, cudaStream_t stream, int64_t group_size = 128);
 
 template <typename T>
 void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, cudaStream_t stream);

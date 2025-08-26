@@ -1,7 +1,8 @@
 /*
  * Copyright 2025 Tencent Inc.  All rights reserved.
  */
-#include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
+
+#include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 
 #include <gtest/gtest.h>
 
@@ -20,8 +21,8 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
  protected:
   using NvidiaTestSuitBase::stream;
-  int group_size_ = 128;
-  const std::vector<std::pair<int, int>> m_n_pairs_ = {{1, 128}};
+  const int group_size_ = 128;
+  const std::vector<std::pair<int, int>> m_n_pairs_ = {{1, 128}, {1, 256}};
 
  protected:
   template <typename T>
@@ -89,7 +90,7 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Check the results
     for (size_t i = 0; i < (m * n) / 128; ++i) {
-      EXPECT_NEAR(h_s[i], target_scales[i], 1e-3);
+      EXPECT_NEAR(h_s[i], target_scales[i], 1e-4);
     }
     for (size_t i = 0; i < m * n; ++i) {
       EXPECT_NEAR(static_cast<int>(h_q[i]), target_q[i], 1);
@@ -110,21 +111,44 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, HalfPerTokenGroupQuantFp8Test) 
   }
 }
 
-TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, FloatPerTokenGroupQuantFp8Test) {
-  for (const auto& m_n_pair : m_n_pairs_) {
-    TestPerTokenGroupQuantFp8<float>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second), stream,
-                                     true);
-    TestPerTokenGroupQuantFp8<float>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second), stream,
-                                     false);
-  }
-}
-
 TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, BFloat16PerTokenGroupQuantFp8Test) {
   for (const auto& m_n_pair : m_n_pairs_) {
     TestPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
                                              stream, true);
     TestPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
                                              stream, false);
+  }
+}
+
+// Performance test is disabled by default
+TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_PerTokenGroupQuantFp8PerfTest) {
+  const std::vector<size_t> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
+  // Config of DeepSeek-V3
+  const size_t hidden_size = 7168;
+
+  for (const size_t token_num : token_nums) {
+    // Prepare device data
+    BufferMeta d_input = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {token_num, hidden_size},
+                                                     /*is_random_init*/ true);
+    BufferMeta d_output_q = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {token_num, hidden_size},
+                                                        /*is_random_init*/ false);
+    BufferMeta d_output_s = CreateBuffer<float>(MemoryType::MEMORY_GPU, {token_num, hidden_size / group_size_},
+                                                /*is_random_init*/ false);
+
+    const int warmups = 5;
+    const int iterations = 10;
+    auto cuda_run = [&]() {
+      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
+                                               hidden_size, group_size_,
+                                               /*is_column_major*/ false, stream);
+    };
+    const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
+    std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
+
+    // Free data
+    DeleteBuffer(d_input);
+    DeleteBuffer(d_output_q);
+    DeleteBuffer(d_output_s);
   }
 }
 

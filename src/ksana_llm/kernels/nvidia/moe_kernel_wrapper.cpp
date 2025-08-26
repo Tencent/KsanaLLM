@@ -34,11 +34,11 @@
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe/moe.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
+#include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
-#include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
@@ -391,7 +391,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     } else if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3 && !has_zp) {  // TODO(jinxcwu) 目前只支持无zp的gptq
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, false, stream);
+      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
       DequantInt4Fp8(stream, dequant_workspace, b, (size_t)num_experts * n * k / 2);
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
           a_q, dequant_workspace, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids,
@@ -409,7 +409,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, false, stream);
+      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
       a = a_q;
     }
     // A [m, k]
@@ -584,7 +584,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
         reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk, tokens_in_chunk, numel, tokens_in_chunk,
         hidden_size, inter_size * 2, max_num_tokens_padded, config, weight_dtype, compute_dtype, use_moe_wna16_cuda,
         dequant_workspace, block_shape, num_experts, stream);
-    size_t elements_num = static_cast<size_t>(tokens_in_chunk) * topk * inter_size * 2;
+
+    const size_t elements_num = static_cast<size_t>(tokens_in_chunk) * topk * inter_size * 2;
     llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel>(
         reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
         reinterpret_cast<const int*>(curr_topk_ids), reinterpret_cast<const int*>(expert_map), num_experts,

@@ -1,18 +1,5 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-# set kernels target
-file(GLOB_RECURSE PER_TOKEN_GROUP_QUANT_SRCS *.cu)
-list(FILTER PER_TOKEN_GROUP_QUANT_SRCS EXCLUDE REGEX ".*test.cu")
-add_library(llm_kernels_nvidia_kernel_per_token_group_quant STATIC ${PER_TOKEN_GROUP_QUANT_SRCS})
-set_property(TARGET llm_kernels_nvidia_kernel_per_token_group_quant PROPERTY POSITION_INDEPENDENT_CODE ON)
-set_property(TARGET llm_kernels_nvidia_kernel_per_token_group_quant PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(llm_kernels_nvidia_kernel_per_token_group_quant PUBLIC -lcublas -lcudart -lcublasLt)
-
-file(GLOB_RECURSE PER_TOKEN_GROUP_QUANT_TEST_SRCS *test.cu)
-cc_test(llm_kernels_nvidia_kernel_per_token_group_quant_test SRCS ${PER_TOKEN_GROUP_QUANT_TEST_SRCS} DEPS 
-    llm_kernels_nvidia_utils
-    llm_kernels_nvidia_kernel_per_token_group_quant)
-
 if(SM VERSION_GREATER_EQUAL "90")
   file(GLOB_RECURSE PER_TOKEN_GROUP_QUANT_ALL_FILES
     per_token_group_quant_creator.sh

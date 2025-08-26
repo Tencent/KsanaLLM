@@ -33,11 +33,11 @@
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe/moe.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
+#include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
-#include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
@@ -518,7 +518,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   void* const k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];  // block中每层layer的起始地址
   void* const v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
   int32_t* const block_table_ptr =
-      block_table.GetPtr<int32_t>();                    // block id，加上layer_kv_cache_ptr后就是对应的cache block
+      block_table.GetPtr<int32_t>();  // block id，加上layer_kv_cache_ptr后就是对应的cache block
   const int max_blocks_per_seq = block_table.shape[1];  // shape: [bs, max_num_blocks_per_query]
   // for mla
   auto skipped_q_pe_ptr =

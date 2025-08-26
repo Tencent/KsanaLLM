@@ -35,11 +35,11 @@
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe/moe.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
+#include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
-#include "csrc/kernels/nvidia/per_token_group_quant/per_token_group_quant_8bit.h"
 #include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/kernels/nvidia/samplers/apply_token_bitmask_inplace.h"
 #include "csrc/kernels/nvidia/samplers/greedy.h"
@@ -350,8 +350,8 @@ void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void*
     }
   }
 }
-#define LOOKUP_EMBEDDING(T)                                                                                    \
-  template void LookupEmbedding<T>(const void* input_ids, const void* ids_offsets, const void* prefix_offsets, \
+#define LOOKUP_EMBEDDING(T)                                                                                        \
+  template void LookupEmbedding<T>(const void* input_ids, const void* ids_offsets, const void* prefix_offsets,     \
                                    const void* emb, const void* pos, const void* steps, void* output,              \
                                    bool use_emb_scale, const T emb_scale, int vocab_size, int hidden_size, int bs, \
                                    int vocab_id, cudaStream_t stream, void* workspace_ptr)
@@ -1032,19 +1032,18 @@ DEQUANTIZE_FP8_E4M3_BLOCKWISE(__nv_bfloat16);
 #endif
 
 template <typename T>
-void InvokePerTokenGroupQuantFp8E4m3(void* input, void* output_q, void* output_s, int m, int n, bool is_column_major,
-                                     cudaStream_t stream, int64_t group_size, float eps, float min_fp8, float max_fp8) {
+void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,
+                                     bool is_column_major, cudaStream_t stream, int64_t group_size) {
 #ifdef ENABLE_FP8
   llm_kernels::nvidia::per_token_group_quant_fp8<T>(input, output_q, output_s, m, n, group_size, is_column_major,
-                                                    stream, eps, min_fp8, max_fp8);
+                                                    stream);
 #else
   KLLM_THROW("FP8 is not supported in this build. Please enable FP8 support.");
 #endif
 }
-#define INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(T)                                                                   \
-  template void InvokePerTokenGroupQuantFp8E4m3<T>(void* input, void* output_q, void* output_s, int m, int n,     \
-                                                   bool is_column_major, cudaStream_t stream, int64_t group_size, \
-                                                   float eps, float min_fp8, float max_fp8);
+#define INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(T)                                                                     \
+  template void InvokePerTokenGroupQuantFp8E4m3<T>(const void* input, void* output_q, void* output_s, int m, int n, \
+                                                   bool is_column_major, cudaStream_t stream, int64_t group_size)
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(float);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(half);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(__nv_bfloat16);
