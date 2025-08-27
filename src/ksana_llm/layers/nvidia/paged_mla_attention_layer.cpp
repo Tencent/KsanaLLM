@@ -521,8 +521,8 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
       block_table.GetPtr<int32_t>();  // block id，加上layer_kv_cache_ptr后就是对应的cache block
   const int max_blocks_per_seq = block_table.shape[1];  // shape: [bs, max_num_blocks_per_query]
   // for mla
-  auto skipped_q_pe_ptr =
-      q_pe_tensor.GetPtr<void>() + skip_tokens_num * (q_pe_tensor.GetTotalBytes() / q_pe_tensor.shape[0]);
+  auto skipped_q_pe_ptr = q_pe_tensor.GetPtr<void>();  // already skipped
+
   auto skipped_compressed_kv_ptr =
       compressed_kv_tensor.GetPtr<void>() +
       skip_tokens_num * (compressed_kv_tensor.GetTotalBytes() / compressed_kv_tensor.shape[0]);
@@ -530,7 +530,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   auto skipped_k_pe_ptr =
       k_pe_tensor.GetPtr<void>() + skip_tokens_num * (k_pe_tensor.GetTotalBytes() / k_pe_tensor.shape[0]);
 
-  const size_t batch_input_ids_len = q_pe_tensor.shape[0];
+  const size_t batch_input_ids_len = k_pe_tensor.shape[0];
   const size_t batch_tail_tokens = batch_input_ids_len - skip_tokens_num - total_tokens;
 
   void* const kv_b_nope_proj_weight_ptr = kv_b_nope_proj_weight.GetPtr<void>();

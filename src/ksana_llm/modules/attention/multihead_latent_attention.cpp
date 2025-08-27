@@ -70,21 +70,10 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
   }
 
   std::string q_b_nope_rope_proj_weight_name = layer_prefix + ".self_attn.q_b_nope_rope_proj.weight";
-  if (creation_context.base_weight->GetModelWeights(q_b_nope_rope_proj_weight_name).GetElementNumber() > 0) {
-    use_q_b_nope_rope_ = true;
-    attn_q_b_projs_ =
-        std::make_shared<Linear>(q_b_nope_rope_proj_weight_name, creation_context, linear_group_quant_backend);
-  } else {
-    use_q_b_nope_rope_ = false;
-    attn_q_b_lora_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_b_nope_proj.weight", creation_context,
-                                                    linear_group_quant_backend);
-    attn_q_b_rope_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_b_rope_proj.weight", creation_context,
-                                                    linear_group_quant_backend);
-  }
+  attn_q_b_projs_ =
+      std::make_shared<Linear>(q_b_nope_rope_proj_weight_name, creation_context, linear_group_quant_backend);
 
-  if (use_fused_lora_a_ || use_q_b_nope_rope_) {
-    split_ = std::make_shared<Split>(creation_context);
-  }
+  split_ = std::make_shared<Split>(creation_context);
 
   if (absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
     attn_o_proj_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
@@ -122,14 +111,18 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   kv_lora_rank_ = attn_config.model_config.mla_config.kv_lora_rank;
   q_lora_rank_ = attn_config.model_config.mla_config.q_lora_rank;
   // 权重吸收后要考虑decode的q维度有变化需要对比。
-  const size_t q_buffer_size =
-      max_token_num * head_num_per_tp_ * qk_nope_head_dim_ + max_decode_tokens * head_num_per_tp_ * kv_lora_rank_;
+  const size_t q_buffer_size = std::max(
+      max_decode_tokens * head_num_per_tp_ * std::max(qk_nope_head_dim_, kv_lora_rank_), max_token_num * q_lora_rank_);
   mla_buffers.q_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.q_buffer", {q_buffer_size}, weight_type);
 
-  const size_t kv_lora_or_q_rope_buffer_size =
-      max_token_num * std::max(head_num_per_tp_ * qk_rope_head_dim_, kv_lora_rank_);
-  mla_buffers.kv_lora_or_q_rope_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.kv_lora_or_q_rope_buffer",
-                                                                        {kv_lora_or_q_rope_buffer_size}, weight_type);
+  const size_t kv_lora_or_q_nope_rope_buffer_size =
+      max_token_num * std::max(head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_), kv_lora_rank_);
+  mla_buffers.kv_lora_or_q_nope_rope_buffer = buffer_mgr->CreateBufferTensor(
+      "mla_buffers.kv_lora_or_q_nope_rope_buffer", {kv_lora_or_q_nope_rope_buffer_size}, weight_type);
+
+  const size_t decode_q_rope_buffer_size = max_decode_tokens * head_num_per_tp_ * qk_rope_head_dim_;
+  mla_buffers.decode_q_rope_buffer =
+      buffer_mgr->CreateBufferTensor("mla_buffers.decode_q_rope_buffer", {decode_q_rope_buffer_size}, weight_type);
 
   const size_t kv_buffer_size = max_token_num * kv_lora_rank_;
   mla_buffers.kv_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.kv_buffer", {kv_buffer_size}, weight_type);
@@ -151,13 +144,13 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
 }
 
 Status MultiHeadLatentAttention::AcquireBuffers(ForwardingContext& forwarding_context) {
-  // TODO(yancyliu): Get tensors from q_buffer, kv_lora_or_q_rope_buffer, kv_buffer, k_rope_buffer in mla_buffers_.
+  // TODO(yancyliu): Get tensors from q_buffer, kv_lora_or_q_nope_rope_buffer, kv_buffer, k_rope_buffer in mla_buffers_.
   // Reset its shape from batch_size and token_num, and then allocate tensor memory.
   return Status();
 }
 
 Status MultiHeadLatentAttention::ReleaseBuffers() {
-  // TODO(yancyliu): Get tensor from q_buffer, kv_lora_or_q_rope_buffer, kv_buffer, k_rope_buffer
+  // TODO(yancyliu): Get tensor from q_buffer, kv_lora_or_q_nope_rope_buffer, kv_buffer, k_rope_buffer
   // then release tenosr memory.
   return Status();
 }
@@ -208,9 +201,9 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(kv_buffer_tensors, mla_buffers_.kv_buffer);
   CREATE_BUFFER_SCOPE(k_rope_buffer_tensors, mla_buffers_.k_rope_buffer);
   CREATE_BUFFER_SCOPE(q_buffer_tensors, mla_buffers_.q_buffer);
-
+  CREATE_BUFFER_SCOPE(decode_q_rope_tensors, mla_buffers_.decode_q_rope_buffer);
   {
-    CREATE_BUFFER_SCOPE(kv_lora_buffer_tensors, mla_buffers_.kv_lora_or_q_rope_buffer);
+    CREATE_BUFFER_SCOPE(kv_lora_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
     if (use_fused_lora_a_) {
       PROFILE_EVENT_SCOPE(attn_fused_lora_a_projs, "attn_fused_lora_a_proj", rank);
       // weight_shape = (q_lora_rank + kv_lora_rank + qk_rope_head_dim, hidden_units)
@@ -241,7 +234,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     }
   }
 
-  CREATE_BUFFER_SCOPE(q_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_rope_buffer);
+CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
   Tensor q_b_input = dp_hidden_input;
   // tensor0 is used for input, tensor1 is free for output
   Tensor q_b_output = hidden_buffer_tensors_1[0];
@@ -268,30 +261,23 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   Tensor q_b_nope_rope_output_tmp = q_b_output.GetView({dp_total_tokens, q_b_output.shape[1]});
   std::vector<Tensor> q_b_nope_rope_output_tmps = {q_b_nope_rope_output_tmp};
   // prefill and decode
-  if (use_q_b_nope_rope_) {
-    PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);
-    STATUS_CHECK_RETURN(attn_q_b_projs_->Forward(q_b_input, q_b_nope_rope_output_tmps));
-    // reshape for split
-    q_b_nope_rope_output_tmps[0].shape = {dp_total_tokens * head_num_per_tp_, qk_nope_head_dim_ + qk_rope_head_dim_};
-    q_buffer_tensors[0].shape = {dp_total_tokens * head_num_per_tp_, qk_nope_head_dim_};
-    q_rope_buffer_tensors[0].shape = {dp_total_tokens * head_num_per_tp_, qk_rope_head_dim_};
-    std::vector<Tensor> split_output_tensors = {q_buffer_tensors[0], q_rope_buffer_tensors[0]};
-    split_->Forward(q_b_nope_rope_output_tmps[0], split_output_tensors);
-    q_buffer_tensors[0].shape = {dp_total_tokens, head_num_per_tp_ * qk_nope_head_dim_};
-    q_rope_buffer_tensors[0].shape = {dp_total_tokens, head_num_per_tp_ * qk_rope_head_dim_};
-  } else {
-    {
-      PROFILE_EVENT_SCOPE(q_b_rope_proj_weight, "q_b_rope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_rope_projs_->Forward(q_b_input, q_rope_buffer_tensors));
-    }
-    {
-      PROFILE_EVENT_SCOPE(q_b_nope_proj_weight, "q_b_nope_proj", rank);
-      STATUS_CHECK_RETURN(attn_q_b_lora_projs_->Forward(q_b_input, q_buffer_tensors));
-    }
+
+  PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);
+  STATUS_CHECK_RETURN(attn_q_b_projs_->Forward(q_b_input, q_nope_rope_buffer_tensors));
+  if (dp_decode_tokens > 0) {
+    Tensor decode_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
+        {dp_decode_tokens * head_num_per_tp_, (qk_nope_head_dim_ + qk_rope_head_dim_)},
+        dp_context_tokens * head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_));
+
+    q_buffer_tensors[0].shape = {dp_decode_tokens * head_num_per_tp_, qk_nope_head_dim_};
+    decode_q_rope_tensors[0].shape = {dp_decode_tokens * head_num_per_tp_, qk_rope_head_dim_};
+    std::vector<Tensor> split_output_tensors = {q_buffer_tensors[0], decode_q_rope_tensors[0]};
+    split_->Forward(decode_q_nope_rope, split_output_tensors);
+    q_buffer_tensors[0].shape = {dp_decode_tokens, head_num_per_tp_ * qk_nope_head_dim_};
+    decode_q_rope_tensors[0].shape = {dp_decode_tokens, head_num_per_tp_ * qk_rope_head_dim_};
   }
 
-  Tensor decode_q_nope = q_buffer_tensors[0].GetView({dp_decode_tokens, head_num_per_tp_ * qk_nope_head_dim_},
-                                                     dp_context_tokens * head_num_per_tp_ * qk_nope_head_dim_);
+  Tensor decode_q_nope = q_buffer_tensors[0].GetView({dp_decode_tokens, head_num_per_tp_ * qk_nope_head_dim_});
   if (dp_decode_tokens > 0 && absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
     PROFILE_EVENT_SCOPE(attn_w_uk_t_bmm, "decode_tokens attn_w_uk_t_bmm", rank);
     decode_q_nope.shape = {dp_decode_tokens, head_num_per_tp_, qk_nope_head_dim_};
@@ -307,14 +293,15 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   }
 
   if (dp_context_tokens > 0) {
-    Tensor prefill_q_nope = q_buffer_tensors[0].GetView({dp_context_tokens, head_num_per_tp_ * qk_nope_head_dim_});
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, hidden_buffer_tensors_0, prefill_q_nope,
-                          q_rope_buffer_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+    Tensor prefill_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
+        {dp_context_tokens, head_num_per_tp_ * (qk_rope_head_dim_ + qk_nope_head_dim_)});
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, hidden_buffer_tensors_0,
+                          prefill_q_nope_rope, kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   if (dp_decode_tokens > 0) {
     PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, decode_q_nope,
-                          q_rope_buffer_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+                          decode_q_rope_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   {
@@ -368,17 +355,16 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 
 Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                                        std::vector<Tensor>& workspace_buffer,
-                                                       std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor,
-                                                       Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
-                                                       Tensor& k_rope_buffer_tensor,
+                                                       std::vector<Tensor>& output_tensors, Tensor& q_nope_rope_tensor,
+                                                       Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                        ForwardingContext& forwarding_context) {
   PROFILE_EVENT_SCOPE(FlashAttentionForward, "FlashAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(prefix_kv_buffer_tensors, mla_buffers_.shared_prefix_kv_buffer);
     STATUS_CHECK_RETURN(flash_mla_attention_layers_->Forward(
         hidden_buffer_tensors_0, forwarding_context.GetModelInput(), workspace_buffer,
-        forwarding_context.GetAttentionForwardContext(), q_nope_tensor, q_rope_buffer_tensor, kv_buffer_tensor,
-        k_rope_buffer_tensor, prefix_kv_buffer_tensors[0], output_tensors));
+        forwarding_context.GetAttentionForwardContext(), q_nope_rope_tensor, kv_buffer_tensor, k_rope_buffer_tensor,
+        prefix_kv_buffer_tensors[0], output_tensors));
   }
   return Status();
 }
@@ -395,16 +381,17 @@ Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& outp
 
     // Process seq1 and seq2 separately
     if (!forwarding_context.GetModelInput()->page_single_input.dp_reqs.empty()) {
-      Tensor decode_one_seq(decode_q_buffer_tensor.location, decode_q_buffer_tensor.dtype,
-                            std::vector<size_t>(decode_q_buffer_tensor.shape), decode_q_buffer_tensor.device_id,
-                            decode_q_buffer_tensor.GetPtr<void>() +
-                                decode_q_buffer_tensor.GetTotalBytes() / decode_q_buffer_tensor.shape[0] *
-                                    forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len);
-
+      const size_t skip_tokens = forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
+      Tensor decode_nope = decode_q_buffer_tensor.GetView(
+          {decode_q_buffer_tensor.shape[0] - skip_tokens, decode_q_buffer_tensor.shape[1]},
+          skip_tokens * decode_q_buffer_tensor.GetElementNumber() / decode_q_buffer_tensor.shape[0]);
+      Tensor decode_rope = q_rope_buffer_tensor.GetView(
+          {q_rope_buffer_tensor.shape[0] - skip_tokens, q_rope_buffer_tensor.shape[1]},
+          skip_tokens * q_rope_buffer_tensor.GetElementNumber() / q_rope_buffer_tensor.shape[0]);
       STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
           output_tensor, forwarding_context.GetModelInput()->page_single_input, hidden_buffer_tensors_1,
-          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0],
-          decode_one_seq, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
+          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0], decode_nope,
+          decode_rope, kv_buffer_tensor, k_rope_buffer_tensor));
     }
 
     if (!forwarding_context.GetModelInput()->page_dual_input.dp_reqs.empty()) {

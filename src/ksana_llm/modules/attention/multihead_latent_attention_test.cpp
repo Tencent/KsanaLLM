@@ -206,16 +206,16 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     }
     std::vector<float> output;
     if (is_multi_token_forward) {
-      output = {-1977, 2088, -3386, 772.5, 125.68, -575.5};
+      output = {-1977, 2088, -3386, 772.5, 125.75, -575.5};
     } else {
       if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
         if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
-          output = {787, 706.5, -280.75, -818, 218.375, -641.5};
+          output = {550, 936.5, 365.75, -46.7188, -75.625, -563.5};
         } else {
-          output = {1029, 483.5, -513.5, -1341, 388.25, -719};
+          output = {559.5, 935.5, 366.25, -55.0312, -76.1875, -564};
         }
       } else {
-        output = {-133.75, 824, -1569, 678.5, -360.25, 518.5};
+        output = {595, 399.5, -819.5, 777, -749.5, 1127};
       }
     }
 
@@ -265,13 +265,12 @@ class TestWeight : public BaseWeight {
       add_tensor_map[fmt::format("model.layers.{}.post_attention_layernorm.weight", i)] = {2048};
       add_tensor_map[fmt::format("model.layers.{}.input_layernorm.weight", i)] = {2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.kv_a_rope_proj.weight", i)] = {2048, 64};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_nope_proj.weight", i)] = {2048, 2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.v_head_proj.weight", i)] = {512, 2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.kv_a_lora_proj.weight", i)] = {2048, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", i)] = {512, 2048};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_rope_proj.weight", i)] = {2048, 1024};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uk_t.weight", i)] = {16, 128, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uv.weight", i)] = {16, 512, 128};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_nope_rope_proj.weight", i)] = {2048, 3072};
     }
     DataType weight_type = GetKsanaDataType<T>();
     for (auto& [tensor_name, shape] : add_tensor_map) {

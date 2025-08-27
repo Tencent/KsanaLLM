@@ -56,7 +56,7 @@ extern bool kContextDecodeUseFP8Cache;
 // Adapted from
 // [DeepSeek-V3 Project] https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py#L393
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,
+void MlaAttenVarlen(void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,
                     void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
                     void* v_head_weight_scale, void* gemm_workspace, cublasHandle_t& cublas_handles,
                     cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos, void* rotary_embedding_mask,
@@ -148,29 +148,29 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
   }
 
   if (rotary_embedding_cuda.has_value()) {
-    rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
-                                    reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr,
-                                    total_q_tokens, stream);
+    rotary_embedding_cuda->SetInput(
+        reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
+        reinterpret_cast<SCALAR_T*>(q_nope_rope_ptr) + qk_nope_head_dim, reinterpret_cast<SCALAR_T*>(k_pe_ptr),
+        total_q_tokens, stream, num_heads * (qk_nope_head_dim + qk_rope_head_dim), qk_nope_head_dim + qk_rope_head_dim,
+        qk_rope_head_dim);
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
   /*
   Input Parameters:
-  q_nope : q_nope_ptr       [total_q_tokens, num_heads, qk_nope_head_dim]
+  q_nope_rope: q_nope_rope_ptr [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
   k_nope : output_buffer  [total_q_tokens, num_heads, qk_nope_head_dim]
-  q_pe   : q_pe_ptr         [total_q_tokens, num_heads, qk_rope_head_dim]
   k_pe   : k_pe_ptr         [total_q_tokens, 1, qk_rope_head_dim]
   v_pe   : mla_workspace    [total_q_tokens, num_heads, v_head_dim]
 
   Intermediate Tensors:
   k_pe_expanded : k_pe_expanded_ptr  [total_q_tokens, num_heads, qk_rope_head_dim]
   v_pad         : v_pad_ptr          [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim - v_head_dim]
-  q_tensor      : q_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
   k_tensor      : k_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
   v_tensor      : v_tensor_ptr       [total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim]
 
   Memory Buffer Allocation:
-  output_buffer : [k_nope][q_tensor][k_tensor]
+  output_buffer : [k_nope][k_tensor]
   mla_workspace   : [v_pe][k_pe_expanded][v_pad][v_tensor]
   */
 
@@ -181,20 +181,18 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
       total_q_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim - v_head_dim) * sizeof(SCALAR_T);
   const size_t k_nope_size = total_q_tokens * num_heads * qk_nope_head_dim * sizeof(SCALAR_T);
 
-  const size_t q_tensor_offset = (k_nope_size + 1023) & ~(1023);
-  const size_t k_tensor_offset = (q_tensor_offset + qk_combined_size + 1023) & ~(1023);
+  const size_t k_tensor_offset = (k_nope_size + 0 + 1023) & ~(1023);
   const size_t k_pe_expanded_offset = (v_tensor_size + 1023) & ~(1023);
   const size_t v_pad_offset = (k_pe_expanded_offset + k_pe_expanded_size + 1023) & ~(1023);
   const size_t v_tensor_offset = (v_pad_offset + v_pad_size + 1023) & ~(1023);
 
-  void* const q_tensor_ptr = static_cast<char*>(output_buffer) + q_tensor_offset;
   void* const k_tensor_ptr = static_cast<char*>(output_buffer) + k_tensor_offset;
   void* const k_pe_expanded_ptr = static_cast<char*>(mla_workspace) + k_pe_expanded_offset;
   void* const v_pad_ptr = static_cast<char*>(mla_workspace) + v_pad_offset;
   void* const v_tensor_ptr = static_cast<char*>(mla_workspace) + v_tensor_offset;
 
   torch::Tensor q_tensor =
-      torch::from_blob(q_tensor_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(q_nope_rope_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor k_tensor =
       torch::from_blob(k_tensor_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor v_tensor =
@@ -202,10 +200,6 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
 
   const size_t outer_dim_size = total_q_tokens * num_heads;
   const size_t inner_dim_size = 1;
-
-  // cat(q_nope, q_pe)
-  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, qk_nope_head_dim, qk_rope_head_dim, outer_dim_size, inner_dim_size,
-                   q_tensor.data_ptr(), stream);
 
   // cat(k_nope, k_pe)
   Expand<SCALAR_T>(k_pe_ptr, k_pe_expanded_ptr, total_q_tokens, num_heads, qk_rope_head_dim, 0, stream);
@@ -307,7 +301,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void*
 
 #define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                 \
   template void MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                          \
-      void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
+      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
@@ -334,7 +328,7 @@ MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5
 #undef MLA_ATTEN_VARLEN
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr,
+void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr,
                           void* compressed_kv_ptr, void* kv_b_nope_proj_weight, void* v_head_proj_weight,
                           void* kv_b_nope_weight_scale, void* v_head_weight_scale, void* gemm_workspace,
                           cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
@@ -352,7 +346,9 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   if (rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
-        reinterpret_cast<SCALAR_T*>(q_pe_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), total_q_tokens, stream);
+        reinterpret_cast<SCALAR_T*>(q_nope_rope_ptr) + qk_nope_head_dim, reinterpret_cast<SCALAR_T*>(k_pe_ptr),
+        total_q_tokens, stream, num_heads * (qk_nope_head_dim + qk_rope_head_dim), qk_nope_head_dim + qk_rope_head_dim,
+        qk_rope_head_dim);
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
@@ -377,16 +373,14 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
   }
 
   constexpr size_t kValueSize = sizeof(SCALAR_T);
-  const size_t q_size = total_q_tokens * num_heads * (qk_nope_head_dim + qk_rope_head_dim) * kValueSize;
   const size_t k_rope_size = total_tokens * num_heads * qk_rope_head_dim * kValueSize;
   const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * kValueSize;
   const size_t v_size = total_tokens * num_heads * v_head_dim * kValueSize;
 
   // WARNING: output_buffer & mla_workspace size verification is not checked. validation must be added in future.​
-  // output_buffer layout: [k_nope] [query] [k_nope+k_rope]
+  // output_buffer layout: [k_nope] [k_nope+k_rope]
   void* const k_nope_ptr = output_buffer;
-  void* const q_ptr = output_buffer + k_nope_size;
-  void* const k_ptr = output_buffer + k_nope_size + q_size;
+  void* const k_ptr = output_buffer + k_nope_size;
 
   // mla_workspace layout: [value] [k_rope] [vaule_pad_part_size] [value_padded]
   void* const v_ptr = mla_workspace;
@@ -457,16 +451,14 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
 
   const auto options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
   torch::Tensor q_tensor =
-      torch::from_blob(q_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+      torch::from_blob(q_nope_rope_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
+
   torch::Tensor k_tensor =
       torch::from_blob(k_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, options);
   torch::Tensor v_tensor = torch::from_blob(v_ptr, {total_tokens, num_heads, v_head_dim}, options);
   const size_t q_outer_dim = total_q_tokens * num_heads;
   const size_t kv_outer_dim = total_tokens * num_heads;
   constexpr size_t inner_dim = 1;
-
-  // cat(q_nope, q_pe)
-  Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, qk_nope_head_dim, qk_rope_head_dim, q_outer_dim, inner_dim, q_ptr, stream);
 
   // cat(k_nope, k_pe)
   Expand<SCALAR_T>(k_rope_buffer, k_rope_ptr, total_tokens, num_heads, qk_rope_head_dim, 0, stream);
@@ -531,7 +523,7 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_ptr, void* q_pe_ptr,
 
 #define MLA_ATTEN_VARLEN_ABSORB(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
   template void MlaAttenVarlenAbsorb<SCALAR_T, CACHE_T, KV_DTYPE>(                                                    \
-      void* output_buffer, void* q_nope_ptr, void* q_pe_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
+      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
@@ -595,8 +587,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const Tensor& forward_shape = *input_iter++;
   const Tensor& layer_kv_cache = *input_iter++;
   const Tensor& block_table = *input_iter++;
-  const Tensor& q_nope_buffer = *input_iter++;
-  const Tensor& q_rope_buffer = *input_iter++;
+  const Tensor& q_nope_rope_tensor = *input_iter++;
   const Tensor& kv_buffer = *input_iter++;
   const Tensor& k_rope_buffer = *input_iter++;
   const Tensor& kv_b_nope_proj_weight = *input_iter++;
@@ -616,7 +607,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const int max_tokens = forward_shape.shape[9];
   const int total_prefix_tokens = forward_shape.shape[12];
 
-  const int total_q_tokens = q_nope_buffer.shape[0];
+  const int total_q_tokens = q_nope_rope_tensor.shape[0];
 
   void** const k_list = (kv_list.GetPtr<void*>()) + this->layer_index_ * layer_block_num * 2;
   void** const v_list = k_list + layer_block_num;
@@ -641,7 +632,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
 
   if (IsAbsorbWeightsEnabled()) {
     MlaAttenVarlenAbsorb<SCALAR_T, CACHE_T, KV_DTYPE>(
-        out.GetPtr<void>(), q_nope_buffer.GetPtr<void>(), q_rope_buffer.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
+        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
         kv_buffer.GetPtr<void>(), kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(),
         kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
         this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
@@ -657,7 +648,7 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
         this->mm_quant_mode_);
   } else {
     MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
-        out.GetPtr<void>(), q_nope_buffer.GetPtr<void>(), q_rope_buffer.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
+        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
         kv_buffer.GetPtr<void>(), kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(),
         kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
         this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],

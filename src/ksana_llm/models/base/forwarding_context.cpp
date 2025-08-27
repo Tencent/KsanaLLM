@@ -53,8 +53,8 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
 
     // For buffer reuse of MlaFlashAtten, see MlaAttenVarlen for details.
     // TODO(rockcao, lijiajieli, qiannanzhou): mla_flash_attn_size is too large, need to be optimized.
-    size_t mla_flash_attn_size =
-        std::max((qk_nope_head_dim * 3 + qk_rope_head_dim * 2), (v_head_dim + qk_nope_head_dim + qk_rope_head_dim * 3));
+    size_t mla_flash_attn_size = std::max((qk_nope_head_dim * 2 + qk_rope_head_dim * 1),
+                                          (v_head_dim + qk_nope_head_dim + qk_rope_head_dim * 3));
     mla_max_dim = std::max(mla_max_dim, head_num_per_tp * mla_flash_attn_size);
 
     // For buffer reuse of MlaPageAtten, see MlaPagedAttention for details.

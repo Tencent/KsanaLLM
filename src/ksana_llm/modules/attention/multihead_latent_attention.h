@@ -25,10 +25,11 @@ namespace ksana_llm {
 // TODO(robertyuan): Some maybe reused with other modules
 struct MlaBuffers {
   TensorBuffer* q_buffer;
-  TensorBuffer* kv_lora_or_q_rope_buffer;
+  TensorBuffer* kv_lora_or_q_nope_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
   TensorBuffer* mem_adjuster_buffer;
+  TensorBuffer* decode_q_rope_buffer;
 
   // shared
   TensorBuffer* shared_prefix_kv_buffer;
@@ -50,7 +51,7 @@ class MultiHeadLatentAttention {
 
  private:
   Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& workspace_buffer,
-                               std::vector<Tensor>& output_tensors, Tensor& q_nope_tensor, Tensor& q_rope_buffer_tensor,
+                               std::vector<Tensor>& output_tensors, Tensor& q_nope_rope_tensor,
                                Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext& forwarding_context);
 
@@ -74,7 +75,6 @@ class MultiHeadLatentAttention {
   bool use_fused_lora_a_ = false;
   // compute o_proj out of dp group
   bool o_proj_out_of_dp_ = false;
-  bool use_q_b_nope_rope_ = false;
 
   std::shared_ptr<Linear> attn_fused_lora_a_projs_;
   std::shared_ptr<Linear> attn_q_a_projs_;

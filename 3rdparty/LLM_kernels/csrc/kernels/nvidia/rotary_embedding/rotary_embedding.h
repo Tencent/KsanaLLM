@@ -40,7 +40,8 @@ enum RotaryEmbeddingType {
 struct RotaryEmbeddingParam {
   int rotary_dim;
   int max_position_embeddings;
-  int head_size;
+  int query_head_size;
+  int key_head_size;
   int num_heads;
   int num_kv_heads;
   int64_t query_stride;
@@ -75,9 +76,10 @@ class RotaryEmbeddingCuda {
  public:
   template <typename T>
   void SetConfig(void* cos_sin_cache,  // temp buffer, [max_position_embeddings, rotary_dim]
-                 const int rotary_dim, const int max_position_embeddings, const float base, const int head_size,
-                 const int num_heads, const int num_kv_heads, const int stride_size, const bool is_neox,
-                 cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
+                 const int rotary_dim, const int max_position_embeddings, const float base, const int query_head_size,
+                 const int key_head_size, const int num_heads, const int num_kv_heads, const int stride_size,
+                 const bool is_neox, cudaStream_t& stream,
+                 const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
                  const float scaling_factor = 1.0f, const float low_freq_factor = 1.0f,
                  const float high_freq_factor = 4.0f, const int original_max_position_embeddings = 8192,
                  const float scaling_alpha = 1.0f, const int* mrope_section = nullptr, const float beta_fast = 32.0f,
@@ -90,7 +92,8 @@ class RotaryEmbeddingCuda {
                                            // [num_tokens, num_heads * head_size]
                 void* key,                 // [batch_size, seq_len, num_kv_heads * head_size] or
                                            // [num_tokens, num_kv_heads * head_size]
-                int num_tokens, cudaStream_t& stream);
+                int num_tokens, cudaStream_t& stream, int64_t query_stride = 0, int query_head_size = 0,
+                int key_head_size = 0);
 
   template <typename T>
   void Forward();

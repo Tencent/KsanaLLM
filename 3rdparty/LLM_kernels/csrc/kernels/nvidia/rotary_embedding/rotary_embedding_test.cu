@@ -196,8 +196,9 @@ class LlamaNvidiaRotaryEmbeddingTestSuit : public NvidiaTestSuitBase {
     BufferMeta cos_sin_cache_ref_meta = CopyToDevice<DataType>(cos_sin_cache_cpu_meta);
 
     RotaryEmbeddingCuda op;
-    op.SetConfig<DataType>(cos_sin_cache_meta.data_ptr, rotary_dim, max_position_embeddings, base, head_size, num_heads,
-                           num_kv_heads, query_stride, is_neox, stream, rotary_embedding_type, scaling_factor);
+    op.SetConfig<DataType>(cos_sin_cache_meta.data_ptr, rotary_dim, max_position_embeddings, base, head_size, head_size,
+                           num_heads, num_kv_heads, query_stride, is_neox, stream, rotary_embedding_type,
+                           scaling_factor);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     op.SetInput(static_cast<int64_t*>(positions_meta.data_ptr), static_cast<int64_t*>(mask_meta.data_ptr),
@@ -254,8 +255,9 @@ class LlamaNvidiaRotaryEmbeddingTestSuit : public NvidiaTestSuitBase {
         MemoryType::MEMORY_GPU, {static_cast<size_t>(max_position_embeddings), static_cast<size_t>(rotary_dim)});
 
     RotaryEmbeddingCuda op;
-    op.SetConfig<DataType>(cos_sin_cache_meta.data_ptr, rotary_dim, max_position_embeddings, base, head_size, num_heads,
-                           num_kv_heads, query_stride, is_neox, stream, rotary_embedding_type, scaling_factor);
+    op.SetConfig<DataType>(cos_sin_cache_meta.data_ptr, rotary_dim, max_position_embeddings, base, head_size, head_size,
+                           num_heads, num_kv_heads, query_stride, is_neox, stream, rotary_embedding_type,
+                           scaling_factor);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     op.SetInput(static_cast<int64_t*>(positions_meta.data_ptr), static_cast<int64_t*>(mask_meta.data_ptr),

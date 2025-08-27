@@ -118,7 +118,7 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
     }
     rotary_embedding_cuda_.emplace();
     rotary_embedding_cuda_->SetConfig<T>(
-        cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, num_heads_, num_kv_heads_,
+        cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, head_size_, num_heads_, num_kv_heads_,
         stride_size_, is_neox, context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor,
         low_freq_factor, high_freq_factor, original_max_position_embeddings, scaling_alpha, mrope_section_ptr,
         beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_yarn);
