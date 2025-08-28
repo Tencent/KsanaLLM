@@ -155,27 +155,23 @@ int main(int argc, char* argv[]) {
   }
   for (auto& config : configs) {
     PerfProfileResult result;
-    auto status = model_performance_runner->RunPerformanceForward(config, result);
     std::stringstream ss;
+    ss << "Running config: " << config.ToStr();
+    KLLM_LOG_INFO << ss.str();
+    std::cout << ss.str() << std::endl;
+    auto status = model_performance_runner->RunPerformanceForward(config, result);
+    ss.clear();
+    ss.str("");
     if (status.OK()) {
       auto& req_config = config.req_configs[0];
-      ss << fmt::format(
-                "\n single_token_request_num:{}, "
-                "single_token_request_cached_token_num:{}, "
-                "multi_token_request_num:{}, multi_token_request_token_num:{}, multi_token_forwarding_token_num:{}, "
-                "layer_forward_round:{}, "
-                "Performance Results: {} rounds cost {} milliseconds, ",
-                req_config.single_token_request_num, req_config.single_token_request_cached_token_num,
-                req_config.multi_token_request_num, req_config.multi_token_request_token_num,
-                req_config.multi_token_forwarding_token_num, config.layer_forward_round, config.profile_round,
-                result.time_cost_ms)
-         << fmt::format("Average: {} milliseconds/round \n", result.time_cost_ms / config.profile_round);
+      ss << fmt::format("  Results: {} rounds cost {} milliseconds, average: {} milliseconds/round",
+                        config.profile_round, result.time_cost_ms, result.time_cost_ms / config.profile_round);
       KLLM_LOG_INFO << ss.str();
     } else {
-      ss << fmt::format("Faild to run model_preformance. End with status {}", status.GetMessage());
+      ss << fmt::format("  Faild to run model_preformance. End with status {}", status.GetMessage());
       KLLM_LOG_ERROR << ss.str();
     }
-    std::cout << ss.str();
+    std::cout << ss.str() << std::endl;
 
     // Write to CSV file if specified
     if (output_file.is_open() && status.OK()) {

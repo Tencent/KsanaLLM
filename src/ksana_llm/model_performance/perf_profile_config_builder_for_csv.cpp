@@ -54,7 +54,7 @@ void PerfProfileConfigBuilderWithCsv::GetPerfProfileConfigs(std::vector<PerfProf
   if (!csv_config_dp_initialized_) {
     // TODO(robertyuan): Support different config for dp
     for (auto& config : csv_configs_) {
-      auto& req_config = config.req_configs[0];
+      auto req_config = config.req_configs[0];
       config.req_configs.resize(dp_num_);
       for (size_t dp_idx = 1; dp_idx < dp_num_; dp_idx++) {
         config.req_configs[dp_idx] = req_config;

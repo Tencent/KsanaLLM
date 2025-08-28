@@ -21,6 +21,23 @@ struct PerfProfileConfig {
   size_t warmup_round = 0;
   size_t profile_round = 1;
   size_t layer_forward_round = 1;  // used to simulate multiple layer forward
+
+  std::string ToStr() const {
+    std::ostringstream oss;
+    oss << "config_id=" << config_id << ", warmup_round=" << warmup_round << ", profile_round=" << profile_round
+        << ", layer_forward_round=" << layer_forward_round << ", req_configs.size=" << req_configs.size()
+        << ", req_configs={ ";
+    for (size_t dp_idx = 0; dp_idx < req_configs.size(); dp_idx++) {
+      auto& config = req_configs[dp_idx];
+      oss << "\n  [" << dp_idx << "]={ st_req_num=" << config.single_token_request_num
+          << ", st_req_token_num=" << config.single_token_request_cached_token_num
+          << ", mt_req_num=" << config.multi_token_request_num
+          << ", mt_req_token_num=" << config.multi_token_request_token_num
+          << ", mt_f_token_num=" << config.multi_token_forwarding_token_num << " } ";
+    }
+    oss << "}";
+    return oss.str();
+  }
 };
 
 struct PerfProfileResult {
