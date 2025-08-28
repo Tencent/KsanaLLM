@@ -257,11 +257,14 @@ bool TaskManager::TryActivatePendingTask(TaskKey& task_key) {
   typename decltype(shard.decode_confirmed_tasks)::const_accessor decode_accessor;
   KLLM_LOG_DEBUG << "Start find prefill Taskkey in decode_confirmed_tasks: " << task_key.ToString();
   if (shard.decode_confirmed_tasks.find(decode_accessor, task_key)) {
+    const TaskKey& decode_confirmed_task_key = decode_accessor->first;
+    task_key.SetIsSkippedTaskFlag(decode_confirmed_task_key.GetIsSkippedTaskFlag());
+    KLLM_LOG_DEBUG << "Assigned skipping flag for task_key: " << task_key.ToString();
     if (task_key.decode_device_id == -1 || task_key.decode_device_offset == -1) {
       KLLM_LOG_DEBUG << "Invalid decode device id need assigned for task_key: " << task_key.ToString();
-      const TaskKey& decode_task_key = decode_accessor->first;
-      task_key.decode_device_id = decode_task_key.decode_device_id;
-      task_key.decode_device_offset = decode_task_key.decode_device_offset;
+      const TaskKey& decode_confirmed_task_key = decode_accessor->first;
+      task_key.decode_device_id = decode_confirmed_task_key.decode_device_id;
+      task_key.decode_device_offset = decode_confirmed_task_key.decode_device_offset;
       KLLM_LOG_DEBUG << "Assigned decode device id for task_key: " << task_key.ToString();
     }
     decode_accessor.release();
@@ -269,6 +272,12 @@ bool TaskManager::TryActivatePendingTask(TaskKey& task_key) {
     // Remove from both maps
     shard.prefill_pending_tasks.erase(task_key);
     shard.decode_confirmed_tasks.erase(task_key);
+
+    // Set the skipped task as completed
+    if (task_key.GetIsSkippedTaskFlag()) {
+      CompleteTask(task_key);
+      KLLM_LOG_DEBUG << "Skipping task: " << task_key.ToString() << " and set as completed";
+    }
 
     return true;  // Can be activated
   }
@@ -285,6 +294,7 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is
   std::unordered_map<GroupDevKey, std::vector<TaskKey>, GroupDevKeyHash> grouped;
   auto tasks = GetTasksBatch(batch);
 
+  size_t skipped_tasks_num = 0;
   for (size_t i = 0; i < batch.size(); ++i) {
     const auto& task_key = batch[i];
     auto task = tasks[i];
@@ -301,9 +311,19 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is
       grouped[{group_key, {prefill_device_id, decode_device_id}}].push_back(task_key);
     } else {
       grouped[{group_key, {decode_device_id, prefill_device_id}}].push_back(task_key);
+
+      // Complete tasks with skipping flag. Only Decode node should trigger this
+      // Prefill node won't include skipped tasks in the batch to avoid additional occupation
+      if (task_key.GetIsSkippedTaskFlag()) {
+        CompleteTask(task_key);
+        ++skipped_tasks_num;
+        KLLM_LOG_DEBUG << "Skipping task: " << task_key.ToString() << " and set as completed";
+      }
     }
   }
 
+  // The number of skipped tasks should be 0 for Prefill node, and depends on the prefix cached length for Decode node
+  KLLM_LOG_DEBUG << "Grouping " << batch.size() << " tasks, skipping " << skipped_tasks_num << " tasks";
   return grouped;
 }
 

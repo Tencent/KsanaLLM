@@ -103,7 +103,7 @@ enum RetCode {
   RET_PREDICTOR_DISCARD = 3005,
 
   // While high bandwidth memory block are not enough.
-  RET_OUT_OF_DEVICE_EMORY = 3007,
+  RET_OUT_OF_DEVICE_MEMORY = 3007,
 
   // While memory block are not enough.
   RET_OUT_OF_HOST_MEMORY = 3008,

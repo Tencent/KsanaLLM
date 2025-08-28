@@ -188,7 +188,7 @@ class InferRequest {
   int step = 0;
 
   // The number of tokens for which kv caches have been generated.
-  int kv_cached_token_num = 0;
+  size_t kv_cached_token_num = 0;
 
   size_t mtp_kv_cached_token_num = 0;
 

@@ -63,12 +63,13 @@ struct TransferTensor {
  * token信息、目标指针、完成状态和目标地址等。
  */
 struct TransferTask {
-  int req_id = 0;             // 请求ID，用于唯一标识传输请求
-  TransferTensor tensor;      // 传输的张量数据
-  int token = 0;              // 和tensor二选一传输
-  void* dst_ptr = nullptr;    // 目标指针，指向接收数据的内存或显存地址
-  bool is_completed = false;  // 是否完成传输，标记任务完成状态
-  std::string addr;           // 目标地址
+  int req_id = 0;                // 请求ID，用于唯一标识传输请求
+  TransferTensor tensor;         // 传输的张量数据
+  int token = 0;                 // 和tensor二选一传输
+  void* dst_ptr = nullptr;       // 目标指针，指向接收数据的内存或显存地址
+  bool is_completed = false;     // 是否完成传输，标记任务完成状态
+  bool is_skipped_task = false;  // 是否跳过任务，当传输block且该block命中prefix cache时为true(仅Decode节点)
+  std::string addr;              // 目标地址
 
   // decode 设备信息
   int decode_device_id = -1;      // decode组内的物理rank号

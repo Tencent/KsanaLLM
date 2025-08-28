@@ -488,7 +488,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   // Reuse some unreferenced blocks.
   size_t free_block_num = 0;
   if (needed_blocks > 0 && !FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks)) {
-    return Status(RET_OUT_OF_DEVICE_EMORY,
+    return Status(RET_OUT_OF_DEVICE_MEMORY,
                   FormatStr("Allocate %d blocks for req %d error, no more usable blocks, free:%d.", block_num, req_id,
                             free_cached_blocks_.size()));
   }
@@ -870,7 +870,7 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
 
   swapped_block_num = dev_swapout_blocks.size();
   if (block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber() < block_device_num_ * swapped_block_num) {
-    return Status(RET_OUT_OF_DEVICE_EMORY,
+    return Status(RET_OUT_OF_DEVICE_MEMORY,
                   FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.", req_id,
                             block_device_num_ * swapped_block_num,
                             block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber()));
@@ -960,7 +960,7 @@ Status PrefixCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   size_t swapin_block_num = swapin_host_blocks.size() + step_block_num;
   if (free_cached_blocks_.size() < swapin_block_num &&
       !FreeCachedBlocks(swapin_block_num - free_cached_blocks_.size(), free_block_num)) {
-    return Status(RET_OUT_OF_DEVICE_EMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
+    return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
   }
   block_num = swapin_block_num;
 

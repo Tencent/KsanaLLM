@@ -104,7 +104,8 @@ void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {
   task_manager_->AddTask(task_key, task);
   task_manager_->PutProcessingBuffer(task_key);
   KLLM_LOG_DEBUG << "Pushed task: " << task_key.ToString() << ", total tasks: " << task->tensor.dtype
-                 << ", shape: " << task->tensor.shape.size() << ProfileTimer::GetCurrentTimeInUs() - start_time;
+                 << ", shape: " << task->tensor.shape.size()
+                 << ", time: " << ProfileTimer::GetCurrentTimeInUs() - start_time;
 }
 
 Connector::~Connector() {

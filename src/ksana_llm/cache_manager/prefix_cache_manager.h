@@ -197,16 +197,16 @@ class PrefixCacheManager : public CacheManagerInterface,
   void AppendCachedBlockToTimedList(PrefixCachedBlock* cached_block);
   void RemoveCachedBlockFromTimedList(PrefixCachedBlock* cached_block);
 
-  // Append specific filled bock to the tree.
+  // Append specific filled block to the tree.
   Status AppendFilledCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                  PrefixCachedBlock* cached_block, std::vector<std::vector<int>>& req_block_ids);
 
-  // Merge specific filled bock to another.
+  // Merge specific filled block to another.
   Status MergeFilledCachedBlocks(PrefixCachedRequest* cached_request, size_t block_index,
                                  PrefixCachedBlock* dst_cached_block, PrefixCachedBlock* src_cached_block,
                                  std::vector<std::vector<int>>& req_block_ids);
 
-  // Merge specific swapped in bock to the tree.
+  // Merge specific swapped in block to the tree.
   Status AppendSwapinCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                  PrefixCachedBlock* cached_block, std::vector<std::vector<int>>& req_block_ids);
 

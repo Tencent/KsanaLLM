@@ -54,4 +54,20 @@ TEST_F(ConnectorPushTaskTest, PushTaskNullptr) {
   EXPECT_NO_THROW({ connector_->PushTask(null_task); });
 }
 
+TEST_F(ConnectorPushTaskTest, PushTaskPrefixCached) {
+  // 构造一个 TransferTask
+  auto task = std::make_shared<TransferTask>();
+  task->req_id = 43;
+  task->is_skipped_task = true;
+  task->tensor.block_idx = 1;
+  task->tensor.layer_idx = 2;
+  task->tensor.hash_device_id = 3;
+  task->tensor.shape = {1, 2, 3};
+  task->tensor.dtype = DataType::TYPE_FP32;
+  task->addr = "127.0.0.1:50051";
+
+  // 推送任务
+  EXPECT_NO_THROW({ connector_->PushTask(task); });
+}
+
 }  // namespace ksana_llm

@@ -113,7 +113,7 @@ DirectCachedBlock* DirectCacheManager::CreateCachedBlock(size_t block_id) {
 Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_num,
                                                  std::vector<std::vector<int>>& req_block_ids) {
   if (block_num > free_cached_blocks_.size()) {
-    return Status(RET_OUT_OF_DEVICE_EMORY,
+    return Status(RET_OUT_OF_DEVICE_MEMORY,
                   FormatStr("Allocate %d blocks for req %d error, no more free blocks.", block_num, req_id));
   }
 
@@ -232,7 +232,7 @@ Status DirectCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   free_block_num = 0;
   swapped_block_num = dev_swapout_blocks.size();
   if (block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber() < block_device_num_ * swapped_block_num) {
-    return Status(RET_OUT_OF_DEVICE_EMORY,
+    return Status(RET_OUT_OF_DEVICE_MEMORY,
                   FormatStr("Swap out req %d error, no more host blocks, needed: %d, free: %d.", req_id,
                             block_device_num_ * swapped_block_num,
                             block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber()));
@@ -282,7 +282,7 @@ Status DirectCacheManager::SwapinRequestAsync(int64_t req_id, size_t& block_num,
   // Check whether enough memory exist, do not change anything swapin failed.
   size_t swapin_block_num = swapin_host_blocks.size() + step_block_num;
   if (free_cached_blocks_.size() < swapin_block_num) {
-    return Status(RET_OUT_OF_DEVICE_EMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
+    return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("Swap in req %d error, No more free blocks.", req_id));
   }
   block_num = swapin_host_blocks.size();
 

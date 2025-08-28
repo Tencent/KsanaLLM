@@ -28,7 +28,7 @@ namespace ksana_llm {
  * 第一个token、GPU内存块信息、传输任务列表等。
  */
 struct TransferMeta {
-  size_t shared_token_num = 0;  // 共享token数量
+  size_t shared_block_num = 0;  // 共享block数量
   int first_token = -1;         // 第一个token的值，-1表示尚未接收到
 
   // 节点内KV存储使用的Rank号
@@ -95,10 +95,10 @@ class TransferEngine {
   /**
    * @brief 添加传输元数据
    * @param request_id 请求ID
-   * @param shared_token_num 共享token数量
+   * @param shared_block_num 共享block数量
    * @param gpu_blocks GPU内存块信息
    */
-  void AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_token_num,
+  void AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_block_num,
                        std::vector<std::vector<void*>>& gpu_blocks, std::vector<int>& kv_occupied_devices);
 
   /**
@@ -161,9 +161,10 @@ class TransferEngine {
    * @param transfer_meta 传输元数据的共享指针
    * @param device_num 设备数量
    * @param block_num 块数量
+   * @param shared_block_num 请求共享block数量
    */
   void CreateTransferTasksForDecodeNode(int request_id, std::shared_ptr<TransferMeta>& transfer_meta, size_t device_num,
-                                        size_t block_num);
+                                        size_t block_num, size_t shared_block_num);
 
   PipelineConfig pipeline_config_;
 

@@ -66,10 +66,10 @@ template void TransferEngine::Initialize<Environment, TransferConnector>(GroupRo
  * @brief 为请求添加传输元数据
  *
  * @param request_id 请求ID
- * @param shared_token_num 共享token数量
+ * @param shared_block_num 共享block数量
  * @param gpu_blocks 每个设备的GPU内存块
  */
-void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_token_num,
+void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int request_id, size_t shared_block_num,
                                      std::vector<std::vector<void*>>& gpu_blocks,
                                      std::vector<int>& kv_occupied_devices) {
   if (group_role_ == GroupRole::PREFILL && request_id == -1) {
@@ -83,7 +83,7 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
   }
 
   auto transfer_meta = std::make_shared<TransferMeta>();
-  transfer_meta->shared_token_num = shared_token_num;
+  transfer_meta->shared_block_num = shared_block_num;
   transfer_meta->kv_ranks_in_node = kv_occupied_devices;
   transfer_meta->gpu_blocks = std::move(gpu_blocks);
   transfer_meta->kv_comm_group_key = kv_comm_group_key;
@@ -104,6 +104,13 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
     return;
   }
 
+  // 验证block_num和shared_block_num
+  if (block_num < shared_block_num) {
+    KLLM_LOG_ERROR << "shared_block_num larger than block_num in AddTransferMeta: " << shared_block_num << ", "
+                   << block_num;
+    return;
+  }
+
   // 预分配适当维度的sent_tasks_矩阵
   transfer_meta->sent_tasks_.resize(device_num);
   for (size_t d = 0; d < device_num; ++d) {
@@ -114,12 +121,12 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
   }
   // 对于decode节点，创建传输任务
   if (group_role_ == GroupRole::DECODE) {
-    CreateTransferTasksForDecodeNode(request_id, transfer_meta, device_num, block_num);
+    CreateTransferTasksForDecodeNode(request_id, transfer_meta, device_num, block_num, shared_block_num);
   } else {
     transfer_meta->first_token = 0;
   }
 
-  KLLM_LOG_DEBUG << "TransferMeta added for request ID: " << request_id << ", shared_token_num: " << shared_token_num
+  KLLM_LOG_DEBUG << "TransferMeta added for request ID: " << request_id << ", shared_block_num: " << shared_block_num
                  << ", gpu_blocks size: " << transfer_meta->gpu_blocks.size()
                  << ", kv_comm_group_key: " << kv_comm_group_key;
 
@@ -421,7 +428,7 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_t
  * @param block_num 块数量
  */
 void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::shared_ptr<TransferMeta>& transfer_meta,
-                                                      size_t device_num, size_t block_num) {
+                                                      size_t device_num, size_t block_num, size_t shared_block_num) {
   KLLM_LOG_DEBUG << "Creating transfer tasks for decode node, request_id: " << request_id
                  << ", device_num: " << device_num << ", block_num: " << block_num;
   const size_t element_size = block_size_ / layer_num_;
@@ -429,6 +436,7 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
   // 为每个设备、块和chunk创建任务
   for (size_t device_idx = 0; device_idx < device_num; ++device_idx) {
     for (size_t block_idx = 0; block_idx < block_num; ++block_idx) {
+      bool is_skipped = block_idx < shared_block_num;
       // 按chunk处理层 - 使用layer_offset而不是layer_idx来确保正确处理边界
       for (int chunk_start_offset = 0; chunk_start_offset < layer_num_;
            chunk_start_offset += transfer_layer_chunk_size_) {
@@ -443,6 +451,7 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
 
         auto task = std::make_shared<TransferTask>();
         task->req_id = request_id;
+        task->is_skipped_task = is_skipped;
         task->addr = transfer_meta->kv_comm_group_key;
         task->tensor.block_idx = block_idx;
         task->tensor.layer_idx = layer_idx + actual_chunk_size - 1;  // chunk的最后一层layer_idx用于标识
@@ -478,6 +487,17 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
       }
     }
   }
+
+  // 计算预期的任务数量
+  const size_t chunks_per_device =
+      (layer_num_ + transfer_layer_chunk_size_ - 1) / transfer_layer_chunk_size_;  // 向上取整
+  const size_t total_task_num = block_num * chunks_per_device * device_num;
+  const size_t skipped_task_num = shared_block_num * chunks_per_device * device_num;
+  KLLM_LOG_DEBUG << "Created block transfer tasks for decode node, request id:" << request_id
+                 << " total_task_num:" << total_task_num << " among which " << skipped_task_num
+                 << " actually do not transfer data due to hit prefix cache. "
+                 << " (device_num:" << device_num << ", chunks_per_device:" << chunks_per_device
+                 << ", block_num:" << block_num << ", shared_block_num:" << shared_block_num << ")";
 
   // 为第一个token创建任务
   auto token_task = std::make_shared<TransferTask>();

@@ -221,7 +221,7 @@ void TaskDispatcher::HandlePrefillGroupBatch(
     return;
   }
   KLLM_LOG_DEBUG << "Step_3: Prefill signal sent to Decode for group_key=" << group_key
-                 << ", device_idx=" << src_device_idx << ", first task_keys is: =" << group_vec[0].ToString();
+                 << ", device_idx=" << src_device_idx << ", first task_keys is: " << group_vec[0].ToString();
   if (config_.communication_type == CommunicationType::NCCL) {
 #ifdef ENABLE_CUDA
     SendDataToDecodeWithNccl(group_key, src_device_idx, dst_device_idx, group_vec);
@@ -530,14 +530,21 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
     grouped_by_req_id[task_key.req_id].push_back(task_key);
   }
 
+  size_t skipped_tasks_num = 0;
   // Use adaptive threshold: parallel processing for multiple req_id groups
   if (grouped_by_req_id.size() <= 1) {
     // Serial processing for single req_id group
     for (auto& task_key : raw_tasks) {
       KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
       if (task_manager_->TryActivatePendingTask(task_key)) {
-        KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
-        batch.push_back(task_key);
+        // Only add non-skipped tasks to batch
+        if (!task_key.GetIsSkippedTaskFlag()) {
+          KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
+          batch.push_back(task_key);
+        } else {
+          KLLM_LOG_DEBUG << "TryActivatePendingTask Skipping task_key: " << task_key.ToString();
+          ++skipped_tasks_num;
+        }
       } else {
         task_manager_->AddPrefillPendingTask(task_key);
         KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to pending: " << task_key.ToString();
@@ -555,8 +562,14 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
       for (auto& task_key : req_tasks) {
         KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
         if (task_manager_->TryActivatePendingTask(task_key)) {
-          KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
-          concurrent_batch.push_back(task_key);
+          // Only add non-skipped tasks to batch
+          if (!task_key.GetIsSkippedTaskFlag()) {
+            KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
+            concurrent_batch.push_back(task_key);
+          } else {
+            KLLM_LOG_DEBUG << "TryActivatePendingTask Skipping task_key: " << task_key.ToString();
+            ++skipped_tasks_num;
+          }
         } else {
           task_manager_->AddPrefillPendingTask(task_key);
           KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to batch: " << task_key.ToString();
@@ -572,6 +585,8 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
               [](const TaskKey& a, const TaskKey& b) { return a.start_time_us < b.start_time_us; });
   }
 
+  KLLM_LOG_DEBUG << "Taking " << batch.size() << " tasks from circular processing buffers for prefill role, skipping "
+                 << skipped_tasks_num << " tasks, the max batch size is " << batch_size;
   return batch;
 }
 

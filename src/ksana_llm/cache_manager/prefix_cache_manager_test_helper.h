@@ -80,7 +80,7 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
       --needed_block_num;
     }
 
-    RetCode ret_code = (location_ == LOCATION_HOST) ? RET_OUT_OF_HOST_MEMORY : RET_OUT_OF_DEVICE_EMORY;
+    RetCode ret_code = (location_ == LOCATION_HOST) ? RET_OUT_OF_HOST_MEMORY : RET_OUT_OF_DEVICE_MEMORY;
     return (needed_block_num == 0) ? Status() : Status(ret_code, "No more blocks.");
   }
 

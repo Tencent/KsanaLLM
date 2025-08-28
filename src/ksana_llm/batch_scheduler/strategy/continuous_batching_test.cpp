@@ -247,6 +247,10 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
 
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 0;
+  req->block_token_num = 16;
+
   // 设置转发token
   req->forwarding_tokens = {1, 2, 3, 4, 5};
 
@@ -277,6 +281,9 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
       }
     }
     req->kv_comm_request_id = 123 + i;
+    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+    req->kv_cached_token_num = 0;
+    req->block_token_num = 16;
     std::vector<std::shared_ptr<InferRequest>> queue;
     queue.push_back(req);
 
@@ -318,8 +325,9 @@ TEST_F(ContinuousBatchingTest, AddTransferMetaTest) {
     }
   }
 
-  // 设置已缓存的token数量
-  req->kv_cached_token_num = 10;
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 16;
+  req->block_token_num = 16;
 
   // 创建请求队列
   std::vector<std::shared_ptr<InferRequest>> queue;
@@ -338,7 +346,6 @@ TEST_F(ContinuousBatchingTest, AddTransferMetaTest) {
   ASSERT_NE(meta, nullptr);
 }
 
-
 // 测试ProcessPrefillTransferQueue函数
 TEST_F(ContinuousBatchingTest, ProcessPrefillTransferQueueTest) {
   // 设置为PREFILL节点
@@ -351,6 +358,10 @@ TEST_F(ContinuousBatchingTest, ProcessPrefillTransferQueueTest) {
   auto req = std::make_shared<InferRequest>(request, 0);
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 0;
+  req->block_token_num = 16;
 
   // 将请求添加到传输队列
   continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
@@ -378,6 +389,10 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueueDecodeTest) {
   auto req = std::make_shared<InferRequest>(request, 0);
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 0;
+  req->block_token_num = 16;
 
   // 设置转发token
   req->forwarding_tokens = {1, 2, 3, 4, 5};
@@ -409,6 +424,10 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
   auto req = std::make_shared<InferRequest>(request, 0);
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 0;
+  req->block_token_num = 16;
 
   // 将请求添加到传输队列
   continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);

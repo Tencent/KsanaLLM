@@ -216,8 +216,9 @@ class TaskDispatcherTest : public ::testing::Test {
     return task;
   }
 
-  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0) {
-    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size);
+  TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
+                        int token = 0, bool is_skipped_task = false) {
+    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size, token, is_skipped_task);
   }
 
   std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int hash_device_id = 0) {
@@ -489,6 +490,35 @@ TEST_F(TaskDispatcherTest, ProcessPrefillReceivedTasks) {
   }
 
   // Test passes if we reach here without hanging
+}
+
+// PREFILL node BatchTasks Tests
+TEST_F(TaskDispatcherTest, BatchTasksPrefill) {
+  CreateTaskDispatcher();
+
+  // Set up expectations for Initialize() call
+  EXPECT_CALL(*mock_comm_manager_, IsInitialized()).WillOnce(testing::Return(false));
+  EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
+  EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
+
+  task_dispatcher_->Initialize(device_info_manager_);
+  task_dispatcher_->config_.group_role = GroupRole::PREFILL;
+
+  // Create test tasks
+  TaskKey task_key1 = CreateTaskKey(123, 0, 0, 0, 400, 0, false);
+  TaskKey task_key2 = CreateTaskKey(123, 1, 2, 3, 400, 0, true);
+
+  std::vector<TaskKey> task_keys = {task_key1, task_key2};
+
+  task_manager_->RegisterDecodeConfirmedTasks(task_keys);
+
+  task_manager_->PutProcessingBuffer(task_key1);
+  task_manager_->PutProcessingBuffer(task_key2);
+
+  // Batch tasks. The task_key with is_skipped_task = true should not be included
+  int batch_size = 10;
+  task_keys = task_dispatcher_->BatchTasks(batch_size);
+  EXPECT_EQ(task_keys.size(), 1);
 }
 
 TEST_F(TaskDispatcherTest, ZMQSendAndRecv) {
