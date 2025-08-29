@@ -193,7 +193,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
       input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
     }
     AssignFromVector(hidden_buffer_tensors_0[0], input_data, context_);
-    Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, *forwarding_context_);
+    Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, nullptr, true, *forwarding_context_);
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);

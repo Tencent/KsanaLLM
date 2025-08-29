@@ -93,7 +93,7 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
 
   // Mla
   mla_->AcquireBuffers(forwarding_context);
-  mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, forwarding_context);
+  mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   mla_->ReleaseBuffers();
   // Mla all reduce
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);

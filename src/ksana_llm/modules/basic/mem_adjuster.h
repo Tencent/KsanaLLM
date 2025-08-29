@@ -14,12 +14,10 @@ class MemAdjuster {
 
   ~MemAdjuster();
 
-  Status GatherSubmatrix(const Tensor& input, Tensor& output_tensor, size_t dp_group_id,
-                         const std::vector<int>& dp_token_offset, size_t max_seq_len, size_t tp_size,
-                         Tensor& workspace_tensor);
-
-  Status DpMapCopy(const Tensor& input, Tensor& output_tensor, const std::vector<int>& dp_token_offset,
-                   Tensor& workspace_tensor);
+  // Extract a subset of columns from a 2D tensor
+  // Input: tensor of shape (m, n)
+  // Output: tensor[:, input_offset:input_offset + output_n] with shape (m, output_n)
+  Status ExtractSubMatrix(const Tensor& input_tensor, Tensor& output_tensor, size_t input_offset, size_t output_n);
 
  protected:
   std::shared_ptr<MemAdjusterLayer> mem_adjuster_layer_;

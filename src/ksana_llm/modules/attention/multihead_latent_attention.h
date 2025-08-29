@@ -28,7 +28,6 @@ struct MlaBuffers {
   TensorBuffer* kv_lora_or_q_nope_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
-  TensorBuffer* mem_adjuster_buffer;
   TensorBuffer* decode_q_rope_buffer;
 
   // shared
@@ -41,6 +40,7 @@ class MultiHeadLatentAttention {
                            ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
+                 std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
                  ForwardingContext& forwarding_context);
 
   static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
@@ -98,7 +98,7 @@ class MultiHeadLatentAttention {
   inline static size_t qk_rope_head_dim_ = 0;
   inline static size_t kv_lora_rank_ = 0;
   inline static size_t q_lora_rank_ = 0;
-  inline static size_t head_num_per_tp_ = 0;
+  inline static size_t head_num_per_atp_ = 0;
 
   AbsorbWeightsType absorb_type_ = AbsorbWeightsType::kAbsorbDisabled;
 };

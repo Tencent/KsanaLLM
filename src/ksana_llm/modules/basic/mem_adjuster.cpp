@@ -13,16 +13,9 @@ MemAdjuster::MemAdjuster(const LayerCreationContext& creation_context) {
 
 MemAdjuster::~MemAdjuster() {}
 
-Status MemAdjuster::GatherSubmatrix(const Tensor& input, Tensor& output_tensor, size_t dp_group_id,
-                                       const std::vector<int>& dp_token_offset, size_t max_seq_len, size_t tp_size,
-                                       Tensor& workspace_tensor) {
-  return mem_adjuster_layer_->GatherSubmatrix(input, output_tensor, dp_group_id, dp_token_offset, max_seq_len, tp_size,
-                                              workspace_tensor);
-}
-
-Status MemAdjuster::DpMapCopy(const Tensor& input, Tensor& output_tensor, const std::vector<int>& dp_token_offset,
-                                 Tensor& workspace_tensor) {
-  return mem_adjuster_layer_->DpMapCopy(input, output_tensor, dp_token_offset, workspace_tensor);
+Status MemAdjuster::ExtractSubMatrix(const Tensor& input_tensor, Tensor& output_tensor, size_t input_offset,
+                                     size_t output_n) {
+  return mem_adjuster_layer_->ExtractSubMatrix(input_tensor, output_tensor, input_offset, output_n);
 }
 
 }  // namespace ksana_llm

@@ -22,7 +22,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     KLLM_LOG_DEBUG << "Enable o_proj_out_of_dp";
   }
   if (absorb_type_ == AbsorbWeightsType::kAbsorbDisabled || absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-    o_proj_k_dim_ = head_num_per_tp_ * attn_config.model_config.mla_config.v_head_dim;
+    o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
   } else {
     KLLM_THROW("Unsupported absorb type");
     return;
@@ -105,22 +105,23 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   const size_t head_num = attn_config.model_config.head_num;
   const size_t max_decode_tokens = runtime_config.max_batch_size * attn_config.max_decode_tokens_per_req;
 
-  head_num_per_tp_ = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+  head_num_per_atp_ = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   qk_nope_head_dim_ = attn_config.model_config.mla_config.qk_nope_head_dim;
   qk_rope_head_dim_ = attn_config.model_config.mla_config.qk_rope_head_dim;
   kv_lora_rank_ = attn_config.model_config.mla_config.kv_lora_rank;
   q_lora_rank_ = attn_config.model_config.mla_config.q_lora_rank;
+
   // 权重吸收后要考虑decode的q维度有变化需要对比。
   const size_t q_buffer_size = std::max(
-      max_decode_tokens * head_num_per_tp_ * std::max(qk_nope_head_dim_, kv_lora_rank_), max_token_num * q_lora_rank_);
+      max_decode_tokens * head_num_per_atp_ * std::max(qk_nope_head_dim_, kv_lora_rank_), max_token_num * q_lora_rank_);
   mla_buffers.q_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.q_buffer", {q_buffer_size}, weight_type);
 
   const size_t kv_lora_or_q_nope_rope_buffer_size =
-      max_token_num * std::max(head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_), kv_lora_rank_);
+      max_token_num * std::max(head_num_per_atp_ * (qk_nope_head_dim_ + qk_rope_head_dim_), kv_lora_rank_);
   mla_buffers.kv_lora_or_q_nope_rope_buffer = buffer_mgr->CreateBufferTensor(
       "mla_buffers.kv_lora_or_q_nope_rope_buffer", {kv_lora_or_q_nope_rope_buffer_size}, weight_type);
 
-  const size_t decode_q_rope_buffer_size = max_decode_tokens * head_num_per_tp_ * qk_rope_head_dim_;
+  const size_t decode_q_rope_buffer_size = max_decode_tokens * head_num_per_atp_ * qk_rope_head_dim_;
   mla_buffers.decode_q_rope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.decode_q_rope_buffer", {decode_q_rope_buffer_size}, weight_type);
 
@@ -130,11 +131,6 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   const size_t k_rope_buffer_size = max_token_num * qk_rope_head_dim_;
   mla_buffers.k_rope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.k_rope_buffer", {k_rope_buffer_size}, weight_type);
-
-  const size_t mem_adjuster_buffer_unit_size = 32;
-  mla_buffers.mem_adjuster_buffer = buffer_mgr->CreateBufferTensor(
-      "mla_buffers.mem_adjuster_buffer",
-      {runtime_config.parallel_basic_config.attn_data_parallel_size, mem_adjuster_buffer_unit_size}, TYPE_INT64);
 
   const size_t prefix_kv_buffer_size =
       runtime_config.enable_prefix_caching ? max_token_num * (kv_lora_rank_ + qk_rope_head_dim_) : 0;
@@ -157,6 +153,7 @@ Status MultiHeadLatentAttention::ReleaseBuffers() {
 
 Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                          std::vector<Tensor>& reduce_buffer_tensors,
+                                         std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
                                          ForwardingContext& forwarding_context) {
   const int rank = forwarding_context.GetCurrentRank();
 
@@ -179,15 +176,6 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 
   PROFILE_EVENT_SCOPE(CommonAttention_seq_len_,
                       fmt::format("CommonAttention_seq_len_{}_hidden_units_{}", dp_total_tokens, hidden_units), rank);
-  // Handle special idle case
-  if (dp_total_tokens == 0) {
-    // We should zero out the whole output
-    MemsetAsync(reduce_buffer_tensors[0].GetPtr<void>(), 0, total_tokens * hidden_units_bytes,
-                forwarding_context.GetContext()->GetComputeStreams()[rank]);
-    // And correctly set the output shape
-    reduce_buffer_tensors[0].shape = {total_tokens, hidden_units};
-    return Status();
-  }
 
 #ifdef ENABLE_CUDA
   std::vector<Tensor> empty_tensors;
@@ -202,8 +190,9 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(k_rope_buffer_tensors, mla_buffers_.k_rope_buffer);
   CREATE_BUFFER_SCOPE(q_buffer_tensors, mla_buffers_.q_buffer);
   CREATE_BUFFER_SCOPE(decode_q_rope_tensors, mla_buffers_.decode_q_rope_buffer);
-  {
-    CREATE_BUFFER_SCOPE(kv_lora_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
+  CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
+  if (dp_total_tokens > 0) {
+    std::vector<Tensor> kv_lora_buffer_tensors = {q_nope_rope_buffer_tensors};
     if (use_fused_lora_a_) {
       PROFILE_EVENT_SCOPE(attn_fused_lora_a_projs, "attn_fused_lora_a_proj", rank);
       // weight_shape = (q_lora_rank + kv_lora_rank + qk_rope_head_dim, hidden_units)
@@ -232,55 +221,54 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
       kv_a_layernorms_->Forward(kv_lora_buffer_tensors, kv_buffer_tensors);
     }
-  }
 
-CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
-  Tensor q_b_input = dp_hidden_input;
-  // tensor0 is used for input, tensor1 is free for output
-  Tensor q_b_output = hidden_buffer_tensors_1[0];
-  // 降维度，q_lora_rank存在
-  if (use_q_lora_) {
-    if (!use_fused_lora_a_) {
-      // q_a proj MatMul
-      PROFILE_EVENT_SCOPE(q_a_proj, "q_a_proj", rank);
-      // weight_shape = (q_lora_rank, hidden_units)
-      STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(dp_hidden_input, q_buffer_tensors));
+    Tensor q_b_input = dp_hidden_input;
+    // tensor0 is used for input, tensor1 is free for output
+    Tensor q_b_output = hidden_buffer_tensors_1[0];
+    // 降维度，q_lora_rank存在
+    if (use_q_lora_) {
+      if (!use_fused_lora_a_) {
+        // q_a proj MatMul
+        PROFILE_EVENT_SCOPE(q_a_proj, "q_a_proj", rank);
+        // weight_shape = (q_lora_rank, hidden_units)
+        STATUS_CHECK_RETURN(attn_q_a_projs_->Forward(dp_hidden_input, q_buffer_tensors));
+      }
+      {
+        PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
+        q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+      }
+      q_b_input = hidden_buffer_tensors_1[0];
+      // tensor1 is used for input, tensor0 is free for output
+      q_b_output = hidden_buffer_tensors_0[0];
     }
-    {
-      PROFILE_EVENT_SCOPE(q_a_layernorm, "q_a_layernorm", rank);
-      q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
+
+    // `hidden_buffer_tensors_0/1` is able to hold this space,
+    // reshape to avoid memory checker error in the following `GetView`
+    q_b_output.shape = {total_tokens, head_num_per_atp_ * (qk_nope_head_dim_ + qk_rope_head_dim_)};
+    Tensor q_b_nope_rope_output_tmp = q_b_output.GetView({dp_total_tokens, q_b_output.shape[1]});
+    std::vector<Tensor> q_b_nope_rope_output_tmps = {q_b_nope_rope_output_tmp};
+    // prefill and decode
+
+    PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);
+    STATUS_CHECK_RETURN(attn_q_b_projs_->Forward(q_b_input, q_nope_rope_buffer_tensors));
+    if (dp_decode_tokens > 0) {
+      Tensor decode_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
+          {dp_decode_tokens * head_num_per_atp_, (qk_nope_head_dim_ + qk_rope_head_dim_)},
+          dp_context_tokens * head_num_per_atp_ * (qk_nope_head_dim_ + qk_rope_head_dim_));
+
+      q_buffer_tensors[0].shape = {dp_decode_tokens * head_num_per_atp_, qk_nope_head_dim_};
+      decode_q_rope_tensors[0].shape = {dp_decode_tokens * head_num_per_atp_, qk_rope_head_dim_};
+      std::vector<Tensor> split_output_tensors = {q_buffer_tensors[0], decode_q_rope_tensors[0]};
+      split_->Forward(decode_q_nope_rope, split_output_tensors);
+      q_buffer_tensors[0].shape = {dp_decode_tokens, head_num_per_atp_ * qk_nope_head_dim_};
+      decode_q_rope_tensors[0].shape = {dp_decode_tokens, head_num_per_atp_ * qk_rope_head_dim_};
     }
-    q_b_input = hidden_buffer_tensors_1[0];
-    // tensor1 is used for input, tensor0 is free for output
-    q_b_output = hidden_buffer_tensors_0[0];
   }
 
-  // `hidden_buffer_tensors_0/1` is able to hold this space,
-  // reshape to avoid memory checker error in the following `GetView`
-  q_b_output.shape = {total_tokens, head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_)};
-  Tensor q_b_nope_rope_output_tmp = q_b_output.GetView({dp_total_tokens, q_b_output.shape[1]});
-  std::vector<Tensor> q_b_nope_rope_output_tmps = {q_b_nope_rope_output_tmp};
-  // prefill and decode
-
-  PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);
-  STATUS_CHECK_RETURN(attn_q_b_projs_->Forward(q_b_input, q_nope_rope_buffer_tensors));
-  if (dp_decode_tokens > 0) {
-    Tensor decode_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
-        {dp_decode_tokens * head_num_per_tp_, (qk_nope_head_dim_ + qk_rope_head_dim_)},
-        dp_context_tokens * head_num_per_tp_ * (qk_nope_head_dim_ + qk_rope_head_dim_));
-
-    q_buffer_tensors[0].shape = {dp_decode_tokens * head_num_per_tp_, qk_nope_head_dim_};
-    decode_q_rope_tensors[0].shape = {dp_decode_tokens * head_num_per_tp_, qk_rope_head_dim_};
-    std::vector<Tensor> split_output_tensors = {q_buffer_tensors[0], decode_q_rope_tensors[0]};
-    split_->Forward(decode_q_nope_rope, split_output_tensors);
-    q_buffer_tensors[0].shape = {dp_decode_tokens, head_num_per_tp_ * qk_nope_head_dim_};
-    decode_q_rope_tensors[0].shape = {dp_decode_tokens, head_num_per_tp_ * qk_rope_head_dim_};
-  }
-
-  Tensor decode_q_nope = q_buffer_tensors[0].GetView({dp_decode_tokens, head_num_per_tp_ * qk_nope_head_dim_});
+  Tensor decode_q_nope = q_buffer_tensors[0].GetView({dp_decode_tokens, head_num_per_atp_ * qk_nope_head_dim_});
   if (dp_decode_tokens > 0 && absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
     PROFILE_EVENT_SCOPE(attn_w_uk_t_bmm, "decode_tokens attn_w_uk_t_bmm", rank);
-    decode_q_nope.shape = {dp_decode_tokens, head_num_per_tp_, qk_nope_head_dim_};
+    decode_q_nope.shape = {dp_decode_tokens, head_num_per_atp_, qk_nope_head_dim_};
     std::vector<Tensor> decode_q_absorb_wuk = {decode_q_nope};
     // 融合Wuk到Qnope, 最后一维从qk_nope_dim变为kv_lora_rank
     STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
@@ -288,24 +276,59 @@ CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_r
   }
 
   // TODO(robertyuan): swap with reduce_buffer_tensors needs optimize.
+  // Swap required: AllReduce only accepts reduce_buffer_tensors as input
   if (forwarding_context.GetModelCommunicator()) {
-    std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
+    if (o_proj_out_of_dp_) {
+      std::swap(hidden_buffer_tensors_0, reduce_buffer_tensors);
+    } else {
+      std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
+    }
   }
+
+  const size_t attn_output_offset = o_proj_out_of_dp_ ? dp_token_offset * o_proj_k_dim_ : 0;
+  std::vector<Tensor> attn_output_tensor = {
+      hidden_buffer_tensors_0[0].GetView(hidden_buffer_tensors_0[0].shape, attn_output_offset)};
 
   if (dp_context_tokens > 0) {
     Tensor prefill_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
-        {dp_context_tokens, head_num_per_tp_ * (qk_rope_head_dim_ + qk_nope_head_dim_)});
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, hidden_buffer_tensors_0,
-                          prefill_q_nope_rope, kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+        {dp_context_tokens, head_num_per_atp_ * (qk_rope_head_dim_ + qk_nope_head_dim_)});
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, attn_output_tensor, prefill_q_nope_rope,
+                          kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   if (dp_decode_tokens > 0) {
-    PagedAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, decode_q_nope,
+    PagedAttentionForward(attn_output_tensor, hidden_buffer_tensors_1, reduce_buffer_tensors, decode_q_nope,
                           decode_q_rope_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
-  {
-    PROFILE_EVENT_SCOPE(o_prpj, "o_proj", rank);
+  if (o_proj_out_of_dp_) {
+    const size_t o_proj_k_dim_per_tp = o_proj_k_dim_ / tensor_parallel_size_;
+    PROFILE_EVENT_SCOPE(o_proj, fmt::format("o_proj_ouf_of_dp_m_{}_n_{}", total_tokens, o_proj_k_dim_per_tp), rank);
+    hidden_buffer_tensors_0[0].shape = {total_tokens, o_proj_k_dim_};
+    if (dp_token_offset > 0) {
+      // `[0, dp_token_offset)`
+      MemsetAsync(hidden_buffer_tensors_0[0].GetPtr<void>(), 0,
+                  dp_token_offset * o_proj_k_dim_ * hidden_buffer_tensors_0[0].GetDTypeSize(),
+                  forwarding_context.GetContext()->GetComputeStreams()[rank]);
+    }
+    if (dp_token_offset + dp_total_tokens < total_tokens) {
+      // `[dp_token_offset + dp_total_tokens, total_tokens)`
+      MemsetAsync(hidden_buffer_tensors_0[0].GetPtr<void>() +
+                      (dp_token_offset + dp_total_tokens) * o_proj_k_dim_ * hidden_buffer_tensors_0[0].GetDTypeSize(),
+                  0,
+                  (total_tokens - dp_token_offset - dp_total_tokens) * o_proj_k_dim_ *
+                      hidden_buffer_tensors_0[0].GetDTypeSize(),
+                  forwarding_context.GetContext()->GetComputeStreams()[rank]);
+    }
+    tp_comm->AllReduce(hidden_buffer_tensors_0, hidden_buffer_tensors_1, is_multi_token_forward, forwarding_context);
+
+    mem_adjuster_->ExtractSubMatrix(hidden_buffer_tensors_1[0], reduce_buffer_tensors[0],
+                                    o_proj_k_dim_per_tp * dp_group_id, o_proj_k_dim_per_tp);
+
+    std::vector<Tensor> o_outputs = {hidden_buffer_tensors_0[0].GetView({dp_total_tokens, hidden_units})};
+    attn_o_proj_->Forward(reduce_buffer_tensors, o_outputs);
+  } else if (dp_total_tokens > 0) {
+    PROFILE_EVENT_SCOPE(o_proj, fmt::format("o_proj_m_{}_n_{}", dp_total_tokens, o_proj_k_dim_), rank);
     // `hidden_buffer_tensors_0` is able to hold this space,
     // reshape to avoid memory checker error in the following `GetView`
     hidden_buffer_tensors_0[0].shape = {total_tokens, o_proj_k_dim_};
@@ -319,26 +342,33 @@ CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_r
     attn_o_proj_->Forward({o_input}, o_outputs);
   }
 
+  // swap back
   if (forwarding_context.GetModelCommunicator()) {
-    std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
+    if (o_proj_out_of_dp_) {
+      std::swap(hidden_buffer_tensors_0, reduce_buffer_tensors);
+    } else {
+      std::swap(hidden_buffer_tensors_1, reduce_buffer_tensors);
+    }
   }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 
   if (forwarding_context.GetModelCommunicator()) {
-    // The output is now in the `reduce_buffer_tensors[0]` for the following allreduce
-    // We should set the output of tokens not assigned to the current dp group to zero
-    if (dp_token_offset > 0) {
-      // `[0, dp_token_offset)`
-      MemsetAsync(reduce_buffer_tensors[0].GetPtr<void>(), 0, dp_token_offset * hidden_units_bytes,
-                  forwarding_context.GetContext()->GetComputeStreams()[rank]);
+    if (!o_proj_out_of_dp_) {
+      // The output is now in the `reduce_buffer_tensors[0]` for the following allreduce
+      // We should set the output of tokens not assigned to the current dp group to zero
+      if (dp_token_offset > 0) {
+        // `[0, dp_token_offset)`
+        MemsetAsync(reduce_buffer_tensors[0].GetPtr<void>(), 0, dp_token_offset * hidden_units_bytes,
+                    forwarding_context.GetContext()->GetComputeStreams()[rank]);
+      }
+      if (dp_token_offset + dp_total_tokens < total_tokens) {
+        // `[dp_token_offset + dp_total_tokens, total_tokens)`
+        MemsetAsync(reduce_buffer_tensors[0].GetPtr<void>() + (dp_token_offset + dp_total_tokens) * hidden_units_bytes,
+                    0, (total_tokens - dp_token_offset - dp_total_tokens) * hidden_units_bytes,
+                    forwarding_context.GetContext()->GetComputeStreams()[rank]);
+      }
     }
-    if (dp_token_offset + dp_total_tokens < total_tokens) {
-      // `[dp_token_offset + dp_total_tokens, total_tokens)`
-      MemsetAsync(reduce_buffer_tensors[0].GetPtr<void>() + (dp_token_offset + dp_total_tokens) * hidden_units_bytes, 0,
-                  (total_tokens - dp_token_offset - dp_total_tokens) * hidden_units_bytes,
-                  forwarding_context.GetContext()->GetComputeStreams()[rank]);
-    }
-    // And correctly set the output shape
+    // correctly set the output shape
     reduce_buffer_tensors[0].shape = {total_tokens, hidden_units};
   } else {
     // The output is now in the `hidden_buffer_tensors_0[0]`

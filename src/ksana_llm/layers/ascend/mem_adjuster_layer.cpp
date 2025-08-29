@@ -17,30 +17,15 @@ Status MemAdjusterLayer::Forward(const std::vector<Tensor>& input_tensors, std::
   return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
 }
 
-Status MemAdjusterLayer::GatherSubmatrix(const Tensor& input, Tensor& output_tensor, size_t dp_group_id,
-                                         const std::vector<int>& dp_token_offset, size_t max_seq_len, size_t tp_size,
-                                         Tensor& workspace_tensor) {
-  KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");
-  return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
-}
-
-Status MemAdjusterLayer::DpMapCopy(const Tensor& input, Tensor& output_tensor, const std::vector<int>& dp_token_offset,
-                                   Tensor& workspace_tensor) {
+Status MemAdjusterLayer::ExtractSubMatrix(const Tensor& input_tensor, Tensor& output_tensor, size_t input_offset,
+                                          size_t output_n) {
   KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
 }
 
 template <typename T>
-Status MemAdjusterLayer::GatherSubmatrixT(const Tensor& input, Tensor& output_tensor, size_t dp_group_id,
-                                          const std::vector<int>& dp_token_offset, size_t max_seq_len, size_t tp_size,
-                                          Tensor& workspace_tensor) {
-  KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");
-  return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
-}
-
-template <typename T>
-Status MemAdjusterLayer::DpMapCopyT(const Tensor& input, Tensor& output_tensor, const std::vector<int>& dp_token_offset,
-                                    Tensor& workspace_tensor) {
+Status MemAdjusterLayer::ExtractSubMatrixT(const Tensor& input_tensor, Tensor& output_tensor, size_t input_offset,
+                                           size_t output_n) {
   KLLM_THROW("MemAdjusterLayer is not implemented in Ascend.");
   return Status(RET_UNDEFINED_REFERENCE, "MemAdjusterLayer is not implemented.");
 }

@@ -320,7 +320,6 @@ TEST_F(DeepSeekV3DPTest, DataParallelTest) {
 
 TEST_F(DeepSeekV3DPTest, OProjOutOfDPTest) {
 #ifdef ENABLE_CUDA
-  GTEST_SKIP() << "Skipping this test because o_proj_out_of_dp is temporarily broken";
   setenv("ENABLE_O_PROJ_OUT_OF_DP", "1", 1);
   InitEnv();
   model_config.is_quant = true;
