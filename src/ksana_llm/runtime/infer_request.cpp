@@ -44,7 +44,6 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       req_fsm(request->req_fsm),
       kv_comm_request_id(request->kv_comm_request_id),
       grammar_matcher(request->grammar_matcher),
-      grammar_finished(request->grammar_finished),
       kv_comm_group_key(request->kv_comm_group_key) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }

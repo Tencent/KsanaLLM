@@ -61,6 +61,10 @@ struct SamplingRequest {
 
   // Grammar matcher for constrained generation, defaults to nullptr (no grammar constraints)
   std::shared_ptr<GrammarMatcherWrapper> grammar_matcher;
+
+  // Flag to control whether to apply grammar constraints during sampling
+  // Used in MTP mode to disable grammar for draft token generation
+  bool apply_grammar_constraint = true;
 };
 
 }  // namespace ksana_llm

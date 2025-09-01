@@ -147,7 +147,6 @@ class InferRequest {
   // grammar matcher
   std::shared_ptr<GrammarMatcherWrapper> &grammar_matcher;
 
-  bool &grammar_finished;
   std::vector<std::shared_ptr<InferRequest>> req_group;
 
   // The model instance pointer.

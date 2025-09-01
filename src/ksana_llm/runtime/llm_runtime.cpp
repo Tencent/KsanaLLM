@@ -340,7 +340,7 @@ Status LlmRuntime::AuxForward(
 }
 
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                                      std::vector<SamplingRequest>& sampling_reqs) {
+                                      std::vector<SamplingRequest>& sampling_reqs, bool apply_grammar_constraint) {
   PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
@@ -369,14 +369,16 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     sampling_req.ngram_dict = &(req_ptr->ngram_dict);
     sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
     sampling_req.grammar_matcher = req_ptr->grammar_matcher;
+    sampling_req.apply_grammar_constraint = apply_grammar_constraint;
     sampling_reqs.push_back(sampling_req);
   }
 }
 
-Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs) {
+Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                            bool apply_grammar_constraint) {
   PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
   std::vector<SamplingRequest> sampling_reqs;
-  BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs);
+  BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs, apply_grammar_constraint);
 
   std::vector<std::future<Status>> results;
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
@@ -428,6 +430,17 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
                     draft_tokens[i]) != req->sampling_config.stop_token_ids.end()) {
         break;
       }
+      // Grammar check for the new generated token
+      if (req->grammar_matcher != nullptr) {
+        int new_token = req->sampling_result_tokens[i + 1];
+        bool new_token_accepted = req->grammar_matcher->AcceptToken(new_token);
+        if (!new_token_accepted) {
+          // Grammar rejects the new_token
+          KLLM_LOG_DEBUG << "Grammar rejected new_token " << new_token << " for request " << req->req_id
+                         << ", will not use it as generated_token";
+          break;
+        }
+      }
       ++draft_hit_num;
     }
 
@@ -458,10 +471,6 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
     if (req->mtp_kv_cached_token_num != req->kv_cached_token_num) {
       continue;
     }
-    if (req->grammar_matcher) {
-      // TODO(ethanyczeng): Add MTP support
-      continue;
-    }
     mtp_reqs.emplace_back(req);
   }
 
@@ -487,7 +496,8 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
 
   ReorderInferRequests(mtp_reqs);
   Forward(multi_batch_id, mtp_reqs, epilogue, RunMode::kNextN);
-  Sampling(multi_batch_id, mtp_reqs);
+  // Used in MTP mode to disable grammar for draft token generation
+  Sampling(multi_batch_id, mtp_reqs, false);
 
   for (size_t i = 0; i < mtp_reqs.size(); ++i) {
     auto& req = mtp_reqs[i];
@@ -506,10 +516,6 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
   }
   PROFILE_EVENT_SCOPE(GenerateDraftToken_, fmt::format("GenerateDraftToken"));
   for (auto& req : reqs) {
-    if (req->grammar_matcher) {
-      // TODO(ethanyczeng): Add MTP support
-      continue;
-    }
     std::vector<int> tokens;
     tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +
                    kStepGenerateTokenNum + req->draft_tokens.mtp.size());

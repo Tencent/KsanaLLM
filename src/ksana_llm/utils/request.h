@@ -254,7 +254,6 @@ class Request {
 
   // grammar matcher
   std::shared_ptr<GrammarMatcherWrapper> grammar_matcher = nullptr;
-  bool grammar_finished = false;
 
   // This is a unique ID for the KV transformer group.
   int64_t kv_comm_request_id;

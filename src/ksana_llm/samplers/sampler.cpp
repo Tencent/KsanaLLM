@@ -479,17 +479,11 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
   for (size_t req_idx = 0; req_idx < sampling_reqs.size(); ++req_idx) {
     auto& req = sampling_reqs[req_idx];
 
-    if (!req.grammar_matcher) {
+    if (!req.grammar_matcher || !req.apply_grammar_constraint) {
       continue;
     }
 
-    // TODO(ethanyczeng): Add MTP support - currently only supports single token per request
-    if (req.sampling_token_num > 1) {
-      KLLM_LOG_WARNING << fmt::format("Grammar skipped for req {} (MTP unsupported)", req_idx);
-      continue;
-    }
-
-    // Record the request index and its logits offset
+    // Record the request index and its logits offset (only first token position for MTP)
     grammar_req_indices.push_back(req_idx);
     grammar_req_offsets.push_back(req.logits_offset);
   }
@@ -514,7 +508,8 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
 
     if (needs_mask) {
       has_active_grammar = true;
-      KLLM_LOG_DEBUG << "Grammar applied: req=" << req.req_id << " idx=" << req_idx << "/" << i;
+      KLLM_LOG_DEBUG << fmt::format("Grammar applied: req={} idx={}/{}, sampling_token_num={}", req.req_id, req_idx, i,
+                                    req.sampling_token_num);
     }
   }
 
@@ -533,7 +528,8 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
 
 void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
   for (auto& req : sampling_reqs) {
-    if (!req.grammar_matcher || !req.sampling_result_tokens || req.sampling_result_tokens->empty()) {
+    if (!req.grammar_matcher || !req.apply_grammar_constraint || !req.sampling_result_tokens ||
+        req.sampling_result_tokens->empty()) {
       continue;
     }
 
@@ -542,8 +538,9 @@ void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
       KLLM_LOG_DEBUG << "Grammar completed for request " << req.req_id;
     }
 
-    // Accept the last generated token
-    int token_id = req.sampling_result_tokens->back();
+    // In MTP mode, only update grammar state for the first token (verify_token)
+    // The second token (new_token) will be handled in DraftTokenFilter if needed
+    int token_id = req.sampling_result_tokens->front();
     bool accepted = req.grammar_matcher->AcceptToken(token_id);
 
     if (!accepted) {
@@ -552,7 +549,6 @@ void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
     }
   }
 }
-
 
 void Sampler::ApplyTokenBitmaskSelective(float* logits, void* bitmask_data, int vocab_size,
                                          const std::vector<size_t>& logits_offsets, Stream& stream) {

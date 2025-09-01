@@ -456,7 +456,6 @@ void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req
     // Create grammar matcher
     req->grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
 
-    // TODO(ethanyczeng): The online service requires a log, which will be deleted later.
     KLLM_LOG_DEBUG << "Grammar compiled successfully for request " << req->req_id;
   } catch (const std::exception& e) {
     KLLM_LOG_WARNING << "Failed to compile grammar for request " << req->req_id << ": " << e.what();

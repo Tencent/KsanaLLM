@@ -70,7 +70,8 @@ class LlmRuntime {
   Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue);
 
   // Execute the sampling.
-  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs);
+  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                  bool apply_grammar_constraint = true);
 
   // Build forward request, group by model name and stage.
   void BuildForwardRequests(
@@ -84,8 +85,7 @@ class LlmRuntime {
 
   // Build sampling request.
   void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                            std::vector<SamplingRequest> &sampling_reqs);
-
+                            std::vector<SamplingRequest> &sampling_reqs, bool apply_grammar_constraint = true);
 
   // Run multi-token and single-token serially in single thread.
   Status RunSerially(

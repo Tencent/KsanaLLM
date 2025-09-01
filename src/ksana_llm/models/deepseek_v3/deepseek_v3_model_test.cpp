@@ -13,9 +13,12 @@
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
+#include "ksana_llm/utils/grammar_backend.h"
+#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 #include "test.h"
 
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
@@ -61,6 +64,7 @@ class DeepSeekV3Test : public testing::Test {
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
     batch_scheduler_config.enable_mtp_module = true;
+    batch_scheduler_config.enable_xgrammar = true;
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
@@ -346,6 +350,53 @@ class DeepSeekV3Test : public testing::Test {
     std::cout << "prefill mtp milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
     EXPECT_TRUE((milliseconds / rounds) < 11);
 
+#ifdef ENABLE_CUDA
+    // Test Xgrammar
+    generated_tokens0.clear();
+    generated_tokens1.clear();
+
+    std::unique_ptr<GrammarBackend> grammar_backend_;
+    std::vector<std::string> vocab;
+    int vocab_size = static_cast<int>(model_config.vocab_size);
+    std::vector<int> stop_token_ids;
+
+    Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_path);
+    auto tokenizer = Singleton<Tokenizer>::GetInstance();
+    tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
+    grammar_backend_ = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
+
+    std::string json_schema = R"({
+      "type": "object"
+    })";
+    auto compiled_grammar = grammar_backend_->CompileJSONSchema(json_schema);
+
+    SamplingRequest grammar_sample_req = sample_req;
+    grammar_sample_req.grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
+    std::vector<SamplingRequest> grammar_sample_reqs = {grammar_sample_req};
+
+    for (auto &forward_req : forward_reqs) {
+      forward_req.infer_stage = InferStage::STATE_DECODE;
+      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+    }
+
+    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    sampler->Sampling(0, grammar_sample_reqs, context->GetComputeStreams()[device_id]);
+    int grammar_token = generated_tokens0[0];
+
+    generated_tokens0.clear();
+
+    SamplingRequest no_grammar_sample_req = sample_req;
+    grammar_sample_reqs = {no_grammar_sample_req};
+    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    sampler->Sampling(0, grammar_sample_reqs, context->GetComputeStreams()[device_id]);
+    int no_grammar_token = generated_tokens0[0];
+
+    EXPECT_NE(grammar_token, no_grammar_token);
+    std::cout << fmt::format("grammar_token: {}, no_grammar_token: {}", grammar_token, no_grammar_token)
+              << std::endl;
+
+    Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
+#endif
     deepseek_v3.reset();
     deepseek_v3_weight.reset();
 
