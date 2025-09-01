@@ -25,8 +25,8 @@ Status DeepGemmMatMulLayer::Init(const std::vector<std::any>& parameters, const 
 
   deepgemm_wrapper_ = std::make_shared<llm_kernels::nvidia::DeepGEMMWrapper>(rank);
 
-  for (int m = 1; m <= max_m_; m++) {
-    int aligned_m = RoundUp(m, 4);
+  for (size_t m = 1; m <= max_m_; m++) {
+    const size_t aligned_m = RoundUp(m, 4);
     // 生成普通的gemm算子
     deepgemm_wrapper_->BuildGemmKernel(aligned_m, n_, k_);
     // 生成swapAB的gemm算子
@@ -52,18 +52,19 @@ Status DeepGemmMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, st
 
 template <typename T>
 Status DeepGemmMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int m = input_tensors[0].shape[0];
-  int k = input_tensors[0].shape[1];
-  int n = input_tensors[1].shape[0];
+  const size_t m = input_tensors[0].shape[0];
+  const size_t k = input_tensors[0].shape[1];
+  // input_tensors[0].shape[1] is k_ (normal case) or 2*k_ (need to do silu mul first)
+  // input_tensors[1].shape[0] is n_
 
-  const size_t align_m = 4;
-  int aligned_m = RoundUp(m, 4);
+  const size_t aligned_m = RoundUp(m, 4);
   T* a = static_cast<T*>(input_tensors[0].GetPtr<void>());
   void* a_q = workspace_buffer_->GetPtr<void>();
-  void* a_s = a_q + GetTypeSize(TYPE_FP8_E4M3) * aligned_m * k;
+  void* a_s = a_q + GetTypeSize(TYPE_FP8_E4M3) * aligned_m * k_;
 
-  InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, aligned_m, k, true, context_->GetComputeStreams()[rank_].Get(),
-                                     block_size_);
+  InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, aligned_m, k_, /*is_column_major*/ true,
+                                     context_->GetComputeStreams()[rank_].Get(), block_size_,
+                                     PerTokenGroupQuantFusionParams{.fuse_silu_mul = (k == 2 * k_)});
 
   void* b = input_tensors[1].GetPtr<void>();
   void* b_s = input_tensors[1].weight_scales->GetPtr<void>();
@@ -72,12 +73,12 @@ Status DeepGemmMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
 
   // TODO(jinxcwu) 要做自适应阈值
   if (aligned_m <= 64) {
-    deepgemm_wrapper_->GemmSwapAB(a_q, a_s, b, b_s, out, aligned_m, n, k, context_->GetComputeStreams()[rank_].Get());
+    deepgemm_wrapper_->GemmSwapAB(a_q, a_s, b, b_s, out, aligned_m, n_, k_, context_->GetComputeStreams()[rank_].Get());
   } else {
-    deepgemm_wrapper_->Gemm(a_q, a_s, b, b_s, out, aligned_m, n, k, context_->GetComputeStreams()[rank_].Get());
+    deepgemm_wrapper_->Gemm(a_q, a_s, b, b_s, out, aligned_m, n_, k_, context_->GetComputeStreams()[rank_].Get());
   }
 
-  output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
+  output_tensors[0].shape = {m, n_};
   output_tensors[0].dtype = input_tensors[0].dtype;
 
   return Status();

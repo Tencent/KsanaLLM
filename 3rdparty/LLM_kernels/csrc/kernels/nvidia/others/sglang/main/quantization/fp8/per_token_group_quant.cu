@@ -27,7 +27,6 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include <cub/cub.cuh>
 
 #include "csrc/kernels/nvidia/common/vec_dtypes.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
@@ -63,6 +62,19 @@ __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
   return val;
 }
 
+__device__ __forceinline__ float tanh(const float x) {
+  float y;
+  asm volatile("tanh.approx.f32 %0, %1;" : "=f"(y) : "f"(x));
+  return y;
+}
+
+__device__ __forceinline__ float silu(const float val) {
+  // This is faster than `val / (1.0f + expf(-val))` but equivalent
+  const float half = 0.5f * val;
+  const float t = tanh(half);
+  return half * (1.0f + t);
+}
+
 __device__ __forceinline__ void st_global(const int4* ptr, const int4& value) {
   asm volatile("st.global.v4.s32 [%0], {%1, %2, %3, %4};" ::"l"(ptr), "r"(value.x), "r"(value.y), "r"(value.z),
                "r"(value.w));
@@ -88,7 +100,8 @@ struct DtypeInfo<__nv_fp8_e4m3> {
 using scale_packed_t = float;
 using scale_element_t = float;
 
-template <typename T, typename DST_DTYPE, int GROUP_SIZE, int THREADS_PER_SUBWARP, bool IS_COLUMN_MAJOR = false>
+template <typename T, typename DST_DTYPE, int GROUP_SIZE, int THREADS_PER_SUBWARP, bool IS_COLUMN_MAJOR = false,
+          bool FUSE_SILU_MUL = false>
 __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t block_group_id,
                                           const T* __restrict__ input, DST_DTYPE* __restrict__ output_q,
                                           scale_packed_t* __restrict__ output_s, const int hidden_size,
@@ -105,7 +118,13 @@ __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t blo
   // At the hidden_size dimension, we are handling idx-th group
   const int hidden_dim_group_idx = group_id % hidden_dim_num_groups;
 
-  const int64_t input_group_start_offset = group_id * GROUP_SIZE;
+  int64_t input_group_start_offset;
+  if constexpr (FUSE_SILU_MUL) {
+    // When fuse_silu_mul, the input shape is [token_num, hidden_size*2] instead of [token_num, hidden_size]
+    input_group_start_offset = token_idx * hidden_size * 2 + hidden_dim_group_idx * GROUP_SIZE;
+  } else {
+    input_group_start_offset = group_id * GROUP_SIZE;
+  }
 
   const int offset_num_groups = token_idx * hidden_dim_num_groups + hidden_dim_group_idx;
 
@@ -116,10 +135,21 @@ __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t blo
   T* input_primary_vec = reinterpret_cast<T*>(input_primary_int4);
   static_assert(sizeof(input_primary_vec[0]) * INPUT_PRIMARY_VEC_SIZE == sizeof(input_primary_int4));
 
+  int4 input_secondary_int4[INPUT_PRIMARY_INT4_SIZE];
+  T* input_secondary_vec = reinterpret_cast<T*>(input_secondary_int4);
+  static_assert(sizeof(input_secondary_vec[0]) * INPUT_PRIMARY_VEC_SIZE == sizeof(input_secondary_int4));
+
   const T* input_offset = input + input_group_start_offset + lane_id * INPUT_PRIMARY_VEC_SIZE;
 #  pragma unroll
   for (uint32_t j = 0; j < INPUT_PRIMARY_INT4_SIZE; ++j) {
     input_primary_int4[j] = ld_global_nc(reinterpret_cast<const int4*>(input_offset) + j);
+  }
+
+  if constexpr (FUSE_SILU_MUL) {
+#  pragma unroll
+    for (uint32_t j = 0; j < INPUT_PRIMARY_INT4_SIZE; ++j) {
+      input_secondary_int4[j] = ld_global_nc(reinterpret_cast<const int4*>(input_offset + hidden_size) + j);
+    }
   }
 
   scale_element_t* scale_output;
@@ -137,7 +167,15 @@ __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t blo
 
 #  pragma unroll
   for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
-    const float val = static_cast<float>(input_primary_vec[j]);
+    float val;
+    if constexpr (FUSE_SILU_MUL) {
+      const T val_lowprec =
+          static_cast<T>(silu(static_cast<float>(input_primary_vec[j])) * static_cast<float>(input_secondary_vec[j]));
+      val = static_cast<float>(val_lowprec);
+      input_primary_vec[j] = val_lowprec;
+    } else {
+      val = static_cast<float>(input_primary_vec[j]);
+    }
 
     const float abs_val = fabsf(val);
     local_absmax = fmaxf(local_absmax, abs_val);
@@ -183,20 +221,21 @@ __device__ __forceinline__ void quant_fp8(const int thread_id, const int64_t blo
             output_buf);
 }
 
-template <typename T, typename DST_DTYPE, int GROUP_SIZE, int THREADS_PER_SUBWARP, bool IS_COLUMN_MAJOR = false>
+template <typename T, typename DST_DTYPE, int GROUP_SIZE, int THREADS_PER_SUBWARP, bool IS_COLUMN_MAJOR = false,
+          bool FUSE_SILU_MUL = false>
 __global__ void per_token_group_quant_fp8_kernel(const T* __restrict__ input, DST_DTYPE* __restrict__ output_q,
                                                  scale_packed_t* __restrict__ output_s, const int hidden_size,
                                                  const int subwarps_per_block, const int hidden_dim_num_groups,
                                                  const int scale_hidden_stride = 0) {
   const int64_t block_group_id = blockIdx.x * subwarps_per_block;
-  quant_fp8<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR>(
+  quant_fp8<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR, FUSE_SILU_MUL>(
       threadIdx.x, block_group_id, input, output_q, output_s, hidden_size, subwarps_per_block, hidden_dim_num_groups,
       scale_hidden_stride);
 }
 
-template <typename T, typename DST_DTYPE, int GROUP_SIZE, bool IS_COLUMN_MAJOR>
+template <typename T, typename DST_DTYPE, int GROUP_SIZE, bool IS_COLUMN_MAJOR, bool FUSE_SILU_MUL>
 void per_token_group_quant_fp8_kernel_launcher(const void* input, void* output_q, void* output_s, int m, int n,
-                                               int64_t group_size, bool is_column_major, cudaStream_t stream) {
+                                               cudaStream_t stream) {
   constexpr int THREADS_PER_SUBWARP = GROUP_SIZE / 16;
 
   const int hidden_dim_num_groups = n / GROUP_SIZE;
@@ -226,7 +265,7 @@ void per_token_group_quant_fp8_kernel_launcher(const void* input, void* output_q
   dim3 grid(num_blocks);
   dim3 block(num_threads);
   const uint32_t smem_size = 0;
-  per_token_group_quant_fp8_kernel<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR>
+  per_token_group_quant_fp8_kernel<T, DST_DTYPE, GROUP_SIZE, THREADS_PER_SUBWARP, IS_COLUMN_MAJOR, FUSE_SILU_MUL>
       <<<grid, block, smem_size, stream>>>(static_cast<const T*>(input), static_cast<DST_DTYPE*>(output_q),
                                            static_cast<scale_packed_t*>(output_s), n, subwarps_per_block,
                                            hidden_dim_num_groups, scale_hidden_stride);
@@ -234,16 +273,25 @@ void per_token_group_quant_fp8_kernel_launcher(const void* input, void* output_q
 
 template <typename T>
 void per_token_group_quant_fp8(const void* input, void* output_q, void* output_s, int m, int n, int64_t group_size,
-                               bool is_column_major, cudaStream_t stream) {
-#  define DISPATCH_COLUMN_MAJOR(T, DST_DTYPE, GROUP_SIZE)                           \
-    do {                                                                            \
-      if (is_column_major) {                                                        \
-        per_token_group_quant_fp8_kernel_launcher<T, DST_DTYPE, GROUP_SIZE, true>(  \
-            input, output_q, output_s, m, n, group_size, is_column_major, stream);  \
-      } else {                                                                      \
-        per_token_group_quant_fp8_kernel_launcher<T, DST_DTYPE, GROUP_SIZE, false>( \
-            input, output_q, output_s, m, n, group_size, is_column_major, stream);  \
-      }                                                                             \
+                               bool is_column_major, bool fuse_silu_mul, cudaStream_t stream) {
+#  define DISPATCH_FUSION(T, DST_DTYPE, GROUP_SIZE, IS_COLUMN_MAJOR)                                 \
+    do {                                                                                             \
+      if (fuse_silu_mul) {                                                                           \
+        per_token_group_quant_fp8_kernel_launcher<T, DST_DTYPE, GROUP_SIZE, IS_COLUMN_MAJOR, true>(  \
+            input, output_q, output_s, m, n, stream);                                                \
+      } else {                                                                                       \
+        per_token_group_quant_fp8_kernel_launcher<T, DST_DTYPE, GROUP_SIZE, IS_COLUMN_MAJOR, false>( \
+            input, output_q, output_s, m, n, stream);                                                \
+      }                                                                                              \
+    } while (0)
+
+#  define DISPATCH_COLUMN_MAJOR(T, DST_DTYPE, GROUP_SIZE) \
+    do {                                                  \
+      if (is_column_major) {                              \
+        DISPATCH_FUSION(T, DST_DTYPE, GROUP_SIZE, true);  \
+      } else {                                            \
+        DISPATCH_FUSION(T, DST_DTYPE, GROUP_SIZE, false); \
+      }                                                   \
     } while (0)
 
 #  define DISPATCH_GROUP_SIZE(T, DST_DTYPE)            \
@@ -282,7 +330,8 @@ void per_token_group_quant_fp8(const void* input, void* output_q, void* output_s
 
 #  define PER_TOKEN_GROUP_QUANT_FP8(T)                                                                          \
     template void per_token_group_quant_fp8<T>(const void* input, void* output_q, void* output_s, int m, int n, \
-                                               int64_t group_size, bool is_column_major, cudaStream_t stream);
+                                               int64_t group_size, bool is_column_major, bool fuse_silu_mul,    \
+                                               cudaStream_t stream);
 PER_TOKEN_GROUP_QUANT_FP8(float);
 PER_TOKEN_GROUP_QUANT_FP8(half);
 PER_TOKEN_GROUP_QUANT_FP8(__nv_bfloat16);

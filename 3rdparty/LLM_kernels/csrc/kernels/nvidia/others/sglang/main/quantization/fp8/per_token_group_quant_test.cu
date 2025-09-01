@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
@@ -61,7 +62,7 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
 
     // Call the kernel
     per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
-                                 is_column_major, stream);
+                                 is_column_major, /*fuse_silu_mul*/ false, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // Copy output data back to host
@@ -99,6 +100,50 @@ class LlamaNvidiaPerTokenGroupQuantFp8TestSuit : public NvidiaTestSuitBase {
     DeleteBuffer(input_meta);
     DeleteBuffer(output_q_meta);
     DeleteBuffer(output_s_meta);
+  }
+
+  template <typename T>
+  void TestSiluMulPerTokenGroupQuantFp8(const size_t m, const size_t n, cudaStream_t stream, bool is_column_major) {
+    size_t q_size = m * n;
+    size_t s_size = m * n / group_size_;
+
+    // Allocate device memory
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {m, n * 2},
+                                            /*is_random_init*/ true);
+    BufferMeta output_q_meta = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {q_size},
+                                                           /*is_random_init*/ false);
+    BufferMeta output_s_meta = CreateBuffer<float>(MemoryType::MEMORY_GPU, {s_size},
+                                                   /*is_random_init*/ false);
+    BufferMeta fused_output_q_meta = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {q_size},
+                                                                 /*is_random_init*/ false);
+    BufferMeta fused_output_s_meta = CreateBuffer<float>(MemoryType::MEMORY_GPU, {s_size},
+                                                         /*is_random_init*/ false);
+
+    // Invoke the fused version
+    per_token_group_quant_fp8<T>(input_meta.data_ptr, fused_output_q_meta.data_ptr, fused_output_s_meta.data_ptr, m, n,
+                                 group_size_, is_column_major, /*fuse_silu_mul*/ true, stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+    // Invoke the unfused version
+    InvokeRowBasedActivation<SiluActivation, T>(reinterpret_cast<T*>(input_meta.data_ptr),
+                                                reinterpret_cast<const T*>(input_meta.data_ptr), m, n * 2, stream);
+    per_token_group_quant_fp8<T>(input_meta.data_ptr, output_q_meta.data_ptr, output_s_meta.data_ptr, m, n, group_size_,
+                                 is_column_major, /*fuse_silu_mul*/ false, stream);
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+
+    // Verify accuracy
+    EXPECT_TRUE(CheckResult<__nv_fp8_e4m3>(
+        "silu_mul_per_token_group_quant_fp8_m_" + std::to_string(m) + "_n_" + std::to_string(n) + "_output_q",
+        fused_output_q_meta, output_q_meta, 1e-4, 1e-4));
+    EXPECT_TRUE(CheckResult<T>(
+        "silu_mul_per_token_group_quant_fp8_m_" + std::to_string(m) + "_n_" + std::to_string(n) + "_output_s",
+        fused_output_s_meta, output_s_meta, 1e-4, 1e-4));
+
+    // Free data
+    DeleteBuffer(input_meta);
+    DeleteBuffer(output_q_meta);
+    DeleteBuffer(output_s_meta);
+    DeleteBuffer(fused_output_q_meta);
+    DeleteBuffer(fused_output_s_meta);
   }
 };
 
@@ -140,10 +185,72 @@ TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_PerTokenGroupQuantFp8P
     auto cuda_run = [&]() {
       per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
                                                hidden_size, group_size_,
-                                               /*is_column_major*/ false, stream);
+                                               /*is_column_major*/ false, /*fuse_silu_mul*/ false, stream);
     };
     const float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, warmups, iterations);
     std::cout << "Token num: " << token_num << ", Execution time: " << elapsed_ms << " ms" << std::endl;
+
+    // Free data
+    DeleteBuffer(d_input);
+    DeleteBuffer(d_output_q);
+    DeleteBuffer(d_output_s);
+  }
+}
+
+TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, HalfSiluMulPerTokenGroupQuantFp8Test) {
+  for (const auto& m_n_pair : m_n_pairs_) {
+    TestSiluMulPerTokenGroupQuantFp8<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
+                                           stream, true);
+    TestSiluMulPerTokenGroupQuantFp8<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second),
+                                           stream, false);
+  }
+}
+
+TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, BFloat16SiluMulPerTokenGroupQuantFp8Test) {
+  for (const auto& m_n_pair : m_n_pairs_) {
+    TestSiluMulPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first),
+                                                    static_cast<size_t>(m_n_pair.second), stream, true);
+    TestSiluMulPerTokenGroupQuantFp8<__nv_bfloat16>(static_cast<size_t>(m_n_pair.first),
+                                                    static_cast<size_t>(m_n_pair.second), stream, false);
+  }
+}
+
+// Performance test is disabled by default
+TEST_F(LlamaNvidiaPerTokenGroupQuantFp8TestSuit, DISABLED_SiluMulPerTokenGroupQuantFp8PerfTest) {
+  const std::vector<size_t> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
+  // Config of DeepSeek-R1
+  const size_t hidden_size = 7168;
+
+  for (const size_t token_num : token_nums) {
+    // Prepare device data
+    BufferMeta d_input = CreateBuffer<__nv_bfloat16>(MemoryType::MEMORY_GPU, {token_num, hidden_size * 2},
+                                                     /*is_random_init*/ true);
+    BufferMeta d_output_q = CreateBuffer<__nv_fp8_e4m3>(MemoryType::MEMORY_GPU, {token_num, hidden_size},
+                                                        /*is_random_init*/ false);
+    BufferMeta d_output_s = CreateBuffer<float>(MemoryType::MEMORY_GPU, {token_num, hidden_size / group_size_},
+                                                /*is_random_init*/ false);
+
+    const int warmups = 5;
+    const int iterations = 10;
+    // Run the fused version
+    auto cuda_run_fused = [&]() {
+      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
+                                               hidden_size, group_size_,
+                                               /*is_column_major*/ false, /*fuse_silu_mul*/ true, stream);
+    };
+    // Run the unfused version
+    auto cuda_run_unfused = [&]() {
+      InvokeRowBasedActivation<SiluActivation, __nv_bfloat16>(reinterpret_cast<__nv_bfloat16*>(d_input.data_ptr),
+                                                              reinterpret_cast<const __nv_bfloat16*>(d_input.data_ptr),
+                                                              token_num, hidden_size * 2, stream);
+      per_token_group_quant_fp8<__nv_bfloat16>(d_input.data_ptr, d_output_q.data_ptr, d_output_s.data_ptr, token_num,
+                                               hidden_size, group_size_,
+                                               /*is_column_major*/ false, /*fuse_silu_mul*/ false, stream);
+    };
+    const float elapsed_ms_fused = MeasureCudaExecutionTime(cuda_run_fused, stream, warmups, iterations);
+    const float elapsed_ms_unfused = MeasureCudaExecutionTime(cuda_run_unfused, stream, warmups, iterations);
+    std::cout << "Token num: " << token_num << ", Execution time of fused version: " << elapsed_ms_fused << " ms"
+              << ", Execution time of unfused version: " << elapsed_ms_unfused << " ms" << std::endl;
 
     // Free data
     DeleteBuffer(d_input);

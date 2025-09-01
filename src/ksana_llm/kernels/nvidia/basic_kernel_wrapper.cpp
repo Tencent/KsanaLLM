@@ -1033,17 +1033,19 @@ DEQUANTIZE_FP8_E4M3_BLOCKWISE(__nv_bfloat16);
 
 template <typename T>
 void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,
-                                     bool is_column_major, cudaStream_t stream, int64_t group_size) {
+                                     bool is_column_major, cudaStream_t stream, int64_t group_size,
+                                     const PerTokenGroupQuantFusionParams& params) {
 #ifdef ENABLE_FP8
   llm_kernels::nvidia::per_token_group_quant_fp8<T>(input, output_q, output_s, m, n, group_size, is_column_major,
-                                                    stream);
+                                                    params.fuse_silu_mul, stream);
 #else
   KLLM_THROW("FP8 is not supported in this build. Please enable FP8 support.");
 #endif
 }
 #define INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(T)                                                                     \
   template void InvokePerTokenGroupQuantFp8E4m3<T>(const void* input, void* output_q, void* output_s, int m, int n, \
-                                                   bool is_column_major, cudaStream_t stream, int64_t group_size)
+                                                   bool is_column_major, cudaStream_t stream, int64_t group_size,   \
+                                                   const PerTokenGroupQuantFusionParams& params)
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(float);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(half);
 INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(__nv_bfloat16);

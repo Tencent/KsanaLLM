@@ -257,9 +257,13 @@ template <typename T>
 void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* output, int m, int k, int n,
                      cudaStream_t& stream, void* cutlass_buffer = nullptr, size_t cutlass_buffer_size = 0ul);
 
+struct PerTokenGroupQuantFusionParams {
+  bool fuse_silu_mul{false};  // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`
+};
 template <typename T>
 void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* output_s, int m, int n,
-                                     bool is_column_major, cudaStream_t stream, int64_t group_size = 128);
+                                     bool is_column_major, cudaStream_t stream, int64_t group_size = 128,
+                                     const PerTokenGroupQuantFusionParams& params = {});
 
 template <typename T>
 void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, cudaStream_t stream);

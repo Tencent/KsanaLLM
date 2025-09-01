@@ -21,11 +21,12 @@ namespace nvidia {
  * @param n Shape[1] of input
  * @param group_size Size of each group
  * @param is_column_major Whether the input is in column-major order
+ * @param fuse_silu_mul Whether to apply silu-mul to the input fisrt
  * @param stream CUDA stream
  */
 template <typename T>
 void per_token_group_quant_fp8(const void* input, void* output_q, void* output_s, int m, int n, int64_t group_size,
-                               bool is_column_major, cudaStream_t stream);
+                               bool is_column_major, bool fuse_silu_mul, cudaStream_t stream);
 
 }  // namespace nvidia
 }  // namespace llm_kernels

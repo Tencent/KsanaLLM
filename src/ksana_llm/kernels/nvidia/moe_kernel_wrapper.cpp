@@ -365,7 +365,8 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
                               int numel, int m, int k, int n, int max_num_tokens_padded,
                               const std::unordered_map<std::string, int>& config, DataType weight_dtype,
                               DataType compute_dtype, bool use_moe_wna16_cuda, void* dequant_workspace,
-                              std::vector<int>& block_shape, int num_experts, const cudaStream_t& stream) {
+                              std::vector<int>& block_shape, int num_experts, bool fuse_silu_mul,
+                              const cudaStream_t& stream) {
   if (chunk_num_tokens < config.at("block_size_m")) {
     max_num_tokens_padded = std::min(max_num_tokens_padded, chunk_num_tokens * topk * config.at("block_size_m"));
   }
@@ -409,7 +410,9 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream,
+                                         /*group_size*/ block_shape[1],
+                                         PerTokenGroupQuantFusionParams{.fuse_silu_mul = fuse_silu_mul});
       a = a_q;
     }
     // A [m, k]
@@ -583,20 +586,26 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int* expert_map, in
         curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr), reinterpret_cast<int32_t*>(expert_ids_ptr),
         reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk, tokens_in_chunk, numel, tokens_in_chunk,
         hidden_size, inter_size * 2, max_num_tokens_padded, config, weight_dtype, compute_dtype, use_moe_wna16_cuda,
-        dequant_workspace, block_shape, num_experts, stream);
+        dequant_workspace, block_shape, num_experts, /*fuse_silu_mul*/ false, stream);
 
-    const size_t elements_num = static_cast<size_t>(tokens_in_chunk) * topk * inter_size * 2;
-    llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel>(
-        reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
-        reinterpret_cast<const int*>(curr_topk_ids), reinterpret_cast<const int*>(expert_map), num_experts,
-        elements_num, inter_size, stream);
+    // When T is __nv_fp8e4m3, we fuse silu_mul into group quant
+    bool fuse_silu_mul =
+        (weight_dtype == DataType::TYPE_BLOCK_FP8_E4M3 && compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3);
+    if (!fuse_silu_mul) {
+      const size_t elements_num = static_cast<size_t>(tokens_in_chunk) * topk * inter_size * 2;
+      llm_kernels::nvidia::InvokeSiluAndMul<T, UseExpertParallel>(
+          reinterpret_cast<const T*>(curr_intermediate_cache1), reinterpret_cast<T*>(curr_intermediate_cache2),
+          reinterpret_cast<const int*>(curr_topk_ids), reinterpret_cast<const int*>(expert_map), num_experts,
+          elements_num, inter_size, stream);
+    }
 
     InvokeFusedMoeKernelFunc<T>(
-        curr_intermediate_cache2, w2, curr_intermediate_cache3, a2_q, a2_scale, w2_scale, w2_zp, curr_topk_weights,
-        curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr), reinterpret_cast<int32_t*>(expert_ids_ptr),
-        reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1, tokens_in_chunk * topk, numel,
-        tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config, weight_dtype, compute_dtype,
-        use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts, stream);
+        fuse_silu_mul ? curr_intermediate_cache1 : curr_intermediate_cache2, w2, curr_intermediate_cache3, a2_q,
+        a2_scale, w2_scale, w2_zp, curr_topk_weights, curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr),
+        reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1,
+        tokens_in_chunk * topk, numel, tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config,
+        weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts, fuse_silu_mul,
+        stream);
 
     void* curr_out_hidden_states = output_hidden_states + sizeof(T) * chunk_size * hidden_size * i;
     llm_kernels::nvidia::InvokeMoeSum<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,

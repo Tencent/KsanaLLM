@@ -20,7 +20,6 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
   n_ = std::any_cast<size_t>(parameters[parameter_index++]);
   k_ = std::any_cast<size_t>(parameters[parameter_index++]);
   block_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  size_t tp_size = std::any_cast<size_t>(parameters[parameter_index++]);
 
   // currently, DeepGEMM only support bfloat16
   if ((inter_data_type_ == DataType::TYPE_BF16) && std::getenv("DISABLE_DEEPGEMM") == nullptr) {
@@ -74,33 +73,37 @@ Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, s
 
 template <typename T>
 Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  int m = input_tensors[0].shape[0];
-  int k = input_tensors[0].shape[1];
-  int n = input_tensors[1].shape[0];
   if (workspace_size_ > workspace_buffer_->GetTotalBytes()) {
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size_, workspace_buffer_->GetTotalBytes()));
   }
+  const size_t m = input_tensors[0].shape[0];
   // TODO(jinxcwu) 要设计一种dispatch逻辑
   if (m <= kDeepGemmMaxMThreshold_) {
     deepgemm_matmul_layer_.Forward(input_tensors, output_tensors);
   } else {
+    const size_t k = input_tensors[0].shape[1];
+    // input_tensors[0].shape[1] is k_ (normal case) or 2*k_ (need to do silu mul first)
+    // input_tensors[1].shape[0] is n_
+
     T* a = static_cast<T*>(input_tensors[0].GetPtr<void>());
     void* a_q = workspace_buffer_->GetPtr<void>();
-    float* a_s = static_cast<float*>(a_q + GetTypeSize(TYPE_FP8_E4M3) * m * k);
-    void* cutlass_buffer = a_s + m * DivRoundUp(k, block_size_) * GetTypeSize(TYPE_FP32);
-    size_t cutlass_buffer_size = m * k * GetTypeSize(TYPE_FP8_E4M3);
+    float* a_s = static_cast<float*>(a_q + GetTypeSize(TYPE_FP8_E4M3) * m * k_);
+    void* cutlass_buffer = a_s + m * DivRoundUp(k_, block_size_) * GetTypeSize(TYPE_FP32);
+    size_t cutlass_buffer_size = m * k_ * GetTypeSize(TYPE_FP8_E4M3);
 
-    InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, m, k, true, context_->GetComputeStreams()[rank_].Get(),
-                                       block_size_);
+    InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, m, k_, /*is_column_major*/ true,
+                                       context_->GetComputeStreams()[rank_].Get(), block_size_,
+                                       PerTokenGroupQuantFusionParams{.fuse_silu_mul = (k == 2 * k_)});
 
     void* b = input_tensors[1].GetPtr<void>();
     float* b_scale = static_cast<float*>(input_tensors[1].weight_scales->GetPtr<void>());
 
     T* output = static_cast<T*>(output_tensors[0].GetPtr<void>());
-    output_tensors[0].shape = {static_cast<size_t>(m), static_cast<size_t>(n)};
-    output_tensors[0].dtype = input_tensors[0].dtype;
-    InvokeBlockGemm<T>(a_q, a_s, b, b_scale, output, m, k, n, context_->GetComputeStreams()[rank_].Get(),
+    InvokeBlockGemm<T>(a_q, a_s, b, b_scale, output, m, k_, n_, context_->GetComputeStreams()[rank_].Get(),
                        cutlass_buffer, cutlass_buffer_size);
+
+    output_tensors[0].shape = {m, n_};
+    output_tensors[0].dtype = input_tensors[0].dtype;
   }
   return Status();
 }

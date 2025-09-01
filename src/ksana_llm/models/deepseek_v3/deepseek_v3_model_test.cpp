@@ -47,9 +47,9 @@ class DeepSeekV3Test : public testing::Test {
       model_path = "/model/DeepSeek-R1-0528-moe-int4";
     } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
       model_path = "/model/deepseek_v3";
-      expected_tokens = {{3648, 303, 19892}, /*placeholder*/ {0, 0, 0}};
+      expected_tokens = {{3648, 303, 19892}};
     } else {
-      expected_tokens = {{5306, 13245, 15354}, {28570, 27932, 4180}};
+      expected_tokens = {{5306, 13245, 15354}, /*without fastmath*/ {5306, 13245, 536}, {28570, 27932, 4180}};
     }
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
