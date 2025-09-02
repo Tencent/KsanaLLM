@@ -62,18 +62,12 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["fused_moe_kernel"] = {"group_n",      "group_k",      "BLOCK_SIZE_M",      "BLOCK_SIZE_N",
                                          "BLOCK_SIZE_K", "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
                                          "compute_type", "use_fp8_w8a8", "use_int8_w8a16", "even_Ks"};
-  kernel_key_map_["_per_token_group_quant_fp8"] = {"compute_type", "colmajor"};
-  kernel_key_map_["_per_token_group_quant_fp8_colmajor"] = {"compute_type", "colmajor"};
   kernel_key_map_["fused_moe_gptq_awq_kernel"] = {"BLOCK_SIZE_M",      "BLOCK_SIZE_N", "BLOCK_SIZE_K", "GROUP_SIZE_M",
                                                   "MUL_ROUTED_WEIGHT", "top_k",        "compute_type", "has_zp",
                                                   "weight_bits",       "group_size"};
   kernel_key_map_["fused_moe_gptq_int4_fp8_kernel"] = {"BLOCK_SIZE_M", "BLOCK_SIZE_N",      "BLOCK_SIZE_K",
                                                        "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
                                                        "compute_type", "group_size"};
-  kernel_key_map_["decode_grouped_att_m_fwd_kernel"] = {"kv_group_num", "q_head_num", "BLOCK_DMODEL", "BLOCK_DPE",
-                                                        "BLOCK_DV",     "BLOCK_N",    "BLOCK_H",      "NUM_KV_SPLITS",
-                                                        "PAGE_SIZE",    "Lk",         "Lv",           "input_type"};
-  kernel_key_map_["decode_softmax_reducev_fwd_kernel"] = {"BLOCK_DV", "NUM_KV_SPLITS", "Lv", "input_type"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -197,30 +191,6 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
                   kernel_stream_name, grid_x, grid_y, grid_z, kernel->block_x, kernel->block_y, kernel->block_z,
                   kernel->shm_size));  // Extra options
 }
-
-template <typename T>
-void TritonWrapper::InvokePerTokenGroupQuantFP8(void* d_data, void* d_q, void* d_s, int m, int n, bool col_major_scale,
-                                                cudaStream_t stream) {
-  const std::unordered_map<std::string, std::string> map = {{"compute_type", GetComputeType<T>()},
-                                                            {"colmajor", ConvertToString(col_major_scale)}};
-  size_t grid_x = CeilDiv(static_cast<size_t>(m) * n, 128);
-  if (col_major_scale) {
-    std::string kernel_name = "_per_token_group_quant_fp8_colmajor";
-    void* args[5] = {&d_data, &d_q, &d_s, &n, &m};
-    InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
-  } else {
-    std::string kernel_name = "_per_token_group_quant_fp8";
-    void* args[4] = {&d_data, &d_q, &d_s, &n};
-    InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
-  }
-}
-#define INVOKE_PER_TOKEN_GROUP_QUANT_FP8(T)                                                                     \
-  template void TritonWrapper::InvokePerTokenGroupQuantFP8<T>(void* d_data, void* d_q, void* d_s, int m, int n, \
-                                                              bool col_major_scale, cudaStream_t stream)
-INVOKE_PER_TOKEN_GROUP_QUANT_FP8(float);
-INVOKE_PER_TOKEN_GROUP_QUANT_FP8(half);
-INVOKE_PER_TOKEN_GROUP_QUANT_FP8(__nv_bfloat16);
-#undef INVOKE_PER_TOKEN_GROUP_QUANT_FP8
 
 template <typename T>
 void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,

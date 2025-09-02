@@ -43,10 +43,6 @@ class TritonWrapper {
   void SetKernelsDir(const std::string& kernels_dir);
 
   template <typename T>
-  void InvokePerTokenGroupQuantFP8(void* d_data, void* d_q, void* d_s, int m, int n, bool col_major_scale,
-                                   cudaStream_t stream);
-
-  template <typename T>
   void InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,
                             void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded, int n, int k,
                             int max_num_tokens_padded, int numel, int a_stride0, int a_stride1, int b_stride0,

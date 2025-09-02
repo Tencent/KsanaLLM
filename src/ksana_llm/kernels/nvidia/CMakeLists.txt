@@ -17,10 +17,6 @@ file(GLOB_RECURSE GROUPED_TOPK_TEST_SRCS grouped_topk_test.cpp)
 cc_test(grouped_topk_test SRCS ${GROUPED_TOPK_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
-file(GLOB_RECURSE PER_TOKEN_GROUP_QUANT_FP8_TEST_SRCS per_token_group_quant_fp8_test.cpp)
-cc_test(per_token_group_quant_fp8_test SRCS ${PER_TOKEN_GROUP_QUANT_FP8_TEST_SRCS} DEPS
-    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
-
 file(GLOB_RECURSE FUSED_MOE_TEST_SRCS fused_moe_test.cpp)
 cc_test(fused_moe_test SRCS ${FUSED_MOE_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
