@@ -239,7 +239,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
         tensor_name.find(".e_score_correction_bias") == std::string::npos && weight_data_type == TYPE_FP32) {
       // cast TYPE_FP32 to weight_data_type_.
       auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-      torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
+      torch::Tensor in = torch::from_blob(weight_ptr, {static_cast<int64_t>(weight_size / sizeof(float))}, options);
       weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
       if (weight_data_type_ == TYPE_FP16) {
         weight_cpu_tensor = in.to(torch::kFloat16);
@@ -943,7 +943,8 @@ void CommonWeight<T>::ProcessWeights() {
       }
       auto options = torch::TensorOptions().device(torch::kCUDA, rank_).dtype(torch_dtype);
       torch::Tensor in =
-          torch::from_blob(tensor.GetPtr<void>(), {(int64_t)tensor.shape[0], (int64_t)tensor.shape[1]}, options);
+          torch::from_blob(tensor.GetPtr<void>(),
+                           {static_cast<int64_t>(tensor.shape[0]), static_cast<int64_t>(tensor.shape[1])}, options);
       auto out = torch::nn::functional::normalize(in, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
       MemcpyAsync(tensor.GetPtr<void>(), out.data_ptr(), sizeof(T) * tensor.shape[0] * tensor.shape[1],
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);

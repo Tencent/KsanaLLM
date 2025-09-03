@@ -217,6 +217,7 @@ void BatchScheduler::BalanceWaitingReqs() {
     // output is dp_waiting_reqs_
     if (waiting_reqs_.empty()) {
       KLLM_LOG_SCHEDULER << "waiting_reqs_ is empty";
+      return;
     }
 
     if (waiting_reqs_.size() == 1 && dp_waiting_reqs_.size() == 1) {
@@ -258,18 +259,6 @@ void BatchScheduler::BalanceWaitingReqs() {
     }
     dp_waiting_reqs.clear();
 
-    for (int j = 0; j < pp_batch_num_; j++) {
-      auto& batch_state = batch_states_[i][j];
-      std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
-      for (auto& req : batch_state->waiting_queue) {
-        int64_t tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
-        tokens_num = tokens_num > 0 ? tokens_num : 1;
-        waiting_reqs_with_index.emplace_back(
-            std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
-      }
-      batch_state->waiting_queue.clear();
-    }
-
     size_t running_size = 0;
     size_t swapped_size = 0;
     size_t waiting_size = 0;
@@ -283,7 +272,7 @@ void BatchScheduler::BalanceWaitingReqs() {
       waiting_size += batch_state->waiting_queue.size();
     }
     // 计算负载，根据优先级分配不同权重，数值越低，权重越低
-    workload[i] = (waiting_size + swapped_size) * 10000 + running_size;
+    workload[i] = running_size * 0.7f + waiting_size + swapped_size * 1.6f;
   }
 
   balance_reqs_algo_->BalanceReqs(workload, waiting_reqs_with_index, dp_waiting_reqs_);
@@ -297,22 +286,15 @@ void BatchScheduler::BalancePPMultiBatchReqs(size_t multi_batch_id) {
   }
 }
 
-void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, size_t dp_rank, size_t pp_rank,
-                                      std::time_t schedule_start_time) {
+void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state) {
   size_t batch_size = batch_state->schedule_output->running_reqs.size();
   REPORT_METRIC(batch_scheduler_batch_size, batch_size);
   REPORT_METRIC(batch_scheduler_waiting_size, batch_state->waiting_queue.size());
   REPORT_METRIC(batch_scheduler_swapped_size, batch_state->swapped_queue.size());
 
-  const auto current_time = ProfileTimer::GetCurrentTimeInMs();
-
-  KLLM_LOG_DEBUG << "dp_rank=" << dp_rank << ", pp_rank=" << pp_rank << ", running_size=" << batch_size
-                 << ", waiting_size=" << batch_state->waiting_queue.size()
-                 << ", swapped_size=" << batch_state->swapped_queue.size() << " ,timestamp=" << current_time
-                 << ", total schedule time=" << current_time - schedule_start_time;
-
   if (batch_size > 0) {
     size_t token_num = 0;
+    const auto current_time = ProfileTimer::GetCurrentTimeInMs();
     for (const auto& req : batch_state->schedule_output->running_reqs) {
       token_num += req->forwarding_tokens.size();
       if (req->kv_cached_token_num == 0) {
@@ -325,7 +307,6 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, s
 }
 
 std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch_id) {
-  const auto schedule_start_time = ProfileTimer::GetCurrentTimeInMs();
   PROFILE_EVENT_SCOPE(Schedule_, fmt::format("Schedule_{}", multi_batch_id));
   std::lock_guard<std::mutex> guard(schedule_mutex_);
 
@@ -357,7 +338,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   size_t total_dp_waiting_queue_size = 0;
   for (size_t i = 0; i < dp_num_; i++) {
     auto& batch_state = batch_states_[i][multi_batch_id];
-    ReportBatchState(batch_state, i, multi_batch_id, schedule_start_time);
+    ReportBatchState(batch_state);
     schedule_output_group_->outputs[i] = batch_state->schedule_output;
     total_running_size += batch_state->schedule_output->running_reqs.size();
     total_waiting_size_in_batch_states += batch_state->waiting_queue.size();

@@ -24,30 +24,31 @@ void BalanceReqsAlgo::BalanceReqs(const std::vector<float>& workloads,
   std::sort(tokens_to_req_pairs.begin(), tokens_to_req_pairs.end(),
             [](const auto& a, const auto& b) { return a.first > b.first; });
 
+  // 计算所有请求的token总和，并初始化每个组的token数量
   size_t total_tokens = 0;
   for (const auto& req : tokens_to_req_pairs) {
     total_tokens += req.first;
   }
-
-  std::vector<float> current_workloads(workloads.size(), 0.0);
+  std::vector<float> current_token_sums(workloads.size());
   for (size_t i = 0; i < workloads.size(); ++i) {
-    current_workloads[i] = workloads[i] * total_tokens / tokens_to_req_pairs.size();
+    current_token_sums[i] = workloads[i] * total_tokens / tokens_to_req_pairs.size();
   }
+
   // 分配每个请求到负载最小的组
   for (const auto& req : tokens_to_req_pairs) {
-    auto min_it = std::min_element(current_workloads.begin(), current_workloads.end());
-    int min_idx = std::distance(current_workloads.begin(), min_it);
+    auto min_it = std::min_element(current_token_sums.begin(), current_token_sums.end());
+    int min_idx = std::distance(current_token_sums.begin(), min_it);
 
     KLLM_LOG_SCHEDULER << "[ Group " << min_idx << " add 1 req, req id: " << req.second->req_id
-                       << ", req_tokens: " << req.first << ", workload: " << current_workloads[min_idx] << " -> "
-                       << current_workloads[min_idx] + req.first << " ] ";
-    current_workloads[min_idx] += 10000 * req.first;
+                       << ", req_tokens: " << req.first << ", workload: " << current_token_sums[min_idx] << " -> "
+                       << current_token_sums[min_idx] + req.first << " ] ";
+    current_token_sums[min_idx] += req.first;
     outputs_reqs[min_idx].push_back(req.second);
   }
 
   std::stringstream ss;
-  for (size_t i = 0; i < current_workloads.size(); ++i) {
-    ss << "[ Group " << i << ": input workloads=" << workloads.at(i) << ", result_tokens=" << current_workloads.at(i)
+  for (size_t i = 0; i < current_token_sums.size(); ++i) {
+    ss << "[ Group " << i << ": input workloads=" << workloads.at(i) << ", result_tokens=" << current_token_sums.at(i)
        << ", reqs=" << outputs_reqs.at(i).size() << " ] ";
   }
   KLLM_LOG_SCHEDULER << "BalanceAlgo distribution:" << ss.str();

@@ -109,12 +109,12 @@ class FusedMoeGptqAwqKernelTestSuit : public testing::Test {
     CUDA_CHECK(cudaMalloc(&d_qo, (size_t)m * topk * n * sizeof(T)));
     CUDA_CHECK(cudaMalloc(&d_o, (size_t)m * topk * n * sizeof(T)));
 
-    torch::Tensor d_a =
-        torch::randn({(int64_t)m * k}, torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
-    torch::Tensor d_qb = torch::randint(0, 256, {(int64_t)num_experts * n * k / pack_factor},
+    torch::Tensor d_a = torch::randn({static_cast<int64_t>(m) * k},
+                                     torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
+    torch::Tensor d_qb = torch::randint(0, 256, {static_cast<int64_t>(num_experts) * n * k / pack_factor},
                                         torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
     torch::Tensor d_qb_scale =
-        torch::randn({(int64_t)num_experts * n * k / group_size},
+        torch::randn({static_cast<int64_t>(num_experts) * n * k / group_size},
                      torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
     // 反量化
     torch::Tensor high_bits = torch::bitwise_right_shift(d_qb, 4);
@@ -215,14 +215,14 @@ class FusedMoeGptqAwqKernelTestSuit : public testing::Test {
     // void* d_qb_scale;  // [num_experts, n, k / group_size]
     // void* d_b;         // [num_experts, n, k]
     // void* d_o;         // [m, topk, n]
-    torch::Tensor d_a =
-        torch::randn({(int64_t)m * k}, torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
-    torch::Tensor d_qb = torch::randint(0, 256, {(int64_t)num_experts * n * k / pack_factor},
+    torch::Tensor d_a = torch::randn({static_cast<int64_t>(m) * k},
+                                     torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
+    torch::Tensor d_qb = torch::randint(0, 256, {static_cast<int64_t>(num_experts) * n * k / pack_factor},
                                         torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
     torch::Tensor d_qb_scale =
-        torch::randn({(int64_t)num_experts * n * k / group_size},
+        torch::randn({static_cast<int64_t>(num_experts) * n * k / group_size},
                      torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
-    torch::Tensor d_to = torch::zeros({(int64_t)m * topk * n},
+    torch::Tensor d_to = torch::zeros({static_cast<int64_t>(m) * topk * n},
                                       torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<T>()));
     torch::Tensor d_co = torch::zeros_like(d_to);
 

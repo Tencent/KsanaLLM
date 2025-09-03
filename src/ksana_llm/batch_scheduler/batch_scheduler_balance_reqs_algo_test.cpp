@@ -194,7 +194,7 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   // 创建一些请求
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
-  InitReqs(dp_num * 5 + 1, src_reqs, requests, 1);
+  InitReqs(dp_num * 5 + 1, src_reqs, requests);
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);
@@ -216,8 +216,8 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   EXPECT_EQ(total_assigned, requests.size());
 
   // 2. 工作负载较低的组应该分配更多的请求
-  EXPECT_TRUE(test_batch_scheduler_->dp_waiting_reqs_[0].size() >= test_batch_scheduler_->dp_waiting_reqs_[1].size());
-  EXPECT_TRUE(test_batch_scheduler_->dp_waiting_reqs_[1].size() >= test_batch_scheduler_->dp_waiting_reqs_[2].size());
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[0].size(), test_batch_scheduler_->dp_waiting_reqs_[1].size());
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[1].size(), test_batch_scheduler_->dp_waiting_reqs_[2].size());
 
   EXPECT_TRUE(test_batch_scheduler_->IsIdle(multi_batch_id));
 }
@@ -229,7 +229,7 @@ TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
   // 创建一些请求
   std::vector<std::shared_ptr<Request>> src_reqs;
   std::vector<std::shared_ptr<InferRequest>> requests;
-  InitReqs(dp_num * 5 + 1, src_reqs, requests, 1);
+  InitReqs(dp_num * 5 + 1, src_reqs, requests);
   for (std::shared_ptr<InferRequest> req : requests) {
     req->input_tokens.resize(req->forwarding_tokens.size());
     req->forwarding_tokens.clear();
@@ -255,8 +255,8 @@ TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
   EXPECT_EQ(total_assigned, requests.size());
 
   // 2. 工作负载较低的组应该分配更多的请求
-  EXPECT_TRUE(test_batch_scheduler_->dp_waiting_reqs_[0].size() >= test_batch_scheduler_->dp_waiting_reqs_[1].size());
-  EXPECT_TRUE(test_batch_scheduler_->dp_waiting_reqs_[1].size() >= test_batch_scheduler_->dp_waiting_reqs_[2].size());
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[0].size(), test_batch_scheduler_->dp_waiting_reqs_[1].size());
+  EXPECT_GE(test_batch_scheduler_->dp_waiting_reqs_[1].size(), test_batch_scheduler_->dp_waiting_reqs_[2].size());
 
   EXPECT_TRUE(test_batch_scheduler_->IsIdle(multi_batch_id));
 }

@@ -15,9 +15,9 @@
 
 #include "ksana_llm/utils/memory_utils.h"
 
+#include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/common/common_config.h"
-#include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
 #include "ksana_llm/models/gpt/gpt_config.h"
@@ -365,7 +365,8 @@ Status EnvModelConfigParser::ParseModelConfigFromGGUF(const std::string &meta_fi
     model_config.layernorm_eps =
         std::any_cast<float>(get_optional_value(model_type + ".attention.layer_norm_rms_epsilon", 1e-6));
     model_config.start_id = std::any_cast<uint32_t>(get_optional_value("tokenizer.ggml.bos_token_id", 1));
-    model_config.pad_id = std::any_cast<uint32_t>(get_optional_value("tokenizer.ggml.padding_token_id", (uint32_t)0));
+    model_config.pad_id =
+        std::any_cast<uint32_t>(get_optional_value("tokenizer.ggml.padding_token_id", static_cast<uint32_t>(0)));
     model_config.max_position_embeddings =
         std::any_cast<uint32_t>(get_optional_value(model_type + ".context_length", 2048));
     model_config.tie_word_embeddings =

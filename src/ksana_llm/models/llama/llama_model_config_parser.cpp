@@ -119,8 +119,8 @@ Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::st
   llama_model_config->start_id =
       std::any_cast<uint32_t>(GetValueFromGGUFMeta(gguf_meta, "tokenizer.ggml.bos_token_id", 1));
 
-  llama_model_config->pad_id =
-      std::any_cast<uint32_t>(GetValueFromGGUFMeta(gguf_meta, "tokenizer.ggml.padding_token_id", (uint32_t)0));
+  llama_model_config->pad_id = std::any_cast<uint32_t>(
+      GetValueFromGGUFMeta(gguf_meta, "tokenizer.ggml.padding_token_id", static_cast<uint32_t>(0)));
 
   llama_model_config->max_position_embeddings =
       std::any_cast<uint32_t>(GetValueFromGGUFMeta(gguf_meta, model_type + ".context_length", 2048));

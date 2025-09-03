@@ -91,7 +91,7 @@ float fp8_e4m3fn_to_float(char* in, std::vector<float>& out, int n) {
     const int MANT_MASK = 0x07;  // 0000 0111
 
     const int EXP_BIAS = 7;
-    uint8_t data = (uint8_t)in[i];
+    uint8_t data = static_cast<uint8_t>(in[i]);
     // 提取符号位
     uint8_t sign = (data & SIGN_MASK) >> 7;
 
@@ -199,7 +199,7 @@ TEST_F(KernelWrapperTest, ScaleQuantizeFp8E4m3Test) {
         }
       }
     }  // end j
-  }    // end i
+  }  // end i
 
   for (size_t i = 0; i < num_elements; i++) {
     if (fabsf(h_out[i]) > 0) {

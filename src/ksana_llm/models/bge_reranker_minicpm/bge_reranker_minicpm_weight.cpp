@@ -49,7 +49,7 @@ Status BgeRerankerMinicpmWeight<T>::LoadWeightsFromFile(const std::shared_ptr<Ba
 
     if (should_cast) {
       auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-      torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
+      torch::Tensor in = torch::from_blob(weight_ptr, {static_cast<int64_t>(weight_size / sizeof(float))}, options);
       weight_size /= sizeof(float) / GetTypeSize(this->weight_data_type_);
 
       if (this->weight_data_type_ == TYPE_FP16) {

@@ -114,7 +114,7 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
     if (weight_data_type == TYPE_FP32) {
       torch::Tensor weight_cpu_tensor;
       const auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
-      torch::Tensor in = torch::from_blob(weight_ptr, {(int64_t)(weight_size / sizeof(float))}, options);
+      torch::Tensor in = torch::from_blob(weight_ptr, {static_cast<int64_t>(weight_size / sizeof(float))}, options);
       weight_size /= sizeof(float) / GetTypeSize(weight_data_type_);
       if (weight_data_type_ == TYPE_FP16) {
         weight_cpu_tensor = in.to(torch::kFloat16);
