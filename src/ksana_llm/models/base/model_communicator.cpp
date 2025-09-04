@@ -12,9 +12,9 @@
 
 namespace ksana_llm {
 
-ModelCommunicator::ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
+ModelCommunicator::ModelCommunicator(Tensor* input, int rank, const RuntimeConfig& runtime_config,
                                      std::shared_ptr<Context> context)
-    : rank_(rank), context_(context), buffer_(buffer), input_(input) {
+    : rank_(rank), context_(context), input_(input) {
   EventCreateWithFlags(&comm_finish_event_, EVENT_DISABLE_TIMING);
 
 #ifdef ENABLE_CUDA

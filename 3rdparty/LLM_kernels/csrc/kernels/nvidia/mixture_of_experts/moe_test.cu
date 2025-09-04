@@ -138,7 +138,7 @@ class MixtureOfExpertsTest : public NvidiaTestSuitBase {
   }
 
   static void SetUpTestCase() {
-    mDeviceCount = getDeviceCount();
+    mDeviceCount = GetDeviceCount();
     if (shouldSkip()) {
       GTEST_SKIP() << "Skipping due to no/unsupported GPU";
     }

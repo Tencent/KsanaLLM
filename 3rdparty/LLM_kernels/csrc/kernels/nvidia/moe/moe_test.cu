@@ -210,7 +210,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
       // Check shared mem
       int shared_mem = std::max(
           /* vllm */ ((num_thread + 2) * num_experts) * sizeof(uint16_t) + (num_experts + 1) * sizeof(int32_t),
-          /* sglang */ (num_experts + (num_experts + 1) + next_pow2(num_experts) + WARP_SIZE) * sizeof(int32_t));
+          /* sglang */ (num_experts + (num_experts + 1) + NextPow2(num_experts) + WARP_SIZE) * sizeof(int32_t));
       int device_max_shared_mem = getMaxSharedMemoryPerBlockOptin();
       if (device_max_shared_mem < shared_mem) {
         std::cout << "Current GPU Device do not support Shared Memory " << shared_mem

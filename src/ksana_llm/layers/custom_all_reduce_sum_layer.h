@@ -35,6 +35,12 @@ class CustomAllReduceSumLayer : public BaseLayer {
   bool is_init_ = false;
   bool is_full_nvlink_ = true;
   bool need_sync_;
+
+  // This value is determined by the performance testing of
+  // `3rdparty/LLM_kernels/csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h`
+  size_t TRT_REDUCE_THRESHOLD = 256;
+  bool enable_trt_reduce_ = false;
+
   uint32_t root_rank_{0};
   uint32_t world_size_{1};
 

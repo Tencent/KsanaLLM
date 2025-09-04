@@ -4,8 +4,8 @@
 #include "ksana_llm/utils/nvidia/nvidia_context.h"
 
 #include <cuda_profiler_api.h>
-
 #include <csignal>
+
 #include "3rdparty/LLM_kernels/csrc/utils/nvidia/cuda_utils.h"
 
 namespace ksana_llm {
@@ -79,9 +79,17 @@ void NvidiaContextExtension<T>::InitCublasHandle(const int worker_id) {
 template <int T>
 void NvidiaContextExtension<T>::InitNcclParam() {
   KLLM_LOG_DEBUG << "Init nvidia nccl param.";
-  reduce_signals_.resize(max_reduce_inputs_num_);
-  reduce_inputs_.resize(max_reduce_inputs_num_);
+
+  // Resize shared pointers for custom all reduce
   const size_t world_size = base_ptr_->tensor_parallel_size_;
+  reduce_signals_.resize(world_size);
+  reduce_inputs_.resize(world_size);
+  // Used to store data buffer, flag buffer, and lamport buffer for each rank respectively
+  trt_reduce_buffers_.resize(3 * world_size);
+  trt_reduce_flags_.resize(world_size);
+  trt_reduce_workspaces_.resize(world_size);
+
+  // Init nccl
   nccl_params_.resize(world_size);
   if (world_size > 1) {
     nccl_uid_ = GenerateNCCLUniqueID();

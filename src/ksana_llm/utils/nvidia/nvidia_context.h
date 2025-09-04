@@ -35,9 +35,12 @@ class NvidiaContextExtension {
 
   std::vector<cublasLtHandle_t>& GetCublasLtHandles() { return cublaslt_handles_; }
 
-  void** GetCustomAllReduceSignals() { return static_cast<void**>(reduce_signals_.data()); }
+  void** GetCustomAllReduceSignals() { return reduce_signals_.data(); }
+  void** GetCustomAllReduceInputs() { return reduce_inputs_.data(); }
 
-  void** GetCustomAllReduceInputs() { return static_cast<void**>(reduce_inputs_.data()); }
+  std::vector<void*>& GetTrtAllReduceBuffers() { return trt_reduce_buffers_; }
+  std::vector<void*>& GetTrtAllReduceFlags() { return trt_reduce_flags_; }
+  std::vector<void*>& GetTrtAllReduceWorkspaces() { return trt_reduce_workspaces_; }
 
   bool IsFullNvLink() { return is_full_nvlink_; }
 
@@ -85,14 +88,16 @@ class NvidiaContextExtension {
   std::vector<cublasHandle_t> cublas_handles_;
   std::vector<cublasLtHandle_t> cublaslt_handles_;
 
-  // The max reduce inputs num for custom reduce.
-  int max_reduce_inputs_num_{8};
-
   // Stores the intermediate results for each gpu of custom all reduce.
   std::vector<void*> reduce_signals_;
 
   // Maintain the input tensor required by each gpu of custom all reduce.
   std::vector<void*> reduce_inputs_;
+
+  // Maintain shared device pointers for trt allreduce
+  std::vector<void*> trt_reduce_buffers_;
+  std::vector<void*> trt_reduce_flags_;
+  std::vector<void*> trt_reduce_workspaces_;
 
   uint32_t sm_{0};
   uint32_t cuda_ver_{0};

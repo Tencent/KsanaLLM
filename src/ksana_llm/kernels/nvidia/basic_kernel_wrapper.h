@@ -203,6 +203,22 @@ void CustomAllReduceRegisterBuffer(void* ptr, void** input_handles, cudaStream_t
 template <typename T>
 void CustomAllReduceRun(void* ptr, void* input, void* result, int data_size, cudaStream_t& stream);
 
+void AllocTrtAllReduceWorkspace(const int rank, const int max_token_num, const int hidden_dim, const int data_type_size,
+                                std::vector<void*>& buffer_d_ptrs, std::vector<void*>& flag_d_ptrs,
+                                std::vector<void*>& workspace_d_ptrs, cudaStream_t stream);
+
+void InitTrtAllReduceWorkspace(const int rank, const std::vector<void*>& buffer_d_ptrs,
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
+                               cudaStream_t stream);
+
+void FreeTrtAllReduceWorkspace(const int rank, const std::vector<void*>& buffer_d_ptrs,
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
+                               cudaStream_t stream);
+
+template <typename T>
+void RunTrtAllReduce(void* input, const int rank, const int token_num, const int hidden_dim,
+                     const std::vector<void*>& workspace_d_ptrs, void* output, cudaStream_t stream);
+
 template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream);
 

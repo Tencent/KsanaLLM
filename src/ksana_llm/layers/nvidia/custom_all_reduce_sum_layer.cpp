@@ -66,6 +66,21 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
 
   // is full nvlink on each device
   is_full_nvlink_ = context_->ext->IsFullNvLink();
+  // Enable trt allreduce only when `tp_size == 2` and group all reduce is not used
+  if (enable_trt_reduce_ = (world_size_ == 2 && !is_group_custom_all_reduce_)) {
+    // When nvlink is not available, lower the threshold for using trt allreduce
+    if (!is_full_nvlink_) {
+      TRT_REDUCE_THRESHOLD = 128;
+    }
+
+    ModelConfig model_config;
+    Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
+    // For DeepSeek-V3, roughly 28MB of extra memory is allocated
+    AllocTrtAllReduceWorkspace(rank_, /*max_token_num*/ TRT_REDUCE_THRESHOLD,
+                               /*hidden_dim*/ model_config.hidden_units, GetTypeSize(inter_data_type_),
+                               context_->ext->GetTrtAllReduceBuffers(), context_->ext->GetTrtAllReduceFlags(),
+                               context_->ext->GetTrtAllReduceWorkspaces(), context_->GetComputeStreams()[rank_].Get());
+  }
 
   s_barrier = std::make_shared<Barrier>(1);
   s_barrier->Init(context_->GetTensorParallelSize());
@@ -110,6 +125,7 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
     void* input = input_tensors[0].GetPtr<void>();
     void* result = output_tensors[0].GetPtr<void>();
     int data_size = input_tensors[0].GetElementNumber();
+    // Initialize the workspace on the first forward
     if (!is_init_) {
       // TODO(jinxcwu): layer的init是卡间串行的，但allreduce的init需要卡间并行，可以考虑并行创建commonmodel
       CustomAllReduceInit<T>(&reduce_op_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_, root_rank_);
@@ -118,15 +134,26 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
       CustomAllReduceRegisterSignalBuffer<T>(reduce_op_, signals_);
       CustomAllReduceRegisterBuffer<T>(reduce_op_, input_handles_, *stream);
 
+      if (enable_trt_reduce_) {
+        InitTrtAllReduceWorkspace(rank_, context_->ext->GetTrtAllReduceBuffers(), context_->ext->GetTrtAllReduceFlags(),
+                                  context_->ext->GetTrtAllReduceWorkspaces(), *stream);
+      }
+
       // Must sync, otherwise the CustomAllReduceRun maybe hanged.
       cudaStreamSynchronize(*stream);
 
       // Without barrier, the reduce maybe hanged.
       s_barrier->arrive_and_wait();
-
       is_init_ = true;
     }
-    CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);
+    // Use only when trt allreduce is enabled and the token number is below the threshold to ensure the performance
+    if (const size_t token_num = input_tensors[0].shape[0]; token_num <= TRT_REDUCE_THRESHOLD && enable_trt_reduce_) {
+      const size_t hidden_dim = input_tensors[0].shape[1];
+      RunTrtAllReduce<T>(input, rank_, token_num, hidden_dim, context_->ext->GetTrtAllReduceWorkspaces(), result,
+                         *stream);
+    } else {
+      CustomAllReduceRun<T>(reduce_op_, input, result, data_size, *stream);
+    }
     // To avoid getting stuck during CustomAllReduce.
     if (need_sync_) {
       CUDA_CHECK(cudaStreamSynchronize(*stream));

@@ -36,6 +36,7 @@
 #include "csrc/kernels/nvidia/moe/moe.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
@@ -645,6 +646,69 @@ template void CustomAllReduceRun<half>(void* ptr, void* input, void* result, int
 template void CustomAllReduceRun<__nv_bfloat16>(void* ptr, void* input, void* result, int data_size,
                                                 cudaStream_t& stream);
 
+// Allocate three workspaces required for trt allreduce
+// three buffers: data buffer: [nranks * max_token_num * hidden_dim * data_type_size]
+//                flag buffer: [nranks * (kBarrierFlagCount = 256) * sizeof(int)]
+//                lamport buffer: [nranks * max_token_num * hidden_dim * data_type_size * 3]
+//                The factor of 3 is due to the flag value having three different states
+// flag pointers buffer: [5 * sizeof(void*)]
+//                       [0]: atomic flag read counter
+//                       [1]: non-lamport flag
+//                       [2]: lamport flag
+//                       [3]: lamport triple buffer offset
+//                       [4]: lamport clear size
+// workspace pointers buffer: [(3 * nranks + 1) * sizeof(void*)]
+//                            [0: 3 * nranks): addresses of three buffers for each rank
+//                            [3 * nranks]: address of flag pointers buffer for the current rank
+void AllocTrtAllReduceWorkspace(const int rank, const int max_token_num, const int hidden_dim, const int data_type_size,
+                                std::vector<void*>& buffer_d_ptrs, std::vector<void*>& flag_d_ptrs,
+                                std::vector<void*>& workspace_d_ptrs, cudaStream_t stream) {
+  const int nranks = static_cast<int>(flag_d_ptrs.size());
+  llm_kernels::nvidia::AllocTrtAllReduceWorkspace(nranks, rank, max_token_num, hidden_dim, data_type_size,
+                                                  buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream);
+}
+
+// Initialize the three workspaces used in trt allreduce after allocation is finished
+void InitTrtAllReduceWorkspace(const int rank, const std::vector<void*>& buffer_d_ptrs,
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
+                               cudaStream_t stream) {
+  const int nranks = static_cast<int>(flag_d_ptrs.size());
+  llm_kernels::nvidia::InitTrtAllReduceWorkspace(nranks, rank, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream);
+}
+
+// Free the three workspaces used in trt allreduce
+void FreeTrtAllReduceWorkspace(const int rank, const std::vector<void*>& buffer_d_ptrs,
+                               const std::vector<void*>& flag_d_ptrs, const std::vector<void*>& workspace_d_ptrs,
+                               cudaStream_t stream) {
+  const int nranks = static_cast<int>(flag_d_ptrs.size());
+  llm_kernels::nvidia::FreeTrtAllReduceWorkspace(nranks, rank, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream);
+}
+
+template <typename T>
+void RunTrtAllReduce(void* input, const int rank, const int token_num, const int hidden_dim,
+                     const std::vector<void*>& workspace_d_ptrs, void* output, cudaStream_t stream) {
+  llm_kernels::nvidia::AllReduceFusionParams<T> params;
+  params.nranks = static_cast<int>(workspace_d_ptrs.size());
+  params.rank = rank;
+  params.size = token_num * hidden_dim;
+  params.hidden_dim = hidden_dim;
+  params.workspace = reinterpret_cast<void**>(workspace_d_ptrs[rank]);
+  params.allreduce_in = input;
+  params.allreduce_out = output;
+  // Always use oneshot, since twoshot has poor performance
+  params.use_oneshot = true;
+  params.stream = stream;
+  params.pattern = llm_kernels::nvidia::AllReduceFusionPattern::kAllReduce;
+  llm_kernels::nvidia::allreduce_fusion_op(params);
+}
+#define RUN_TRT_ALLREDUCE(T)                                                                                 \
+  template void RunTrtAllReduce<T>(void*, const int, const int, const int, const std::vector<void*>&, void*, \
+                                   cudaStream_t)
+RUN_TRT_ALLREDUCE(float);
+RUN_TRT_ALLREDUCE(half);
+RUN_TRT_ALLREDUCE(__nv_bfloat16);
+#undef RUN_TRT_ALLREDUCE
+
 template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream) {
   CUDA_CHECK_LAST_ERROR(
@@ -1100,6 +1164,7 @@ INVOKE_GATHER_SUBMATRIX(__nv_bfloat16);
 void InvokeProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ProcessKvList(kv_list, layer_num, block_num, block_size, stream));
 }
+
 // Apply token bitmask to logits for grammar-constrained sampling
 template <typename T>
 void InvokeApplyTokenBitmaskInplace(void* logits, const void* bitmask, const void* indices, int32_t vocab_size,
@@ -1125,4 +1190,5 @@ INVOKE_APPLY_TOKEN_BITMASK_INPLACE(float);
 INVOKE_APPLY_TOKEN_BITMASK_INPLACE(half);
 INVOKE_APPLY_TOKEN_BITMASK_INPLACE(__nv_bfloat16);
 #undef INVOKE_APPLY_TOKEN_BITMASK_INPLACE
+
 }  // namespace ksana_llm

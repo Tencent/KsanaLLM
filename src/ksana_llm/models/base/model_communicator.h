@@ -22,8 +22,7 @@ namespace ksana_llm {
 // The collective communicator library.
 class ModelCommunicator {
  public:
-  ModelCommunicator(Tensor* buffer, Tensor* input, int rank, const RuntimeConfig& runtime_config,
-                    std::shared_ptr<Context> context);
+  ModelCommunicator(Tensor* input, int rank, const RuntimeConfig& runtime_config, std::shared_ptr<Context> context);
   ~ModelCommunicator();
 
   // The all-gather reduce.
@@ -67,7 +66,6 @@ class ModelCommunicator {
   Tensor tp_custom_all_reduce_rank_tensor_;
 
   // Use for custom all reduce layer.
-  Tensor* buffer_;
   Tensor* input_;
 
   // Whether the communication is finished.

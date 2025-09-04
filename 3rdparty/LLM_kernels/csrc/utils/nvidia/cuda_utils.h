@@ -132,9 +132,8 @@ template <typename T>
 void ResetGPUBufferWithStep(T* data_ptr, size_t n_elems, const float max_val = 1.0f, const float min_val = -1.0f,
                             const float val_step = 0.000001f);
 
-typedef struct __align__(4) {
-  half x, y, z, w;
-} half4;
+typedef struct __align__(4) { half x, y, z, w; }
+half4;
 
 inline int32_t div_up(int32_t a, int32_t n) { return (a + n - 1) / n; }
 
@@ -324,12 +323,24 @@ inline int32_t GetSMVersion() {
   return sm_major * 10 + sm_minor;
 }
 
-inline int32_t GetSMCount() {
-  int32_t device{-1};
-  CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device));
-  int32_t sms{0};
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device));
-  return sms;
+inline int GetSMCount() {
+  static int sm_count{-1};
+  if (sm_count == -1) {
+    int device_id;
+    CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device_id));
+  }
+  return sm_count;
+}
+
+inline int GetPerBlockRegisterCount() {
+  static int regs_per_block{-1};
+  if (regs_per_block == -1) {
+    int device_id;
+    CHECK_NVIDIA_CUDA_ERROR(cudaGetDevice(&device_id));
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&regs_per_block, cudaDevAttrMaxRegistersPerBlock, device_id));
+  }
+  return regs_per_block;
 }
 
 inline int getMaxSharedMemoryPerBlockOptin() {
@@ -357,10 +368,12 @@ inline std::tuple<size_t, size_t> getDeviceMemoryInfo(bool const useUvm) {
   return {free, total};
 }
 
-inline int getDeviceCount() {
-  int count = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&count));
-  return count;
+inline int GetDeviceCount() {
+  static int device_count{-1};
+  if (device_count == -1) {
+    CHECK_NVIDIA_CUDA_ERROR(cudaGetDeviceCount(&device_count));
+  }
+  return device_count;
 }
 
 uint32_t GetNvLinkVersion(uint32_t device_id, uint32_t link_idx);
@@ -407,8 +420,36 @@ float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 1
 }
 
 // Get the next power of 2 of a number
-inline uint32_t next_pow2(uint32_t x) noexcept {
-  return x <= 1u ? 1u : 1u << (32 - __builtin_clz(x - 1));
+inline uint32_t NextPow2(uint32_t x) noexcept { return x <= 1u ? 1u : 1u << (32 - __builtin_clz(x - 1)); }
+
+inline bool GetEnablePDL() {
+  // We enable PDL (programmatic dependent launch) by default on hopper and later arch
+  // See
+  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization
+  static bool enable_pdl = GetSMVersion() >= 90 && std::getenv("KLLM_DISABLE_PDL") == nullptr;
+  return enable_pdl;
+}
+
+inline bool EnableGpuP2PAccess(int device_count) {
+  constexpr uint32_t kReserveP2PFlag = 0;
+  for (int src_rank = 0; src_rank < device_count; src_rank++) {
+    CHECK_NVIDIA_CUDA_ERROR(cudaSetDevice(src_rank));
+    for (int dst_rank = 0; dst_rank < device_count; dst_rank++) {
+      if (src_rank == dst_rank) {
+        continue;
+      }
+      int can_cuda_enable_p2p = 0;
+      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceCanAccessPeer(&can_cuda_enable_p2p, src_rank, dst_rank));
+      if (can_cuda_enable_p2p == 0) {
+        return false;
+      }
+      cudaError_t err = cudaDeviceEnablePeerAccess(dst_rank, kReserveP2PFlag);
+      if (err != cudaErrorPeerAccessAlreadyEnabled) {
+        CHECK_NVIDIA_CUDA_ERROR(err);
+      }
+    }
+  }
+  return true;
 }
 
 }  // namespace utils

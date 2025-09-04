@@ -671,7 +671,7 @@ void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* ex
                              int32_t* total_tokens_post_pad, const int32_t* expert_map, const int32_t topk,
                              const int32_t num_experts, const int32_t expert_para_size, const int32_t block_size,
                              const size_t numel, const int32_t rank, const cudaStream_t& stream) {
-  static int device_count = llm_kernels::utils::getDeviceCount();
+  static int device_count = llm_kernels::utils::GetDeviceCount();
   static std::vector<bool> initialized(device_count, false);
   static std::vector<int> num_threads(device_count, 0);
   static std::vector<int> shared_mems(device_count, 0);
@@ -752,7 +752,7 @@ void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t*
   // We employ extra blocks to perform `sorted_ids.fill_(numel)`
   const int align_num_blocks =
       std::min(max_blocks, 1 + CEILDIV(max_num_tokens_padded / SGL_MOE_ALIGN_BLOCK_VEC_SIZE, align_block_threads));
-  const size_t scan_size = llm_kernels::utils::next_pow2(num_experts);
+  const size_t scan_size = llm_kernels::utils::NextPow2(num_experts);
   const size_t shared_mem_size = (num_experts + (num_experts + 1) + scan_size + WARP_SIZE) * sizeof(int32_t);
   sgl_moe_align_block_size_kernel<T><<<align_num_blocks, align_block_threads, shared_mem_size, stream>>>(
       topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, max_num_tokens_padded, num_experts, block_size,

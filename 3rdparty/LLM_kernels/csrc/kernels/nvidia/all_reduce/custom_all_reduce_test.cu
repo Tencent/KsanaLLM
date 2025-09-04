@@ -295,7 +295,6 @@ class LlamaNvidiaCustomAllReduceTestSuit : public NvidiaTestSuitBase {
     }
     custom_all_reduce.RegisterBuffer(data, stream);
 
-    constexpr int num_iters = 25;
     dummy_kernel<<<1, 1, 0, stream>>>();
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 

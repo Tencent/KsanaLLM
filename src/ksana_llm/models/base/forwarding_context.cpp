@@ -234,13 +234,8 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
 
   // Model communicator is only required when tp size is greater than 1.
   if (tensor_para_size > 1) {
-    // Currently, custom all reduce is only enabled when `tp == 2`, so the
-    // `buffers_.hidden_buffer_0_` will not be used.
-
-    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, buffers_->hidden_buffer_0);
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, buffers_->shared_buffer);
     model_communicator_ = std::make_shared<ModelCommunicator>(
-        /* buffer */ &(hidden_buffer_tensors_0[0]),
         /* input */ &(reduce_buffer_tensors[0]), rank_, runtime_config, context_);
   } else {
     model_communicator_ = nullptr;
