@@ -42,6 +42,10 @@ enum PacketType {
   CONTROL_REQ_EXPERT_PARALLEL = 16,
   CONTROL_RSP_EXPERT_PARALLEL = 17,
 
+  // Expert-Parallel DeepEP Meta data.
+  CONTROL_REQ_DEEPEP_META = 18,
+  CONTROL_RSP_DEEPEP_META = 19,
+
   // unknown type.
   PACKET_TYPE_UNKNOWN = 255
 };

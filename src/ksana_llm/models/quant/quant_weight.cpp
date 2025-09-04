@@ -107,13 +107,13 @@ QuantWeight<T>::QuantWeight(const ModelConfig& model_config, const RuntimeConfig
   size_t expert_node_rank = expert_parallel_config.expert_node_rank;
   size_t num_experts = model_config_.moe_config.num_experts;
   num_experts_per_rank_ = (num_experts + global_expert_para_size_ - 1) / global_expert_para_size_;
-  expert_map_ = std::vector<int>(num_experts, num_experts_per_rank_ + 1);
+  expert_map_ = std::vector<int>(num_experts, -1);
   size_t rank_expert_offset = expert_node_rank * expert_para_size_ * num_experts_per_rank_;
   size_t expert_offset = (global_expert_para_size_ > 1) ? ((rank_ % expert_para_size_) * num_experts_per_rank_) : 0;
   size_t expert_start_id = rank_expert_offset + expert_offset;
   size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank_);
   for (size_t i = expert_start_id; i < expert_end_id; ++i) {
-    expert_map_[i] = i - expert_start_id;
+    expert_map_[i] = static_cast<int>(i - expert_start_id);
   }
   KLLM_LOG_DEBUG << fmt::format("In quant_weight.cpp Rank {} valid expert range is from {} to {}", rank_,
                                 expert_start_id, expert_end_id - 1);
@@ -191,7 +191,7 @@ void QuantWeight<T>::LoadMoeIntQuantWeight(const std::string& tensor_name, std::
   size_t group_size = model_config_.quant_config.group_size;
   int layer_idx = -1, expert_idx = -1;
   GetExpertsScaleIdx(tensor_name, layer_idx, expert_idx);
-  if (expert_map_[expert_idx] >= num_experts_per_rank_) {
+  if (expert_map_[expert_idx] < 0) {
     // Skip load weight when the expert_id will be not used in current rank.
     return;
   }
@@ -919,7 +919,7 @@ bool QuantWeight<T>::LoadMoeFp8E4m3BlockWiseScale(const std::string& tensor_name
     if (layer_idx == -1) {
       return false;
     }
-    if (expert_map_[expert_idx] >= num_experts_per_rank_) {
+    if (expert_map_[expert_idx] < 0) {
       // Skip load weight when the expert_id will be not used in current rank.
       return false;
     }
@@ -1205,10 +1205,10 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
                                     ".mlp.shared_expert.up_proj.", ".mlp.shared_expert.down_proj."};
   size_t num_experts = model_config_.moe_config.num_experts;
   for (size_t idx = 0; idx < num_experts; idx++) {
-    if (expert_map_[idx] >= num_experts_per_rank_) {
+    if (expert_map_[idx] < 0) {
       continue;
     }
-    size_t expert_idx = expert_map_[idx];
+    int expert_idx = expert_map_[idx];
     names.push_back(fmt::format(".mlp.experts.{}.gate_proj", expert_idx));
     names.push_back(fmt::format(".mlp.experts.{}.up_proj", expert_idx));
     names.push_back(fmt::format(".mlp.experts.{}.down_proj", expert_idx));

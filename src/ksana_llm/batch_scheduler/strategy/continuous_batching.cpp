@@ -37,7 +37,20 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
   }
   size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num;
+  /* TODO(zezhao):
+   * 在多机 EP 场景下，每台机器都持有完整的 MLA、Embedding 以及 LmHead，多台机器间仅在 MOE 层进行数据共享
+   * 对于每台机器，MLA 部分的所有 DP 节点，每轮调度后会产出最多 max_step_token_num 的 token。
+   * 多台机器通过 DeepEP Dispatch 逻辑，完成 AllToAll 数据传输，则每台机器、每张卡上理论收到的最多 token 数为：
+   *    machine_nums * max_step_token_num
+   * 而 MOE 部分所使用的参与数据存储的几个空间 hidden_buffer_0, hidden_buffer_1, reduce_buffer, workspace 等，
+   * 均是按照 max_step_token_num 分配的显存空间。上述的 Dispatch 分发会导致计算越界。
+   * 因此这里暂时通过将 dp_max_step_token_num 缩放到 (1 / EP机器数) 的方法，规避越界问题。
+   * 后续将重新调整 MOE 部分的空间分配及使用方法，移除此处的缩放操作。
+   * 额外的，由于缩放操作存在，在开启双机 EP 时，将 max_step_token_num 配置为 64K，则程序本身仅能支持最大为 32K 的
+   * 请求，与 yaml 配置存在不符。
+   */
+  dp_max_step_token_num_ =
+      batch_scheduler_config_.max_step_token_num / runtime_config_.parallel_basic_config.expert_world_size;
   dp_max_batch_size_ = batch_scheduler_config_.max_batch_size;
   dp_max_logits_num_ = dp_max_batch_size_ * batch_scheduler_config.max_decode_tokens_per_req;
   if (connector_config_.group_role == GroupRole::DECODE) {
@@ -67,9 +80,18 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
   req->kv_cached_token_num = 0;
   req->suggested_draft_num = 0;
   req->prefix_cache_len = 0;
-
+  // To avoid Mock requests being categorized as SingleTokenForward requests, we calculate the Mock request total
+  // length as: Mock total length = MTP token count + SingleToken length + 1 (additional token)
+  size_t mock_request_length = (runtime_config.enable_mtp_module ? 1 : 0) + 1 + 1;
+  // After Mock request completes one inference round, rollback the newly generated tokens at the end to restore
+  // the initial state.
+  if (req->output_tokens.size() > mock_request_length) {
+    req->output_tokens.resize(mock_request_length);
+  }
+  if (req->forwarding_tokens.size() > mock_request_length) {
+    req->forwarding_tokens.resize(mock_request_length);
+  }
   batch_state_->mock_queue.push_back(req);
-
   return Status();
 }
 

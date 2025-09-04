@@ -108,6 +108,7 @@ void MemGetInfoT<DEVICE_TYPE_NVIDIA>(size_t* free, size_t* total) {
   size_t device_free;
   CUDA_CHECK(cudaMemGetInfo(&device_free, total));
   *free = device_free + mempool_free;
+  KLLM_LOG_DEBUG << "device_id " << device_id << " free " << *free;
 }
 
 template <>

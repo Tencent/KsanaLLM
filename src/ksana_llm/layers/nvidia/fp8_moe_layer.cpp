@@ -27,7 +27,7 @@ Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 
 template <typename T>
 size_t Fp8MoeLayer::GetWorkSpaceSizeT() {
-  GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_, this->expert_hidden_size_,
+  GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_per_node_, this->expert_hidden_size_,
                                      this->expert_inter_size_, this->expert_topk_, this->tp_size_, this->rank_,
                                      this->use_lora_, this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
   quant_buffer_size_ = this->max_token_num_ * this->expert_hidden_size_ * GetTypeSize(TYPE_FP8_E4M3);
@@ -38,7 +38,7 @@ size_t Fp8MoeLayer::GetWorkSpaceSizeT() {
 
 Status Fp8MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   this->workspace_buffer_ = workspace_buffer;
-  this->scale_probabilities_size_ = this->max_token_num_ * this->expert_num_ * sizeof(float);
+  this->scale_probabilities_size_ = this->max_token_num_ * this->expert_num_per_node_ * sizeof(float);
   this->src_to_dest_map_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);
   this->selected_expert_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);
   this->lora_workspace_size_ = 0;  // NO support for lora
@@ -100,7 +100,7 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
         input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
         input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_, this->expert_topk_, this->workspace_info_.workspace_sizes,
+        this->expert_inter_size_, this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
         static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
         this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
@@ -112,7 +112,7 @@ Status Fp8MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
         input_activations, input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
         input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_,
-        this->expert_inter_size_, this->expert_num_, this->expert_topk_, this->workspace_info_.workspace_sizes,
+        this->expert_inter_size_, this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
         static_cast<char*>(this->workspace_info_.workspace), output_tensors[0].GetPtr<void>(),
         this->workspace_info_.scale_probs, static_cast<int*>(this->workspace_info_.src_to_dest_map),
         static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,

@@ -26,15 +26,19 @@ file(GLOB_RECURSE models_SRCS
 
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 
-set(kernels_nvidia_LIBS, "")
-set(kernels_ascend_LIBS, "")
+set(kernels_nvidia_LIBS "")
+set(kernels_ascend_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm)
 endif()
 
 add_library(models STATIC ${models_SRCS})
-target_link_libraries(models PUBLIC modules model_base cache_manager layers samplers data_hub ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
+target_link_libraries(models PUBLIC modules model_base cache_manager
+  -Wl,--whole-archive
+  layers
+  -Wl,--no-whole-archive
+  samplers data_hub ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
 
 # for test
 if(WITH_STANDALONE_TEST)

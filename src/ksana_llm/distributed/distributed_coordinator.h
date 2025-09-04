@@ -45,6 +45,8 @@ class DistributedCoordinator {
   // Stop to accept any new connection.
   Status Frozen();
 
+  Status SynchronizeNvshmemUniqueId();
+
  private:
   PipelineConfig pipeline_config_;
 

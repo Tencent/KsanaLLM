@@ -85,7 +85,7 @@ Status CutlassMatMulLayer::PreprocessT(const ModelConfig& model_config, const Ru
   const size_t warmup_iters = std::max(1UL, record_iters / 2);  // warmup不能为0
 
   if (weight_data_type_ == TYPE_I4_GROUP) {
-    const size_t max_posible_m = runtime_config.max_batch_size;
+    const size_t max_posible_m = std::min(runtime_config.max_batch_size, 256);
     const size_t posible_n = max_n_;
     const size_t posible_k = max_k_;
 

@@ -47,8 +47,8 @@ DistributedCoordinator::DistributedCoordinator(
   if (expert_parallel_config_.global_expert_para_size > 1) {
     expert_parallel_control_channel_ = std::make_shared<ExpertParallelControlChannel>(
         expert_parallel_config_.expert_master_host, expert_parallel_config_.expert_master_port,
-        expert_parallel_config_.expert_world_size, expert_parallel_config_.expert_node_rank, packet_creation_fn,
-        schedule_output_pool, env_);
+        expert_parallel_config_.expert_world_size, expert_parallel_config_.expert_node_rank,
+        expert_parallel_config_.global_expert_para_size, packet_creation_fn, schedule_output_pool, env_);
 
 #ifdef ENABLE_CUDA
     Status status = DataChannelFactory::CreateExpertDataChannel<ExpertParallelNcclDataChannel>(
@@ -224,6 +224,10 @@ Status DistributedCoordinator::SynchronizeExpertParallelExperts() {
 }
 
 Status DistributedCoordinator::SynchronizeCacheBlockNum() { return control_channel_->SynchronizeCacheBlockNum(); }
+
+Status DistributedCoordinator::SynchronizeNvshmemUniqueId() {
+  return expert_parallel_control_channel_->SynchronizeNvshmemUniqueId();
+}
 
 Status DistributedCoordinator::Barrier() { return control_channel_->Barrier(); }
 

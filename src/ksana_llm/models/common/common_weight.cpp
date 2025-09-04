@@ -143,11 +143,18 @@ Status CommonWeight<T>::PrepareLoadOpMeta(size_t& tensor_para_offset, std::vecto
     return Status();
   }
 
-  tensor_para_offset = rank_;
   if (tensor_name.find(".bias") != std::string::npos || tensor_name.find("o_proj") != std::string::npos ||
       tensor_name.find("down_proj") != std::string::npos || tensor_name.find("embed_") != std::string::npos) {
     transpose_first = true;
   }
+  if (enable_full_shared_expert_ &&
+      (tensor_name.find(".down_proj") != std::string::npos || tensor_name.find(".up_proj") != std::string::npos ||
+       tensor_name.find(".gate_proj") != std::string::npos)) {
+    KLLM_LOG_INFO << fmt::format("Using enable_full_shared_expert, tensor {} no need to slicing.", tensor_name);
+    return Status();
+  }
+
+  tensor_para_offset = rank_;
   if (transpose_first) {
     if (tensor_name.find("o_proj") != std::string::npos) {
       int attn_group_tp_size = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;

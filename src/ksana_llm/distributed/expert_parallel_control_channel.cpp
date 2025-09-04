@@ -1,4 +1,4 @@
-/* Copyright 2024 Tencent Inc.  All rights reserved.
+/* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 #include "ksana_llm/distributed/expert_parallel_control_channel.h"
@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/distributed/control_channel.h"
 #include "ksana_llm/distributed/control_message.h"
 #include "ksana_llm/distributed/node_info.h"
@@ -31,13 +32,14 @@
 namespace ksana_llm {
 ExpertParallelControlChannel::ExpertParallelControlChannel(const std::string& master_host, uint16_t master_port,
                                                            size_t world_size, int node_rank,
+                                                           size_t global_expert_para_size,
                                                            PacketCreationFunc packet_creation_fn,
                                                            ScheduleOutputPool* schedule_output_pool,
                                                            std::shared_ptr<Environment> env)
     : ControlChannel(master_host, master_port, 1, node_rank, packet_creation_fn, nullptr, env) {
   world_size_ = world_size;
   node_rank_ = node_rank;
-
+  global_expert_para_size_ = global_expert_para_size;
   master_host_ = master_host;
   master_port_ = master_port;
 
@@ -154,15 +156,15 @@ Status ExpertParallelControlChannel::ProcessAddNodeRequest(NodeInfo* node_info, 
 
   AddNodeRequest* add_node_req = reinterpret_cast<AddNodeRequest*>(req_packet->body);
 
-  int node_rank = add_node_req->node_rank;
-  node_ranks_[*node_info] = node_rank;
-  rank_nodes_[node_rank] = *node_info;
+  size_t req_node_rank = add_node_req->node_rank;
+  node_ranks_[*node_info] = req_node_rank;
+  rank_nodes_[req_node_rank] = *node_info;
 
   char* data_host = add_node_req->data_host;
   uint16_t data_port = add_node_req->data_port;
-  rank_data_nodes_[node_rank] = {std::string(data_host), data_port};
+  rank_data_nodes_[req_node_rank] = {std::string(data_host), data_port};
   KLLM_LOG_INFO << "ExpertParallelControlChannel add node, data_host: " << std::string(data_host)
-                << ", port: " << data_port << ", node_rank: " << node_rank;
+                << ", port: " << data_port << ", node_rank: " << req_node_rank;
 
   Packet* rsp_packet = GetPacketObject(PacketType::CONTROL_RSP_ADD_NODE, 0);
   if (rsp_packet == nullptr) {
@@ -191,8 +193,8 @@ Status ExpertParallelControlChannel::ProcessHeartbeatRequest(NodeInfo* node_info
   std::unique_lock<std::mutex> lock(mutex_);
 
   HeartbeatRequest* heartbeat_req = reinterpret_cast<HeartbeatRequest*>(req_packet->body);
-  int node_rank = heartbeat_req->node_rank;
-  node_heartbeat_timestamp_[node_rank] = GetCurrentTime();
+  size_t req_node_rank = heartbeat_req->node_rank;
+  node_heartbeat_timestamp_[req_node_rank] = GetCurrentTime();
 
   // Send response.
   Packet* packet = GetPacketObject(PacketType::CONTROL_RSP_HEARTBEAT, 0);
@@ -220,8 +222,8 @@ Status ExpertParallelControlChannel::ProcessHeartbeatResponse(NodeInfo* node_inf
   std::unique_lock<std::mutex> lock(mutex_);
 
   HeartbeatResponse* heartbeat_rsp = reinterpret_cast<HeartbeatResponse*>(rsp_packet->body);
-  int node_rank = heartbeat_rsp->node_rank;
-  node_heartbeat_timestamp_[node_rank] = GetCurrentTime();
+  size_t req_node_rank = heartbeat_rsp->node_rank;
+  node_heartbeat_timestamp_[req_node_rank] = GetCurrentTime();
 
   free(rsp_packet);
   return Status();
@@ -235,8 +237,8 @@ Status ExpertParallelControlChannel::ProcessBarrierRequest(NodeInfo* node_info, 
     barrier_req_ranks_.insert(std::make_pair(clock_idx, std::unordered_set<int>()));
   }
 
-  int node_rank = barrier_req->node_rank;
-  barrier_req_ranks_[clock_idx].insert(node_rank);
+  size_t req_node_rank = barrier_req->node_rank;
+  barrier_req_ranks_[clock_idx].insert(req_node_rank);
 
   // Notify if all nodes arrives.
   if (barrier_req_ranks_[clock_idx].size() == world_size_ - 1) {
@@ -336,11 +338,12 @@ Status ExpertParallelControlChannel::ProcessExpertParallelRequest(NodeInfo* node
                 << expert_parallel_config.nccl_unique_id;
 
   expert_parallel_config.nccl_unique_ids.resize(world_size_);
-  for (int i = 0; i < world_size_; i++) {
-    memcpy(expert_parallel_config.nccl_unique_ids[i].data(), layer_req.nccl_unique_ids[i].data(),
-           sizeof(layer_req.nccl_unique_id));
-    KLLM_LOG_INFO << "ProcessExpertParallelRequest, rank: " << i << ", expert_parallele_config nccl_unique_ids: : "
-                  << reinterpret_cast<char*>(expert_parallel_config.nccl_unique_ids[i].data());
+  for (size_t target_node_rank = 0; target_node_rank < world_size_; target_node_rank++) {
+    memcpy(expert_parallel_config.nccl_unique_ids[target_node_rank].data(),
+           layer_req.nccl_unique_ids[target_node_rank].data(), sizeof(layer_req.nccl_unique_id));
+    KLLM_LOG_INFO << "ProcessExpertParallelRequest, rank: " << target_node_rank
+                  << ", expert_parallele_config nccl_unique_ids: : "
+                  << reinterpret_cast<char*>(expert_parallel_config.nccl_unique_ids[target_node_rank].data());
   }
 #endif
 
@@ -408,8 +411,8 @@ Status ExpertParallelControlChannel::ProcessShutdownResponse(NodeInfo* node_info
     return Status(RET_RUNTIME_FAILED, "Unknown node received.");
   }
 
-  int node_rank = it->second;
-  shutdown_nodes_.insert(node_rank);
+  size_t target_node_rank = it->second;
+  shutdown_nodes_.insert(target_node_rank);
 
   if (shutdown_nodes_.size() == world_size_) {
     shutdown_cv_.notify_all();
@@ -525,15 +528,15 @@ Status ExpertParallelControlChannel::SerializeAllocateExpertRequest(char* buffer
   current += sizeof(uint16_t);
 #ifdef ENABLE_CUDA
   // 反序列化 nccl_unique_id
-  memcpy(current, reinterpret_cast<char*>(request.nccl_unique_id), 128);
-  current += 128;
+  memcpy(current, reinterpret_cast<char*>(request.nccl_unique_id), kNcclUniqueIdSize);
+  current += kNcclUniqueIdSize;
 
-  // 反序列化 nccccl_unique_ids 的每个元素
-  for (uint32_t i = 0; i < world_size; i++) {
-    memcpy(current, request.nccl_unique_ids[i].data(), 128);
+  // 反序列化 nccl_unique_ids 的每个元素
+  for (size_t target_node_rank = 0; target_node_rank < world_size; target_node_rank++) {
+    memcpy(current, request.nccl_unique_ids[target_node_rank].data(), kNcclUniqueIdSize);
     std::cout << "SerializeAllocateExpertRequest, unique_dst: " << std::hex << std::setw(2) << current
-              << ", unique_src: " << request.nccl_unique_ids[i].data() << std::endl;
-    current += 128;
+              << ", unique_src: " << request.nccl_unique_ids[target_node_rank].data() << std::endl;
+    current += kNcclUniqueIdSize;
   }
 #endif
 
@@ -554,16 +557,16 @@ Status ExpertParallelControlChannel::DeserializeAllocateExpertRequest(AllocateEx
 
 #ifdef ENABLE_CUDA
   // 反序列化 nccl_unique_id
-  memcpy(request.nccl_unique_id, current, 128);
-  current += 128;
+  memcpy(request.nccl_unique_id, current, kNcclUniqueIdSize);
+  current += kNcclUniqueIdSize;
 
   //
-  // 反序列化 nccccl_unique_ids 的每个元素
+  // 反序列化 nccl_unique_ids 的每个元素
   request.nccl_unique_ids.resize(world_size);
   for (uint32_t i = 0; i < world_size; ++i) {
-    std::array<char, 128> unique_id;
-    memcpy(request.nccl_unique_ids[i].data(), current, 128);
-    current += 128;
+    std::array<char, kNcclUniqueIdSize> unique_id;
+    memcpy(request.nccl_unique_ids[i].data(), current, kNcclUniqueIdSize);
+    current += kNcclUniqueIdSize;
   }
 #endif
 
@@ -590,8 +593,8 @@ Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
     expert_parallel_config.local_num_experts = local_num_experts;
 
     // Set expert_id vs expert node mapping.
-    for (size_t i = 0; i < world_size_; i++) {
-      expert_parallel_config.expert_route_table[i * local_num_experts] = i;
+    for (size_t target_node_rank = 0; target_node_rank < world_size_; target_node_rank++) {
+      expert_parallel_config.expert_route_table[target_node_rank * local_num_experts] = target_node_rank;
     }
 
     // TODO(xingjinglu): Support more than two nodes later.
@@ -608,7 +611,7 @@ Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
 
     // Send comm info to every worker node.
     int padding = 0;
-    for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+    for (size_t target_node_rank = 1; target_node_rank < world_size_; target_node_rank++) {
       Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_EXPERT_PARALLEL, 0);
       if (req_packet == nullptr) {
         throw std::runtime_error("ControlChannel::SynchronizeNodeLayers allocate memory error.");
@@ -620,12 +623,12 @@ Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
 #endif
 
       // post-data_node
-      if (node_rank == world_size_ - 1) {
+      if (target_node_rank == world_size_ - 1) {
         strcpy(layer_req.downstream_host, expert_parallel_config.data_host.c_str());
         layer_req.downstream_port = expert_parallel_config.data_port;
       } else {
-        strcpy(layer_req.downstream_host, rank_data_nodes_[node_rank + 1].host.c_str());
-        layer_req.downstream_port = rank_data_nodes_[node_rank + 1].port;
+        strcpy(layer_req.downstream_host, rank_data_nodes_[target_node_rank + 1].host.c_str());
+        layer_req.downstream_port = rank_data_nodes_[target_node_rank + 1].port;
       }
 
       Status status;
@@ -638,12 +641,12 @@ Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
           memcpy(layer_req.nccl_unique_ids[i].data(), expert_parallel_config.nccl_unique_ids[i].data(),
                  sizeof(expert_parallel_config.nccl_unique_id));
         }
-        KLLM_LOG_INFO << "ExpertParallelControlChannel set worker node " << node_rank << ", send  nccl_unique_id"
+        KLLM_LOG_INFO << "ExpertParallelControlChannel set worker node " << target_node_rank << ", send  nccl_unique_id"
                       << expert_parallel_config.nccl_unique_id << "\n";
 #endif
 
         SerializeAllocateExpertRequest(req_packet->body, layer_req, world_size_);
-        status = raw_socket_->Send(rank_nodes_[node_rank], req_packet);
+        status = raw_socket_->Send(rank_nodes_[target_node_rank], req_packet);
       }
 
       free(req_packet);
@@ -666,13 +669,13 @@ Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
 Status ExpertParallelControlChannel::ShutdownCluster() {
   // Only master can call shutdown.
   if (node_rank_ == 0) {
-    for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+    for (size_t target_node_rank = 1; target_node_rank < world_size_; target_node_rank++) {
       Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_SHUTDOWN, 0);
       if (req_packet == nullptr) {
         throw std::runtime_error("ControlChannel::ShutdownCluster allocate memory error.");
       }
 
-      Status status = raw_socket_->Send(rank_nodes_[node_rank], req_packet);
+      Status status = raw_socket_->Send(rank_nodes_[target_node_rank], req_packet);
       free(req_packet);
 
       if (!status.OK()) {
@@ -693,6 +696,143 @@ Status ExpertParallelControlChannel::ShutdownCluster() {
     GetServiceLifetimeManager()->ShutdownService();
   }
 
+  return Status();
+}
+
+Status ExpertParallelControlChannel::SynchronizeNvshmemUniqueId() {
+  KLLM_LOG_INFO << "SynchronizeNvshmemUniqueId";
+  if (world_size_ == 1) {
+    return Status();
+  }
+  if (deepep_wrapper_ == nullptr) {
+    deepep_wrapper_ = GetExpertParallelDeepepWrapper();
+  }
+  // Workers report ipc_handles to Master for aggregation.
+  char* ipc_handles = deepep_wrapper_->GetIPCHandles();
+  uint8_t* nvshmem_unique_id = deepep_wrapper_->GetNvshmemUniqueId();
+
+  int local_num_ranks = global_expert_para_size_ / world_size_;
+  if (node_rank_ != 0) {
+    // Worker nodes (node_rank_ != 0) send messages (ipc handles ptr) to master.
+    Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_DEEPEP_META, 0);
+    if (req_packet == nullptr) {
+      throw std::runtime_error("ExpertParallelControlChannel::SynchronizeNvshmemUniqueId allocate memory error.");
+    }
+    NvshmemUniqueIdRequest* nvshmem_req = reinterpret_cast<NvshmemUniqueIdRequest*>(req_packet->body);
+    nvshmem_req->node_rank = node_rank_;
+
+    char* target_ipc_handles = reinterpret_cast<char*>(nvshmem_req->ipc_handles[node_rank_ * local_num_ranks]);
+    std::memcpy(target_ipc_handles, ipc_handles + (node_rank_ * local_num_ranks * kIpcHandlesSize),
+                kIpcHandlesSize * local_num_ranks);
+
+    Status status = raw_socket_->Send({master_host_, master_port_}, req_packet);
+    free(req_packet);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << node_rank_ << " send IPC Handle to master failed: " << status.GetMessage();
+      return status;
+    }
+  } else {
+    // Master node waits for data from worker nodes.
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto ipc_handle_ptr = std::make_unique<char[]>(kIpcHandlesSize * local_num_ranks);
+    std::memcpy(ipc_handle_ptr.get(), ipc_handles, kIpcHandlesSize * local_num_ranks);
+    node_ipc_handles_[0] = std::move(ipc_handle_ptr);
+    ipc_handles_cv_.wait(lock, [this]() -> bool { return node_ipc_handles_.size() == world_size_; });
+    for (auto& pair : node_ipc_handles_) {
+      int req_node_rank = pair.first;
+      size_t ipc_handles_size_per_node = kIpcHandlesSize * local_num_ranks;
+      char* src_ipc_handles = pair.second.get();
+      char* dst_ipc_handles = ipc_handles + req_node_rank * ipc_handles_size_per_node;
+      std::memcpy(dst_ipc_handles, src_ipc_handles, ipc_handles_size_per_node);
+    }
+  }
+
+  // Master aggregates results and sends nvshmem_unique_id and all ipc_handles to workers.
+  if (node_rank_ == 0) {
+    uint8_t* nvshmem_unique_id = deepep_wrapper_->GetNvshmemUniqueId();
+    for (size_t target_node_rank = 1; target_node_rank < world_size_; ++target_node_rank) {
+      Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_DEEPEP_META, 0);
+      if (req_packet == nullptr) {
+        throw std::runtime_error("ExpertParallelControlChannel::SynchronizeNvshmemUniqueId allocate memory error.");
+      }
+
+      NvshmemUniqueIdRequest* nvshmem_req = reinterpret_cast<NvshmemUniqueIdRequest*>(req_packet->body);
+
+      nvshmem_req->node_rank = node_rank_;
+      std::memcpy(nvshmem_req->nvshmem_unique_id, nvshmem_unique_id, global_expert_para_size_ * kNvshmemUniqudIdSize);
+      std::memcpy(reinterpret_cast<char*>(nvshmem_req->ipc_handles), ipc_handles,
+                  global_expert_para_size_ * kIpcHandlesSize);
+
+      Status status = raw_socket_->Send(rank_nodes_[target_node_rank], req_packet);
+      free(req_packet);
+
+      if (!status.OK()) {
+        KLLM_LOG_ERROR << "Send Nvshmem Unique Id to worker " << target_node_rank << " failed: " << status.GetMessage();
+        return status;
+      }
+    }
+  } else {
+    // Worker node waits for data from master nodes.
+    std::unique_lock<std::mutex> lock(mutex_);
+    nvshmem_unique_id_cv_.wait(lock, [this]() -> bool { return nvshmem_unique_id_synchronized_; });
+  }
+  deepep_wrapper_->SetReady();
+  return Status();
+}
+
+Status ExpertParallelControlChannel::ProcessNvshmemUniqueIdRequest(NodeInfo* node_info, Packet* req_packet) {
+  KLLM_LOG_INFO << "ProcessNvshmemUniqueIdRequest";
+  NvshmemUniqueIdRequest* nvshmem_req = reinterpret_cast<NvshmemUniqueIdRequest*>(req_packet->body);
+  if (deepep_wrapper_ == nullptr) {
+    deepep_wrapper_ = GetExpertParallelDeepepWrapper();
+  }
+  uint8_t* nvshmem_unique_id = deepep_wrapper_->GetNvshmemUniqueId();
+  if (nvshmem_req->node_rank > 0) {
+    // Process requests received by Master.
+    size_t req_node_rank = nvshmem_req->node_rank;
+    size_t local_num_ranks = global_expert_para_size_ / world_size_;
+    auto ipc_handle_ptr = std::make_unique<char[]>(kIpcHandlesSize * local_num_ranks);
+    std::memcpy(ipc_handle_ptr.get(), nvshmem_req->ipc_handles[req_node_rank * local_num_ranks],
+                kIpcHandlesSize * local_num_ranks);
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      node_ipc_handles_[req_node_rank] = std::move(ipc_handle_ptr);
+      if (node_ipc_handles_.size() == world_size_) {
+        ipc_handles_cv_.notify_all();
+      }
+    }
+  } else {
+    // Process requests received by Worker.
+    std::memcpy(nvshmem_unique_id, nvshmem_req->nvshmem_unique_id, global_expert_para_size_ * kNvshmemUniqudIdSize);
+    char* ipc_handles = deepep_wrapper_->GetIPCHandles();
+    std::memcpy(ipc_handles, nvshmem_req->ipc_handles, global_expert_para_size_ * kIpcHandlesSize);
+    nvshmem_unique_id_synchronized_ = true;
+    nvshmem_unique_id_cv_.notify_all();
+  }
+
+  // Send response.
+  Packet* rsp_packet = GetPacketObject(PacketType::CONTROL_RSP_DEEPEP_META, 0);
+  if (rsp_packet == nullptr) {
+    throw std::runtime_error("ExpertParallelControlChannel::ProcessNvshmemUniqueIdRequest allocate memory error.");
+  }
+
+  NvshmemUniqueIdResponse* nvshmem_rsp = reinterpret_cast<NvshmemUniqueIdResponse*>(rsp_packet->body);
+  nvshmem_rsp->status = 0;  // success
+
+  Status status = raw_socket_->Send(*node_info, rsp_packet);
+  free(rsp_packet);
+
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "Send Nvshmem Unique Id response failed: " << status.GetMessage();
+  }
+
+  free(req_packet);
+  return status;
+}
+
+Status ExpertParallelControlChannel::ProcessNvshmemUniqueIdResponse(NodeInfo* node_info, Packet* rsp_packet) {
+  KLLM_LOG_INFO << "ProcessNvshmemUniqueIdResponse";
+  free(rsp_packet);
   return Status();
 }
 

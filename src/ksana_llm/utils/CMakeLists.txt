@@ -11,24 +11,24 @@ list(FILTER utils_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")
 list(FILTER utils_SRCS EXCLUDE REGEX ".*/zixiao/.*.cpp")
 message(STATUS "utils_SRCS: ${utils_SRCS}")
 
-set(utils_nvidia_SRCS, "")
-set(utils_nvidia_LIBS, "")
+set(utils_nvidia_SRCS "")
+set(utils_nvidia_LIBS "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE utils_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/nvidia/*.cpp)
   list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt -lcuda llm_kernels_nvidia_utils)
 endif()
 
-set(utils_ascend_SRCS, "")
-set(utils_ascend_LIBS, "")
+set(utils_ascend_SRCS "")
+set(utils_ascend_LIBS "")
 
 if(WITH_ACL)
   file(GLOB_RECURSE utils_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/ascend/*.cpp)
   list(APPEND utils_ascend_LIBS ${ACL_SHARED_LIBS} hccl llm_kernels_ascend_utils_common)
 endif()
 
-set(utils_zixiao_SRCS, "")
-set(utils_zixiao_LIBS, "")
+set(utils_zixiao_SRCS "")
+set(utils_zixiao_LIBS "")
 
 if(WITH_TOPS)
   file(GLOB_RECURSE utils_zixiao_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/zixiao/*.cpp)

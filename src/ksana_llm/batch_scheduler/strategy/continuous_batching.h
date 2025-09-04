@@ -139,6 +139,10 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // 用于限制dp分组下最大的batch，等同于标准场景的dp_max_batch_size_.
   size_t dp_max_decode_batch_size_;
   size_t dp_max_logits_num_;
+
+  // Current active dp group id, only ranks where (active_dp_group_id % world_size == rank % world_size)
+  // will be scheduled
+  size_t active_dp_group_id_ = 0;
 };
 
 }  // namespace ksana_llm

@@ -31,20 +31,22 @@ void MoE::Init(const std::string& up_gate_proj_weight_name, const std::string& d
 
   up_gate_proj_weight_ = creation_context.base_weight->GetModelWeights(up_gate_proj_weight_name);
   down_proj_weight_ = creation_context.base_weight->GetModelWeights(down_proj_weight_name);
-  expert_map_ = creation_context.base_weight->GetModelWeights("expert_map");
 }
 
 MoE::~MoE() {}
 
-Status MoE::Forward(Tensor hidden_states, Tensor gating_output, std::vector<Tensor>& output_tensors) {
+Status MoE::Forward(Tensor hidden_states, Tensor gating_output, Tensor workspace_tensor,
+                    std::vector<Tensor>& output_tensors) {
+  std::vector<Tensor> moe_output_tensors = {output_tensors[0], workspace_tensor};
   if (use_e_score_correction_bias_) {
-    STATUS_CHECK_RETURN(moe_layer_->Forward({hidden_states, gating_output, up_gate_proj_weight_, down_proj_weight_,
-                                             expert_map_, e_score_correction_bias_weight_},
-                                            output_tensors));
-  } else {
     STATUS_CHECK_RETURN(moe_layer_->Forward(
-        {hidden_states, gating_output, up_gate_proj_weight_, down_proj_weight_, expert_map_}, output_tensors));
+        {hidden_states, gating_output, up_gate_proj_weight_, down_proj_weight_, e_score_correction_bias_weight_},
+        moe_output_tensors));
+  } else {
+    STATUS_CHECK_RETURN(moe_layer_->Forward({hidden_states, gating_output, up_gate_proj_weight_, down_proj_weight_},
+                                            moe_output_tensors));
   }
+  output_tensors[0].shape = moe_output_tensors[0].shape;
   return Status();
 }
 

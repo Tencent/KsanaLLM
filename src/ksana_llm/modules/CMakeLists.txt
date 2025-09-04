@@ -9,8 +9,8 @@ file(GLOB_RECURSE modules_SRCS
 
 list(FILTER modules_SRCS EXCLUDE REGEX ".*test.cpp")
 
-set(kernels_nvidia_LIBS, "")
-set(kernels_ascend_LIBS, "")
+set(kernels_nvidia_LIBS "")
+set(kernels_ascend_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm)
@@ -22,11 +22,15 @@ if(WITH_ACL)
 endif()
 
 add_library(modules STATIC ${modules_SRCS})
-target_link_libraries(modules PUBLIC layers ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS})
+target_link_libraries(modules PUBLIC 
+  -Wl,--whole-archive
+  layers ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS}
+  -Wl,--no-whole-archive
+  )
 
 # for test
 if(WITH_STANDALONE_TEST)
-  set(MODELS_TEST_DEPS modules models runtime data_hub)
+  set(MODELS_TEST_DEPS modules models runtime)
   set(MODEL_TEST_MAIN ${PROJECT_SOURCE_DIR}/tests/test.cpp)
 
   
@@ -36,7 +40,7 @@ if(WITH_STANDALONE_TEST)
     set(MODELS_TEST_LIBS  samplers ${kernels_ascend_LIBS})
   endif()
  if(WITH_CUDA)
-  cpp_test(module_mla_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/modules/attention/multihead_latent_attention_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  cpp_test(module_mla_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/modules/attention/multihead_latent_attention_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS} -Wl,--whole-archive data_hub -Wl,--no-whole-archive)
   cpp_test(module_bmm_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/modules/basic/bmm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   endif()
 endif()

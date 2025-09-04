@@ -20,7 +20,7 @@ CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, const Runti
   size_t expert_node_rank = expert_parallel_config.expert_node_rank;
   size_t num_experts = model_config_.moe_config.num_experts;
   num_experts_per_rank_ = (num_experts + global_expert_para_size_ - 1) / global_expert_para_size_;
-  expert_map_ = std::vector<int>(num_experts, num_experts_per_rank_ + 1);
+  expert_map_ = std::vector<int>(num_experts, -1);
   size_t rank_expert_offset = expert_node_rank * expert_para_size_ * num_experts_per_rank_;
   size_t expert_offset = (global_expert_para_size_ > 1) ? ((rank_ % expert_para_size_) * num_experts_per_rank_) : 0;
   size_t expert_start_id = rank_expert_offset + expert_offset;
@@ -34,12 +34,6 @@ CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, const Runti
   }
   KLLM_LOG_INFO << fmt::format("In Rank {}, valid expert range is from {} to {}", rank_, expert_start_id,
                                expert_end_id - 1);
-  std::string expert_map_name = "expert_map";
-  tensor_manager_->AddWeightTensor(expert_map_name, {num_experts}, TYPE_INT32);
-  weights_data_type_map_[expert_map_name] = TYPE_INT32;
-  Tensor& expert_map_tensor = weights_map_[expert_map_name];
-  MemcpyAsync(expert_map_tensor.GetPtr<void>(), expert_map_.data(), num_experts * sizeof(int32_t),
-              MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
 }
 
 template <typename T>
@@ -105,7 +99,7 @@ Status CommonMoeWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTen
 
     int layer_idx = -1, expert_idx = -1;
     STATUS_CHECK_RETURN(GetExpertsIdx(tensor_name, layer_idx, expert_idx));
-    if (expert_idx >= 0 && expert_map_[expert_idx] >= num_experts_per_rank_) {
+    if (expert_idx >= 0 && expert_map_[expert_idx] < 0) {
       // Skip load weight when the expert_id will be not used in current rank.
       continue;
     }

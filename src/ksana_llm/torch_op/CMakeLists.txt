@@ -15,7 +15,7 @@ if(WITH_CUDA OR WITH_TOPS)
 endif()
 
 if(WITH_ACL)
-  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs layers kernels)
+  target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs -Wl,--whole-archive layers -Wl,--no-whole-archive kernels)
 endif()
 
 # for test

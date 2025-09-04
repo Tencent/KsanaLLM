@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "ksana_llm/layers/moe_layer.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_preprocessors.h"
+#include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/utils/environment.h"
@@ -39,7 +40,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   int parameter_index = 0;
   moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
   max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
+
+  expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_topk_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -56,8 +58,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   int group_size = std::any_cast<int>(parameters[parameter_index++]);
 
-  world_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
-                            runtime_config.parallel_basic_config.expert_world_size;
+  global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
+                             runtime_config.parallel_basic_config.expert_world_size;
 
   // 权重&计算类型处理
   weight_dtype_ = GetDataType<T>();
@@ -79,14 +81,13 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
 
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
 
-  // 初始化 GroupedTopkLayer
+  // Initialize GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
   std::vector<std::any> grouped_topk_params = {
       static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
       static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
       use_e_score_correction_bias_};
   grouped_topk_layer_->Init(grouped_topk_params, runtime_config, context, rank);
-
   return Status();
 }
 
@@ -96,8 +97,9 @@ inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
 template <typename T>
 size_t MoeLayer::GetWorkSpaceSizeT() {
-  GetMoeGemmWorkspaceSize<T, T, T>(max_token_num_, expert_num_, expert_hidden_size_, expert_inter_size_, expert_topk_,
-                                   tp_size_, rank_, use_lora_, max_ws_bytes_, workspace_info_.workspace_sizes);
+  GetMoeGemmWorkspaceSize<T, T, T>(max_token_num_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_,
+                                   expert_topk_, tp_size_, rank_, use_lora_, max_ws_bytes_,
+                                   workspace_info_.workspace_sizes);
   if (use_vllm_moe_) {
     size_t m = std::min(VLLM_FUSED_MOE_CHUNK_SIZE, max_token_num_);
     topk_weights_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(float));
@@ -117,7 +119,7 @@ size_t MoeLayer::GetWorkSpaceSizeT() {
       if (weight_dtype_ == DataType::TYPE_I4_GROUP) {
         // TODO(jinxcwu) too large
         dequant_workspace_size =
-            AlignAddress(expert_num_ * expert_hidden_size_ * expert_inter_size_ * 2 * sizeof(char));
+            AlignAddress(expert_num_per_node_ * expert_hidden_size_ * expert_inter_size_ * 2 * sizeof(char));
       }
     }
     max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size +
@@ -130,7 +132,7 @@ size_t MoeLayer::GetWorkSpaceSizeT() {
 
 Status MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   workspace_buffer_ = workspace_buffer;
-  scale_probabilities_size_ = max_token_num_ * expert_num_ * sizeof(float);
+  scale_probabilities_size_ = max_token_num_ * expert_num_per_node_ * sizeof(float);
   src_to_dest_map_size_ = expert_topk_ * max_token_num_ * sizeof(int);
   selected_expert_size_ = expert_topk_ * max_token_num_ * sizeof(int);
   lora_workspace_size_ = 0;  // NO support for lora
@@ -152,11 +154,17 @@ Status MoeLayer::PreprocessT(const ModelConfig& model_config_, const RuntimeConf
 
 template <typename T>
 Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  // input_tensors:
+  //  0: hidden_states
+  //  1: gating_output
+  //  2: up_gate_proj_weight
+  //  3: down_proj_weight
+  //  (*)4: e_score_correction_bias_weight
   const size_t num_tokens = input_tensors[0].shape[0];
   size_t best_config_index = 0;  // TODO(winminkong): op optimization
   void* e_score_correction_bias_weight_void = nullptr;
   if (use_e_score_correction_bias_) {
-    e_score_correction_bias_weight_void = input_tensors[5].GetPtr<void>();
+    e_score_correction_bias_weight_void = input_tensors[4].GetPtr<void>();
   }
 
   // SetWorkSpaceBuffer只保证空间足够大，不能保证后续地址不发生改变，要写死就只能在Forward中做
@@ -194,7 +202,6 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
   }
 
   if (use_vllm_moe_) {
-    // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     void* w1_scale = nullptr;
     void* w2_scale = nullptr;
     if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
@@ -206,14 +213,12 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     }
 
     // 使用 GroupedTopkLayer 计算 topk
-    int num_tokens = input_tensors[0].shape[0];
-    ExecuteGroupedTopk(input_tensors, num_tokens);
+    ExecuteGroupedTopk(input_tensors, output_tensors);
 
-    if (world_expert_para_size_ == 1) {
+    if (global_expert_para_size_ == 1) {
       InvokeFusedMoe<T, false>(input_tensors[0].GetPtr<void>(),              // hidden_states
                                input_tensors[2].GetPtr<void>(),              // w1
                                input_tensors[3].GetPtr<void>(),              // w2
-                               input_tensors[4].GetPtr<int>(),               // expert_map
                                expert_topk_,                                 // topk
                                weight_dtype_,                                // weight_dtype
                                compute_dtype_,                               // compute_dtype
@@ -237,48 +242,53 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
                                intermediate_cache3_,                         // intermediate_cache3
                                fused_id_buffer_,                             // buffer_of_ids_in_kernel
                                num_tokens,                                   // num_tokens
-                               expert_num_,                                  // num_experts
+                               expert_num_per_node_,                         // num_experts_per_node
                                expert_hidden_size_,                          // hidden_size
                                expert_inter_size_,                           // inter_size
-                               world_expert_para_size_,                      // expert_para_size* expert_world_size
+                               global_expert_para_size_,                     // expert_para_size* expert_world_size
                                dequant_workspace_,                           // dequant_workspace
                                rank_,                                        // rank
                                context_->GetComputeStreams()[rank_].Get());  // stream
     } else {
-      InvokeFusedMoe<T, true>(input_tensors[0].GetPtr<void>(),              // hidden_states
-                              input_tensors[2].GetPtr<void>(),              // w1
-                              input_tensors[3].GetPtr<void>(),              // w2
-                              input_tensors[4].GetPtr<int>(),               // expert_map
-                              expert_topk_,                                 // topk
-                              weight_dtype_,                                // weight_dtype
-                              compute_dtype_,                               // compute_dtype
-                              false,                                        // is_marlin
-                              false,                                        // use_triton
-                              w1_scale,                                     // w1_scale
-                              w2_scale,                                     // w2_scale
-                              nullptr,                                      // w1_zp
-                              nullptr,                                      // w2_zp
-                              a1_q_,                                        // a1_q
-                              a2_q_,                                        // a2_q
-                              a1_scale_,                                    // a1_scale
-                              a2_scale_,                                    // a2_scale
-                              block_shape_,                                 // block_shape
-                              topk_weights_ptr_,                            // topk_weights_ptr
-                              topk_ids_ptr_,                                // topk_ids_ptr
-                              routed_scaling_factor_,                       // routed_scaling_factor
-                              output_tensors[0].GetPtr<void>(),             // output_hidden_states
-                              intermediate_cache1_,                         // intermediate_cache1
-                              intermediate_cache2_,                         // intermediate_cache2
-                              intermediate_cache3_,                         // intermediate_cache3
-                              fused_id_buffer_,                             // buffer_of_ids_in_kernel
-                              num_tokens,                                   // num_tokens
-                              expert_num_,                                  // num_experts
-                              expert_hidden_size_,                          // hidden_size
-                              expert_inter_size_,                           // inter_size
-                              world_expert_para_size_,                      // expert_para_size* expert_world_size
-                              dequant_workspace_,                           // dequant_workspace
-                              rank_,                                        // rank
-                              context_->GetComputeStreams()[rank_].Get());  // stream
+      const size_t dispatch_num_tokens = output_tensors[1].shape[0];
+      if (dispatch_num_tokens > 0) {
+        InvokeFusedMoe<T, true>(output_tensors[1].GetPtr<void>(),             // hidden_states from dispatch
+                                input_tensors[2].GetPtr<void>(),              // w1
+                                input_tensors[3].GetPtr<void>(),              // w2
+                                expert_topk_,                                 // topk
+                                weight_dtype_,                                // weight_dtype
+                                compute_dtype_,                               // compute_dtype
+                                false,                                        // is_marlin
+                                false,                                        // use_triton
+                                w1_scale,                                     // w1_scale
+                                w2_scale,                                     // w2_scale
+                                nullptr,                                      // w1_zp
+                                nullptr,                                      // w2_zp
+                                a1_q_,                                        // a1_q
+                                a2_q_,                                        // a2_q
+                                a1_scale_,                                    // a1_scale
+                                a2_scale_,                                    // a2_scale
+                                block_shape_,                                 // block_shape
+                                topk_weights_ptr_,                            // topk_weights_ptr
+                                topk_ids_ptr_,                                // topk_ids_ptr
+                                routed_scaling_factor_,                       // routed_scaling_factor
+                                output_tensors[1].GetPtr<void>(),             // output_hidden_states
+                                intermediate_cache1_,                         // intermediate_cache1
+                                intermediate_cache2_,                         // intermediate_cache2
+                                intermediate_cache3_,                         // intermediate_cache3
+                                fused_id_buffer_,                             // buffer_of_ids_in_kernel
+                                dispatch_num_tokens,                          // num_tokens
+                                expert_num_per_node_,                         // num_experts
+                                expert_hidden_size_,                          // hidden_size
+                                expert_inter_size_,                           // inter_size
+                                global_expert_para_size_,                     // expert_para_size * expert_world_size
+                                dequant_workspace_,                           // dequant_workspace
+                                rank_,                                        // rank
+                                context_->GetComputeStreams()[rank_].Get());  // stream
+      }
+
+      // Combine is an in-place operation
+      Combine({output_tensors[1]}, output_tensors);
     }
   } else {
     // input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
@@ -286,7 +296,7 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
           input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
           input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_, expert_topk_, workspace_info_.workspace_sizes,
+          expert_inter_size_, expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
           static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
           tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
@@ -297,7 +307,7 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
       InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
           input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(), input_tensors[2].GetPtr<void>(),
           input_tensors[3].GetPtr<void>(), e_score_correction_bias_weight_void, num_tokens, expert_hidden_size_,
-          expert_inter_size_, expert_num_, expert_topk_, workspace_info_.workspace_sizes,
+          expert_inter_size_, expert_num_per_node_, expert_topk_, workspace_info_.workspace_sizes,
           static_cast<char*>(workspace_info_.workspace), output_tensors[0].GetPtr<void>(), workspace_info_.scale_probs,
           static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
           tp_size_, rank_, use_lora_, best_config_index, tactics_, use_vllm_moe_, num_expert_group_,
@@ -308,37 +318,72 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
   }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
-
   return Status();
 }
 
-Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens) {
+Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // 准备 GroupedTopkLayer 的输入和输出张量
   std::vector<Tensor> grouped_topk_input_tensors;
   std::vector<Tensor> grouped_topk_output_tensors;
+
+  size_t num_tokens = input_tensors[0].shape[0];
 
   // 输入: gating_output
   grouped_topk_input_tensors.push_back(input_tensors[1]);
 
   // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
-  if (input_tensors.size() > 5) {
-    grouped_topk_input_tensors.push_back(input_tensors[5]);
+  if (input_tensors.size() > 4) {
+    grouped_topk_input_tensors.push_back(input_tensors[4]);
   }
 
   // 输出: topk_weights_ptr
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32,
-                             {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, expert_topk_},
                              input_tensors[1].device_id, topk_weights_ptr_);
   grouped_topk_output_tensors.push_back(topk_weights_tensor);
 
   // 输出: topk_ids_ptr
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32,
-                         {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
-                         input_tensors[1].device_id, topk_ids_ptr_);
+  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, expert_topk_}, input_tensors[1].device_id,
+                         topk_ids_ptr_);
   grouped_topk_output_tensors.push_back(topk_ids_tensor);
 
   // 调用 GroupedTopkLayer
-  return grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+  Status status = grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
+    return status;
+  }
+
+  // 调用 Dispatch 分发
+  // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
+  std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
+  std::vector<Tensor>& deepep_output_tensors = output_tensors;
+
+  KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
+                                deepep_input_tensors[1].shape[0]);
+  Dispatch(deepep_input_tensors, deepep_output_tensors);
+  KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch output shape {} {}", deepep_output_tensors[0].shape[0],
+                                deepep_output_tensors[1].shape[0]);
+  topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+  topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+  return Status();
+}
+
+Status MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (GetExpertParallelDeepepWrapper()) {
+    GetExpertParallelDeepepWrapper()->Dispatch(input_tensors, output_tensors, rank_);
+  } else {
+    output_tensors[0].shape = input_tensors[0].shape;
+  }
+  return Status();
+}
+
+Status MoeLayer::Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (GetExpertParallelDeepepWrapper()) {
+    GetExpertParallelDeepepWrapper()->Combine(input_tensors, output_tensors, rank_);
+  } else {
+    output_tensors[0].shape = input_tensors[0].shape;
+  }
+  return Status();
 }
 
 }  // namespace ksana_llm

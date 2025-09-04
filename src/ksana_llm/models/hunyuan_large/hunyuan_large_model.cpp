@@ -78,7 +78,7 @@ Status HunyuanDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tensor
   STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, gated_buffer_));
 
   // MOE layer
-  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], moe_buffer_tensors);
+  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors);
 
   // shared expert
   shared_mlps_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);

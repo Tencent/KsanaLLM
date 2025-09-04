@@ -23,20 +23,20 @@ list(FILTER runtime_SRCS EXCLUDE REGEX ".*test.cpp")
 list(FILTER runtime_SRCS EXCLUDE REGEX ".*layer_progress_tracker.cpp")
 message(STATUS "runtime_SRCS: ${runtime_SRCS}")
 
-set(runtime_nvidia_LIBS, "")
+set(runtime_nvidia_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND runtime_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublasLt -lcublas)
 endif()
 
-set(runtime_ascend_LIBS, "")
+set(runtime_ascend_LIBS "")
 
 if(WITH_ACL)
   list(APPEND runtime_ascend_LIBS ${ACL_SHARED_LIBS})
   list(FILTER runtime_SRCS EXCLUDE REGEX ".*cuda_graph_runner.cpp")
 endif()
 
-set(runtime_zixiao_LIBS, "")
+set(runtime_zixiao_LIBS "")
 
 if(WITH_TOPS)
   list(APPEND runtime_ascend_LIBS ${TOPS_SHARED_LIBS})

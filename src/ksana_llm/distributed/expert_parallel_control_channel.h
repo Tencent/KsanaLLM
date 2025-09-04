@@ -6,6 +6,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include "ksana_llm/data_hub/expert_parallel_deepep_wrapper.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/distributed/control_message.h"
 #include "ksana_llm/distributed/node_info.h"
@@ -20,7 +21,7 @@ namespace ksana_llm {
 class ExpertParallelControlChannel : public ControlChannel {
  public:
   ExpertParallelControlChannel(const std::string& master_host, uint16_t master_port, size_t world_size, int node_rank,
-                               PacketCreationFunc packet_creation_fn = GetPacketObject,
+                               size_t global_expert_para_size, PacketCreationFunc packet_creation_fn = GetPacketObject,
                                ScheduleOutputPool* schedule_output_pool = nullptr,
                                std::shared_ptr<Environment> env = nullptr);
   ~ExpertParallelControlChannel();
@@ -49,6 +50,7 @@ class ExpertParallelControlChannel : public ControlChannel {
   Status ShutdownCluster();
 
   Status SynchronizeExpertParallelExperts();
+  Status SynchronizeNvshmemUniqueId();
   Status SerializeAllocateExpertRequest(char* buffer, AllocateExpertRequest& request, size_t world_size);
   Status DeserializeAllocateExpertRequest(AllocateExpertRequest& request, const char* buffer, size_t world_size);
 
@@ -82,6 +84,8 @@ class ExpertParallelControlChannel : public ControlChannel {
 
   // send schedule output to workers.
   // virtual Status ProcessSendScheduleOutputLoop();
+  virtual Status ProcessNvshmemUniqueIdRequest(NodeInfo* node_info, Packet* req_packet);
+  virtual Status ProcessNvshmemUniqueIdResponse(NodeInfo* node_info, Packet* rsp_packet);
 
  private:
   std::shared_ptr<RawSocket> raw_socket_ = nullptr;
@@ -94,6 +98,7 @@ class ExpertParallelControlChannel : public ControlChannel {
 
   size_t world_size_;
   int node_rank_;
+  size_t global_expert_para_size_;
 
   // Used for barrier.
   int barrier_clock_idx_ = 0;
@@ -119,6 +124,12 @@ class ExpertParallelControlChannel : public ControlChannel {
   std::condition_variable layer_allocation_cv_;
   std::condition_variable block_num_cv_;
 
+  std::condition_variable nvshmem_unique_id_cv_;
+  bool nvshmem_unique_id_synchronized_ = false;
+
+  std::condition_variable ipc_handles_cv_;
+  bool ipc_handles_synchronized_ = false;
+
   // rank to nodes and vice versa.
   std::unordered_map<int, NodeInfo> rank_nodes_;
   std::unordered_map<NodeInfo, int, NodeInfoHash, NodeInfoEqual> node_ranks_;
@@ -134,11 +145,16 @@ class ExpertParallelControlChannel : public ControlChannel {
   // rank to timestamp.
   std::unordered_map<int, time_t> node_heartbeat_timestamp_;
 
+  std::unordered_map<int, std::unique_ptr<char[]>> node_ipc_handles_;
+
   // Send schedule_output async.
   std::shared_ptr<std::thread> expert_parallel_send_packet_thread_ = nullptr;
 
   // Protect multi-thread receive handles.
   std::mutex mutex_;
+
+  // Unique DeepEP wrapper for each node in Expert-Parallel.
+  std::shared_ptr<ExpertParallelDeepepWrapper> deepep_wrapper_ = nullptr;
 };
 
 }  // namespace ksana_llm

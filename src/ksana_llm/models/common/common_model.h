@@ -27,6 +27,7 @@
 #include "ksana_llm/models/base/model_input.h"
 #include "ksana_llm/models/base/model_output.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
+#include "ksana_llm/models/communicator/tp_communicator.h"
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"

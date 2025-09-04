@@ -294,19 +294,6 @@ class CommonMoeWeightTest : public testing::Test {
       }
     }
 
-    // Check rank 0 expert_map
-    // Shape [256]
-    // array([0, 1, ..., 254, 255])
-    Tensor& expert_map_tensor_rank_0 = weight_rank_0->weights_map_["expert_map"];
-    EXPECT_EQ(expert_map_tensor_rank_0.shape.size(), 1);
-    EXPECT_EQ(expert_map_tensor_rank_0.shape[0], num_experts);
-    std::vector<int> expert_map_rank_0(num_experts);
-    Memcpy(expert_map_rank_0.data(), expert_map_tensor_rank_0.GetPtr<void>(), num_experts * sizeof(int),
-           MEMCPY_DEVICE_TO_HOST);
-    for (size_t i = 0; i < num_experts; ++i) {
-      EXPECT_EQ(expert_map_rank_0[i], i);
-    }
-
     // Load weight into rank 1
     SetDevice(1);
     weight_rank_1->LoadWeightsFromFile(loader, weight_name_list, custom_name_list);
@@ -371,19 +358,6 @@ class CommonMoeWeightTest : public testing::Test {
                        (i % (moe_inter_size / tensor_para_size)) + moe_inter_size / tensor_para_size;
         EXPECT_NEAR(static_cast<float>(down_data[i]), value * 0.01f, 1e-3);
       }
-    }
-
-    // Check rank 1 expert_map
-    // Shape [256]
-    // array([0, 1, ..., 254, 255])
-    Tensor& expert_map_tensor_rank_1 = weight_rank_1->weights_map_["expert_map"];
-    EXPECT_EQ(expert_map_tensor_rank_1.shape.size(), 1);
-    EXPECT_EQ(expert_map_tensor_rank_1.shape[0], model_config.moe_config.num_experts);
-    std::vector<int> expert_map_rank_1(model_config.moe_config.num_experts);
-    Memcpy(expert_map_rank_1.data(), expert_map_tensor_rank_1.GetPtr<void>(),
-           model_config.moe_config.num_experts * sizeof(int), MEMCPY_DEVICE_TO_HOST);
-    for (size_t i = 0; i < model_config.moe_config.num_experts; ++i) {
-      EXPECT_EQ(expert_map_rank_1[i], i);
     }
 
     SetDevice(0);
@@ -460,23 +434,6 @@ class CommonMoeWeightTest : public testing::Test {
       }
     }
 
-    // Check rank 0 expert_map
-    // Shape [256]
-    // array([0, 2])
-    Tensor& expert_map_tensor_rank_0 = weight_rank_0->weights_map_["expert_map"];
-    EXPECT_EQ(expert_map_tensor_rank_0.shape.size(), 1);
-    EXPECT_EQ(expert_map_tensor_rank_0.shape[0], num_experts);
-    std::vector<int> expert_map_rank_0(num_experts);
-    Memcpy(expert_map_rank_0.data(), expert_map_tensor_rank_0.GetPtr<void>(), num_experts * sizeof(int),
-           MEMCPY_DEVICE_TO_HOST);
-    for (size_t i = 0; i < num_experts; ++i) {
-      if (i < num_experts / runtime_config.parallel_basic_config.expert_parallel_size) {
-        EXPECT_EQ(expert_map_rank_0[i], i);
-      } else {
-        EXPECT_EQ(expert_map_rank_0[i], num_experts / runtime_config.parallel_basic_config.expert_parallel_size + 1);
-      }
-    }
-
     // Load weight into rank 1
     SetDevice(1);
     weight_rank_1->LoadWeightsFromFile(loader, weight_name_list, custom_name_list);
@@ -529,23 +486,6 @@ class CommonMoeWeightTest : public testing::Test {
       size_t down_element_size = down_data.size();
       for (size_t i = 0; i < down_element_size; ++i) {
         EXPECT_NEAR(static_cast<float>(down_data[i]), (i + moe_inter_size * hidden_units) * 0.01f, 1e-3);
-      }
-    }
-
-    // Check rank 1 expert_map
-    // Shape [256]
-    // array([2, 0])
-    Tensor& expert_map_tensor_rank_1 = weight_rank_1->weights_map_["expert_map"];
-    EXPECT_EQ(expert_map_tensor_rank_1.shape.size(), 1);
-    EXPECT_EQ(expert_map_tensor_rank_1.shape[0], num_experts);
-    std::vector<int> expert_map_rank_1(num_experts);
-    Memcpy(expert_map_rank_1.data(), expert_map_tensor_rank_1.GetPtr<void>(), num_experts * sizeof(int),
-           MEMCPY_DEVICE_TO_HOST);
-    for (size_t i = 0; i < num_experts; ++i) {
-      if (i < num_experts / runtime_config.parallel_basic_config.expert_parallel_size) {
-        EXPECT_EQ(expert_map_rank_1[i], num_experts / runtime_config.parallel_basic_config.expert_parallel_size + 1);
-      } else {
-        EXPECT_EQ(expert_map_rank_1[i], i - num_experts / runtime_config.parallel_basic_config.expert_parallel_size);
       }
     }
 

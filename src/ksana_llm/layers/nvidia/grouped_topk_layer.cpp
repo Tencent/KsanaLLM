@@ -55,6 +55,10 @@ Status GroupedTopkLayer::ForwardT(const std::vector<Tensor>& input_tensors, std:
   int num_tokens = input_tensors[0].shape[0];
   int num_experts = input_tensors[0].shape[1];
 
+  if (num_tokens == 0) {
+    return Status();
+  }
+
   // 计算 total_num_experts，考虑专家并行
   // TODO(zezhao): 使用 num_experts / expert_para_size 来替换 total_num_experts. 不再维护 ExpertParallelSize
   int total_num_experts = num_experts;

@@ -322,7 +322,6 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
       void* w1;
       void* w2;
       void* gating_output;
-      int* expert_map;
       void* e_bias;
       void* w1_scale;
       void* w2_scale;
@@ -342,7 +341,6 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
       CUDA_CHECK(cudaMalloc(&w1, num_experts_per_rank * inter_size * 2 * hidden_size * sizeof(half)));
       CUDA_CHECK(cudaMalloc(&w2, num_experts_per_rank * hidden_size * inter_size * sizeof(half)));
       CUDA_CHECK(cudaMalloc(&gating_output, num_tokens * num_experts * sizeof(float)));
-      CUDA_CHECK(cudaMalloc(&expert_map, num_experts * sizeof(int)));
       CUDA_CHECK(cudaMalloc(&e_bias, num_experts * sizeof(float)));
       CUDA_CHECK(cudaMalloc(&w1_scale, num_experts_per_rank * inter_size * 2 * hidden_size / 128 * sizeof(float)));
       CUDA_CHECK(cudaMalloc(&w2_scale, num_experts_per_rank * hidden_size * inter_size / 128 * sizeof(float)));
@@ -374,7 +372,6 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
       // 生成随机数据
       std::vector<float> h_hidden_states(num_tokens * hidden_size);
       std::vector<float> h_gating_output(num_tokens * num_experts);
-      std::vector<int> h_expert_map(num_experts, num_experts / expert_para_size + 1);
       std::vector<int> h_fake_topk_ids(num_tokens * topk);
 
       std::random_device rd;
@@ -390,17 +387,15 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
         h_gating_output[i] = dis(gen);
       }
 
-      for (size_t i = 0; i < num_experts_per_rank; ++i) {
-        h_expert_map[i] = i;
-      }
-
       int hit_expert = 0;
       std::vector<int> hit_counts(num_experts, 0);
       for (size_t i = 0; i < num_tokens * topk; ++i) {
         h_fake_topk_ids[i] = int_dis(gen);
-        if (h_expert_map[h_fake_topk_ids[i]] < num_experts_per_rank) {
+        if (h_fake_topk_ids[i] < num_experts_per_rank) {
           hit_expert += 1;
-          hit_counts[h_expert_map[h_fake_topk_ids[i]]] += 1;
+          hit_counts[h_fake_topk_ids[i]] += 1;
+        } else {
+          h_fake_topk_ids[i] = -1;
         }
       }
 
@@ -409,7 +404,6 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
                             cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(gating_output, h_gating_output.data(), num_tokens * num_experts * sizeof(float),
                             cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(expert_map, h_expert_map.data(), num_experts * sizeof(int), cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(fake_topk_ids_ptr, h_fake_topk_ids.data(), num_tokens * topk * sizeof(int),
                             cudaMemcpyHostToDevice));
 
@@ -472,13 +466,13 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
           } else if (expert_para_size == 1) {
             llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, false>(
                 reinterpret_cast<int32_t*>(topk_ids_ptr), sorted_ids.data_ptr<int32_t>(),
-                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), expert_map, topk,
-                num_experts_per_rank, expert_para_size, block_size, numel, device, stream);
+                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), topk, num_experts_per_rank,
+                expert_para_size, block_size, numel, device, stream);
           } else {
             llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, true>(
                 reinterpret_cast<int32_t*>(topk_ids_ptr), sorted_ids.data_ptr<int32_t>(),
-                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), expert_map, topk,
-                num_experts_per_rank, expert_para_size, block_size, numel, device, stream);
+                expert_ids.data_ptr<int32_t>(), num_tokens_post_pad.data_ptr<int32_t>(), topk, num_experts_per_rank,
+                expert_para_size, block_size, numel, device, stream);
           }
         }
         {
@@ -507,13 +501,11 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
           if (expert_para_size == 1) {
             llm_kernels::nvidia::InvokeSiluAndMul<half, false>(
                 reinterpret_cast<const half*>(intermediate_cache1), reinterpret_cast<half*>(intermediate_cache2),
-                reinterpret_cast<const int*>(topk_ids_ptr), reinterpret_cast<const int*>(expert_map),
-                num_experts_per_rank, elements_num, inter_size, stream);
+                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, stream);
           } else {
             llm_kernels::nvidia::InvokeSiluAndMul<half, true>(
                 reinterpret_cast<const half*>(intermediate_cache1), reinterpret_cast<half*>(intermediate_cache2),
-                reinterpret_cast<const int*>(topk_ids_ptr), reinterpret_cast<const int*>(expert_map),
-                num_experts_per_rank, elements_num, inter_size, stream);
+                reinterpret_cast<const int*>(topk_ids_ptr), elements_num, inter_size, stream);
           }
         }
         {
@@ -540,12 +532,10 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
           CudaEventTimer fused_moe_1("InvokeMoeSum", stream, cal_moe_sum);
           if (expert_para_size == 1) {
             llm_kernels::nvidia::InvokeMoeSum<half, false>(intermediate_cache3, output_hidden_states, topk_ids_ptr,
-                                                           expert_map, num_tokens, num_experts_per_rank, topk,
-                                                           hidden_size, stream);
+                                                           num_tokens, topk, hidden_size, stream);
           } else {
             llm_kernels::nvidia::InvokeMoeSum<half, true>(intermediate_cache3, output_hidden_states, topk_ids_ptr,
-                                                          expert_map, num_tokens, num_experts_per_rank, topk,
-                                                          hidden_size, stream);
+                                                          num_tokens, topk, hidden_size, stream);
           }
         }
         CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -556,7 +546,6 @@ TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
       CUDA_CHECK(cudaFree(w1));
       CUDA_CHECK(cudaFree(w2));
       CUDA_CHECK(cudaFree(gating_output));
-      CUDA_CHECK(cudaFree(expert_map));
       CUDA_CHECK(cudaFree(e_bias));
       CUDA_CHECK(cudaFree(w1_scale));
       CUDA_CHECK(cudaFree(w2_scale));

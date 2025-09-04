@@ -9,8 +9,8 @@ file(GLOB_RECURSE model_base_SRCS
 
 list(FILTER model_base_SRCS EXCLUDE REGEX ".*test.cpp")
 
-set(kernels_nvidia_LIBS, "")
-set(kernels_ascend_LIBS, "")
+set(kernels_nvidia_LIBS "")
+set(kernels_ascend_LIBS "")
 
 if(WITH_CUDA)
   list(APPEND kernels_nvidia_LIBS llm_kernels_nvidia_kernel_asymmetric_gemm)

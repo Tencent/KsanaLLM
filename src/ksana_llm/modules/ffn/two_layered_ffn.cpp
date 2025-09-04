@@ -23,6 +23,7 @@ void TwoLayeredFFN::InitConfig(int layer_idx, LayerCreationContext& creation_con
                                const std::string& weight_name_format) {
   const std::string up_gate_proj_weights_name =
       fmt::format("model.layers.{}" + weight_name_format, layer_idx, "gate_up_proj");
+  enable_full_shared_expert_ = creation_context.runtime_config.enable_full_shared_expert;
   if (creation_context.base_weight->GetModelWeights(up_gate_proj_weights_name).GetElementNumber() > 0) {
     fuse_gate_up_proj_ = true;
     // Fuse silu mul into fp8 group quant before down projection
@@ -105,7 +106,7 @@ Status TwoLayeredFFN::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std:
   }
 
   // Mlp down_proj MatMul
-  if (forwarding_context.GetModelCommunicator()) {
+  if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
     // Put output to `reduce_buffer_tensors` to ensure that the input for custom reduce sum is
     // always in `reduce_buffer_tensors`.
     STATUS_CHECK_RETURN(mlp_down_projs_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors));

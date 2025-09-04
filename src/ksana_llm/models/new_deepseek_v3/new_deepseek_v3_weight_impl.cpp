@@ -584,7 +584,7 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   size_t moe_tp_rank = dev_rank / expert_parallel_config.expert_para_size;
 
   // init expert map
-  std::vector<int> expert_map(num_experts, num_experts_per_rank + 1);
+  std::vector<int> expert_map(num_experts, -1);
   size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
   size_t expert_offset = (global_expert_para_size > 1)
                              ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
@@ -594,7 +594,6 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   for (size_t i = expert_start_id; i < expert_end_id; ++i) {
     expert_map[i] = i - expert_start_id;
   }
-  std::string expert_map_name = "expert_map";
   size_t moe_inter_size_per_rank =
       DivRoundUp(new_deepseek_v3_config->moe_config.moe_inter_size, new_deepseek_v3_config->moe_tensor_para_size);
   size_t hidden_units = new_deepseek_v3_config->hidden_units;
@@ -615,12 +614,12 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
     KLLM_LOG_DEBUG << fmt::format("Dev_rank: {}, processing weight: {}, dtype: {}, shape: {}", dev_rank,
                                   host_weight_name, host_weight_tensor.dtype,
                                   Vector2Str(std::vector<size_t>(host_weight_tensor.shape)));
+    size_t mlp_tensor_para_size = runtime_config_.enable_full_shared_expert ? 1 : context_->GetTensorParallelSize();
     // 1, quant MLP layers
     if (host_weight_name.find(".mlp.down_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.shared_expert.down_proj.") != std::string::npos) {
       Tensor dev_tensor;
-      SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, context_->GetTensorParallelSize(),
-                    false);
+      SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, mlp_tensor_para_size, false);
       device_model_weights[host_weight_name] = dev_tensor;
       continue;
     }
@@ -629,10 +628,8 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
         host_weight_name.find(".mlp.shared_expert.gate_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.gate_proj.") != std::string::npos) {
       Tensor dev_tensor;
-      TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                         context_->GetTensorParallelSize(), true);
+      TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config, mlp_tensor_para_size, true);
       device_model_weights[host_weight_name] = dev_tensor;
-
       continue;
     }
 
@@ -642,8 +639,8 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
       if (layer_idx < 0 || expert_idx < 0) {
         continue;
       }
-      size_t expert_idx_ = expert_map[expert_idx];
-      if (expert_idx_ >= 0 && expert_idx_ >= num_experts_per_rank) {
+      int expert_idx_ = expert_map[expert_idx];
+      if (expert_idx_ < 0) {
         continue;
       }
       bool is_qweight = host_weight_name.find(".qweight") != std::string::npos;

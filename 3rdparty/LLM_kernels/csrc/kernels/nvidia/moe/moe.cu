@@ -101,7 +101,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
   token_cnts_t* tokens_cnts =
       (token_cnts_t*)(shared_mem + num_experts + 1);  // 2d tensor with shape (blockDim.x + 1, num_experts)
 
-  for (int i = 0; i < num_experts; ++i) {
+  for (int32_t i = 0; i < num_experts; ++i) {
     tokens_cnts[index(num_experts, threadIdx.x + 1, i)] = 0;
   }
 
@@ -110,7 +110,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
    * which counts how many tokens in the token shard of thread_index are
    * assigned to expert expert_index.
    */
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
+  for (size_t i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
     ++tokens_cnts[index(num_experts, threadIdx.x + 1, topk_ids[i])];
   }
 
@@ -119,7 +119,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
   // For each expert we accumulate the token counts from the different threads.
   if (threadIdx.x < num_experts) {
     tokens_cnts[index(num_experts, 0, threadIdx.x)] = 0;
-    for (int i = 1; i <= blockDim.x; ++i) {
+    for (unsigned int i = 1; i <= blockDim.x; ++i) {
       tokens_cnts[index(num_experts, i, threadIdx.x)] += tokens_cnts[index(num_experts, i - 1, threadIdx.x)];
     }
   }
@@ -129,7 +129,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
   // We accumulate the token counts of all experts in thread 0.
   if (threadIdx.x == 0) {
     cumsum[0] = 0;
-    for (int i = 1; i <= num_experts; ++i) {
+    for (int32_t i = 1; i <= num_experts; ++i) {
       cumsum[i] = cumsum[i - 1] + CEILDIV(tokens_cnts[index(num_experts, blockDim.x, i - 1)], block_size) * block_size;
     }
     *total_tokens_post_pad = static_cast<int32_t>(cumsum[num_experts]);
@@ -142,7 +142,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
    * blocks and stores the corresponding expert_id for each block.
    */
   if (threadIdx.x < num_experts) {
-    for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
+    for (int32_t i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
       expert_ids[i / block_size] = threadIdx.x;
     }
   }
@@ -154,7 +154,7 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
    * *, 1, 3, *, *, 2, 4, *, *, 5, 7, *, *, 8, *, *, *], where * represents a
    * padding value(preset in python).
    */
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
+  for (size_t i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
     int32_t expert_id = topk_ids[i];
     /** The cumsum[expert_id] stores the starting index of the tokens that the
      * expert with expert_id needs to process, and
@@ -171,8 +171,8 @@ __global__ void moe_align_block_size_kernel(scalar_t* __restrict__ topk_ids, int
 template <typename scalar_t, typename token_cnts_t>
 __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict__ topk_ids, int32_t* sorted_token_ids,
                                                             int32_t* expert_ids, int32_t* total_tokens_post_pad,
-                                                            const int32_t* expert_map, int32_t topk,
-                                                            int32_t num_experts, int32_t block_size, size_t numel) {
+                                                            int32_t topk, int32_t num_experts, int32_t block_size,
+                                                            size_t numel) {
   const size_t tokens_per_thread = CEILDIV(numel, blockDim.x);
   const size_t start_idx = threadIdx.x * tokens_per_thread;
 
@@ -182,7 +182,7 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
       (token_cnts_t*)(shared_mem + num_experts + 1);  // 2d tensor with shape (blockDim.x + 1, num_experts)
 
   // 把共享内存从 threadIdx.x * num_experts 开始， expert_num 个数字置 0
-  for (int i = 0; i < num_experts; ++i) {
+  for (int32_t i = 0; i < num_experts; ++i) {
     tokens_cnts[index(num_experts, threadIdx.x + 1, i)] = 0;
   }
 
@@ -192,9 +192,9 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
    * assigned to expert expert_index.
    */
   // 统计所有的 topk_ids，将对应的位置计数 +n
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
-    int expert_id = expert_map[topk_ids[i]];
-    if (expert_id < num_experts) {
+  for (size_t i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
+    int32_t expert_id = topk_ids[i];
+    if (expert_id >= 0) {
       ++tokens_cnts[index(num_experts, threadIdx.x + 1, expert_id)];
     }
   }
@@ -205,7 +205,7 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
   // 我们用不同的 thread，来累加不同的专家
   if (threadIdx.x < num_experts) {
     tokens_cnts[index(num_experts, 0, threadIdx.x)] = 0;
-    for (int i = 1; i <= blockDim.x; ++i) {
+    for (unsigned int i = 1; i <= blockDim.x; ++i) {
       tokens_cnts[index(num_experts, i, threadIdx.x)] += tokens_cnts[index(num_experts, i - 1, threadIdx.x)];
     }
   }
@@ -215,7 +215,7 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
   // We accumulate the token counts of all experts in thread 0.
   if (threadIdx.x == 0) {
     cumsum[0] = 0;
-    for (int i = 1; i <= num_experts; ++i) {
+    for (int32_t i = 1; i <= num_experts; ++i) {
       cumsum[i] = cumsum[i - 1] + CEILDIV(tokens_cnts[index(num_experts, blockDim.x, i - 1)], block_size) * block_size;
     }
     *total_tokens_post_pad = static_cast<int32_t>(cumsum[num_experts]);
@@ -228,7 +228,7 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
    * blocks and stores the corresponding expert_id for each block.
    */
   if (threadIdx.x < num_experts) {
-    for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
+    for (int32_t i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
       expert_ids[i / block_size] = threadIdx.x;
     }
   }
@@ -240,9 +240,9 @@ __global__ void moe_align_block_size_kernel_expert_parallel(scalar_t* __restrict
    * *, 1, 3, *, *, 2, 4, *, *, 5, 7, *, *, 8, *, *, *], where * represents a
    * padding value(preset in python).
    */
-  for (int i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
-    int32_t expert_id = expert_map[topk_ids[i]];
-    if (expert_id >= num_experts) {
+  for (size_t i = start_idx; i < numel && i < start_idx + tokens_per_thread; ++i) {
+    int32_t expert_id = topk_ids[i];
+    if (expert_id < 0) {
       continue;
     }
     /** The cumsum[expert_id] stores the starting index of the tokens that the
@@ -549,7 +549,7 @@ __global__ void scaled_fp8_quant_kernel(FP8_TYPE* __restrict__ out, const scalar
 template <typename scalar_t, int TOPK>
 __global__ void moe_sum_kernel(scalar_t* __restrict__ out,          // [..., d]
                                const scalar_t* __restrict__ input,  // [..., topk, d]
-                               const int num_experts, const int d) {
+                               const int d) {
   const int64_t token_idx = blockIdx.x;
   for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
     scalar_t x = 0.0;
@@ -565,14 +565,13 @@ template <typename scalar_t, int TOPK>
 __global__ void moe_sum_kernel_expert_parallel(scalar_t* __restrict__ out,          // [..., d]
                                                const scalar_t* __restrict__ input,  // [..., topk, d]
                                                const int* __restrict__ topk_ids,    // [..., topk]
-                                               const int* __restrict__ expert_map,  // [expert_nums]
-                                               const int num_experts, const int d) {
+                                               const int d) {
   const int64_t token_idx = blockIdx.x;
   for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
     scalar_t x = 0.0;
 #pragma unroll
     for (int k = 0; k < TOPK; ++k) {
-      if (expert_map[topk_ids[token_idx * TOPK + k]] < num_experts) {
+      if (topk_ids[token_idx * TOPK + k] >= 0) {
         x += *(&input[token_idx * TOPK * d + k * d + idx]);
       }
     }
@@ -607,11 +606,11 @@ __global__ void silu_and_mul_kernel(const T* x, T* out, size_t size, size_t inte
 }
 
 template <typename T>
-__global__ void silu_and_mul_kernel_expert_parallel(const T* x, T* out, const int* topk_ids, const int* expert_map,
-                                                    const int num_experts, size_t size, size_t inter_size) {
+__global__ void silu_and_mul_kernel_expert_parallel(const T* x, T* out, const int* topk_ids, size_t size,
+                                                    size_t inter_size) {
   const int64_t token_idx = blockIdx.x;
   if (token_idx >= size) return;
-  if (expert_map[topk_ids[token_idx]] >= num_experts) return;
+  if (topk_ids[token_idx] < 0) return;
   for (int64_t idx = threadIdx.x; idx < inter_size; idx += blockDim.x) {
     float a = *(&x[token_idx * 2 * inter_size + idx]);
     float b = *(&x[token_idx * 2 * inter_size + inter_size + idx]);
@@ -658,19 +657,11 @@ __global__ void weight_dequant_kernel(const uint8_t* data, const float* scale, T
   }
 }
 
-__global__ void map_expert_ids_kernel(const int* expert_map, int* expert_idx, int total_nums) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid < total_nums) {
-    int idx = expert_idx[tid];
-    expert_idx[tid] = expert_map[idx];
-  }
-}
-
 template <typename T, typename TOKEN_CNTS_T, bool UseExpertParallel>
 void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
-                             int32_t* total_tokens_post_pad, const int32_t* expert_map, const int32_t topk,
-                             const int32_t num_experts, const int32_t expert_para_size, const int32_t block_size,
-                             const size_t numel, const int32_t rank, const cudaStream_t& stream) {
+                             int32_t* total_tokens_post_pad, const int32_t topk, const int32_t num_experts,
+                             const int32_t expert_para_size, const int32_t block_size, const size_t numel,
+                             const int32_t rank, const cudaStream_t& stream) {
   static int device_count = llm_kernels::utils::GetDeviceCount();
   static std::vector<bool> initialized(device_count, false);
   static std::vector<int> num_threads(device_count, 0);
@@ -719,23 +710,22 @@ void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* ex
   int num_thread = num_threads[rank];
   int shared_mem = shared_mems[rank];
   if constexpr (UseExpertParallel) {
-    moe_align_block_size_kernel_expert_parallel<T, TOKEN_CNTS_T>
-        <<<1, num_thread, shared_mem, stream>>>(topk_ids, sorted_token_ids, experts_ids, total_tokens_post_pad,
-                                                expert_map, topk, num_experts, block_size, numel);
+    moe_align_block_size_kernel_expert_parallel<T, TOKEN_CNTS_T><<<1, num_thread, shared_mem, stream>>>(
+        topk_ids, sorted_token_ids, experts_ids, total_tokens_post_pad, topk, num_experts, block_size, numel);
   } else {
     moe_align_block_size_kernel<T, TOKEN_CNTS_T><<<1, num_thread, shared_mem, stream>>>(
         topk_ids, sorted_token_ids, experts_ids, total_tokens_post_pad, num_experts, block_size, numel);
   }
 }
-#define INVOKE_MOE_ALIGN_BLOCK_SIZE(T, TOKEN_CNTS_T)                                                            \
-  template void InvokeMoeAlignBlockSize<T, TOKEN_CNTS_T, true>(                                                 \
-      T * topk_ids, int32_t * sorted_token_ids, int32_t * experts_ids, int32_t * total_tokens_post_pad,         \
-      const int32_t* expert_map, const int32_t topk, const int32_t expert_para_size, const int32_t num_experts, \
-      const int32_t block_size, const size_t numel, const int32_t rank, const cudaStream_t& stream);            \
-  template void InvokeMoeAlignBlockSize<T, TOKEN_CNTS_T, false>(                                                \
-      T * topk_ids, int32_t * sorted_token_ids, int32_t * experts_ids, int32_t * total_tokens_post_pad,         \
-      const int32_t* expert_map, const int32_t topk, const int32_t expert_para_size, const int32_t num_experts, \
-      const int32_t block_size, const size_t numel, const int32_t rank, const cudaStream_t& stream);
+#define INVOKE_MOE_ALIGN_BLOCK_SIZE(T, TOKEN_CNTS_T)                                                           \
+  template void InvokeMoeAlignBlockSize<T, TOKEN_CNTS_T, true>(                                                \
+      T * topk_ids, int32_t * sorted_token_ids, int32_t * experts_ids, int32_t * total_tokens_post_pad,        \
+      const int32_t topk, const int32_t expert_para_size, const int32_t num_experts, const int32_t block_size, \
+      const size_t numel, const int32_t rank, const cudaStream_t& stream);                                     \
+  template void InvokeMoeAlignBlockSize<T, TOKEN_CNTS_T, false>(                                               \
+      T * topk_ids, int32_t * sorted_token_ids, int32_t * experts_ids, int32_t * total_tokens_post_pad,        \
+      const int32_t topk, const int32_t expert_para_size, const int32_t num_experts, const int32_t block_size, \
+      const size_t numel, const int32_t rank, const cudaStream_t& stream);
 INVOKE_MOE_ALIGN_BLOCK_SIZE(int32_t, uint16_t);
 INVOKE_MOE_ALIGN_BLOCK_SIZE(int32_t, int32_t);
 #undef INVOKE_MOE_ALIGN_BLOCK_SIZE
@@ -797,24 +787,23 @@ void InvokeStaticScaledFP8Quant(const T* input, float* scale, void* output, cons
 }
 
 template <typename T, bool UseExpertParallel>
-void InvokeMoeSum(void* input,      // [num_tokens, topk, hidden_size]
-                  void* output,     // [num_tokens, hidden_size]
-                  void* topk_ids,   // [..., topk]
-                  int* expert_map,  // [expert_nums]
-                  int num_tokens, const int num_experts, int topk, int hidden_size, const cudaStream_t& stream) {
+void InvokeMoeSum(void* input,     // [num_tokens, topk, hidden_size]
+                  void* output,    // [num_tokens, hidden_size]
+                  void* topk_ids,  // [..., topk]
+                  int num_tokens, int topk, int hidden_size, const cudaStream_t& stream) {
   dim3 grid(num_tokens);
   dim3 block(std::min(hidden_size, 1024));
   switch (topk) {
-#define CASE_LAUNCH_MOE_SUM_KERNEL(TOPK)                                                                           \
-  case TOPK:                                                                                                       \
-    if constexpr (UseExpertParallel) {                                                                             \
-      moe_sum_kernel_expert_parallel<T, TOPK><<<grid, block, 0, stream>>>(                                         \
-          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), reinterpret_cast<const int*>(topk_ids), \
-          reinterpret_cast<const int*>(expert_map), num_experts, hidden_size);                                     \
-    } else {                                                                                                       \
-      moe_sum_kernel<T, TOPK><<<grid, block, 0, stream>>>(                                                         \
-          reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), num_experts, hidden_size);              \
-    }                                                                                                              \
+#define CASE_LAUNCH_MOE_SUM_KERNEL(TOPK)                                                                              \
+  case TOPK:                                                                                                          \
+    if constexpr (UseExpertParallel) {                                                                                \
+      moe_sum_kernel_expert_parallel<T, TOPK>                                                                         \
+          <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input),               \
+                                       reinterpret_cast<const int*>(topk_ids), hidden_size);                          \
+    } else {                                                                                                          \
+      moe_sum_kernel<T, TOPK>                                                                                         \
+          <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), hidden_size); \
+    }                                                                                                                 \
     break;
     CASE_LAUNCH_MOE_SUM_KERNEL(1);
     CASE_LAUNCH_MOE_SUM_KERNEL(2);
@@ -844,38 +833,38 @@ void InvokeMoeSum(void* input,      // [num_tokens, topk, hidden_size]
       break;
   }
 }
-#define INVOKE_MOE_SUM(T)                                                                                            \
-  template void InvokeMoeSum<T, true>(void* input, void* output, void* topk_ids, int* expert_map, int num_tokens,    \
-                                      const int num_experts, int topk, int hidden_size, const cudaStream_t& stream); \
-  template void InvokeMoeSum<T, false>(void* input, void* output, void* topk_ids, int* expert_map, int num_tokens,   \
-                                       const int num_experts, int topk, int hidden_size, const cudaStream_t& stream)
+#define INVOKE_MOE_SUM(T)                                                                                   \
+  template void InvokeMoeSum<T, true>(void* input, void* output, void* topk_ids, int num_tokens, int topk,  \
+                                      int hidden_size, const cudaStream_t& stream);                         \
+  template void InvokeMoeSum<T, false>(void* input, void* output, void* topk_ids, int num_tokens, int topk, \
+                                       int hidden_size, const cudaStream_t& stream)
 INVOKE_MOE_SUM(float);
 INVOKE_MOE_SUM(half);
 INVOKE_MOE_SUM(__nv_bfloat16);
 #undef INVOKE_MOE_SUM
 
 template <typename T, bool UseExpertParallel>
-void SiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
-  size_t num_tokens = elements_num / 2 / inter_size;
-  // dim3 grid(std::min(elements_num / 2 / inter_size, static_cast<size_t>(65535)));
-  dim3 grid(num_tokens);
+void SiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                const cudaStream_t& stream) {
+  // input: dtype: FP16/BFP16, shape: [num_tokens, topk, inter_size * 2]
+  // output: dtype: FP16/BFP16, shape: [num_tokens, topk, inter_size]
+  // elements_num = num_tokens * topk * inter_size
+  size_t total_expert_count = elements_num / 2 / inter_size;
+  dim3 grid(total_expert_count);
   dim3 block(std::min(inter_size, static_cast<size_t>(1024)));
   if constexpr (UseExpertParallel) {
     silu_and_mul_kernel_expert_parallel<T>
-        <<<grid, block, 0, stream>>>(input, output, topk_ids, expert_map, num_experts, num_tokens, inter_size);
+        <<<grid, block, 0, stream>>>(input, output, topk_ids, total_expert_count, inter_size);
   } else {
-    silu_and_mul_kernel<T><<<grid, block, 0, stream>>>(input, output, num_tokens, inter_size);
+    silu_and_mul_kernel<T><<<grid, block, 0, stream>>>(input, output, total_expert_count, inter_size);
   }
 }
 
-#define SILU_AND_MUL(T)                                                                                     \
-  template void SiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, const int* expert_map,  \
-                                    int num_experts, size_t elements_num, size_t inter_size,                \
-                                    const cudaStream_t& stream);                                            \
-  template void SiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, const int* expert_map, \
-                                     int num_experts, size_t elements_num, size_t inter_size,               \
-                                     const cudaStream_t& stream)
+#define SILU_AND_MUL(T)                                                                                   \
+  template void SiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, size_t elements_num,  \
+                                    size_t inter_size, const cudaStream_t& stream);                       \
+  template void SiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, size_t elements_num, \
+                                     size_t inter_size, const cudaStream_t& stream)
 SILU_AND_MUL(float);
 SILU_AND_MUL(half);
 SILU_AND_MUL(__nv_bfloat16);
@@ -884,8 +873,8 @@ SILU_AND_MUL(__nv_bfloat16);
 __device__ __forceinline__ float silu(const float& val) { return val / (1.0f + __expf(-val)); }
 
 template <typename T>
-void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                          size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
+void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                          const cudaStream_t& stream) {
   size_t num_tokens = elements_num / 2 / inter_size;
   dim3 grid(num_tokens);
   uint32_t vec_size = 16 / sizeof(T);
@@ -893,36 +882,33 @@ void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, const 
   flashinfer::activation::act_and_mul_kernel<T, silu><<<grid, block, 0, stream>>>(output, input, inter_size);
 }
 
-#define FLASHINFER_SILU_AND_MUL(T)                                                                             \
-  template void FlashinferSiluAndMul<T>(const T* input, T* output, const int* topk_ids, const int* expert_map, \
-                                        int num_experts, size_t elements_num, size_t inter_size,               \
-                                        const cudaStream_t& stream)
+#define FLASHINFER_SILU_AND_MUL(T)                                                                           \
+  template void FlashinferSiluAndMul<T>(const T* input, T* output, const int* topk_ids, size_t elements_num, \
+                                        size_t inter_size, const cudaStream_t& stream)
 FLASHINFER_SILU_AND_MUL(float);
 FLASHINFER_SILU_AND_MUL(half);
 FLASHINFER_SILU_AND_MUL(__nv_bfloat16);
 #undef FLASHINFER_SILU_AND_MUL
 
 template <typename T, bool UseExpertParallel>
-void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                      size_t elements_num, size_t inter_size, const cudaStream_t& stream) {
+void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                      const cudaStream_t& stream) {
   if constexpr (UseExpertParallel) {
-    SiluAndMul<T, true>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+    SiluAndMul<T, true>(input, output, topk_ids, elements_num, inter_size, stream);
   } else {
 #if defined(ENABLE_FLASHINFER)
-    FlashinferSiluAndMul<T>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+    FlashinferSiluAndMul<T>(input, output, topk_ids, elements_num, inter_size, stream);
 #else
-    SiluAndMul<T, false>(input, output, topk_ids, expert_map, num_experts, elements_num, inter_size, stream);
+    SiluAndMul<T, false>(input, output, topk_ids, elements_num, inter_size, stream);
 #endif
   }
 }
 
-#define INVOKE_SILU_AND_MUL(T)                                                                                    \
-  template void InvokeSiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, const int* expert_map,  \
-                                          int num_experts, size_t elements_num, size_t inter_size,                \
-                                          const cudaStream_t& stream);                                            \
-  template void InvokeSiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, const int* expert_map, \
-                                           int num_experts, size_t elements_num, size_t inter_size,               \
-                                           const cudaStream_t& stream)
+#define INVOKE_SILU_AND_MUL(T)                                                                                  \
+  template void InvokeSiluAndMul<T, true>(const T* input, T* output, const int* topk_ids, size_t elements_num,  \
+                                          size_t inter_size, const cudaStream_t& stream);                       \
+  template void InvokeSiluAndMul<T, false>(const T* input, T* output, const int* topk_ids, size_t elements_num, \
+                                           size_t inter_size, const cudaStream_t& stream)
 INVOKE_SILU_AND_MUL(float);
 INVOKE_SILU_AND_MUL(half);
 INVOKE_SILU_AND_MUL(__nv_bfloat16);
@@ -943,12 +929,6 @@ INVOKE_WEIGHT_DEQUANT(half);
 INVOKE_WEIGHT_DEQUANT(float);
 INVOKE_WEIGHT_DEQUANT(__nv_bfloat16);
 #undef INVOKE_WEIGHT_DEQUANT
-
-void InvokeMapExpertIds(const int* expert_map, int* expert_ids, int total_num) {
-  const int BLOCK_SIZE = 256;
-  int num_blocks = (total_num + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  map_expert_ids_kernel<<<num_blocks, BLOCK_SIZE>>>(expert_map, expert_ids, total_num);
-}
 
 __global__ void fill_buffer_kernel(int* buffer, const int* fill_info, int fill_info_length) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;

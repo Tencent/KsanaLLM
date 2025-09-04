@@ -11,6 +11,11 @@
 
 namespace ksana_llm {
 
+constexpr int kMaxNumRanks = 256;  // Maximum number of ranks for DeepEP networking
+constexpr int kNcclUniqueIdSize = 128;
+constexpr int kNvshmemUniqudIdSize = 128;
+constexpr int kIpcHandlesSize = 64;
+
 // For barrier
 struct BarrierRequest {
   int node_rank;
@@ -29,30 +34,30 @@ struct AllocateLayerRequest {
   int16_t lower_nextn_layer_idx;
   int16_t upper_nextn_layer_idx;
 
-  char downstream_host[16];
+  char downstream_host[kMaxNumRanks];
   uint16_t downstream_port;
 
   // Used to broadcast nccl unique_id to all workers.
   // Because ncclUniqueId is platform dependency, so char[] is used.
-  char nccl_unique_id[128];
+  char nccl_unique_id[kNcclUniqueIdSize];
 };
 
 // for layer allocation, master to worker.
 struct AllocateExpertRequest {
-  char downstream_host[16];
+  char downstream_host[kMaxNumRanks];
   uint16_t downstream_port;
 
   // Used to broadcast nccl unique_id to all workers.
   // Because ncclUniqueId is platform dependency, so char[] is used.
-  char nccl_unique_id[128];
-  std::vector<std::array<char, 128> > nccl_unique_ids;
+  char nccl_unique_id[kNcclUniqueIdSize];
+  std::vector<std::array<char, kNcclUniqueIdSize> > nccl_unique_ids;
 };
 
 // add node, worker to master.
 struct AddNodeRequest {
   std::size_t node_rank;
 
-  char data_host[16];
+  char data_host[kMaxNumRanks];
   uint16_t data_port;
 };
 
@@ -82,6 +87,16 @@ struct HeartbeatRequest {
 // Same as req
 struct HeartbeatResponse {
   size_t node_rank;
+};
+
+struct NvshmemUniqueIdRequest {
+  int node_rank;
+  char ipc_handles[kMaxNumRanks][kIpcHandlesSize];
+  uint8_t nvshmem_unique_id[kMaxNumRanks][kNvshmemUniqudIdSize];
+};
+
+struct NvshmemUniqueIdResponse {
+  int status;
 };
 
 }  // namespace ksana_llm

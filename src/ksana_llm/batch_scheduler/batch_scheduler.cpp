@@ -81,7 +81,7 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   env->GetExpertParallelConfig(ep_config);
 
   if (ep_config.expert_world_size > 1) {
-    CreateMockReq(mock_request_group_);
+    CreateMockReq(runtime_config, mock_request_group_);
     if (mock_request_group_.size() >= 1) {
       for (int i = 0; i < pp_batch_num_; i++) {
         batch_states_[0][i]->mock_queue.push_back(mock_request_group_[0]);
@@ -312,7 +312,6 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
 
   KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
   Singleton<LayerProgressTracker>::GetInstance()->ResetState();
-
   // Update running requests before workload balance
   for (size_t i = 0; i < dp_num_; i++) {
     schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
@@ -345,20 +344,19 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
     total_dp_waiting_queue_size += dp_waiting_reqs_[i].size();
   }
 
-  // Add mock req when total_running_size == 0, and only assign req to dp_num == 0.
+  // Add mock req when total_running_size == 0.
   ExpertParallelConfig ep_config;
   Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
   KLLM_LOG_DEBUG << "expert_world_size: " << ep_config.expert_world_size
                  << ", total_running_size: " << total_running_size;
   if (ep_config.expert_world_size > 1 && total_running_size == 0) {
-    // Assign mock task to dp_num == 0.
-    auto& batch_state = batch_states_[0][multi_batch_id];
-    if (!batch_state->mock_queue.empty()) {
-      auto it = batch_state->mock_queue.begin();
-      batch_state->waiting_queue.push_back(*it);
-      batch_state->mock_queue.erase(it);
-    } else {
-      KLLM_LOG_WARNING << "mock_queue is empty()";
+    for (size_t i = 0; i < dp_num_; i++) {
+      auto& batch_state = batch_states_[i][multi_batch_id];
+      if (!batch_state->mock_queue.empty()) {
+        auto it = batch_state->mock_queue.begin();
+        batch_state->waiting_queue.push_back(*it);
+        batch_state->mock_queue.erase(it);
+      }
     }
   }
   // TODO(xingjinglu): remove potential mock request when running_size > 1.
@@ -426,8 +424,7 @@ void BatchScheduler::RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_bac
 
 void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req) {
   if (!grammar_backend_) {
-    KLLM_LOG_WARNING << "Grammar backend not available, skipping grammar compilation for request "
-                     << req->req_id;
+    KLLM_LOG_WARNING << "Grammar backend not available, skipping grammar compilation for request " << req->req_id;
     return;
   }
 
@@ -444,8 +441,11 @@ void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req
   }
 }
 
-Status BatchScheduler::CreateMockReq(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
-  size_t mock_req_length = 1;
+Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
+                                     std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  // To avoid Mock requests being categorized as SingleTokenForward requests, we calculate the Mock request total
+  // length as: Mock total length = MTP token count + SingleToken length + 1 (additional token)
+  size_t mock_req_length = (runtime_config.enable_mtp_module ? 1 : 0) + 1 + 1;
   auto mock_req_input = std::make_shared<KsanaPythonInput>();
   alias_python_input_ = mock_req_input;
   std::vector<int> input_tokens(mock_req_length, 0);

@@ -56,9 +56,16 @@ class ContextT {
   // Whether current node is master node.
   bool IsChief() const;
 
+  // Whether current node is standalone mode in Expert-Parallel.
   bool IsExpertParallelStandalone() const;
+
+  // Whether current node is master node in Expert-Parallel.
   bool IsExpertParallelChief() const;
+
+  // Total number of machines participating in Expert-Parallel
   size_t GetExpertParallelWorldSize() { return expert_parallel_config_.expert_world_size; }
+
+  // Rank value of the current node in multi-machine Expert-Parallel scenario
   size_t GetExpertParallelExpertNodeRank() { return expert_parallel_config_.expert_node_rank; }
 
  public:

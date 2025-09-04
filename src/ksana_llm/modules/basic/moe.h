@@ -21,7 +21,8 @@ class MoE {
 
   ~MoE();
 
-  Status Forward(Tensor hidden_states, Tensor gating_output, std::vector<Tensor>& output_tensors);
+  Status Forward(Tensor hidden_states, Tensor gating_output, Tensor workspace_tensor,
+                 std::vector<Tensor>& output_tensors);
 
  private:
   void Init(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
@@ -34,9 +35,5 @@ class MoE {
 
   bool use_e_score_correction_bias_;
   Tensor e_score_correction_bias_weight_;
-
-  // Expert map for Expert-Parallel. represents the contiguous arrangement of actual_expert_id that each expert_id is
-  // mapped to in current rank.
-  Tensor expert_map_;
 };
 }  // namespace ksana_llm

@@ -61,7 +61,8 @@ Status Qwen3MoeDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const
   STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, moe_buffer_tensors));
 
   // MOE layer
-  STATUS_CHECK_RETURN(moes_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], reduce_buffer_tensors));
+  STATUS_CHECK_RETURN(moes_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], reduce_buffer_tensors[0],
+                                     reduce_buffer_tensors));
 
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
 

@@ -6,9 +6,9 @@
 #  include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #endif
 #include "ksana_llm/layers/base_layer.h"
-#include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
 
 namespace ksana_llm {
 
@@ -37,8 +37,12 @@ class MoeLayer : public BaseLayer {
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
-  // 执行 GroupedTopk 计算的辅助函数
-  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens);
+  // 执行 GroupedTopk 计算与 Dispatch 分发
+  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+  // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
+  Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   template <typename T>
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -55,15 +59,16 @@ class MoeLayer : public BaseLayer {
 
  protected:
   bool set_workspace_buffer_info_ = true;
+  bool run_topk_ = true;
 
   MoeScaleNormMode moe_scale_norm_mode_;
   size_t max_ws_bytes_;
   size_t max_token_num_;
-  size_t expert_num_;
+  size_t expert_num_per_node_;
   size_t expert_hidden_size_;
   size_t expert_inter_size_;
   size_t expert_topk_;
-  size_t world_expert_para_size_;  // expert_para_size* expert_world_size
+  size_t global_expert_para_size_;  // expert_para_size* expert_world_size
   int tp_size_;
   bool use_lora_ = false;
   bool use_vllm_moe_ = false;
@@ -124,6 +129,7 @@ class MoeLayer : public BaseLayer {
 
   // GroupedTopk layer for handling topk computation
   std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
+
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 };
 #endif

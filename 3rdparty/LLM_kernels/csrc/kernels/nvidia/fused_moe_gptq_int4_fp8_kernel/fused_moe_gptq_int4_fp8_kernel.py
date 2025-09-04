@@ -88,6 +88,14 @@ def fused_moe_gptq_int4_fp8_kernel(
     token_mask = offs_token < num_valid_tokens
 
     off_experts = tl.load(expert_ids_ptr + pid_m).to(tl.int64)
+    if off_experts == -1:
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=compute_type)
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_ptrs = c_ptr + N * offs_token[:, None] + offs_cn[None, :]
+        c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
+        tl.store(c_ptrs, accumulator, mask=c_mask)
+        return
+
     offs_bn = (pid_n * BLOCK_SIZE_N +
                tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)

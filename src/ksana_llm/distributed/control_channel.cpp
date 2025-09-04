@@ -803,6 +803,12 @@ Status ControlChannel::HandleServerPacket(NodeInfo* node_info, Packet* packet) {
     case PacketType::CONTROL_RSP_EXPERT_PARALLEL: {
       return ProcessExpertParallelResponse(node_info, packet);
     }
+    case PacketType::CONTROL_RSP_DEEPEP_META: {
+      return ProcessNvshmemUniqueIdResponse(node_info, packet);
+    }
+    case PacketType::CONTROL_REQ_DEEPEP_META: {
+      return ProcessNvshmemUniqueIdRequest(node_info, packet);
+    }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;
       return Status(RET_RUNTIME_FAILED, FormatStr("Not supported packet type %d", packet->type));
@@ -834,6 +840,12 @@ Status ControlChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
     }
     case PacketType::CONTROL_REQ_EXPERT_PARALLEL: {
       return ProcessExpertParallelRequest(node_info, packet);
+    }
+    case PacketType::CONTROL_REQ_DEEPEP_META: {
+      return ProcessNvshmemUniqueIdRequest(node_info, packet);
+    }
+    case PacketType::CONTROL_RSP_DEEPEP_META: {
+      return ProcessNvshmemUniqueIdResponse(node_info, packet);
     }
     default: {
       KLLM_LOG_ERROR << "Not supported packet type:" << packet->type;

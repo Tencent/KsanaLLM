@@ -12,16 +12,16 @@ list(FILTER layers_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/zixiao/.*.cpp")
 message(STATUS "layers_SRCS: ${layers_SRCS}")
 
-set(layers_nvidia_SRCS, "")
-set(layers_nvidia_LIBS, "")
+set(layers_nvidia_SRCS "")
+set(layers_nvidia_LIBS "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE layers_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/nvidia/*.cpp)
   list(APPEND layers_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
 endif()
 
-set(layers_ascend_SRCS, "")
-set(layers_ascend_LIBS, "")
+set(layers_ascend_SRCS "")
+set(layers_ascend_LIBS "")
 
 if(WITH_ACL)
   file(GLOB_RECURSE layers_ascend_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/ascend/*.cpp)
@@ -29,8 +29,8 @@ if(WITH_ACL)
     atb_attention)
 endif()
 
-set(layers_zixiao_SRCS, "")
-set(layers_zixiao_LIBS, "")
+set(layers_zixiao_SRCS "")
+set(layers_zixiao_LIBS "")
 
 if(WITH_TOPS)
   file(GLOB_RECURSE layers_zixiao_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/zixiao/*.cpp)
@@ -38,12 +38,14 @@ if(WITH_TOPS)
 endif()
 
 add_library(layers STATIC ${layers_SRCS} ${layers_nvidia_SRCS} ${layers_ascend_SRCS} ${layers_zixiao_SRCS})
-target_link_libraries(layers PUBLIC kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS} layer_progress_tracker)
+target_link_libraries(layers PUBLIC 
+  kernels ${layers_nvidia_LIBS} ${layers_ascend_LIBS} layer_progress_tracker data_hub
+)
 
 # for test
-set(layers_test_nvidia_SRCS, "")
-set(layers_test_ascend_SRCS, "")
-set(layers_test_zixiao_SRCS, "")
+set(layers_test_nvidia_SRCS "")
+set(layers_test_ascend_SRCS "")
+set(layers_test_zixiao_SRCS "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE layers_test_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/layers/nvidia/*test.cpp)

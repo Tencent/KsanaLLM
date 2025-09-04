@@ -32,9 +32,9 @@ namespace nvidia {
 
 template <typename T, typename TOKEN_CNTS_T, bool UseExpertParallel>
 void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* experts_ids,
-                             int32_t* total_tokens_post_pad, const int32_t* expert_map, const int32_t topk,
-                             const int32_t num_experts, const int32_t expert_para_size, const int32_t block_size,
-                             const size_t numel, const int32_t rank, const cudaStream_t& stream);
+                             int32_t* total_tokens_post_pad, const int32_t topk, const int32_t num_experts,
+                             const int32_t expert_para_size, const int32_t block_size, const size_t numel,
+                             const int32_t rank, const cudaStream_t& stream);
 
 template <typename T>
 void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* expert_ids,
@@ -55,27 +55,24 @@ void InvokeDynamicScaledFP8Quant(const T* input, float* scale, void* output, con
                                  const cudaStream_t& stream);
 
 template <typename T, bool UseExpertParallel>
-void InvokeMoeSum(void* input,      // [num_tokens, topk, hidden_size]
-                  void* output,     // [num_tokens, hidden_size]
-                  void* topk_ids,   // [..., topk]
-                  int* expert_map,  // [expert_nums]
-                  int num_tokens, const int num_experts, int topk, int hidden_size, const cudaStream_t& stream);
+void InvokeMoeSum(void* input,     // [num_tokens, topk, hidden_size]
+                  void* output,    // [num_tokens, hidden_size]
+                  void* topk_ids,  // [..., topk]
+                  int num_tokens, int topk, int hidden_size, const cudaStream_t& stream);
 
 template <typename T, bool UseExpertParallel>
-void SiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                size_t elements_num, size_t inter_size, const cudaStream_t& stream);
+void SiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                const cudaStream_t& stream);
 template <typename T>
-void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                          size_t elements_num, size_t inter_size, const cudaStream_t& stream);
+void FlashinferSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                          const cudaStream_t& stream);
 template <typename T, bool UseExpertParallel>
-void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, const int* expert_map, int num_experts,
-                      size_t elements_num, size_t inter_size, const cudaStream_t& stream);
+void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                      const cudaStream_t& stream);
 
 template <typename T>
 void InvokeWeightDequant(const uint8_t* x, const float* s, T* output, int M, int N, int block_size,
                          const cudaStream_t& stream);
-
-void InvokeMapExpertIds(const int* expert_map, int* expert_ids, int total_num);
 
 void InvokeFillIntToBuffer(int* output, void* fill_info, int* fill_info_on_host, int fill_info_length,
                            const cudaStream_t& stream);

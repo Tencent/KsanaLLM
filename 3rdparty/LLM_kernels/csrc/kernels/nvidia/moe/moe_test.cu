@@ -61,7 +61,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
                                      cudaMemcpyHostToDevice));
 
   for (int i = 0; i < 10; ++i)
-    InvokeMoeSum<float, false>(d_input, d_output, nullptr, nullptr, num_tokens, num_experts, topk, hidden_size, stream);
+    InvokeMoeSum<float, false>(d_input, d_output, nullptr, num_tokens, topk, hidden_size, stream);
 
   cudaEvent_t start, stop;
   CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
@@ -100,10 +100,10 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelAccTest() {
                                                      /*is_random_init*/ true);
 
     SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output_ref.data_ptr),
-                         nullptr, nullptr, 256, num_elements, inter_size, stream);
+                         nullptr, num_elements, inter_size, stream);
     FlashinferSiluAndMul<T>(reinterpret_cast<const T*>(d_input.data_ptr),
-                            reinterpret_cast<T*>(d_output_flashinfer.data_ptr), nullptr, nullptr, 256, num_elements,
-                            inter_size, stream);
+                            reinterpret_cast<T*>(d_output_flashinfer.data_ptr), nullptr, num_elements, inter_size,
+                            stream);
 
     EXPECT_TRUE(CheckResult<T>("SiluKernelTest dtype: " + type_str + " m = " + std::to_string(m), d_output_ref,
                                d_output_flashinfer, tol, tol));
@@ -126,7 +126,7 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelPerformanceTest() {
 
     auto cuda_run = [&]() {
       SiluAndMul<T, false>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output.data_ptr),
-                           nullptr, nullptr, 256, num_elements, inter_size, stream);
+                           nullptr, num_elements, inter_size, stream);
     };
     float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
     std::cout << std::left << std::setw(25) << "SiluAndMul "
@@ -134,7 +134,7 @@ void LlamaNvidiaMoeTestSuit::SiluMulKernelPerformanceTest() {
 
     auto cuda_run_flashinfer = [&]() {
       FlashinferSiluAndMul<T>(reinterpret_cast<const T*>(d_input.data_ptr), reinterpret_cast<T*>(d_output.data_ptr),
-                              nullptr, nullptr, 256, num_elements, inter_size, stream);
+                              nullptr, num_elements, inter_size, stream);
     };
     milliseconds = MeasureCudaExecutionTime(cuda_run_flashinfer, stream, 10, 100);
     std::cout << std::left << std::setw(25) << "FlashinferSiluAndMul "
@@ -160,14 +160,14 @@ TEST_F(LlamaNvidiaMoeTestSuit, bf16SiluKernelTest) {
   SiluMulKernelPerformanceTest<__nv_bfloat16>();
 }
 
-void MoeAlignBlockCpu(const int* topk_ids, int* expert_ids, int* sorted_ids, const int* expert_map, int* token_post_pad,
-                      int token_num, int topk, int expert_num, int block_size) {
+void MoeAlignBlockCpu(const int* topk_ids, int* expert_ids, int* sorted_ids, int* token_post_pad, int token_num,
+                      int topk, int expert_num, int block_size) {
   std::vector<int> cumsum(expert_num + 1);
   std::vector<int> token_cnts(expert_num);
   size_t numel = static_cast<size_t>(token_num) * topk;
   for (size_t i = 0; i < numel; ++i) {
-    int expert_id = expert_map[topk_ids[i]];
-    if (expert_id >= expert_num) {
+    int expert_id = topk_ids[i];
+    if (expert_id < 0) {
       continue;
     }
     token_cnts[expert_id] += 1;
@@ -181,8 +181,8 @@ void MoeAlignBlockCpu(const int* topk_ids, int* expert_ids, int* sorted_ids, con
   }
   token_post_pad[0] = cumsum[expert_num] * block_size;
   for (size_t i = 0; i < numel; ++i) {
-    int expert_id = expert_map[topk_ids[i]];
-    if (expert_id >= expert_num) {
+    int expert_id = topk_ids[i];
+    if (expert_id < 0) {
       continue;
     }
     int idx = cumsum[expert_id] * block_size + token_cnts[expert_id];
@@ -221,7 +221,7 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
       // Prepare host data
       BufferMeta h_topk_ids =
           CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(token_num), static_cast<size_t>(topk)},
-                            /*is_random_init*/ true, /*min_val*/ 0, /*max_val*/ num_experts - 1);
+                            /*is_random_init*/ true, /*min_val*/ -1, /*max_val*/ num_experts_per_rank - 1);
       BufferMeta h_sorted_token_ids =
           CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(max_num_tokens_padded)},
                             /*is_random_init*/ true, /*min_val*/ numel, /*max_val*/ numel);
@@ -229,46 +229,30 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
                                                   /*is_random_init*/ false);
       BufferMeta h_total_tokens_post_pad = CreateBuffer<int>(MemoryType::MEMORY_CPU, {1},
                                                              /*is_random_init*/ false);
-      BufferMeta h_expert_map = CreateBuffer<int>(MemoryType::MEMORY_CPU, {static_cast<size_t>(num_experts)},
-                                                  /*is_random_init*/ false);
-      for (int i = 0; i < num_experts; i++) {
-        if (expert_para_size == 1) {
-          reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = i;
-        } else {
-          if (i < num_experts_per_rank) {
-            reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = num_experts_per_rank + 1;
-          } else {
-            reinterpret_cast<int*>(h_expert_map.data_ptr)[i] = i - num_experts_per_rank;
-          }
-        }
-      }
 
       // Invoke cpu version
-      MoeAlignBlockCpu(
-          reinterpret_cast<const int*>(h_topk_ids.data_ptr), reinterpret_cast<int*>(h_expert_ids.data_ptr),
-          reinterpret_cast<int*>(h_sorted_token_ids.data_ptr), reinterpret_cast<const int*>(h_expert_map.data_ptr),
-          reinterpret_cast<int*>(h_total_tokens_post_pad.data_ptr), token_num, topk, num_experts_per_rank, block_size);
+      MoeAlignBlockCpu(reinterpret_cast<const int*>(h_topk_ids.data_ptr), reinterpret_cast<int*>(h_expert_ids.data_ptr),
+                       reinterpret_cast<int*>(h_sorted_token_ids.data_ptr),
+                       reinterpret_cast<int*>(h_total_tokens_post_pad.data_ptr), token_num, topk, num_experts_per_rank,
+                       block_size);
 
       // Prepare device data
       BufferMeta d_topk_ids = CopyToDevice<int>(h_topk_ids);
       BufferMeta d_sorted_token_ids = CopyToDevice<int>(h_sorted_token_ids);
       BufferMeta d_expert_ids = CopyToDevice<int>(h_expert_ids);
       BufferMeta d_total_tokens_post_pad = CopyToDevice<int>(h_total_tokens_post_pad);
-      BufferMeta d_expert_map = CopyToDevice<int>(h_expert_map);
 
       // Invoke vllm version
       if (expert_para_size == 1) {
         InvokeMoeAlignBlockSize<int, uint16_t, false>(
             reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
             reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
-            reinterpret_cast<int*>(d_expert_map.data_ptr), topk, num_experts_per_rank, expert_para_size, block_size,
-            numel, 0, stream);
+            topk, num_experts_per_rank, expert_para_size, block_size, numel, 0, stream);
       } else {
         InvokeMoeAlignBlockSize<int, uint16_t, true>(
             reinterpret_cast<int*>(d_topk_ids.data_ptr), reinterpret_cast<int*>(d_sorted_token_ids.data_ptr),
             reinterpret_cast<int*>(d_expert_ids.data_ptr), reinterpret_cast<int*>(d_total_tokens_post_pad.data_ptr),
-            reinterpret_cast<int*>(d_expert_map.data_ptr), topk, num_experts_per_rank, expert_para_size, block_size,
-            numel, 0, stream);
+            topk, num_experts_per_rank, expert_para_size, block_size, numel, 0, stream);
       }
       CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
@@ -313,12 +297,10 @@ TEST_F(LlamaNvidiaMoeTestSuit, MoeAlignBlockKernelAccTest) {
       DeleteBuffer(h_sorted_token_ids);
       DeleteBuffer(h_expert_ids);
       DeleteBuffer(h_total_tokens_post_pad);
-      DeleteBuffer(h_expert_map);
       DeleteBuffer(d_topk_ids);
       DeleteBuffer(d_sorted_token_ids);
       DeleteBuffer(d_expert_ids);
       DeleteBuffer(d_total_tokens_post_pad);
-      DeleteBuffer(d_expert_map);
     }
   }
 }

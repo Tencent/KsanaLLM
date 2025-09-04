@@ -6,8 +6,8 @@ cmake_minimum_required(VERSION 3.8)
 file(GLOB_RECURSE distributed_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/distributed/*.cpp)
 
-set(data_channel_nvidia_SRCS, "")
-set(data_channel_nvidia_LIBS, "")
+set(data_channel_nvidia_SRCS "")
+set(data_channel_nvidia_LIBS "")
 
 if(WITH_CUDA)
   file(GLOB_RECURSE data_channel_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/distributed/nvidia/*.cpp)

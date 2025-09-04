@@ -63,7 +63,7 @@ Status MixtralDecoderLayer::Forward(std::vector<Tensor>& residual_buffer, const 
   STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, gated_buffer_));
 
   // MOE layer
-  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], hidden_buffer_tensors_0);
+  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], hidden_buffer_tensors_0);
 
   // AllReduce Sum
   tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);

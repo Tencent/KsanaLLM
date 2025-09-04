@@ -14,7 +14,7 @@
 
 namespace ksana_llm {
 
-// // For expert parallel. Every expert node has only one pool.
+// For expert parallel. Every expert node has only one pool.
 ExpertParallelHiddenUnitBufferPool* g_expert_hidden_unit_buffer_pool = nullptr;
 
 // Used to sync hidden_unit_buffer pointer among devices on the same node.
@@ -26,12 +26,41 @@ HiddenUnitDeviceBuffer* g_expert_send_comm_meta_hidden_unit_buffer = nullptr;
 // Used to sync devices on the same node, be careful to avoid potential data race.
 std::shared_ptr<Waiter> g_expert_waiter = std::make_shared<Waiter>(1);
 
+// Used to connect with DeepEP
+std::shared_ptr<ExpertParallelDeepepWrapper> g_deepep_wrapper = nullptr;
+
 void InitializeExpertHiddenUnitBufferPool() {
   KLLM_LOG_INFO << "InitializeExpertHiddenUnitBufferPool";
   g_expert_hidden_unit_buffer_pool = new ExpertParallelHiddenUnitBufferPool();
 }
 
 ExpertParallelHiddenUnitBufferPool* GetExpertHiddenUnitBufferPool() { return g_expert_hidden_unit_buffer_pool; }
+
+const std::shared_ptr<ExpertParallelDeepepWrapper>& GetExpertParallelDeepepWrapper() { return g_deepep_wrapper; }
+
+void SetExpertParallelDeepepWrapper(const std::shared_ptr<ExpertParallelDeepepWrapper>& deepep_wrapper) {
+  g_deepep_wrapper = deepep_wrapper;
+}
+
+Status InitializeExpertParallelDeepepWrapper(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                             const std::shared_ptr<Context>& context) {
+  size_t num_ranks = runtime_config.parallel_basic_config.expert_world_size *
+                     runtime_config.parallel_basic_config.expert_parallel_size;
+  size_t num_ranks_per_node = runtime_config.parallel_basic_config.expert_parallel_size;
+  size_t max_token_num = runtime_config.max_step_token_num;
+  size_t hidden_size = static_cast<size_t>(model_config.hidden_units);
+  size_t expert_topk = model_config.moe_config.experts_topk;
+  size_t num_experts = model_config.moe_config.num_experts;
+  size_t node_rank = context->GetExpertParallelExpertNodeRank();
+  if (num_ranks > 1) {
+    // Initialize deepep_wrapper when using Expert-Parallel
+    g_deepep_wrapper =
+        std::make_shared<ExpertParallelDeepepWrapper>(num_ranks, num_ranks_per_node, node_rank, max_token_num,
+                                                      hidden_size, expert_topk, num_experts, context);
+    g_deepep_wrapper->Init();
+  }
+  return Status();
+}
 
 Status InitExpertHiddenUnits() {
   HiddenUnitDeviceBuffer* hidden_unit_buffer = GetExpertHiddenUnitBufferPool()->GetDeviceBufferSingle();

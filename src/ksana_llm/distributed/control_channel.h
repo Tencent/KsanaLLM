@@ -106,6 +106,9 @@ class ControlChannel {
   virtual Status ProcessExpertParallelResponse(NodeInfo* node_info, Packet* req_packet) { return Status(); }
   virtual Status ProcessExpertParallelRequest(NodeInfo* node_info, Packet* req_packet) { return Status(); }
 
+  virtual Status ProcessNvshmemUniqueIdRequest(NodeInfo* node_info, Packet* req_packet) { return Status(); }
+  virtual Status ProcessNvshmemUniqueIdResponse(NodeInfo* node_info, Packet* rsp_packet) { return Status(); }
+
   // Generate layer distribution for all nodes
   // If master_offload_layer_num > 0, offload that many layers from master node to other nodes evenly
   std::map<int, std::pair<int, int>> GenerateLayerDistribution(int num_layer, size_t master_offload_layer_num);

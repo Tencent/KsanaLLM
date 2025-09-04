@@ -9,7 +9,7 @@
 
 namespace ksana_llm {
 
-void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_num) {
+void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_token_num) {
   auto env = Singleton<Environment>::GetInstance();
   const size_t tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
   const size_t head_num = model_config.head_num;
@@ -24,7 +24,10 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   env->GetBatchSchedulerConfig(batch_scheduler_config);
   const size_t max_logits_tokens = batch_size * batch_scheduler_config.max_decode_tokens_per_req;
 
-  size_t inter_size_per_tp = model_config.inter_size / tensor_para_size;
+  size_t inter_size_per_tp = model_config.inter_size;
+  if (!runtime_config.enable_full_shared_expert) {
+    inter_size_per_tp /= tensor_para_size;
+  }
   if (model_config.has_shared_experts) {
     size_t shared = model_config.moe_config.shared_expert_inter_size;
     if (!runtime_config.enable_full_shared_expert) {
@@ -64,11 +67,11 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
     if (runtime_config.enable_o_proj_out_of_dp) {
       shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
     }
-    const size_t token_num_per_dp = token_num;
+    const size_t token_num_per_dp = max_token_num;
     mla_hidden_buffer_size = token_num_per_dp * mla_max_dim;
     // TODO(rockcao): remove this extra buffer by removing unnecessary offset when using dp
     if (runtime_config.parallel_basic_config.attn_data_parallel_size > 1) {  //
-      mla_hidden_buffer_size += token_num * model_config.hidden_units;
+      mla_hidden_buffer_size += max_token_num * model_config.hidden_units;
     }
 
     KLLM_LOG_INFO << fmt::format(
@@ -80,11 +83,11 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   }
 
   const size_t hidden_buffer_size =
-      std::max(std::max(max_logits_tokens * vocab_size_pad, token_num * max_dim), mla_hidden_buffer_size);
+      std::max(std::max(max_logits_tokens * vocab_size_pad, max_token_num * max_dim), mla_hidden_buffer_size);
   // `shared_buffer_` is shared by `gated_buffer_`, `reduce_buffer_` and `paged_buffer_`.
-  const size_t shared_buffer_size = token_num * shared_buffer_unit_size;
+  const size_t shared_buffer_size = max_token_num * shared_buffer_unit_size;
   KLLM_LOG_INFO << "max_batch_size=" << batch_size << ", vocab_size_pad=" << vocab_size_pad
-                << ", max_token_num=" << token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
+                << ", max_token_num=" << max_token_num << ", max_dim=" << max_dim << ", hidden_units=" << hidden_units
                 << ", inter_size_per_tp=" << inter_size_per_tp << ", hidden_buffer_size=" << hidden_buffer_size
                 << ", shared_buffer_size=" << shared_buffer_size;
   buffers_shape_map = {{"hidden_buffer_0", {hidden_buffer_size}},
@@ -102,7 +105,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t token_nu
   }
 
   if (use_mtp) {
-    buffers_shape_map["mtp_hidden_buffer_tensors"] = {token_num * model_config.hidden_units};
+    buffers_shape_map["mtp_hidden_buffer_tensors"] = {max_token_num * model_config.hidden_units};
   }
 }
 

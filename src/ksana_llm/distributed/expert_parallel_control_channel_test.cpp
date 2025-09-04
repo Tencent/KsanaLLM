@@ -16,6 +16,8 @@
 #include <utility>
 #include <vector>
 #include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/data_hub/expert_data_hub.h"
+#include "ksana_llm/data_hub/expert_parallel_deepep_wrapper.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/distributed/control_channel.h"
 #include "ksana_llm/distributed/expert_parallel_control_channel.h"
@@ -30,6 +32,60 @@
 #include "ksana_llm/helpers/environment_test_helper.h"
 
 using namespace ksana_llm;
+
+// 创建一个MockExpertParallelDeepepWrapper类
+class MockExpertParallelDeepepWrapper : public ExpertParallelDeepepWrapper {
+ public:
+  enum NodeType { MASTER, WORKER };
+
+  explicit MockExpertParallelDeepepWrapper(NodeType type)
+      : ExpertParallelDeepepWrapper(2, 1, type == MASTER ? 0 : 1, 128, 1024, 8, 64, nullptr), node_type_(type) {}
+
+  uint8_t* GetNvshmemUniqueId() override {
+    static uint8_t master_unique_id[kMaxNumRanks * kNvshmemUniqudIdSize];
+    static uint8_t worker_unique_id[kMaxNumRanks * kNvshmemUniqudIdSize];
+    static bool initialized = false;
+
+    if (!initialized) {
+      // 设置不同的特殊值，便于验证
+      for (int i = 0; i < kMaxNumRanks * kNvshmemUniqudIdSize; i++) {
+        master_unique_id[i] = 0xAA;
+        worker_unique_id[i] = 0xCC;
+      }
+      initialized = true;
+    }
+
+    return (node_type_ == MASTER) ? master_unique_id : worker_unique_id;
+  }
+
+  // 覆盖GetIPCHandles方法，返回可控的值
+  char* GetIPCHandles() override {
+    static char master_ipc_handles[kMaxNumRanks * kIpcHandlesSize];
+    static char worker_ipc_handles[kMaxNumRanks * kIpcHandlesSize];
+    static bool initialized = false;
+
+    if (!initialized) {
+      // 设置不同的特殊值，便于验证
+      for (int i = 0; i < kMaxNumRanks * kIpcHandlesSize; i++) {
+        master_ipc_handles[i] = 0xBB;
+        worker_ipc_handles[i] = 0xDD;
+      }
+      initialized = true;
+    }
+    return (node_type_ == MASTER) ? master_ipc_handles : worker_ipc_handles;
+  }
+
+  Status SetReady() override {
+    return Status();
+  }
+
+ private:
+  NodeType node_type_;
+};
+
+// 全局变量，分别存储master和worker的mock对象
+std::shared_ptr<MockExpertParallelDeepepWrapper> g_master_mock_deepep_wrapper;
+std::shared_ptr<MockExpertParallelDeepepWrapper> g_worker_mock_deepep_wrapper;
 
 class ExpertParallelControlChannelTest : public testing::Test {
  protected:
@@ -65,10 +121,16 @@ class ExpertParallelControlChannelTest : public testing::Test {
     GetAvailableInterfaceAndIP(interface, master_host_);
     GetAvailablePort(master_port_);
 
+    // 初始化mock对象，确保在创建控制通道之前就已经设置好
+    g_master_mock_deepep_wrapper =
+        std::make_shared<MockExpertParallelDeepepWrapper>(MockExpertParallelDeepepWrapper::MASTER);
+    g_worker_mock_deepep_wrapper =
+        std::make_shared<MockExpertParallelDeepepWrapper>(MockExpertParallelDeepepWrapper::WORKER);
+
     ctrl_channel_master_ = std::make_shared<ExpertParallelControlChannel>(
-        master_host_, master_port_, world_size_, 0, GetPacketObject, master_schedule_output_pool_, master_env_);
+        master_host_, master_port_, world_size_, 0, 2, GetPacketObject, master_schedule_output_pool_, master_env_);
     ctrl_channel_worker_ = std::make_shared<ExpertParallelControlChannel>(
-        master_host_, master_port_, world_size_, 1, GetPacketObject, worker_schedule_output_pool_, worker_env_);
+        master_host_, master_port_, world_size_, 1, 2, GetPacketObject, worker_schedule_output_pool_, worker_env_);
   }
 
   void TearDown() override {
@@ -132,6 +194,25 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     // synchronize expert parallel info.
     ctrl_channel_master_->SynchronizeExpertParallelExperts();
 
+    // synchronize deepep meta info.
+    SetExpertParallelDeepepWrapper(g_master_mock_deepep_wrapper);
+    ctrl_channel_master_->SynchronizeNvshmemUniqueId();
+
+    // 验证master节点的结果
+    uint8_t* nvshmem_unique_id = g_master_mock_deepep_wrapper->GetNvshmemUniqueId();
+    char* ipc_handles = g_master_mock_deepep_wrapper->GetIPCHandles();
+
+    // 验证master节点的nvshmem_unique_id是否包含了worker节点的数据
+    // 由于SynchronizeNvshmemUniqueId函数会将worker节点的数据同步到master节点
+    // 所以这里期望master节点的数据已经被修改为包含worker节点的数据
+    for (size_t i = 0; i < kNvshmemUniqudIdSize; ++i) {
+      EXPECT_EQ(nvshmem_unique_id[i], static_cast<uint8_t>(0xAA));
+    }
+    for (size_t i = 0; i < kIpcHandlesSize; ++i) {
+      EXPECT_EQ(ipc_handles[i], static_cast<char>(0xBB));
+      EXPECT_EQ(ipc_handles[i + kIpcHandlesSize], static_cast<char>(0xDD));
+    }
+
     // Close master.
     ctrl_channel_master_->Close();
   };
@@ -163,6 +244,21 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     // Wait layer result.
     ctrl_channel_worker_->SynchronizeExpertParallelExperts();
 
+    SetExpertParallelDeepepWrapper(g_worker_mock_deepep_wrapper);
+    ctrl_channel_worker_->SynchronizeNvshmemUniqueId();
+    // 验证worker节点的结果
+    uint8_t* nvshmem_unique_id = g_worker_mock_deepep_wrapper->GetNvshmemUniqueId();
+    char* ipc_handles = g_worker_mock_deepep_wrapper->GetIPCHandles();
+    // 验证worker节点的nvshmem_unique_id是否已经被master节点的数据覆盖
+    // 由于SynchronizeNvshmemUniqueId函数会将master节点的数据同步到worker节点
+    // 所以这里期望worker节点的数据已经被修改为master节点的数据
+    for (size_t i = 0; i < kNvshmemUniqudIdSize; ++i) {
+      EXPECT_EQ(nvshmem_unique_id[i], static_cast<uint8_t>(0xAA));
+    }
+    for (size_t i = 0; i < kIpcHandlesSize; ++i) {
+      EXPECT_EQ(ipc_handles[i], static_cast<char>(0xBB));
+      EXPECT_EQ(ipc_handles[i + kIpcHandlesSize], static_cast<char>(0xDD));
+    }
     // Disconnect from master.
     ctrl_channel_worker_->Disconnect();
   };

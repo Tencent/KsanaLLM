@@ -92,7 +92,7 @@ Status Qwen2MoeDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tenso
   STATUS_CHECK_RETURN(expert_gates_->Forward(hidden_buffer_tensors_0, gated_buffer_));
 
   // MOE layer
-  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], moe_buffer_tensors);
+  moes_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors);
 
   // Expert share gating MatMul
   STATUS_CHECK_RETURN(shared_expert_gates_->Forward(hidden_buffer_tensors_0, share_gating_buffer_tensors));

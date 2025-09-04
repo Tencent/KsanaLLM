@@ -165,7 +165,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   size_t global_expert_para_size = expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
   size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
   // init expert map
-  std::vector<int> expert_map(num_experts, num_experts_per_rank + 1);
+  std::vector<int> expert_map(num_experts, -1);
   size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
   size_t expert_offset = (global_expert_para_size > 1)
                              ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
@@ -173,16 +173,13 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   size_t expert_start_id = rank_expert_offset + expert_offset;
   size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank);
   for (size_t i = expert_start_id; i < expert_end_id; ++i) {
-    expert_map[i] = i - expert_start_id;
+    expert_map[i] = static_cast<int>(i - expert_start_id);
   }
-  std::string expert_map_name = "expert_map";
-  if (device_model_weights.find(expert_map_name) == device_model_weights.end()) {
-    Tensor expert_map_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT32, {num_experts}, dev_rank,
-                                      nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-    MemcpyAsync(expert_map_tensor.GetPtr<void>(), expert_map.data(), num_experts * sizeof(int32_t),
-                MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-    device_model_weights[expert_map_name] = expert_map_tensor;
-  }
+  KLLM_LOG_INFO << fmt::format("expert_world_size = {}, expert_para_size = {}, global_expert_para_size = {}",
+                               expert_parallel_config.expert_world_size, expert_parallel_config.expert_para_size,
+                               global_expert_para_size);
+  KLLM_LOG_INFO << fmt::format("In rank {} node_rank {}, valid experts is [{}, {})", dev_rank, expert_node_rank,
+                               expert_start_id, expert_end_id);
 
   size_t moe_inter_size_per_rank =
       DivRoundUp(new_deepseek_v3_config->moe_config.moe_inter_size, new_deepseek_v3_config->moe_tensor_para_size);
@@ -232,8 +229,8 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       if (layer_idx < 0 || expert_idx < 0) {
         continue;
       }
-      size_t expert_idx_ = expert_map[expert_idx];
-      if (expert_idx_ >= 0 && expert_idx_ >= num_experts_per_rank) {
+      int expert_idx_ = expert_map[expert_idx];
+      if (expert_idx_ < 0) {
         // Skip load weight when the expert_id will be not used in current rank.
         continue;
       }
@@ -528,8 +525,9 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       // "up && gate proj(bf16/fp16): First split along axis = 0, then transpose."
       // "up && gate proj(fp8 weight/fp32 weight_scale_inv): split along axis = 0."
       Tensor dev_tensor;
+      size_t mlp_tensor_para_size = runtime_config_.enable_full_shared_expert ? 1 : context_->GetTensorParallelSize();
       weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                                  context_->GetTensorParallelSize(), !new_deepseek_v3_config->is_quant);
+                                  mlp_tensor_para_size, !new_deepseek_v3_config->is_quant);
       // TODO(huicongyao): Refactor to eliminate string-based type checking
       if (new_deepseek_v3_config->type == "deepseek_v3") {
         // deepseek v3 need to combine gate & up proj
@@ -550,8 +548,9 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       // down proj(bf16/fp16): transpose first, then split along axis = 0
       // down proj(fp8/fp32): transpose first, then split along axis = 0, and then transpose back.
       Tensor dev_tensor;
+      size_t mlp_tensor_para_size = runtime_config_.enable_full_shared_expert ? 1 : context_->GetTensorParallelSize();
       weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
-                                       context_->GetTensorParallelSize(), new_deepseek_v3_config->is_quant);
+                                       mlp_tensor_para_size, new_deepseek_v3_config->is_quant);
       device_model_weights[file_weight_name] = dev_tensor;
       continue;
     }

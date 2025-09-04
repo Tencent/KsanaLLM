@@ -177,7 +177,7 @@ def args_config():
                         type=str,
                         default="localhost",
                         help='server host address')
-    parser.add_argument('--port', type=int, default=8080, help='server port')
+    parser.add_argument('--port', type=str, default="8080", help='server port')
     parser.add_argument('--input_csv', '--dataset_path',
                         dest='dataset_path',
                         type=str,
@@ -398,6 +398,14 @@ def args_config():
                         help="Whether to show only decode token throughput,"
                             " which will override the default total token throughput")
     args = parser.parse_args()
+    if "," in args.host:
+        args.host = args.host.split(",")
+    else:
+        args.host = [args.host]
+    if "," in args.port:
+        args.port = args.port.split(",")
+    else:
+        args.port = [args.port]
     return args
 
 
@@ -787,6 +795,9 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         "req_id": str(req_id),
     }
 
+    api_url = api_url.replace("##host##", args.host[req_id % len(args.host)])
+    api_url = api_url.replace("##port##", args.port[req_id % len(args.port)])
+
     # Set a timeout of 3 hours for the aiohttp client
     timeout = aiohttp.ClientTimeout(total=args.client_timeout)
 
@@ -861,7 +872,6 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
 
     # Calculate the latency of the request
     request_latency = request_end_time - request_start_time
-
     output_token_num = len(output.get("output_token_ids", [""])[0])
     input_token_num = len(output.get("input_token_ids", ""))
     out_tokens = None
@@ -1060,7 +1070,7 @@ def main(args: argparse.Namespace):
     random.seed(args.seed)
 
     tokenizer = None
-    api_url = "http://" + args.host + ":" + str(args.port) + "/generate"
+    api_url = "http://##host##:##port##/generate"
 
     if args.backend == "trt-llm":
         api_url = "http://" + args.host + ":" + str(

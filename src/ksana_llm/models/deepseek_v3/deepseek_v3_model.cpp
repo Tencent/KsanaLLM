@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/layers/assemble_tokens_hidden_layer.h"
 #include "ksana_llm/layers/concat_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
@@ -60,13 +61,6 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
           std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context, moe_scale_norm_mode);
     }
-    // Expert parallel.
-    ep_data_transfer_ = std::make_shared<ExpertParallelDataTransfer>();
-    if (ep_data_transfer_ == nullptr)
-      KLLM_LOG_ERROR << "Create ExpertParallelDataTransfer object( ep_data_transfer_ ) failed ";
-    else
-      KLLM_LOG_INFO << "Create ExpertParallelDataTransfer object( ep_data_transfer_ ) succeed ";
-
   } else {
     mlp_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   }
@@ -84,6 +78,8 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
+  const size_t org_token_size = residual_buffer[0].shape[0];
+  const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
   if (need_add_residual_before_attn) {  // Adding the residual should have been done after mlp in the previous layer for
                                         // better performance.
     pre_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
@@ -95,24 +91,63 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   mla_->AcquireBuffers(forwarding_context);
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   mla_->ReleaseBuffers();
+
   // Mla all reduce
-  tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
+  if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
+    std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
+  } else {
+    tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
+  }
 
   post_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
+
+  const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
+  const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
+  const size_t dp_context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
+  const size_t dp_decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
+                                  forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
+  size_t dp_token_size = dp_context_tokens + dp_decode_tokens;
+  const size_t dp_bytes_offset = dp_token_offset * token_hidden_stat_bytes;
+  const size_t dp_bytes = dp_token_size * token_hidden_stat_bytes;
+  dp_token_size = dp_token_size > 0 ? dp_token_size : 1;
+  KLLM_LOG_DEBUG << fmt::format(
+      "rank: {}, dp_group_id: {}, dp_token_offset: {}, dp_context_tokens: {}, dp_decode_tokens: {}, dp_token_size: {}, "
+      "dp_bytes_offset: {}, dp_bytes: {}",
+      forwarding_context.GetCurrentRank(), dp_group_id, dp_token_offset, dp_context_tokens, dp_decode_tokens,
+      dp_token_size, dp_bytes_offset, dp_bytes);
+  if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
+    std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
+    Stream& stream = forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()];
+    MemcpyAsync(hidden_buffer_tensors_0[0].GetPtr<void>(), reduce_buffer_tensors[0].GetPtr<void>() + dp_bytes_offset,
+                dp_bytes, MEMCPY_DEVICE_TO_DEVICE, stream);
+    hidden_buffer_tensors_0[0].shape = {dp_token_size, reduce_buffer_tensors[0].shape[1]};
+    reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
+  }
 
   // Common mlp/moe
   AcquireMoeBuffers(forwarding_context);
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
   ReleaseMoeBuffers();
+
   // Mlp/moe all reduce
-  if (!enable_full_shared_expert_ || !is_moe_) {
+  // TODO(zakwang): 非 MOE 层会执行 TP 分卡，后续去除 AllReduce 逻辑时，需要将这些层在各卡上完整持有
+  if (!enable_full_shared_expert_) {
     PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
     tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
   }
 
-  if (is_moe_ && forwarding_context.GetContext()->GetExpertParallelWorldSize() > 1) {
-    ep_data_transfer_->FreeHiddenUnitDeviceBuffer(forwarding_context);
+  // When using Expert-Parallel (EP) parallelism, Data-Parallel (DP) parallelism is enabled by default.
+  // Since under EP, the MOE portion only computes the current DP data, so the data needs to be restored to the complete
+  // length when MOE computation is finished.
+  if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
+    std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
+    Stream& stream = forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()];
+    MemcpyAsync(hidden_buffer_tensors_0[0].GetPtr<void>() + dp_bytes_offset, reduce_buffer_tensors[0].GetPtr<void>(),
+                dp_bytes, MEMCPY_DEVICE_TO_DEVICE, stream);
+    hidden_buffer_tensors_0[0].shape = {residual_buffer[0].shape[0], reduce_buffer_tensors[0].shape[1]};
+    reduce_buffer_tensors[0].shape = hidden_buffer_tensors_0[0].shape;
+    residual_buffer[0].shape = hidden_buffer_tensors_0[0].shape;
   }
 
   // Mlp/moe residual add
@@ -138,153 +173,35 @@ Status DeepSeekV3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
     PROFILE_EVENT_SCOPE(CommonMlp, "CommonMlp", forwarding_context.GetCurrentRank());
     mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
   } else {
-    // CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
-
     // Stage 1. Compute moe for mlp input from local nodes.
-    CREATE_BUFFER_SCOPE(common_mlp_buffer_tensors, moe_buffer_);
-    auto& gated_buffer_ = common_mlp_buffer_tensors;
+    CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
+    auto& gated_buffer_ = moe_buffer_tensors;
 
-    // Expert gating MatMul
     {
       PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
       STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0, gated_buffer_));
     }
+
     {
       PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors));
-    }
-
-    size_t expert_node_rank = forwarding_context.GetContext()->GetExpertParallelExpertNodeRank();
-    size_t world_size = forwarding_context.GetContext()->GetExpertParallelWorldSize();
-
-    KLLM_LOG_DEBUG << fmt::format("Send moe_buffer_tensors rank_: {}, shape: {} {}, dtype: {}, refer_ptr: {}",
-                                  forwarding_context.GetCurrentRank(), reduce_buffer_tensors[0].shape[0],
-                                  reduce_buffer_tensors[0].shape[1], reduce_buffer_tensors[0].ToString(),
-                                  reduce_buffer_tensors[0].GetPtr<void>());
-
-    // Expert parallel.
-    if (world_size > 1) {
-      // Stage 2. Send mlp input to other expert-parallel nodes or
-      // Receive mlp input from other expert-parallel nodes for computing moe.
-
-      std::vector<Tensor> remote_mlp_input_compute;
-      for (size_t node_rank = 0; node_rank < world_size; node_rank++) {
-        if (node_rank == expert_node_rank) {
-          // Stage 2.1 Send mlp input to other expert-parallel nodes.
-
-          ep_data_transfer_->SendHiddenUnitBufferForEP(hidden_buffer_tensors_0, forwarding_context, true);
-          KLLM_LOG_DEBUG << "Stage 2. Send mlp input for moe computing finished";
-
-        } else {
-          // Stage 2.2 Receive mlp input from other expert-parallel nodes.
-          std::vector<Tensor>& remote_mlp_input_compute =
-              ep_data_transfer_->RecvHiddenUnitBufferForEP(forwarding_context);
-
-          if (!remote_mlp_input_compute.empty()) {
-            moe_queue_in_.push_back(remote_mlp_input_compute);
-
-          } else {
-            KLLM_LOG_DEBUG << "Stage 2.2. not recv mlp input of remote expert parallel nodes";
-          }
-
-          KLLM_LOG_DEBUG << "Stage 2. Receive mlp input for moe computing finished";
-        }
-      }
-      KLLM_LOG_DEBUG << "Stage 2. Send and receive mlp input for moe computing finished";
-
-      // Stage 3. Compute moe for mlp input of other nodes and send results back. Only support two ep nodes now.
-      for (std::vector<Tensor>& remote_mlp_input : moe_queue_in_) {
-        // remote_mlp_input_temp.push_back(remote_mlp_input[0]);
-        KLLM_LOG_DEBUG << "Recv remote_mlp_input shape: " << remote_mlp_input[0].shape[0]
-                       << remote_mlp_input[0].shape[1] << ", dtype: " << remote_mlp_input[0].ToString()
-                       << ", refer_ptr " << remote_mlp_input[0].GetPtr<void>()
-                       << ", rank: " << forwarding_context.GetCurrentRank();
-        // Expert gating MatMul
-        {
-          PROFILE_EVENT_SCOPE(gate, "gate", forwarding_context.GetCurrentRank());
-          STATUS_CHECK_RETURN(expert_gate_->Forward(remote_mlp_input, gated_buffer_));
-        }
-        {
-          PROFILE_EVENT_SCOPE(MOE, "MOE", forwarding_context.GetCurrentRank());
-          STATUS_CHECK_RETURN(moe_->Forward(remote_mlp_input[0], gated_buffer_[0], common_mlp_buffer_tensors));
-        }
-      }
-
-      // Clear finished tasks.
-      moe_queue_in_.clear();
-
-      // Stage 4 Send and Receive moe results.
-      std::vector<Tensor> remote_residual_buffer_result;
-      for (size_t node_rank = 0; node_rank < world_size; node_rank++) {
-        if (node_rank == expert_node_rank) {
-          // Stage 4.1 Send moe results to other nodes.
-          ep_data_transfer_->SendHiddenUnitBufferForEP(common_mlp_buffer_tensors, forwarding_context, true);
-          KLLM_LOG_DEBUG << fmt::format("Send moe_buffer_tensors rank_: {},  shape: {} {}, dtype: {}, refer_ptr: {}",
-                                        forwarding_context.GetCurrentRank(), common_mlp_buffer_tensors[0].shape[0],
-                                        common_mlp_buffer_tensors[0].shape[1], common_mlp_buffer_tensors[0].ToString(),
-                                        common_mlp_buffer_tensors[0].GetPtr<void>());
-
-        } else {
-          // Stage 4.2 Revc moe results from other expert-parallel nodes.
-          remote_residual_buffer_result = ep_data_transfer_->RecvHiddenUnitBufferForEP(forwarding_context);
-
-          KLLM_LOG_DEBUG << fmt::format("Recv moe_buffer_tensors rank_: {}, shape: {} {}, dtype: {}, refer_ptr: {}",
-                                        forwarding_context.GetCurrentRank(), remote_residual_buffer_result[0].shape[0],
-                                        remote_residual_buffer_result[0].shape[1],
-                                        remote_residual_buffer_result[0].ToString(),
-                                        remote_residual_buffer_result[0].GetPtr<void>());
-        }
-      }
-
-      // Stage5. Combine local and remote moe results.
       STATUS_CHECK_RETURN(
-          add_->Forward(reduce_buffer_tensors[0], remote_residual_buffer_result[0], reduce_buffer_tensors));
+          moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors));
     }
 
     {
       PROFILE_EVENT_SCOPE(CommonShareMlp, "CommonShareMlp", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, common_mlp_buffer_tensors,
-                                               is_multi_token_forward, forwarding_context));
+      STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward,
+                                               forwarding_context));
     }
 
-    if (enable_full_shared_expert_) {
-      PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
-      tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
-    }
-
-    /*
-     * Add moe output and share_expert output:
-     *
-     * When model_communicator is False, which means device_num = 1:
-     *     MoeOutput          saved in reduce_buffer_tensors
-     *     SharedExpertOutput saved in hidden_buffer_tensors_0
-     *     CommonMlp Output = reduce_buffer_tensors + hidden_buffer_tensors_0
-     *
-     * When model_communicator is True, and enable_full_shared_expert_ is False:
-     *     MoeOutput          saved in reduce_buffer_tensors
-     *     SharedExpertOutput saved in common_mlp_buffer_tensors
-     *     CommonMlp Output = reduce_buffer_tensors + common_mlp_buffer_tensors
-     *
-     * When model_communicator is True, and enable_full_shared_expert_ is True:
-     *     MoeOutput          saved in hidden_buffer_tensors_0
-     *     SharedExpertOutput saved in common_mlp_buffer_tensors
-     *     CommonMlp Output = hidden_buffer_tensors_0 + common_mlp_buffer_tensors
-     */
-    if (forwarding_context.GetModelCommunicator()) {
+    if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
       PROFILE_EVENT_SCOPE(add_layer, "add_layer_with_comm", forwarding_context.GetCurrentRank());
-      if (enable_full_shared_expert_) {
-        STATUS_CHECK_RETURN(
-            add_->Forward(hidden_buffer_tensors_0[0], common_mlp_buffer_tensors[0], hidden_buffer_tensors_0));
-      } else {
-        STATUS_CHECK_RETURN(
-            add_->Forward(reduce_buffer_tensors[0], common_mlp_buffer_tensors[0], reduce_buffer_tensors));
-      }
+      STATUS_CHECK_RETURN(add_->Forward(reduce_buffer_tensors[0], moe_buffer_tensors[0], reduce_buffer_tensors));
     } else {
       PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], reduce_buffer_tensors[0], hidden_buffer_tensors_0));
+      STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
     }
   }
-
   return Status();
 }
 
@@ -352,7 +269,6 @@ Status DeepSeekV3MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
                                               /* need_add_residual_before_attn */ false,
                                               /* need_add_residual_after_mlp */ true));
 
-  StreamSynchronize(forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::End);
   return Status();
@@ -377,21 +293,21 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
   MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                           creation_context.runtime_config, mla_buffers_);
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
-  const size_t max_token_num = creation_context.runtime_config.max_step_token_num;
+  size_t max_token_num = creation_context.runtime_config.max_step_token_num;
+  size_t expert_world_size = creation_context.runtime_config.parallel_basic_config.expert_world_size;
   size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
-  // Used for TwoLayeredFFN
-  moe_buffer_size = std::max(
-      moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size * 2);
-  if (creation_context.runtime_config.enable_full_shared_expert) {
-    moe_buffer_size = std::max(
-        moe_buffer_size, max_token_num * model_creation_config.attn_config.model_config.moe_config.moe_inter_size *
-                             model_creation_config.attn_config.model_config.moe_config.num_shared_experts);
-    KLLM_LOG_DEBUG << fmt::format("when using enable_full_shared_expert, moe_buffer_size = {} * max({}, {} * {})",
-                                  max_token_num, model_creation_config.attn_config.model_config.hidden_units,
-                                  model_creation_config.attn_config.model_config.moe_config.moe_inter_size,
-                                  model_creation_config.attn_config.model_config.moe_config.num_shared_experts);
-  }
   moe_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
+
+  if (creation_context.runtime_config.parallel_basic_config.expert_world_size > 1 ||
+      creation_context.runtime_config.parallel_basic_config.expert_parallel_size > 1) {
+    CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
+    if (GetExpertParallelDeepepWrapper()) {
+      GetExpertParallelDeepepWrapper()->SetMoeBuffer(moe_buffer_tensors, creation_context.rank);
+    } else {
+      KLLM_LOG_ERROR << fmt::format(
+          "Failed to initialize moe buffer tensor data_ptr with DeepEPWrapper: GetExpertParallelDeepepWrapper failed.");
+    }
+  }
 
   for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
        layer_idx <= creation_context.pipeline_config.upper_layer_idx; ++layer_idx) {
@@ -438,6 +354,30 @@ Status DeepSeekV3Model::LayerForward(ForwardingContext& forwarding_context, cons
     for (int layer_idx = forwarding_context.GetPipelineConfig().lower_nextn_layer_idx;
          layer_idx <= forwarding_context.GetPipelineConfig().upper_nextn_layer_idx; ++layer_idx) {
       STATUS_CHECK_RETURN(nextn_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
+    }
+  }
+
+  if (forwarding_context.GetForwardingBuffers()->runtime_config.enable_full_shared_expert) {
+    // EP 开启时，需要清除其他 DP 的脏数据
+    std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(forwarding_context, need_recv);
+    const size_t org_token_size = residual_buffer[0].shape[0];
+    const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
+    const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
+    const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
+    const size_t dp_context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
+    const size_t dp_decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
+                                    forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
+    size_t dp_token_size = dp_context_tokens + dp_decode_tokens;
+
+    if (dp_token_offset > 0) {
+      MemsetAsync(residual_buffer[0].GetPtr<void>(), 0, dp_token_offset * token_hidden_stat_bytes,
+                  forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
+    }
+
+    if (dp_token_offset + dp_token_size < org_token_size) {
+      MemsetAsync(residual_buffer[0].GetPtr<void>() + (dp_token_offset + dp_token_size) * token_hidden_stat_bytes, 0,
+                  (org_token_size - dp_token_offset - dp_token_size) * token_hidden_stat_bytes,
+                  forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()]);
     }
   }
   return Status();

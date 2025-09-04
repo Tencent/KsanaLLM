@@ -86,13 +86,16 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
   // gptq layer
   if (model_config_.is_quant &&
       (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {
-    size_t tp = runtime_config_.parallel_basic_config.tensor_parallel_size;
+    bool enable_full_shared_expert = runtime_config_.enable_full_shared_expert;
+    size_t tp = enable_full_shared_expert ? 1 : runtime_config_.parallel_basic_config.tensor_parallel_size;
     size_t attn_tp = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
     size_t hidden_size = model_config_.hidden_units;
-    size_t inter_size = model_config_.inter_size;
-    size_t shared_expert_inter_size_per_rank = runtime_config_.enable_full_shared_expert
-                                                   ? model_config_.moe_config.shared_expert_inter_size
-                                                   : model_config_.moe_config.shared_expert_inter_size / tp;
+    size_t inter_size_per_rank = model_config_.inter_size;
+    size_t shared_expert_inter_size_per_rank = model_config_.moe_config.shared_expert_inter_size;
+    if (!enable_full_shared_expert) {
+      inter_size_per_rank /= tp;
+      shared_expert_inter_size_per_rank /= tp;
+    }
     uint32_t qk_rope_head_dim = model_config_.mla_config.qk_rope_head_dim;
     uint32_t qk_nope_head_dim = model_config_.mla_config.qk_nope_head_dim;
     uint32_t q_lora_rank = model_config_.mla_config.q_lora_rank;
@@ -101,15 +104,15 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
     size_t head_num = model_config_.head_num;
     // The inter size in config.json for the qwen1 model is twice the true inter size.
     if (model_config_.type == "qwen") {
-      inter_size /= 2;
+      inter_size_per_rank /= 2;
     }
     size_t qkv_size = model_config_.size_per_head * (model_config_.head_num + 2 * model_config_.num_key_value_heads);
     // Because the layout convertion, we can't get n/k from weight shape, and have to calculate it.
     std::map<std::string, std::tuple<size_t, size_t, bool>> kn_pairs;
     // mlp
-    kn_pairs["mlp.gate_proj"] = std::make_tuple(hidden_size, inter_size / tp, true);
+    kn_pairs["mlp.gate_proj"] = std::make_tuple(hidden_size, inter_size_per_rank, true);
     kn_pairs["mlp.up_proj"] = kn_pairs["mlp.gate_proj"];
-    kn_pairs["mlp.down_proj"] = std::make_tuple(inter_size / tp, hidden_size, false);
+    kn_pairs["mlp.down_proj"] = std::make_tuple(inter_size_per_rank, hidden_size, false);
     kn_pairs["mlp.shared_expert.gate_proj"] = std::make_tuple(hidden_size, shared_expert_inter_size_per_rank, true);
     kn_pairs["mlp.shared_expert.up_proj"] = kn_pairs["mlp.shared_expert.gate_proj"];
     kn_pairs["mlp.shared_expert.down_proj"] = std::make_tuple(shared_expert_inter_size_per_rank, hidden_size, false);

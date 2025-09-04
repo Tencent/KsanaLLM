@@ -110,6 +110,7 @@ Status ExpertParallelNcclDataChannel::Close() {
 
 //    All expert parallel worker nodes.
 Status ExpertParallelNcclDataChannel::Connect() {
+  // TODO(zezhao): 删除原有版本使用 NCCL 的多机 EP 通信
   env_->GetExpertParallelConfig(expert_parallel_config_);
 
   // Deserialize nccl unique id from master.

@@ -31,6 +31,7 @@ class TwoLayeredFFN {
   bool fuse_gate_up_proj_ = false;
   bool fuse_silu_mul_ = false;  // whether to fuse silu mul into quant before gemm
   bool mlp_bias_ = false;
+  bool enable_full_shared_expert_ = false;
 
   Tensor mlp_gate_bias_tensor_;
   Tensor mlp_up_bias_tensor_;

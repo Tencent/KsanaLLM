@@ -46,7 +46,7 @@ struct ForwardingBuffers {
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
 
-  void CalculateBuffersShape(size_t batch_size, size_t token_num);
+  void CalculateBuffersShape(size_t batch_size, size_t max_token_num);
 
   // Resize buffer to save device memory.
   Status ResizeBuffers(size_t batch_size, size_t token_num, bool release = false);

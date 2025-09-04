@@ -8,6 +8,7 @@
 
 #include "fmt/core.h"
 #include "ksana_llm/data_hub/data_hub.h"
+#include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_stage.h"
@@ -85,6 +86,24 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
     KLLM_LOG_DEBUG << "Initialized forwarding context buffer with " << forwarding_context_buffer_size_ << " contexts";
   }
 
+  // When using Expert-Parallel, we should init hidden_buffer_ptr in DeepEPWrapper.
+  if (forwarding_context_buffer_size_ == 1 && expert_parallel_config_.global_expert_para_size > 1) {
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0,
+                        forwarding_context_buffer_[0]->GetForwardingBuffers()->hidden_buffer_0);
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1,
+                        forwarding_context_buffer_[0]->GetForwardingBuffers()->hidden_buffer_1);
+    CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_buffer_[0]->GetForwardingBuffers()->shared_buffer);
+    std::vector<Tensor> hidden_buffer_tensors = {hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0],
+                                                 reduce_buffer_tensors[0]};
+    if (GetExpertParallelDeepepWrapper()) {
+      GetExpertParallelDeepepWrapper()->SetHiddenBuffers(hidden_buffer_tensors, rank_);
+    } else {
+      KLLM_LOG_ERROR << fmt::format(
+          "Failed to initialize hidden buffer tensor data_ptr with DeepEPWrapper: GetExpertParallelDeepepWrapper "
+          "failed.");
+    }
+  }
+
   layer_num_on_node_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
   if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {
     layer_num_on_node_ += pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
@@ -105,12 +124,11 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
     Tensor position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
     emb_lookup_layer_->Init(
-        {model_run_config_.use_emb_scale, model_run_config_.emb_scale, position_weight.GetPtr<void>()},
-        runtime_config_, context_, rank_);
+        {model_run_config_.use_emb_scale, model_run_config_.emb_scale, position_weight.GetPtr<void>()}, runtime_config_,
+        context_, rank_);
   } else {
-    emb_lookup_layer_->Init(
-        {model_run_config_.use_emb_scale, model_run_config_.emb_scale}, runtime_config_, context_,
-        rank_);
+    emb_lookup_layer_->Init({model_run_config_.use_emb_scale, model_run_config_.emb_scale}, runtime_config_, context_,
+                            rank_);
   }
 
   cpu_emb_lookup_layer_ = std::make_shared<CpuEmbLookupLayer>();
@@ -406,6 +424,8 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
   ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
   KLLM_LOG_DEBUG << "start forward multi_batch_id=" << forwarding_context->GetMultiBatchId() << ", rank=" << rank_;
 
+  {}
+
   PROFILE_EVENT_SCOPE(
       CommonModel_Forward,
       fmt::format("CommonModel_Forward_{}_{}_rank{}", multi_batch_id, epilogue, forwarding_context->GetCurrentRank()),
@@ -548,6 +568,13 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   // lm_head
   PROFILE_EVENT_SCOPE(CommonModel_LmHead_, fmt::format("CommonModel_LmHead_{}", forwarding_context.GetMultiBatchId()),
                       forwarding_context.GetCurrentRank());
+
+  if (forwarding_context.GetModelCommunicator() && runtime_config_.enable_full_shared_expert) {
+    forwarding_context.GetModelCommunicator()->ReduceSum(hidden_buffer_tensors_0, hidden_buffer_tensors_1,
+                                                         is_multi_token_forward, /*use_custom*/ false);
+    std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+  }
+
   STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0, hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 

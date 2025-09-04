@@ -7,6 +7,7 @@
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
 
+#include "ksana_llm/data_hub/expert_parallel_deepep_wrapper.h"
 #include "ksana_llm/data_hub/expert_parallel_hidden_unit_buffer.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/distributed/packet_type.h"
@@ -46,5 +47,11 @@ void SetCurrentExpertRecvCommMetaHiddenUnitBuffer(HiddenUnitDeviceBuffer* hidden
 HiddenUnitDeviceBuffer* GetCurrentExpertRecvCommMetaHiddenUnitBuffer();
 
 void PrintExpertHiddenUnitBufferPoolInfo(std::string tag = "PrintExpertHiddenUnitBufferPoolInfo");
+
+Status InitializeExpertParallelDeepepWrapper(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
+                                             const std::shared_ptr<Context>& context);
+
+const std::shared_ptr<ExpertParallelDeepepWrapper>& GetExpertParallelDeepepWrapper();
+void SetExpertParallelDeepepWrapper(const std::shared_ptr<ExpertParallelDeepepWrapper>& deepep_wrapper);
 
 }  // namespace ksana_llm

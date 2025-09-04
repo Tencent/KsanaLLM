@@ -103,6 +103,23 @@ Packet* GetPacketObject(PacketType packet_type, size_t body_size) {
       }
       break;
     }
+    case PacketType::CONTROL_REQ_DEEPEP_META: {
+      size_t nvshmem_unique_id_size = kNvshmemUniqudIdSize;
+      size_t ipc_handles_size = kMaxNumRanks * kIpcHandlesSize;
+      packet = reinterpret_cast<Packet*>(
+          malloc(sizeof(Packet) + nvshmem_unique_id_size + ipc_handles_size + sizeof(NvshmemUniqueIdRequest)));
+      if (packet != nullptr) {
+        packet->size = sizeof(NvshmemUniqueIdRequest) + nvshmem_unique_id_size + ipc_handles_size;
+      }
+      break;
+    }
+    case PacketType::CONTROL_RSP_DEEPEP_META: {
+      packet = reinterpret_cast<Packet*>(malloc(sizeof(Packet) + sizeof(NvshmemUniqueIdResponse)));
+      if (packet != nullptr) {
+        packet->size = sizeof(NvshmemUniqueIdResponse);
+      }
+      break;
+    }
     case PacketType::DATA_RSP_HIDDEN_UNIT:
     case PacketType::CONTROL_RSP_SCHEDULE:
     case PacketType::CONTROL_RSP_LAYER:

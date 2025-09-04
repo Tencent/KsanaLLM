@@ -12,19 +12,40 @@ file(GLOB_RECURSE model_performance_SRCS
 list(FILTER model_performance_SRCS EXCLUDE REGEX ".*test.cpp")
 
 add_library(model_performance STATIC ${model_performance_SRCS})
-target_link_libraries(model_performance PUBLIC cache_manager models runtime layers samplers runtime ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS} data_hub distributed)
-
+target_link_libraries(model_performance PUBLIC 
+  -Wl,--whole-archive
+  layers
+  -Wl,--no-whole-archive
+  cache_manager models samplers runtime ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${kernels_nvidia_LIBS} data_hub distributed)
 
 add_executable(run_model_performance ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_model_performance.cpp)
-target_link_libraries(run_model_performance PUBLIC model_performance yaml-cpp)
+target_link_libraries(run_model_performance PUBLIC model_performance yaml-cpp
+  -Wl,--whole-archive
+  data_hub
+  layers
+  -Wl,--no-whole-archive
+)
 
 add_executable(run_communcation_performance ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_communication_performance.cpp)
+if(WITH_CUDA)
+  target_link_libraries(run_communcation_performance PUBLIC nvToolsExt)
+endif()
 target_link_libraries(run_communcation_performance PUBLIC model_performance)
 
 
 # for test
 if(WITH_CUDA)
-  file(GLOB_RECURSE model_performance_test_SRCS
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/*test.cpp)
-  cpp_test(model_performance_test SRCS ${model_performance_test_SRCS} DEPS model_performance)
+  file(GLOB model_performance_runner_test_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/model_performance_runner_test.cpp)
+  cpp_test(model_performance_runner_test
+    SRCS ${model_performance_runner_test_SRCS}
+    DEPS model_performance
+    LIBS -Wl,--whole-archive layers -Wl,--no-whole-archive)
+
+  file(GLOB communication_performance_runner_test_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/communication_performance_runner_test.cpp)
+  cpp_test(communication_performance_runner_test
+    SRCS ${communication_performance_runner_test_SRCS}
+    DEPS model_performance
+    LIBS -lnvToolsExt)
 endif()

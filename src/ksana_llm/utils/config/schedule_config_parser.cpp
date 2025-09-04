@@ -196,6 +196,22 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
                   runtime_config_.parallel_basic_config.tensor_parallel_size,
                   runtime_config_.parallel_basic_config.attn_data_parallel_size));
 
+  if (runtime_config_.parallel_basic_config.expert_world_size > 1 ||
+      runtime_config_.parallel_basic_config.expert_parallel_size > 1) {
+    if (!runtime_config_.enable_full_shared_expert) {
+      KLLM_LOG_WARNING << fmt::format("When using Expert-Parallel, enable_full_shared_expert = True");
+      runtime_config_.enable_full_shared_expert = true;
+    }
+  }
+
+  // TODO(zezhao): 临时限制，Expert-Parallel 开启时 Data-Parallel 需相等，后续将支持 ATP > 1
+  if (runtime_config_.parallel_basic_config.expert_parallel_size > 1 &&
+      runtime_config_.parallel_basic_config.expert_parallel_size !=
+          runtime_config_.parallel_basic_config.attn_data_parallel_size) {
+    KLLM_LOG_ERROR << fmt::format("Expert-Parallel only supports DP=EP");
+    KLLM_THROW(fmt::format("Expert-Parallel only supports DP=EP"));
+  }
+
 #if (defined(ENABLE_ACL) || defined(ENABLE_TOPS))
   if (runtime_config_.parallel_basic_config.attn_data_parallel_size > 1) {
     KLLM_THROW(

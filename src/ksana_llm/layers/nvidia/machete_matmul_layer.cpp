@@ -154,7 +154,7 @@ Status MacheteMatMulLayer::Preprocess(const ModelConfig& model_config_, const Ru
     // shape配置
     const size_t bits = 4;
     const size_t pack_factor = 32 / bits;
-    const size_t max_posible_m = runtime_config.max_batch_size;
+    const size_t max_posible_m = std::min(runtime_config.max_batch_size, 256);
     const size_t posible_n = max_n_;
     const size_t posible_k = max_k_;
 
