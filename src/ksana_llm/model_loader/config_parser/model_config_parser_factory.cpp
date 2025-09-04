@@ -6,6 +6,7 @@
 
 #include "ksana_llm/models/llama/llama_model_config_parser.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config_parser.h"
+#include "ksana_llm/models/qwen/new_qwen_config_parser.h"
 #include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
@@ -19,6 +20,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_DEEPSEEK: {
       model_config_parser = std::make_shared<NewDeepSeekV3ConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_QWEN: {
+      model_config_parser = std::make_shared<NewQwenConfigParser>();
       break;
     }
     default: {

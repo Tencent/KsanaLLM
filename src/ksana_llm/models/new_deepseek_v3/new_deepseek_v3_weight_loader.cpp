@@ -35,7 +35,7 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
   env->GetRuntimeConfig(runtime_config_);
-  to_be_permuted_weights_.resize(runtime_config_.parallel_basic_config.tensor_parallel_size);
+  weights_to_permute_.resize(runtime_config_.parallel_basic_config.tensor_parallel_size);
 
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);
@@ -114,7 +114,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
   }
 
   for (auto& [weight_name, weight_tensor] : dev_weights_map) {
-    if (to_be_permuted_weights_[dev_rank].find(weight_name) != to_be_permuted_weights_[dev_rank].end()) {
+    if (weights_to_permute_[dev_rank].find(weight_name) != weights_to_permute_[dev_rank].end()) {
       // permute weight tensor
       weight_impl_->PermuteWeight(weight_tensor, {1, 0}, dev_rank);
     }
@@ -384,7 +384,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
           device_model_weights[fused_tensor_name] = fused_tensor;
         }
         if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
-          to_be_permuted_weights_[dev_rank].insert(fused_tensor_name);
+          weights_to_permute_[dev_rank].insert(fused_tensor_name);
         }
         continue;
       }
@@ -413,7 +413,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
           device_model_weights[fused_tensor_name] = fused_tensor;
         }
         if (fused_tensor.dtype == DataType::TYPE_FP16 || fused_tensor.dtype == DataType::TYPE_BF16) {
-          to_be_permuted_weights_[dev_rank].insert(fused_tensor_name);
+          weights_to_permute_[dev_rank].insert(fused_tensor_name);
         }
         continue;
       }

@@ -11,6 +11,7 @@
 
 #include "ksana_llm/models/llama/llama_model_weight_loader.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_loader.h"
+#include "ksana_llm/models/qwen/new_qwen_weight_loader.h"
 
 namespace ksana_llm {
 
@@ -26,6 +27,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_DEEPSEEK: {
       model_weight_loader = std::make_shared<NewDeepSeekV3WeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_QWEN: {
+      model_weight_loader = std::make_shared<NewQwenWeightLoader>(model_config, env, context);
       break;
     }
     default: {

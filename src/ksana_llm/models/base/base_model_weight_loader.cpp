@@ -4,8 +4,8 @@
 
 #include "ksana_llm/models/base/base_model_weight_loader.h"
 #include <c10/core/ScalarType.h>
-#include <torch/types.h>
 #include <dlfcn.h>
+#include <torch/types.h>
 #include <algorithm>
 
 #include "fmt/core.h"
@@ -32,6 +32,9 @@ BaseModelWeightLoader::BaseModelWeightLoader(std::shared_ptr<BaseModelConfig> mo
   model_config_ = model_config;
   env_ = env;
   context_ = context;
+
+  permute_buffers_.resize(context_->GetTensorParallelSize());
+  tensor_buffers_.resize(context_->GetTensorParallelSize());
 }
 
 BaseModelWeightLoader::~BaseModelWeightLoader() {}

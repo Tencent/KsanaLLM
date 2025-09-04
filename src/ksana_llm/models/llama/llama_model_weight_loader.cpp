@@ -25,9 +25,13 @@ namespace ksana_llm {
 
 LlamaModelWeightLoader::LlamaModelWeightLoader(std::shared_ptr<BaseModelConfig> model_config,
                                                std::shared_ptr<Environment> env, std::shared_ptr<Context> context)
-    : BaseModelWeightLoader(model_config, env, context) {
+    : BaseModelWeightLoader(model_config, env, context),
+      common_weight_loader_(std::make_unique<CommonModelWeightLoader>(model_config, env, context)) {
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
+  weights_to_permute_.resize(runtime_config.parallel_basic_config.tensor_parallel_size);
 }
 
 LlamaModelWeightLoader::~LlamaModelWeightLoader() {}
@@ -68,6 +72,22 @@ Status LlamaModelWeightLoader::FilterWeightNames(std::vector<std::string>& weigh
   return Status();
 }
 
+Status LlamaModelWeightLoader::PostProcessModelWeights(std::unordered_map<std::string, Tensor>& dev_weights_map,
+                                                       int dev_rank) {
+  std::shared_ptr<LlamaModelConfig> llama_model_config = std::dynamic_pointer_cast<LlamaModelConfig>(model_config_);
+  for (auto& weight_name : weights_to_permute_.at(dev_rank)) {
+    auto itr = dev_weights_map.find(weight_name);
+    if (itr == dev_weights_map.end()) {
+      KLLM_THROW(fmt::format("Can't find weight: {} in device model weights map.", weight_name));
+    } else {
+      Tensor& weight_tensor = itr->second;
+      STATUS_CHECK_RETURN(common_weight_loader_->PermuteWeight(weight_tensor, {1, 0}, dev_rank));
+    }
+  }
+
+  return Status();
+}
+
 Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights,
                                                    int dev_rank,
                                                    std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -87,74 +107,12 @@ Status LlamaModelWeightLoader::ProcessModelWeights(const std::unordered_map<std:
     if (CheckWeightNameMatched(file_weight_name,
                                {"self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"},
                                false)) {
-      std::string qkv_weight_name_prefix = file_weight_name.substr(0, file_weight_name.find("_proj") - 1);
-
-      // Merge q & k & v to query_key_value.
-      std::string qkv_weight_name = qkv_weight_name_prefix + "query_key_value.weight";
-
-      // Make sure q & k & v all exist in one file.
-      if (!CheckAllWeightsExist(host_model_weights,
-                                {qkv_weight_name_prefix + "q_proj.weight", qkv_weight_name_prefix + "k_proj.weight",
-                                 qkv_weight_name_prefix + "v_proj.weight"})) {
-        left_host_weights[file_weight_name] = host_weight_tensor;
-        continue;
-      }
-
-      const Tensor& q_host_weight_tensor = host_model_weights.at(qkv_weight_name_prefix + "q_proj.weight");
-      const Tensor& k_host_weight_tensor = host_model_weights.at(qkv_weight_name_prefix + "k_proj.weight");
-      const Tensor& v_host_weight_tensor = host_model_weights.at(qkv_weight_name_prefix + "v_proj.weight");
-
-      size_t qkv_shape_0 =
-          q_host_weight_tensor.shape[0] + k_host_weight_tensor.shape[0] + v_host_weight_tensor.shape[0];
-      size_t qkv_slice_shape_0 = static_cast<size_t>(DivRoundUp(qkv_shape_0, context_->GetTensorParallelSize()));
-      std::vector<size_t> qkv_slice_shape = {qkv_slice_shape_0, host_weight_tensor.shape[1]};
-
-      Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, qkv_slice_shape, dev_rank);
-      Tensor qkv_dev_tensor =
-          Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, qkv_slice_shape, dev_rank);
-
-      size_t q_slice_offset =
-          static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
-          q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
-      size_t q_slice_bytes =
-          static_cast<size_t>(DivRoundUp(q_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
-          q_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-
-      if (k_host_weight_tensor.shape[0] != v_host_weight_tensor.shape[0]) {
-        KLLM_THROW(fmt::format("k & v should have same shape for llama"));
-      }
-      size_t kv_slice_offset =
-          static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
-          k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype) * dev_rank;
-      size_t kv_slice_bytes =
-          static_cast<size_t>(DivRoundUp(k_host_weight_tensor.shape[0], context_->GetTensorParallelSize())) *
-          k_host_weight_tensor.shape[1] * GetTypeSize(host_weight_tensor.dtype);
-      if (static_cast<size_t>(dev_rank) == context_->GetTensorParallelSize() - 1) {
-        q_slice_bytes = q_host_weight_tensor.GetTotalBytes() - q_slice_offset;
-        kv_slice_bytes = k_host_weight_tensor.GetTotalBytes() - kv_slice_offset;
-      }
-
-      MemcpyAsync(qkv_dev_tensor.GetPtr<void>(), q_host_weight_tensor.GetPtr<void>() + q_slice_offset, q_slice_bytes,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-      MemcpyAsync(qkv_dev_tensor.GetPtr<void>() + q_slice_bytes, k_host_weight_tensor.GetPtr<void>() + kv_slice_offset,
-                  kv_slice_bytes, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
-      MemcpyAsync(qkv_dev_tensor.GetPtr<void>() + q_slice_bytes + kv_slice_bytes,
-                  v_host_weight_tensor.GetPtr<void>() + kv_slice_offset, kv_slice_bytes, MEMCPY_HOST_TO_DEVICE,
-                  context_->GetMemoryManageStreams()[dev_rank]);
-      StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
-
-      PermuteDeviceTensor(qkv_dev_tensor, {1, 0}, dev_rank, dev_tensor);
-
-      Status status = CastDeviceTensorType(dev_tensor, llama_model_config->weight_data_type, dev_rank);
-      if (!status.OK()) {
-        return status;
-      }
-
-      device_model_weights[qkv_weight_name] = dev_tensor;
-
-      processed_weights.insert(qkv_weight_name_prefix + "q_proj.weight");
-      processed_weights.insert(qkv_weight_name_prefix + "k_proj.weight");
-      processed_weights.insert(qkv_weight_name_prefix + "v_proj.weight");
+      STATUS_CHECK_RETURN(common_weight_loader_->LoadMhaWeights(
+          file_weight_name, host_weight_tensor, device_model_weights, dev_rank, llama_model_config->head_num,
+          llama_model_config->num_key_value_heads, llama_model_config->size_per_head));
+      const std::string query_key_value_name =
+          file_weight_name.substr(0, file_weight_name.find(".self_attn.")) + ".self_attn.query_key_value.weight";
+      weights_to_permute_.at(dev_rank).insert(query_key_value_name);
 
       continue;
     }

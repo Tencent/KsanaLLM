@@ -21,13 +21,16 @@
 #endif
 
 namespace ksana_llm {
+
+// TODO(huicongyao): Methods in this class like `GetTempTensor` and `SplitOptTrans` is duplicated with
+// `BaseModelWeightLoader`, should be merged together in the future.
 class NewDeepSeekV3WeightImplBase {
  public:
   virtual ~NewDeepSeekV3WeightImplBase() = default;
 
   // Reuse temporary created tensor while processing weights
   // these tensors should not be inserted into device_model_weights
-  // Careful with this function cause it may cause memory issue
+  // Careful with this function because it may cause memory issue
   virtual Tensor& GetTempTensor(const std::vector<size_t>& shape, DataType data_type, int dev_rank) = 0;
 
   // Permutation with buffer

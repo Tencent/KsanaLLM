@@ -36,6 +36,7 @@
 
 #include "ksana_llm/models/llama/llama_model_config.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
+#include "ksana_llm/models/qwen/new_qwen_config.h"
 
 namespace ksana_llm {
 
@@ -126,7 +127,7 @@ void WeightInstance::Load() {
   Status status =
       model_config_parser.ParseModelConfig(model_config_.path, runtime_config_.parallel_basic_config, model_config);
 
-  if (use_old_loader && model_config->model_arch == ModelArchitecture::ARCH_DEEPSEEK) {
+  if (status.OK() && use_old_loader && model_config->model_arch == ModelArchitecture::ARCH_DEEPSEEK) {
     KLLM_LOG_WARNING << "DeepSeek is disabled for old model loader now. Ignore env variable `ENABLE_OLD_LOADER`";
     use_old_loader = false;
   }
@@ -356,7 +357,7 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     return false;
   }
 
-  // Temporarily support partly llama and deepseek v3 on nvidia-GPU
+  // Temporarily support partly llama , qwen-dense and deepseek v3 on nvidia-GPU
   switch (model_config->model_arch) {
     case ModelArchitecture::ARCH_LLAMA: {
       std::shared_ptr<LlamaModelConfig> llama_model_config = std::dynamic_pointer_cast<LlamaModelConfig>(model_config);
@@ -368,10 +369,12 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     }
 
     case ModelArchitecture::ARCH_DEEPSEEK: {
-      std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
-          std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config);
-
       return true;
+    }
+
+    case ModelArchitecture::ARCH_QWEN: {
+      std::shared_ptr<NewQwenConfig> qwen_model_config = std::dynamic_pointer_cast<NewQwenConfig>(model_config);
+      return !qwen_model_config->is_quant;
     }
     default:
       return false;

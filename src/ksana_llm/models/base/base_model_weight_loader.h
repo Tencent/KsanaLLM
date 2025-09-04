@@ -55,6 +55,7 @@ class BaseModelWeightLoader {
   // cast device tensor type.
   Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_rank);
 
+  // TODO(huicongyao): remove this function in the future
   Status CastDeviceTensorTypePytorch(Tensor& input_tensor, DataType new_dtype, int dev_rank);
 
   // Copy host tensor to device.
@@ -75,6 +76,9 @@ class BaseModelWeightLoader {
 
   std::vector<std::pair<std::regex, std::string>> patterns_;
   bool loaded_patterns_ = false;
+
+  std::vector<std::unordered_map<size_t, Tensor>> permute_buffers_;
+  std::vector<std::unordered_map<size_t, Tensor>> tensor_buffers_;
 };
 
 }  // namespace ksana_llm

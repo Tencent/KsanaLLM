@@ -46,7 +46,7 @@ option(WITH_CLEAR_CACHE "Enable clear prefix cache" OFF)
 option(WITH_LIGHTLY_CI_TEST "Enable lightly ci test" ON)
 option(WITH_BOOST "Enable Boost" ON)
 option(WITH_FLASH_ATTN_CACHE "Enable block table-based KV cache management for Flash Attention" ON)
-  
+
 
 # Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
 option(WITH_INTERNAL_LIBRARIES "Enable use of Tencent internal libraries" OFF)

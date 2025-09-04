@@ -14,18 +14,19 @@ namespace ksana_llm {
 
 // buildin model type.
 static const std::unordered_map<std::string, ModelArchitecture> model_type_to_archs = {
-    {"llama", ModelArchitecture::ARCH_LLAMA},       {"qwen2_moe", ModelArchitecture::ARCH_QWEN2_MOE},
-    {"qwen2_vl", ModelArchitecture::ARCH_QWEN2_VL}, {"qwen", ModelArchitecture::ARCH_QWEN},
-    {"baichuan", ModelArchitecture::ARCH_BAICHUAN}, {"chatglm", ModelArchitecture::ARCH_CHATGLM},
-    {"gpt", ModelArchitecture::ARCH_GPT},           {"fairseq-transformer", ModelArchitecture::ARCH_GPT},
-    {"mixtral", ModelArchitecture::ARCH_MIXTRAL},   {"qwen3_moe", ModelArchitecture::ARCH_QWEN3_MOE},
-    {"deepseek", ModelArchitecture::ARCH_DEEPSEEK}};
+    {"llama", ModelArchitecture::ARCH_LLAMA},          {"qwen2_moe", ModelArchitecture::ARCH_QWEN2_MOE},
+    {"qwen2_vl", ModelArchitecture::ARCH_QWEN2_VL},    {"qwen", ModelArchitecture::ARCH_QWEN},
+    {"qwen2", ModelArchitecture::ARCH_QWEN},           {"qwen3", ModelArchitecture::ARCH_QWEN},
+    {"baichuan", ModelArchitecture::ARCH_BAICHUAN},    {"chatglm", ModelArchitecture::ARCH_CHATGLM},
+    {"gpt", ModelArchitecture::ARCH_GPT},              {"fairseq-transformer", ModelArchitecture::ARCH_GPT},
+    {"mixtral", ModelArchitecture::ARCH_MIXTRAL},      {"qwen3_moe", ModelArchitecture::ARCH_QWEN3_MOE},
+    {"deepseek_v2", ModelArchitecture::ARCH_DEEPSEEK}, {"deepseek_v3", ModelArchitecture::ARCH_DEEPSEEK}};
 
 static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_type = {
     {ModelArchitecture::ARCH_LLAMA, "llama"},
     {ModelArchitecture::ARCH_QWEN2_MOE, "qwen2_moe"},
     {ModelArchitecture::ARCH_QWEN2_VL, "qwen2_vl"},
-    {ModelArchitecture::ARCH_QWEN, "qwen"},
+    {ModelArchitecture::ARCH_QWEN, "qwen3"},
     {ModelArchitecture::ARCH_BAICHUAN, "baichuan"},
     {ModelArchitecture::ARCH_CHATGLM, "chatglm"},
     {ModelArchitecture::ARCH_GPT, "gpt"},
@@ -35,7 +36,7 @@ static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_ty
 
 Status GetModelArchitectureFromString(const std::string& model_type, ModelArchitecture& model_arch) {
   for (const auto& [key, value] : model_type_to_archs) {
-    if (model_type.find(key) != std::string::npos) {
+    if (model_type == key) {
       model_arch = value;
       return Status();
     }

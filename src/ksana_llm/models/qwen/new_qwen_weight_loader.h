@@ -1,23 +1,25 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
+
 #pragma once
+
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "ksana_llm/models/base/base_model_weight_loader.h"
-#include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
-#include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_impl.h"
+#include "ksana_llm/models/base/common_model_weight_loader.h"
+#include "ksana_llm/models/qwen/new_qwen_config.h"
 
 namespace ksana_llm {
-// The new deepseek loader.
-class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
+// Qwen weight loader
+class NewQwenWeightLoader : public BaseModelWeightLoader {
  public:
-  NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelConfig> model_config, std::shared_ptr<Environment> env,
-                            std::shared_ptr<Context> context);
-  virtual ~NewDeepSeekV3WeightLoader() override;
+  NewQwenWeightLoader(std::shared_ptr<BaseModelConfig> model_config, std::shared_ptr<Environment> env,
+                      std::shared_ptr<Context> context);
+  virtual ~NewQwenWeightLoader() override;
 
   // Do some filter on model weight names.
   virtual Status FilterWeightNames(std::vector<std::string>& weight_names) override;
@@ -32,13 +34,9 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
                                          int dev_rank) override;
 
  private:
-  Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config);
-
- private:
   PipelineConfig pipeline_config_;
-  RuntimeConfig runtime_config_;
-  std::unique_ptr<NewDeepSeekV3WeightImplBase> weight_impl_;
-  // rank -> weight_name
   std::vector<std::unordered_set<std::string>> weights_to_permute_;
+  std::unique_ptr<CommonModelWeightLoader> common_weight_loader_;
 };
+
 }  // namespace ksana_llm

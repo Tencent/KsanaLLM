@@ -1,4 +1,4 @@
-/* Copyright 2024 Tencent Inc.  All rights reserved.
+/* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
 
@@ -6,19 +6,16 @@
 #include <filesystem>
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
-#include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
+#include "ksana_llm/models/qwen/qwen_model.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
-#include "ksana_llm/utils/grammar_backend.h"
-#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
-#include "ksana_llm/utils/tokenizer.h"
 #include "test.h"
 
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
@@ -27,29 +24,18 @@
 
 using namespace ksana_llm;
 
-class DeepSeekV3Test : public testing::Test {
+class QwenTest : public testing::Test {
  protected:
   void SetUp() override {
     InitLoguru();
     DeviceMemoryPool::Disable();
     const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
-    std::string model_path = "/model/DeepSeek-R1-17832-fix-mtp";
+    std::string model_path = "/model/qwen1.5-hf/0.5B-Chat";
     std::string yaml_path = "../../../../examples/llama7b/ksana_llm.yaml";
     SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
     context = std::make_shared<Context>(1, 1, 1);
-
-    // Skip int4 output token check cause it's not stable.
-    if (test_name.find("ForwardGPTQInt4Test") != std::string::npos) {
-      model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
-    } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
-      model_path = "/model/DeepSeek-R1-0528-moe-int4-fix-mtp";
-    } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
-      model_path = "/model/deepseek_v3";
-      expected_tokens = {{3648, 303, 19892}};
-    } else {
-      expected_tokens = {{5306, 13245, 15354}, /*without fastmath*/ {5306, 13245, 536}, {28570, 27932, 4180}};
-    }
+    expected_tokens = {{13790, 397}};
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
@@ -59,11 +45,9 @@ class DeepSeekV3Test : public testing::Test {
 
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_path);
-    // TODO(robertyuan): bad style, remove later
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
-    batch_scheduler_config.enable_mtp_module = true;
-    batch_scheduler_config.enable_xgrammar = true;
+    batch_scheduler_config.enable_mtp_module = false;  // Qwen doesn't use MTP
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
@@ -71,7 +55,7 @@ class DeepSeekV3Test : public testing::Test {
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
     env->GetAttnBackendConfig(attn_backend_config);
-    attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
+    attn_backend_config.enable_blocked_multi_token_forwarding_kv = false;
     env->SetAttnBackendConfig(attn_backend_config);
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
@@ -119,12 +103,9 @@ class DeepSeekV3Test : public testing::Test {
   std::vector<std::vector<int>> expected_tokens;
 
   template <typename weight_data_type>
-  void TestDeepSeekV3Forward() {
+  void TestQwenForward() {
     int device_id = 0;
     SetDevice(device_id);
-#ifdef ENABLE_FP8
-    // fp8 is not supported
-#endif
     std::filesystem::path model_path(model_config.path);
     if (!std::filesystem::exists(model_path)) {
       KLLM_LOG_ERROR << fmt::format("The given model path {} does not exist.", model_config.path);
@@ -139,10 +120,10 @@ class DeepSeekV3Test : public testing::Test {
     std::unique_ptr<WeightInstance> weight_instance =
         std::make_unique<WeightInstance>(model_config, runtime_config, context);
     weight_instance->Load();
-    std::shared_ptr<BaseWeight> deepseek_v3_weight = weight_instance->GetWeight(/*rank*/ 0);
-    std::shared_ptr<DeepSeekV3Model> deepseek_v3 =
-        std::make_shared<DeepSeekV3Model>(model_config, runtime_config, device_id, context, deepseek_v3_weight);
-    deepseek_v3->AllocResources(multi_batch_id);
+    std::shared_ptr<BaseWeight> qwen_weight = weight_instance->GetWeight(/*rank*/ 0);
+    std::shared_ptr<QwenModel> qwen =
+        std::make_shared<QwenModel>(model_config, runtime_config, device_id, context, qwen_weight);
+    qwen->AllocResources(multi_batch_id);
 
     // ContextDecode
     ForwardRequest forward;
@@ -167,7 +148,7 @@ class DeepSeekV3Test : public testing::Test {
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);
-    forward.logits_buf[0] = deepseek_v3->GetLogitsPtr(multi_batch_id);
+    forward.logits_buf[0] = qwen->GetLogitsPtr(multi_batch_id);
     forward.logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
@@ -183,7 +164,7 @@ class DeepSeekV3Test : public testing::Test {
     forward.kv_cache_ptrs.resize(1);  // rank num = 1
     block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
 
-    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer + model_config.num_nextn_predict_layers, {block_ids},
+    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids},
                                        forward.atb_kv_cache_base_blk_ids, cache_manager);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
       Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
@@ -201,28 +182,28 @@ class DeepSeekV3Test : public testing::Test {
     std::vector<ForwardRequest> forward_reqs = {forward, decode_forward};
     Singleton<LayerProgressTracker>::GetInstance()->Initialize(
         runtime_config.parallel_basic_config.tensor_parallel_size,
-        model_config.num_layer + model_config.num_nextn_predict_layers);
+        model_config.num_layer);
     Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
       KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;
     });
-    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    EXPECT_TRUE(qwen->Forward(multi_batch_id, qwen_weight, forward_reqs, false).OK());
     Singleton<LayerProgressTracker>::GetInstance()->Cleanup();
     std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
     // warmup
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      qwen->Forward(multi_batch_id, qwen_weight, multi_forward_reqs, false);
     }
     // test performance
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      qwen->Forward(multi_batch_id, qwen_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
     EventElapsedTime(&milliseconds, start, stop);
     std::cout << "ContextDecode milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
 
-    if (model_config.quant_config.method == QUANT_BLOCK_FP8_E4M3 && !model_config.quant_config.enable_moe_int4) {
+    if (model_config.quant_config.method == QUANT_BLOCK_FP8_E4M3) {
       EXPECT_TRUE((milliseconds / rounds) < 20);
     }
 
@@ -281,7 +262,7 @@ class DeepSeekV3Test : public testing::Test {
       forward_req.infer_stage = InferStage::STATE_DECODE;
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
-    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    EXPECT_TRUE(qwen->Forward(multi_batch_id, qwen_weight, forward_reqs, false).OK());
     sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
     std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
               << std::endl;
@@ -309,7 +290,7 @@ class DeepSeekV3Test : public testing::Test {
       forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      qwen->Forward(multi_batch_id, qwen_weight, multi_forward_reqs, false);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -317,87 +298,8 @@ class DeepSeekV3Test : public testing::Test {
     std::cout << "Decode milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
     EXPECT_TRUE((milliseconds / rounds) < 11);
 
-    // MTP
-    for (auto &forward_req : multi_forward_reqs) {
-      forward_req.infer_stage = InferStage::STAGE_CONTEXT;
-      forward_req.kv_cached_token_num = 0;
-    }
-    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN).OK());
-    sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
-    std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])
-              << std::endl;
-    // Check if generated tokens match any group of expected tokens
-    match0 = false;
-    match1 = false;
-    for (size_t i = 0; i < expected_tokens.size(); ++i) {
-      if (generated_tokens0[0] == expected_tokens[i][2]) match0 = true;
-      if (generated_tokens1[0] == expected_tokens[i][2]) match1 = true;
-    }
-    EXPECT_TRUE(match0 || expected_tokens.empty());
-    EXPECT_TRUE(match1 || expected_tokens.empty());
-
-    generated_tokens0.clear();
-    generated_tokens1.clear();
-
-    EventRecord(start, context->GetComputeStreams()[device_id]);
-    for (int i = 0; i < rounds; ++i) {
-      deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN);
-    }
-    EventRecord(stop, context->GetComputeStreams()[device_id]);
-    EventSynchronize(stop);
-    EventElapsedTime(&milliseconds, start, stop);
-    std::cout << "prefill mtp milliseconds / " << rounds << " is: " << milliseconds / rounds << std::endl;
-    EXPECT_TRUE((milliseconds / rounds) < 11);
-
-#ifdef ENABLE_CUDA
-    // Test Xgrammar
-    generated_tokens0.clear();
-    generated_tokens1.clear();
-
-    std::unique_ptr<GrammarBackend> grammar_backend_;
-    std::vector<std::string> vocab;
-    int vocab_size = static_cast<int>(model_config.vocab_size);
-    std::vector<int> stop_token_ids;
-
-    Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_path);
-    auto tokenizer = Singleton<Tokenizer>::GetInstance();
-    tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
-    grammar_backend_ = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
-
-    std::string json_schema = R"({
-      "type": "object"
-    })";
-    auto compiled_grammar = grammar_backend_->CompileJSONSchema(json_schema);
-
-    SamplingRequest grammar_sample_req = sample_req;
-    grammar_sample_req.grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
-    std::vector<SamplingRequest> grammar_sample_reqs = {grammar_sample_req};
-
-    for (auto &forward_req : forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
-    }
-
-    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
-    sampler->Sampling(0, grammar_sample_reqs, context->GetComputeStreams()[device_id]);
-    int grammar_token = generated_tokens0[0];
-
-    generated_tokens0.clear();
-
-    SamplingRequest no_grammar_sample_req = sample_req;
-    grammar_sample_reqs = {no_grammar_sample_req};
-    EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
-    sampler->Sampling(0, grammar_sample_reqs, context->GetComputeStreams()[device_id]);
-    int no_grammar_token = generated_tokens0[0];
-
-    EXPECT_NE(grammar_token, no_grammar_token);
-    std::cout << fmt::format("grammar_token: {}, no_grammar_token: {}", grammar_token, no_grammar_token)
-              << std::endl;
-
-    Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
-#endif
-    deepseek_v3.reset();
-    deepseek_v3_weight.reset();
+    qwen.reset();
+    qwen_weight.reset();
 
     StreamSynchronize(context->GetMemoryManageStreams()[device_id]);
     EventDestroy(stop);
@@ -406,55 +308,12 @@ class DeepSeekV3Test : public testing::Test {
   }
 };
 
-TEST_F(DeepSeekV3Test, ForwardFP8BlockWiseTest) {
+TEST_F(QwenTest, ForwardFP16Test) {
 #ifdef ENABLE_CUDA
-  model_config.is_quant = true;
-  model_config.weight_data_type = TYPE_BF16;
+  model_config.is_quant = false;
+  model_config.weight_data_type = TYPE_FP16;
   runtime_config.inter_data_type = model_config.weight_data_type;
-  // deepseek only support fp8 block-wise quantization, don't support fp8 per-tensor quantization
-  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
-  std::cout << "Test FP8-BlockWise TYPE_BF16 weight_data_type forward." << std::endl;
-  TestDeepSeekV3Forward<bfloat16>();
+  std::cout << "Test FP16 weight_data_type forward." << std::endl;
+  TestQwenForward<half>();
 #endif
-}
-
-TEST_F(DeepSeekV3Test, ForwardGPTQInt4Test) {
-#ifdef ENABLE_CUDA
-  model_config.is_quant = true;
-  model_config.weight_data_type = TYPE_BF16;
-  runtime_config.inter_data_type = model_config.weight_data_type;
-  model_config.quant_config.method = QUANT_GPTQ;
-  std::cout << "Test GPTQ-Quant TYPE_BF16 weight_data_type forward." << std::endl;
-  TestDeepSeekV3Forward<bfloat16>();
-#endif
-}
-
-TEST_F(DeepSeekV3Test, ForwardMoeInt4Test) {
-#ifdef ENABLE_CUDA
-  model_config.is_quant = true;
-  model_config.weight_data_type = TYPE_BF16;
-  runtime_config.inter_data_type = model_config.weight_data_type;
-  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
-  model_config.quant_config.enable_moe_int4 = true;
-  std::cout << "Test MoeInt4 TYPE_BF16 weight_data_type forward." << std::endl;
-  TestDeepSeekV3Forward<bfloat16>();
-#endif
-}
-
-// Test for `num_experts_per_rank_ <= 224`
-TEST_F(DeepSeekV3Test, SmallExpertsTest) {
-  model_config.is_quant = true;
-  model_config.weight_data_type = TYPE_BF16;
-  runtime_config.inter_data_type = model_config.weight_data_type;
-  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
-  TestDeepSeekV3Forward<bfloat16>();
-}
-
-TEST_F(DeepSeekV3Test, EnableFullShardExpertTest) {
-  model_config.is_quant = true;
-  model_config.weight_data_type = TYPE_BF16;
-  runtime_config.inter_data_type = model_config.weight_data_type;
-  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
-  runtime_config.enable_full_shared_expert = true;
-  TestDeepSeekV3Forward<bfloat16>();
 }
