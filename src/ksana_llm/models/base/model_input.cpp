@@ -14,7 +14,6 @@
 #endif
 #include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
 #include "ksana_llm/profiler/profile_event.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/dynamic_memory_counter.h"
 #include "ksana_llm/utils/environment.h"
@@ -99,7 +98,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     info.rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
     info.layer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
-    info.metadata = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {4}, rank);
     info.block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num}, rank);
 
 #ifdef ENABLE_CUDA
@@ -295,8 +293,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareDualDecode();
   PrepareSingleDecode();
 
-  PrepareMetadata();
-
 #ifdef ENABLE_CUDA
   PrepareCudagraphParams(forward_reqs);
 #endif
@@ -305,19 +301,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, multi_token_request_num > 0);
 #endif
-}
-
-void ModelInput::PrepareMetadata() {
-  size_t meta_offset = 0;
-  // index 0: 在input_ids中的offset
-  page_single_input.metadata.GetPtr<size_t>()[meta_offset] =
-      flash_input.total_dp_input_ids_len + page_dual_input.total_dp_input_ids_len;
-  page_dual_input.metadata.GetPtr<size_t>()[meta_offset] = flash_input.total_dp_input_ids_len;
-
-  // index 1: 单请求的固定input_ids长度
-  ++meta_offset;
-  page_single_input.metadata.GetPtr<size_t>()[meta_offset] = 1;
-  page_dual_input.metadata.GetPtr<size_t>()[meta_offset] = 2;
 }
 
 // TODO(ttsybyweng): VL_Model :Prepare moved into each Model Class

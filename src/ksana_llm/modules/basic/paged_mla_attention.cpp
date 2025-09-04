@@ -78,7 +78,7 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, Absor
   }
 }
 
-Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensor, ModelInput::input_info& page_input,
+Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensor, const ModelInput::input_info& page_input,
                                   std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
                                   const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer,
                                   Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
@@ -106,7 +106,6 @@ Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensor, ModelInput
                                                            attn_o_proj_weight_,
                                                            page_input.tile_scheduler_metadata,
                                                            page_input.num_splits,
-                                                           page_input.metadata,
                                                            attn_w_uv_weight_},
                                                           output_tensor));
 

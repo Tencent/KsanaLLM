@@ -290,15 +290,23 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       hidden_buffer_tensors_0[0].GetView(hidden_buffer_tensors_0[0].shape, attn_output_offset)};
 
   if (dp_context_tokens > 0) {
-    Tensor prefill_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
+    Tensor context_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
         {dp_context_tokens, head_num_per_atp_ * (qk_rope_head_dim_ + qk_nope_head_dim_)});
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, attn_output_tensor, prefill_q_nope_rope,
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, attn_output_tensor, context_q_nope_rope,
                           kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   if (dp_decode_tokens > 0) {
-    PagedAttentionForward(attn_output_tensor, hidden_buffer_tensors_1, reduce_buffer_tensors, decode_q_nope,
-                          decode_q_rope_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+    // Offset tensors by `dp_context_tokens`
+    std::vector<Tensor> decode_attn_output_tensor = {
+        attn_output_tensor[0].GetView({dp_decode_tokens, o_proj_k_dim_}, dp_context_tokens * o_proj_k_dim_)};
+    Tensor decode_kv_buffer_tensor =
+        kv_buffer_tensors[0].GetView({dp_decode_tokens, kv_lora_rank_}, dp_context_tokens * kv_lora_rank_);
+    Tensor decode_k_rope_buffer_tensor =
+        k_rope_buffer_tensors[0].GetView({dp_decode_tokens, qk_rope_head_dim_}, dp_context_tokens * qk_rope_head_dim_);
+    PagedAttentionForward(decode_attn_output_tensor, hidden_buffer_tensors_1, reduce_buffer_tensors, decode_q_nope,
+                          decode_q_rope_tensors[0], decode_kv_buffer_tensor, decode_k_rope_buffer_tensor,
+                          forwarding_context);
   }
 
   if (o_proj_out_of_dp_) {
@@ -399,7 +407,7 @@ Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidd
   return Status();
 }
 
-Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& output_tensor,
+Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& output_tensors,
                                                        std::vector<Tensor>& hidden_buffer_tensors_1,
                                                        std::vector<Tensor>& workspace_buffer,
                                                        Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
@@ -408,27 +416,29 @@ Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& outp
   PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
   {
     CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
-
-    // Process seq1 and seq2 separately
-    if (!forwarding_context.GetModelInput()->page_single_input.dp_reqs.empty()) {
-      const size_t skip_tokens = forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
-      Tensor decode_nope = decode_q_buffer_tensor.GetView(
-          {decode_q_buffer_tensor.shape[0] - skip_tokens, decode_q_buffer_tensor.shape[1]},
-          skip_tokens * decode_q_buffer_tensor.GetElementNumber() / decode_q_buffer_tensor.shape[0]);
-      Tensor decode_rope = q_rope_buffer_tensor.GetView(
-          {q_rope_buffer_tensor.shape[0] - skip_tokens, q_rope_buffer_tensor.shape[1]},
-          skip_tokens * q_rope_buffer_tensor.GetElementNumber() / q_rope_buffer_tensor.shape[0]);
-      STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
-          output_tensor, forwarding_context.GetModelInput()->page_single_input, hidden_buffer_tensors_1,
-          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0], decode_nope,
-          decode_rope, kv_buffer_tensor, k_rope_buffer_tensor));
-    }
-
-    if (!forwarding_context.GetModelInput()->page_dual_input.dp_reqs.empty()) {
-      STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
-          output_tensor, forwarding_context.GetModelInput()->page_dual_input, hidden_buffer_tensors_1,
-          kv_cache_buffer_tensors[0], forwarding_context.GetAttentionForwardContext(), workspace_buffer[0],
-          decode_q_buffer_tensor, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor));
+    // Process page_dual and page_single sequentially
+    // Page_dual is placed before page_single, since requests are sorted by token_num in descending order
+    size_t skip_tokens = 0;
+    for (const auto page_input : {&forwarding_context.GetModelInput()->page_dual_input,
+                                  &forwarding_context.GetModelInput()->page_single_input}) {
+      if (const size_t current_tokens = page_input->total_dp_input_ids_len; current_tokens > 0) {
+        // Offset tensors by `skip_tokens`
+        Tensor current_decode_q_buffer_tensor = decode_q_buffer_tensor.GetView(
+            {current_tokens, decode_q_buffer_tensor.shape[1]}, skip_tokens * decode_q_buffer_tensor.shape[1]);
+        Tensor current_q_rope_buffer_tensor = q_rope_buffer_tensor.GetView(
+            {current_tokens, q_rope_buffer_tensor.shape[1]}, skip_tokens * q_rope_buffer_tensor.shape[1]);
+        std::vector<Tensor> current_output_tensors = {output_tensors[0].GetView(
+            {current_tokens, output_tensors[0].shape[1]}, skip_tokens * output_tensors[0].shape[1])};
+        Tensor current_kv_buffer_tensor = kv_buffer_tensor.GetView({current_tokens, kv_buffer_tensor.shape[1]},
+                                                                   skip_tokens * kv_buffer_tensor.shape[1]);
+        Tensor current_k_rope_buffer_tensor = k_rope_buffer_tensor.GetView(
+            {current_tokens, k_rope_buffer_tensor.shape[1]}, skip_tokens * k_rope_buffer_tensor.shape[1]);
+        STATUS_CHECK_RETURN(paged_mla_attention_layers_->Forward(
+            current_output_tensors, *page_input, hidden_buffer_tensors_1, kv_cache_buffer_tensors[0],
+            forwarding_context.GetAttentionForwardContext(), workspace_buffer[0], current_decode_q_buffer_tensor,
+            current_q_rope_buffer_tensor, current_kv_buffer_tensor, current_k_rope_buffer_tensor));
+        skip_tokens += current_tokens;
+      }
     }
   }
   return Status();

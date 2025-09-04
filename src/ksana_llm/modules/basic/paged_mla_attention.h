@@ -18,7 +18,7 @@ class PagedMlaAttention {
   ~PagedMlaAttention() = default;
 
   // TODO(robertyuan): param after output tensor should be removed
-  Status Forward(std::vector<Tensor>& output_tensor, ModelInput::input_info& page_input,
+  Status Forward(std::vector<Tensor>& output_tensor, const ModelInput::input_info& page_input,
                  std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
                  const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer, Tensor& decode_q_buffer_tensor,
                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor);

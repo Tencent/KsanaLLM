@@ -216,6 +216,11 @@ class ModelInput {
 
  public:
   struct input_info {
+    input_info() = default;
+    // Disable the time-consuming copy
+    input_info(const input_info&) = delete;
+    input_info& operator=(const input_info&) = delete;
+
     std::vector<ForwardRequest*> reqs;
     std::vector<ForwardRequest*> dp_reqs;
 
@@ -228,7 +233,6 @@ class ModelInput {
     Tensor block_table;
     Tensor tile_scheduler_metadata;
     Tensor num_splits;
-    Tensor metadata;  // host, only for page, size_t
 
     size_t total_dp_input_ids_len = 0;
     size_t kv_cache_block_num = 0;

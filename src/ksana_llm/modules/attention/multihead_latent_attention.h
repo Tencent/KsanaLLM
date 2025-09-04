@@ -5,7 +5,6 @@
 
 #include "ksana_llm/models/common/common_model.h"
 #include "ksana_llm/models/common/common_weight.h"
-#include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
