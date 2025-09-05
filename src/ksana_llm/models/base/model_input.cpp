@@ -25,6 +25,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
                        std::shared_ptr<Context> context)
     : model_config_(model_config), runtime_config_(runtime_config), rank_(rank), context_(context) {
   auto env = Singleton<Environment>::GetInstance();
+  env->GetConnectorConfigs(connector_config_);
   PipelineConfig pipeline_config;
   env->GetPipelineConfig(pipeline_config);
   enable_blocked_multi_token_forwarding_kv_ =
@@ -237,6 +238,9 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   batch_size = forward_reqs.size();
   if (batch_size == 0) {
     KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
+  } else if (connector_config_.group_role == GroupRole::DECODE && batch_size > runtime_config_.max_step_token_num) {
+    KLLM_THROW(fmt::format("ModelInput batch_size exceed max_step_token_num at PD disaggregation. {} > {}", batch_size,
+                           runtime_config_.max_step_token_num));
   } else if (batch_size > (size_t)runtime_config_.max_batch_size) {
     KLLM_THROW(fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size,
                            runtime_config_.max_batch_size));

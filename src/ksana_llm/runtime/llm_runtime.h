@@ -15,6 +15,7 @@
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 
@@ -104,6 +105,9 @@ class LlmRuntime {
   Status MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue);
 
   void GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>> &reqs);
+
+  void TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest>> &reqs,
+                              std::shared_ptr<TransferEngine> transfer_engine = TransferEngine::GetInstance());
 
   Status StepOnChief(ScheduleOutput *schedule_output, bool epilogue);
   Status StepOnWorker(ScheduleOutput *schedule_output, bool epilogue);

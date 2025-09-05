@@ -201,6 +201,7 @@ class ModelInput {
  private:
   ModelConfig model_config_;
   RuntimeConfig runtime_config_;
+  ConnectorConfig connector_config_;
 
   bool enable_blocked_multi_token_forwarding_kv_;
 

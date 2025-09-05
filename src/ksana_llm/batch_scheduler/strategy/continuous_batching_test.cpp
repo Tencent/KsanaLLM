@@ -46,7 +46,8 @@ class ContinuousBatchingTest : public testing::Test {
     batch_scheduler_config.split_fuse_token_num = 256;
     const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
-    if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos) {
+    if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos ||
+        test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
       auto env = Singleton<Environment>::GetInstance();
       ConnectorConfig connector_config;
       connector_config.group_role = GroupRole::DECODE;
@@ -57,6 +58,9 @@ class ContinuousBatchingTest : public testing::Test {
       env->SetBlockManagerConfig(block_manager_config);
     }
     RuntimeConfig runtime_config;
+    if (test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
+      runtime_config.enable_mtp_module = true;
+    }
     continuous_batching_strategy_ =
         std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config, runtime_config);
     size_t multi_batch_id = 0;
@@ -299,6 +303,53 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 8);
 
   for (int i = 0; i < 20; ++i) {
+    TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
+  }
+}
+
+// 测试MTP开启时的draft token传输
+TEST_F(ContinuousBatchingTest, ProcessMTPDecodeTransferQueueTest) {
+  // 设置为DECODE节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
+
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+
+  for (int i = 0; i < 10; ++i) {
+    auto req = std::make_shared<InferRequest>(request, 0);
+    req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+    req->forwarding_tokens = {1, 2, 3};
+    // 设置KV缓存块
+    req->kv_cache_blocks.resize(2);
+    for (size_t i = 0; i < 2; ++i) {
+      req->kv_cache_blocks[i].resize(3);
+      for (size_t j = 0; j < 3; ++j) {
+        req->kv_cache_blocks[i][j] = j + i * 10;
+      }
+    }
+    req->kv_comm_request_id = 123 + i;
+    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+    req->kv_cached_token_num = 0;
+    req->block_token_num = 16;
+    std::vector<std::shared_ptr<InferRequest>> queue;
+    queue.push_back(req);
+    // 调用AddTransferMeta函数
+    continuous_batching_strategy_->AddTransferMeta(queue);
+    continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+  }
+
+  // 调用ProcessDecodeTransferQueue函数
+  continuous_batching_strategy_->ProcessDecodeTransferQueue();
+  for (auto running_req : continuous_batching_strategy_->batch_state_->schedule_output->running_reqs) {
+    ASSERT_EQ(running_req->forwarding_tokens_draft_num, 1);
+    ASSERT_EQ(running_req->draft_tokens.GetDraftTokens()[0], 1);
+    ASSERT_EQ(running_req->forwarding_tokens[3], 1);
+    ASSERT_EQ(running_req->forwarding_tokens[4], 1);
+  }
+
+  for (int i = 0; i < 10; ++i) {
     TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
   }
 }

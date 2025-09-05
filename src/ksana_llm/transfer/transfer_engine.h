@@ -29,7 +29,8 @@ namespace ksana_llm {
  */
 struct TransferMeta {
   size_t shared_block_num = 0;  // 共享block数量
-  int first_token = -1;         // 第一个token的值，-1表示尚未接收到
+  std::vector<int> first_tokens =
+      std::vector<int>(MAX_TRANSFER_TOKENS, -1);  // Prefill阶段所有的gen token和draft token的值，-1表示尚未接收到
 
   // 节点内KV存储使用的Rank号
   std::vector<int> kv_ranks_in_node;
@@ -111,9 +112,9 @@ class TransferEngine {
   /**
    * @brief 检查指定请求的接收操作是否完成
    * @param request_id 请求ID
-   * @return int 如果完成则返回first_token值，否则返回-1
+   * @return std::vector<int> 如果完成则返回first_tokens值，否则返回值全为-1的向量
    */
-  int IsRecvDone(int request_id);
+  std::vector<int> IsRecvDone(int request_id);
 
   /**
    * @brief 在特定设备和层上发送传输任务
@@ -126,7 +127,7 @@ class TransferEngine {
    * @brief 发送多个请求的token传输任务
    * @param reqs_tokens 请求ID和token对的向量
    */
-  void Send(std::vector<std::tuple<std::string, int, int>>& reqs_tokens);
+  virtual void Send(std::vector<std::tuple<std::string, int, std::vector<int>>>& reqs_tokens);
 
   /**
    * @brief 获取指定请求的传输元数据
@@ -209,8 +210,10 @@ class TransferEngine {
    * @param layer_idx 层索引
    * @return bool 如果索引有效则返回true，否则返回false
    */
-  bool ValidateLayerIndex(int layer_idx) const {
-    return layer_idx >= pipeline_config_.lower_layer_idx && layer_idx <= pipeline_config_.upper_layer_idx;
+
+  inline bool ValidateLayerIndex(int layer_idx) const {
+    return (layer_idx >= pipeline_config_.lower_layer_idx && layer_idx <= pipeline_config_.upper_layer_idx) ||
+           (layer_idx >= pipeline_config_.lower_nextn_layer_idx && layer_idx <= pipeline_config_.upper_nextn_layer_idx);
   }
 
   /**

@@ -431,7 +431,7 @@ TEST_F(TransferEngineTest, SendWithDecodeRole) {
   int device_idx = 0;
   int layer_idx = 1;
   transfer_engine_->Send(device_idx, layer_idx);
-  ASSERT_FALSE(transfer_engine_->IsRecvDone(123) != -1);
+  ASSERT_FALSE(transfer_engine_->IsRecvDone(123) != std::vector<int>(MAX_TRANSFER_TOKENS, -1));
 }
 
 // 测试发送功能（无效层索引）
@@ -462,7 +462,8 @@ TEST_F(TransferEngineTest, SendTokens) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建测试数据
-  std::vector<std::tuple<std::string, int, int>> reqs_tokens = {{"", 123, 456}, {"", 789, 101}};
+  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
+                                                                             {"", 789, {101, 102}}};
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
@@ -512,7 +513,8 @@ TEST_F(TransferEngineTest, SendTokensWithDecodeRole) {
   transfer_engine_->Initialize(GroupRole::DECODE);
 
   // 创建测试数据
-  std::vector<std::tuple<std::string, int, int>> reqs_tokens = {{"", 123, 456}, {"", 789, 101}};
+  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens = {{"", 123, {456, 457}},
+                                                                             {"", 789, {101, 102}}};
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
@@ -551,13 +553,13 @@ TEST_F(TransferEngineTest, SendEmptyTokens) {
   transfer_engine_->Initialize(GroupRole::PREFILL);
 
   // 创建空的测试数据
-  std::vector<std::tuple<std::string, int, int>> reqs_tokens;
+  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_tokens;
 
   // 发送token
   transfer_engine_->Send(reqs_tokens);
 
   // 验证空请求不会导致程序崩溃
-  std::vector<std::tuple<std::string, int, int>> non_empty_reqs_tokens = {{"", 123, 456}};
+  std::vector<std::tuple<std::string, int, std::vector<int>>> non_empty_reqs_tokens = {{"", 123, {456, 457}}};
   transfer_engine_->Send(non_empty_reqs_tokens);
   ASSERT_FALSE(transfer_engine_->IsSendDone(123));
 }
@@ -586,8 +588,11 @@ TEST_F(TransferEngineTest, IsRecvDone) {
   transfer_engine_->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
 
   // 检查接收是否完成
-  int first_token = transfer_engine_->IsRecvDone(request_id);
-  ASSERT_EQ(first_token, -1);
+  std::vector<int> first_tokens = transfer_engine_->IsRecvDone(request_id);
+  ASSERT_EQ(first_tokens.size(), MAX_TRANSFER_TOKENS);
+  for (auto first_token : first_tokens) {
+    ASSERT_EQ(first_token, -1);
+  }
 
   // 清理分配的内存
   auto meta = transfer_engine_->GetTransferMeta(request_id);
@@ -606,10 +611,13 @@ TEST_F(TransferEngineTest, IsRecvDoneInvalidRequestId) {
 
   // 检查不存在的请求ID
   int invalid_request_id = 999;
-  int first_token = transfer_engine_->IsRecvDone(invalid_request_id);
+  std::vector<int> first_tokens = transfer_engine_->IsRecvDone(invalid_request_id);
 
   // 验证结果（应该返回-1，因为请求ID不存在）
-  ASSERT_EQ(first_token, -1);
+  ASSERT_EQ(first_tokens.size(), MAX_TRANSFER_TOKENS);
+  for (auto first_token : first_tokens) {
+    ASSERT_EQ(first_token, -1);
+  }
 }
 
 // 测试发送完成检查
@@ -812,10 +820,13 @@ TEST_F(TransferEngineTest, ChunkTransferReceiveTaskCount) {
   // chunk1: layers 0-2 (3层)
   // chunk2: layer 3 (1层)
   // 预期任务数 = block_num(2) * chunks_per_device(2) * device_num(2) = 8
-  int result = transfer_engine_->IsRecvDone(request_id);
+  std::vector<int> results = transfer_engine_->IsRecvDone(request_id);
 
   // 由于没有实际接收到任务，应该返回-1
-  ASSERT_EQ(result, -1);
+  ASSERT_EQ(results.size(), MAX_TRANSFER_TOKENS);
+  for (auto result : results) {
+    ASSERT_EQ(result, -1);
+  }
 
   // 清理
   auto meta = transfer_engine_->GetTransferMeta(request_id);

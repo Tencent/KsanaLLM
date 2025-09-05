@@ -18,7 +18,6 @@
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/sampler.h"
-#include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
@@ -389,9 +388,14 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
   // Wait all instances done and check status.
   Status result_status = Status();
   for (auto& result : results) {
-    Status status = result.get();
-    if (!status.OK()) {
-      result_status = status;
+    try {
+      Status status = result.get();
+      if (!status.OK()) {
+        result_status = status;
+      }
+    } catch (const std::exception& e) {
+      KLLM_LOG_FATAL << "Exception in sampling, info: " << e.what();
+      result_status = Status(RET_RUNTIME_FAILED, "Failed to sampling.");
     }
   }
 
@@ -408,7 +412,6 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
 }
 
 void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  std::vector<std::tuple<std::string, int, int>> reqs_tokens;
   for (auto& req : reqs) {
     if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size()) {
       KLLM_LOG_ERROR << fmt::format(
@@ -416,7 +419,6 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
           req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.trie.size());
       continue;
     }
-
     // Check which tokens are predicted correctly.
     size_t draft_hit_num = 0;
     req->accepted_tokens.clear();
@@ -449,11 +451,9 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
     req->accepted_tokens.swap(draft_tokens);
     req->accepted_tokens.resize(draft_hit_num);
     req->generated_token = req->sampling_result_tokens[draft_hit_num];  // only kStepGenerateTokenNum(1) token now
-    reqs_tokens.emplace_back(req->kv_comm_group_key, req->kv_comm_request_id, req->generated_token);
     req->sampling_result_tokens.clear();
     req->draft_tokens.clear();
   }
-  TransferEngine::GetInstance()->Send(reqs_tokens);
 }
 
 Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
@@ -529,6 +529,27 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
   }
 }
 
+void LlmRuntime::TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest>>& reqs,
+                                        std::shared_ptr<TransferEngine> transfer_engine) {
+  std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_transfer_tokens;
+  for (auto& req : reqs) {
+    std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
+    // TODO(winminkong): In the future, MTP will be improved to generate multiple draft tokens or gen tokens, and the
+    // transmission method will be modified subsequently.
+    std::vector<int> send_tokens(MAX_TRANSFER_TOKENS, -1);
+    send_tokens[0] = req->generated_token;
+    if (draft_tokens.size() > (MAX_TRANSFER_TOKENS - 1)) {
+      KLLM_LOG_ERROR << "Out of token transfer memory: draft_tokens size: " << draft_tokens.size() << " > "
+                     << MAX_TRANSFER_TOKENS - 1;
+      KLLM_THROW("Out of token transfer memory");
+    }
+    std::copy(draft_tokens.begin(), draft_tokens.end(), send_tokens.begin() + 1);
+    KLLM_LOG_DEBUG << "TranferGeneratedToken req " << req->req_id << " send tokens: " << Vector2Str(send_tokens);
+    reqs_transfer_tokens.emplace_back(req->kv_comm_group_key, req->kv_comm_request_id, send_tokens);
+  }
+  transfer_engine->Send(reqs_transfer_tokens);
+}
+
 Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
   if (context_->IsChief()) {
     return StepOnChief(schedule_output, epilogue);
@@ -538,7 +559,7 @@ Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
 
 Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
   KLLM_LOG_MAIN << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
-                 << ", epilogue=" << epilogue;
+                << ", epilogue=" << epilogue;
   PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->running_reqs[0]->model_instance;
@@ -573,6 +594,7 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
     DraftTokenFilter(schedule_output->running_reqs);
     MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
     GenerateDraftToken(schedule_output->running_reqs);
+    TransferGeneratedToken(schedule_output->running_reqs);
 
     // Forwarding finished, free resources.
     model_instance->FreeResources(schedule_output->multi_batch_id);

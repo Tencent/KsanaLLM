@@ -217,8 +217,9 @@ class TaskDispatcherTest : public ::testing::Test {
   }
 
   TaskKey CreateTaskKey(int req_id, int block_idx, int layer_idx, int hash_device_id, int tensor_size = 0,
-                        int token = 0, bool is_skipped_task = false) {
-    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size, token, is_skipped_task);
+                        std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0),
+                        bool is_skipped_task = false) {
+    return TaskKey(req_id, block_idx, layer_idx, hash_device_id, tensor_size, tokens, is_skipped_task);
   }
 
   std::vector<TaskKey> CreateTaskKeyBatch(int batch_size, int hash_device_id = 0) {
@@ -505,8 +506,8 @@ TEST_F(TaskDispatcherTest, BatchTasksPrefill) {
   task_dispatcher_->config_.group_role = GroupRole::PREFILL;
 
   // Create test tasks
-  TaskKey task_key1 = CreateTaskKey(123, 0, 0, 0, 400, 0, false);
-  TaskKey task_key2 = CreateTaskKey(123, 1, 2, 3, 400, 0, true);
+  TaskKey task_key1 = CreateTaskKey(123, 0, 0, 0, 400, {0, 0}, false);
+  TaskKey task_key2 = CreateTaskKey(123, 1, 2, 3, 400, {0, 0}, true);
 
   std::vector<TaskKey> task_keys = {task_key1, task_key2};
 
@@ -563,35 +564,36 @@ TEST_F(TaskDispatcherTest, ZMQSendAndRecv) {
 
   // 模拟接收到数据并执行callback
   TaskKey task_key = CreateTaskKey(111, 0, 0, 0, 0);
-  std::vector<char> test_data(sizeof(TaskKey) + sizeof(int));
+  std::vector<char> test_data(sizeof(TaskKey) + (sizeof(int) * MAX_TRANSFER_TOKENS));
 
   std::shared_ptr<TransferTask> task = std::make_shared<TransferTask>();
 
   task_manager_->AddTask(task_key, nullptr);
   memcpy(test_data.data(), &task_key, sizeof(TaskKey));
   captured_callback(test_data.data(), test_data.size(), 0, nullptr);
-
   task_manager_->AddTask(task_key, task);
-  task_key.token = 1;
-  int token = 0;
-  task->dst_ptr = &token;
+  task_key.tokens[0] = 1;
+  task_key.tokens[1] = 2;
+  std::vector<int> tokens(MAX_TRANSFER_TOKENS, 0);
+  task->dst_ptr = tokens.data();
   memcpy(test_data.data(), &task_key, sizeof(TaskKey));
   captured_callback(test_data.data(), test_data.size(), 0, nullptr);
-  EXPECT_EQ(token, 1);
+  EXPECT_EQ(tokens[0], 1);
+  EXPECT_EQ(tokens[1], 2);
 
 #  ifdef ENABLE_CUDA
   task_key = CreateTaskKey(111, 0, 0, 0, sizeof(int));
-  token = 1;
+  int tensor_size = 1;
   task_manager_->AddTask(task_key, task);
   int* data_ptr = nullptr;
   cudaMalloc(&data_ptr, sizeof(int));
   task->dst_ptr = data_ptr;
   memcpy(test_data.data(), &task_key, sizeof(TaskKey));
-  memcpy(test_data.data() + sizeof(TaskKey), &token, sizeof(token));
+  memcpy(test_data.data() + sizeof(TaskKey), &tensor_size, sizeof(tensor_size));
   captured_callback(test_data.data(), test_data.size(), 0, nullptr);
-  token = 0;
-  cudaMemcpy(&token, data_ptr, sizeof(int), cudaMemcpyDeviceToHost);
-  EXPECT_EQ(token, 1);
+  tensor_size = 0;
+  cudaMemcpy(&tensor_size, data_ptr, sizeof(int), cudaMemcpyDeviceToHost);
+  EXPECT_EQ(tensor_size, 1);
   cudaFree(data_ptr);
 #  endif
 }

@@ -66,13 +66,26 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
     }
     auto req = *it;
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
-    int first_token = transfer_engine->IsRecvDone(req->kv_comm_request_id);
-    if (first_token != -1) {
+    std::vector<int> first_tokens = transfer_engine->IsRecvDone(req->kv_comm_request_id);
+    if (first_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
       // 接收完成，更新请求状态
       req->kv_cached_token_num = req->forwarding_tokens.size();
       req->prefix_cache_len = req->kv_cached_token_num;
-      req->forwarding_tokens.push_back(first_token);
-      req->output_tokens.push_back(first_token);
+      req->output_tokens.push_back(first_tokens[0]);
+      req->generated_token = first_tokens[0];
+      KLLM_LOG_DEBUG << "Received first_tokens: " << Vector2Str(first_tokens);
+
+      req->forwarding_tokens.push_back(first_tokens[0]);
+      // TODO(winminkong): PD disaggregation supports mutil draft token and speculative decoding.
+      if (first_tokens[1] != -1 && runtime_config_.enable_mtp_module) {
+        req->draft_tokens.mtp.push_back(first_tokens[1]);
+        req->mtp_kv_cached_token_num = req->kv_cached_token_num;
+        req->forwarding_tokens.push_back(first_tokens[1]);
+      }
+      req->forwarding_tokens_draft_num = req->draft_tokens.size();
+      req->sampling_token_num =
+          req->logits_custom_length > 0 ? req->logits_custom_length : req->draft_tokens.size() + kStepGenerateTokenNum;
+
       KLLM_LOG_DEBUG << "Decode running_reqs insert for compute, req id:" << req->kv_comm_request_id;
       batch_state_->schedule_output->running_reqs.push_back(req);
       it = batch_state_->transfer_queue.erase(it);

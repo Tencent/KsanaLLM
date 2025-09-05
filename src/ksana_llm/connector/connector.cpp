@@ -94,7 +94,8 @@ void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {
       KLLM_LOG_ERROR << "Task address is empty, cannot push task";
     }
     if (task->tensor.shape.empty() && task->dst_ptr) {
-      *static_cast<int*>(task->dst_ptr) = 1;
+      std::vector<int> tmp_tokens(MAX_TRANSFER_TOKENS, 1);
+      std::memcpy(static_cast<int*>(task->dst_ptr), tmp_tokens.data(), sizeof(int32_t) * tmp_tokens.size());
     }
     task->is_completed = true;
     return;

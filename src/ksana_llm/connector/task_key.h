@@ -23,14 +23,13 @@ namespace ksana_llm {
  */
 struct TaskKey {
   // Core identifiers
-  int req_id;            ///< Request ID for grouping related tasks (primary sharding key)
-  int block_idx;         ///< Block index in the computation pipeline
-  int layer_idx;         ///< Layer index in the neural network
-  int tensor_size;       ///< Size of the tensor data in bytes
-  int token;             ///< Token identifier for sequencing
-  bool is_skipped_task;  ///< Flag indicating if the task is skipped
-
-  int hash_device_id;  ///< Critical parameters for checking if Taskkeys are the same
+  int req_id;                            ///< Request ID for grouping related tasks (primary sharding key)
+  int block_idx;                         ///< Block index in the computation pipeline
+  int layer_idx;                         ///< Layer index in the neural network
+  int tensor_size;                       ///< Size of the tensor data in bytes
+  int tokens[MAX_TRANSFER_TOKENS] = {};  ///< Transfer tokens including gen tokens and draft tokens
+  bool is_skipped_task;                  ///< Flag indicating if the task is skipped
+  int hash_device_id;                    ///< Critical parameters for checking if Taskkeys are the same
 
   int decode_device_id = -1;      ///< The physical rank ID within the decode group
   int decode_device_offset = -1;  ///< The logical ID of the request within its DP group
@@ -65,25 +64,26 @@ struct TaskKey {
         layer_idx(0),
         hash_device_id(0),
         tensor_size(0),
-        token(0),
         is_skipped_task(false),
         start_time_us(0) {}
 
-  TaskKey(int req, int block, int layer, int hash_device_id, int tsize = 0, int ttoken = 0, bool skipped = false,
+  TaskKey(int req, int block, int layer, int hash_device_id, int tsize = 0,
+          std::vector<int> tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0), bool skipped = false,
           int decode_device_id = -1, int decode_device_offset = -1, int prefill_device_id = -1,
           int prefill_device_offset = -1, std::time_t timestamp_us = 0)
       : req_id(req),
         block_idx(block),
         layer_idx(layer),
         tensor_size(tsize),
-        token(ttoken),
         is_skipped_task(skipped),
         hash_device_id(hash_device_id),
         decode_device_id(decode_device_id),
         decode_device_offset(decode_device_offset),
         prefill_device_id(prefill_device_id),
         prefill_device_offset(prefill_device_offset),
-        start_time_us(timestamp_us) {}
+        start_time_us(timestamp_us) {
+    std::memcpy(this->tokens, tokens.data(), sizeof(int32_t) * tokens.size());
+  }
 
   // Default copy/move semantics
   TaskKey(const TaskKey& other) = default;
@@ -106,10 +106,10 @@ struct TaskKey {
   std::string ToString() const {
     std::ostringstream oss;
     oss << "req_id=" << req_id << ", block_idx=" << block_idx << ", layer_idx=" << layer_idx
-        << ", tensor_size=" << tensor_size << ", token=" << token << ", is_skipped_task=" << is_skipped_task
-        << ", hash_device_id=" << hash_device_id << ", decode_device_id=" << decode_device_id
-        << ", decode_device_offset=" << decode_device_offset << ", prefill_device_id=" << prefill_device_id
-        << ", prefill_device_offset=" << prefill_device_offset;
+        << ", tensor_size=" << tensor_size << ", gen token=" << tokens[0] << ", draft token=" << tokens[1]
+        << ", is_skipped_task=" << is_skipped_task << ", hash_device_id=" << hash_device_id
+        << ", decode_device_id=" << decode_device_id << ", decode_device_offset=" << decode_device_offset
+        << ", prefill_device_id=" << prefill_device_id << ", prefill_device_offset=" << prefill_device_offset;
     return oss.str();
   }
 
@@ -208,7 +208,7 @@ struct TaskKey {
     }
 
     return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.hash_device_id,
-                   tensor_size, task->token, task->is_skipped_task, task->decode_device_id, task->decode_device_offset,
+                   tensor_size, task->tokens, task->is_skipped_task, task->decode_device_id, task->decode_device_offset,
                    task->prefill_device_id, task->prefill_device_offset, ProfileTimer::GetCurrentTimeInUs());
   }
 

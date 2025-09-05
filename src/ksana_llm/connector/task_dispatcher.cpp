@@ -304,7 +304,7 @@ void TaskDispatcher::RegisterDecodeRecv() {
         return;
       }
       if (tk.tensor_size == 0) {
-        std::memcpy(task->dst_ptr, &tk.token, sizeof(int32_t));
+        std::memcpy(task->dst_ptr, &tk.tokens, sizeof(int32_t) * MAX_TRANSFER_TOKENS);
       } else {
 #ifdef ENABLE_CUDA
         cudaStream_t cur_stream = device_streams_[tk.decode_device_id];
@@ -711,7 +711,7 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_
     if (tk.tensor_size > 0) {
       AddTensorForTask(task, tk, recv_ptrs, recv_sizes, data_types, true);
     } else {
-      std::memcpy(task->dst_ptr, &tk.token, sizeof(int32_t));
+      std::memcpy(task->dst_ptr, &tk.tokens, sizeof(int32_t) * MAX_TRANSFER_TOKENS);
     }
   }
 

@@ -45,7 +45,13 @@ void TransferEngine::Initialize(GroupRole group_role) {
     connector_->Initialize(group_role, device_info_manager_);
 
     // 计算派生值
-    layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+    int common_layer_num = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+    int mtp_layer_num = 0;
+    if (runtime_config.enable_mtp_module) {
+      mtp_layer_num = pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
+    }
+    KLLM_LOG_DEBUG << "common_layer_num: " << common_layer_num << ", mtp_layer_num: " << mtp_layer_num;
+    layer_num_ = common_layer_num + mtp_layer_num;
     block_size_ = block_manager_config_.device_allocator_config.block_size;
     kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
     transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
@@ -123,7 +129,7 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
   if (group_role_ == GroupRole::DECODE) {
     CreateTransferTasksForDecodeNode(request_id, transfer_meta, device_num, block_num, shared_block_num);
   } else {
-    transfer_meta->first_token = 0;
+    transfer_meta->first_tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 0);
   }
 
   KLLM_LOG_DEBUG << "TransferMeta added for request ID: " << request_id << ", shared_block_num: " << shared_block_num
@@ -141,13 +147,13 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
  * @brief 检查请求的所有接收操作是否完成
  *
  * @param request_id 请求ID
- * @return int 如果完成则返回first_token值，否则返回-1
+ * @return std::pair<int, int> 如果完成则返回first_tokens值，否则返回{-1, -1}
  */
-int TransferEngine::IsRecvDone(int request_id) {
+std::vector<int> TransferEngine::IsRecvDone(int request_id) {
   std::shared_ptr<TransferMeta> meta = GetTransferMeta(request_id);
   if (!meta) {
     KLLM_LOG_DEBUG << "TransferTask not found, request id:" << request_id;
-    return -1;
+    return std::vector<int>(MAX_TRANSFER_TOKENS, -1);
   }
 
   // 处理已完成的任务
@@ -169,7 +175,7 @@ int TransferEngine::IsRecvDone(int request_id) {
     // 检查gpu_blocks是否为空
     if (meta->gpu_blocks.empty()) {
       KLLM_LOG_WARNING << "Empty gpu_blocks in IsDone for request id: " << request_id;
-      return -1;
+      return std::vector<int>(MAX_TRANSFER_TOKENS, -1);
     }
 
     // 计算预期的任务数量 - 现在按chunk传输，任务数量会减少
@@ -198,16 +204,16 @@ int TransferEngine::IsRecvDone(int request_id) {
                    << ", device_num:" << device_num << ")";
 
     if (decode_node_benchmark) {
-      meta->first_token = 10;  // 模拟从prefill获取的首token
+      meta->first_tokens = std::vector<int>(MAX_TRANSFER_TOKENS, 10);  // 模拟从prefill获取的首token
     }
 
     // 检查所有任务是否完成（管道并行异构模式）
-    if (block_num > 0 && meta->finished_tasks_deque_.size() == expected_tasks && meta->first_token != -1) {
-      return meta->first_token;
+    if (block_num > 0 && meta->finished_tasks_deque_.size() == expected_tasks && meta->first_tokens[0] != -1) {
+      return meta->first_tokens;
     }
   }
 
-  return -1;
+  return std::vector<int>(MAX_TRANSFER_TOKENS, -1);
 }
 
 /**
@@ -216,7 +222,9 @@ int TransferEngine::IsRecvDone(int request_id) {
  * @param request_id 请求ID
  * @return true 如果所有发送操作完成则返回true，否则返回false
  */
-bool TransferEngine::IsSendDone(int request_id) { return IsRecvDone(request_id) != -1; }
+bool TransferEngine::IsSendDone(int request_id) {
+  return IsRecvDone(request_id) != std::vector<int>(MAX_TRANSFER_TOKENS, -1);
+}
 
 /**
  * @brief 为特定设备和层发送传输任务
@@ -386,7 +394,7 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
  *
  * @param reqs_tokens 请求ID和token对的向量
  */
-void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_tokens) {
+void TransferEngine::Send(std::vector<std::tuple<std::string, int, std::vector<int>>>& reqs_tokens) {
   if (group_role_ != GroupRole::PREFILL) {
     return;
   }
@@ -397,7 +405,7 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_t
   }
 
   // 处理所有请求-token对
-  for (const auto& [kv_comm_group_key, request_id, token] : reqs_tokens) {
+  for (const auto& [kv_comm_group_key, request_id, tokens] : reqs_tokens) {
     if (request_id < 0) {
       KLLM_LOG_WARNING << "Invalid request_id: " << request_id;
       continue;
@@ -407,7 +415,7 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_t
     auto task = std::make_shared<TransferTask>();
     task->req_id = request_id;
     task->addr = kv_comm_group_key;
-    task->token = token;
+    task->tokens = tokens;
 
     // 额外附带信息
     task->prefill_device_id = 0;
@@ -415,7 +423,8 @@ void TransferEngine::Send(std::vector<std::tuple<std::string, int, int>>& reqs_t
 
     // 将任务推送到连接器队列
     connector_->PushTask(task);
-    KLLM_LOG_DEBUG << "Sent token transfer task for request " << request_id << ", token: " << token;
+    KLLM_LOG_DEBUG << "Sent token transfer task for request " << request_id << ", gen tokens: " << tokens[0]
+                   << ", draft tokens: " << tokens[1];
   }
 }
 
@@ -502,7 +511,7 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
   // 为第一个token创建任务
   auto token_task = std::make_shared<TransferTask>();
   token_task->req_id = request_id;
-  token_task->dst_ptr = &transfer_meta->first_token;
+  token_task->dst_ptr = transfer_meta->first_tokens.data();
   token_task->addr = transfer_meta->kv_comm_group_key;
 
   // 额外附带信息
