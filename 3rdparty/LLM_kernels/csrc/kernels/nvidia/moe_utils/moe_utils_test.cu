@@ -8,7 +8,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "moe.h"
+#include "moe_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 #define WARP_SIZE 32

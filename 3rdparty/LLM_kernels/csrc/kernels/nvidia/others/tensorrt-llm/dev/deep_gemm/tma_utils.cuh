@@ -42,7 +42,7 @@ namespace deep_gemm {
 
 #ifndef NVRTC_JIT_COMPILATION
 template <class T>
-constexpr CUtensorMapDataType get_CUtensorMapDataType() {
+inline constexpr CUtensorMapDataType get_CUtensorMapDataType() {
   if constexpr (std::is_same<T, uint8_t>::value) {
     return CU_TENSOR_MAP_DATA_TYPE_UINT8;
   } else if constexpr (std::is_same<T, __nv_fp8_e4m3>::value) {
@@ -70,7 +70,7 @@ constexpr CUtensorMapDataType get_CUtensorMapDataType() {
   }
 }
 
-PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled() {
+inline PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled() {
   // Get pointer to `cuTensorMapEncodeTiled`
   cudaDriverEntryPointQueryResult driver_status;
   void* cuTensorMapEncodeTiled_ptr = nullptr;
@@ -88,7 +88,7 @@ PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled() {
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_copy_desc(T* global_address, uint64_t gmem_dim[2], uint64_t stride_in_bytes,
+inline CUtensorMap make_2d_tma_copy_desc(T* global_address, uint64_t gmem_dim[2], uint64_t stride_in_bytes,
                                   uint32_t smem_dim[2], CUtensorMapSwizzle swizzle_type,
                                   PFN_cuTensorMapEncodeTiled encode_func = nullptr) {
   CUtensorMap tensor_map{};

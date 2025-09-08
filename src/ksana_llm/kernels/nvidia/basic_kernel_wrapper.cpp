@@ -33,7 +33,7 @@
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
-#include "csrc/kernels/nvidia/moe/moe.h"
+#include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
@@ -236,7 +236,7 @@ void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_
   gemm.GetWorkspaceSize(m, n, k, ws_bytes);
 }
 #define GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(T, WT) \
-  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t& ws_bytes)
+  template void GetFpAIntBGroupCutlassGemmWorkspaceSize<T, WT>(size_t m, size_t n, size_t k, size_t & ws_bytes)
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT4);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(float, llm_kernels::nvidia::WeightType::INT8);
 GET_FPA_INTB_GROUP_CUTLASS_GEMM_WORKSPACE_SIZE(half, llm_kernels::nvidia::WeightType::INT4);

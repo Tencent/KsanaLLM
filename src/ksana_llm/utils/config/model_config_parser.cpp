@@ -51,9 +51,11 @@ void ParseGPTQQuantConfig(const nlohmann::json &config_json, ModelConfig &model_
   quant_config.method = QUANT_GPTQ;
   quant_config.bits = config_json.at("bits");
   quant_config.group_size = config_json.at("group_size");
-  quant_config.desc_act = config_json.at("desc_act");
-  KLLM_LOG_INFO << fmt::format("using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}",
-                               quant_config.bits, quant_config.group_size, quant_config.desc_act);
+  quant_config.desc_act = config_json.value("desc_act", false);
+  quant_config.input_scale = config_json.value("input_scale", false);
+  KLLM_LOG_INFO << fmt::format(
+      "using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}, input_scale:{}", quant_config.bits,
+      quant_config.group_size, quant_config.desc_act, quant_config.input_scale);
 }
 
 void ParseAWQQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {

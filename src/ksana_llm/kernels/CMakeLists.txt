@@ -23,7 +23,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_permute llm_kernels_nvidia_kernel_alibi
     llm_kernels_nvidia_kernel_samplers llm_kernels_nvidia_kernel_asymmetric_gemm
     llm_kernels_nvidia_kernel_gptq_marlin llm_kernels_nvidia_kernel_weight_only_batched_gemv
-    llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_kernel_moe
+    llm_kernels_nvidia_kernel_mixture_of_experts llm_kernels_nvidia_kernel_moe_utils
     llm_kernels_nvidia_kernel_blockwise_gemm llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_flash_mla llm_kernels_nvidia_kernel_expand
     llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_machete
@@ -31,7 +31,8 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_marlin_moe llm_kernels_nvidia_kernel_trt_all_reduce
     llm_kernels_nvidia_kernel_quant_fp8 llm_kernels_nvidia_kernel_fused_add_norm
     llm_kernels_nvidia_kernel_deepgemm_aot_wrapper llm_kernels_nvidia_kernel_split
-    llm_kernels_nvidia_kernel_adjust_mem llm_kernels_nvidia_kernel_gemm_deepgemm)
+    llm_kernels_nvidia_kernel_adjust_mem llm_kernels_nvidia_kernel_gemm_deepgemm
+    llm_kernels_nvidia_kernel_moe_cutlass_moe llm_kernels_nvidia_kernel_moe_expert_map)
 endif()
 
 

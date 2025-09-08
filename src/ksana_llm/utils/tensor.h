@@ -147,6 +147,9 @@ class Tensor {
   Tensor* input_scales = nullptr;
   Tensor* weight_scales = nullptr;
 
+  // input_alpha is used as a coefficient for input
+  Tensor* input_alpha = nullptr;
+
   void Fill(float f);
 };
 

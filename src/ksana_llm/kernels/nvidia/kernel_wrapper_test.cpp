@@ -23,7 +23,7 @@
 #include "cuda_runtime.h"
 
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
-#include "csrc/kernels/nvidia/moe/moe.h"
+#include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 #include "ksana_llm/utils/device_types.h"
@@ -199,7 +199,7 @@ TEST_F(KernelWrapperTest, ScaleQuantizeFp8E4m3Test) {
         }
       }
     }  // end j
-  }  // end i
+  }    // end i
 
   for (size_t i = 0; i < num_elements; i++) {
     if (fabsf(h_out[i]) > 0) {

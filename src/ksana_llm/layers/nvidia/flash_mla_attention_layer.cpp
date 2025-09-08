@@ -30,7 +30,7 @@
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
-#include "csrc/kernels/nvidia/moe/moe.h"
+#include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
@@ -301,7 +301,7 @@ void MlaAttenVarlen(void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, 
 
 #define MLA_ATTEN_VARLEN(SCALAR_T, CACHE_T, KV_DTYPE)                                                                 \
   template void MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(                                                          \
-      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
+      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                            \
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
@@ -328,12 +328,12 @@ MLA_ATTEN_VARLEN(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5
 #undef MLA_ATTEN_VARLEN
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr,
-                          void* compressed_kv_ptr, void* kv_b_nope_proj_weight, void* v_head_proj_weight,
-                          void* kv_b_nope_weight_scale, void* v_head_weight_scale, void* gemm_workspace,
-                          cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
-                          void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace,
-                          void* seqlens_with_prefix_ptr, void* seqlens_with_prefix_int32_ptr, float attn_scale,
+void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,
+                          void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale,
+                          void* v_head_weight_scale, void* gemm_workspace, cublasHandle_t& cublas_handles,
+                          cublasLtHandle_t& cublaslt_handles, void* rotary_embedding_pos, void* rotary_embedding_mask,
+                          void* mla_workspace, void* seqlens_with_prefix_ptr, void* seqlens_with_prefix_int32_ptr,
+                          float attn_scale,
                           std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
                           int total_q_tokens, int max_tokens, int batch, int num_heads, int qk_rope_head_dim,
                           int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, float k_scale,
@@ -523,7 +523,7 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
 
 #define MLA_ATTEN_VARLEN_ABSORB(SCALAR_T, CACHE_T, KV_DTYPE)                                                          \
   template void MlaAttenVarlenAbsorb<SCALAR_T, CACHE_T, KV_DTYPE>(                                                    \
-      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                 \
+      void* output_buffer, void* q_nope_rope_ptr, void* k_pe_ptr, void* compressed_kv_ptr,                            \
       void* kv_b_nope_proj_weight, void* v_head_proj_weight, void* kv_b_nope_weight_scale, void* v_head_weight_scale, \
       void* gemm_workspace, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,                       \
       void* rotary_embedding_pos, void* rotary_embedding_mask, void* mla_workspace, void* seqlens_with_prefix_ptr,    \
@@ -632,35 +632,34 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
 
   if (IsAbsorbWeightsEnabled()) {
     MlaAttenVarlenAbsorb<SCALAR_T, CACHE_T, KV_DTYPE>(
-        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
-        kv_buffer.GetPtr<void>(), kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(),
-        kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
-        this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
-        rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(),
-        dp_input_offset.GetPtr<void>(), dp_input_offset_int32.GetPtr<void>(), this->attn_scale_,
-        this->rotary_embedding_cuda_, total_q_tokens, max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_,
-        this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->k_scale_,
-        this->v_scale_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
-        dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(), this->alibi_slopes_,
-        this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table.GetPtr<int32_t>(),
-        kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_tokens,
-        dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(), prefix_kv_buffer.GetPtr<void>(),
-        this->mm_quant_mode_);
+        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(), kv_buffer.GetPtr<void>(),
+        kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(), kv_b_nope_weight_scale,
+        v_head_weight_scale, fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
+        this->context_->ext->GetCublasLtHandles()[this->rank_], rotary_embedding_pos.GetPtr<void>(),
+        rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(), dp_input_offset.GetPtr<void>(),
+        dp_input_offset_int32.GetPtr<void>(), this->attn_scale_, this->rotary_embedding_cuda_, total_q_tokens,
+        max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_,
+        this->v_head_dim_, this->num_kv_heads_, this->k_scale_, this->v_scale_, this->is_causal_, this->rank_,
+        this->block_token_num_, k_list, v_list, dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(),
+        this->alibi_slopes_, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr,
+        block_table.GetPtr<int32_t>(), kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens,
+        total_prefix_tokens, dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(),
+        prefix_kv_buffer.GetPtr<void>(), this->mm_quant_mode_);
   } else {
     MlaAttenVarlen<SCALAR_T, CACHE_T, KV_DTYPE>(
-        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(),
-        kv_buffer.GetPtr<void>(), kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(),
-        kv_b_nope_weight_scale, v_head_weight_scale, fp8_work_buffer,
-        this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
-        rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(),
-        dp_input_offset.GetPtr<void>(), dp_input_offset_int32.GetPtr<void>(), this->attn_scale_,
-        this->rotary_embedding_cuda_, total_q_tokens, max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_,
-        this->qk_nope_head_dim_, this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->k_scale_,
-        this->v_scale_, this->is_causal_, this->rank_, this->block_token_num_, k_list, v_list,
-        dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(), this->alibi_slopes_,
-        this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table.GetPtr<int32_t>(),
-        kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens, total_prefix_tokens,
-        dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(), this->mm_quant_mode_);
+        out.GetPtr<void>(), q_nope_rope_tensor.GetPtr<void>(), k_rope_buffer.GetPtr<void>(), kv_buffer.GetPtr<void>(),
+        kv_b_nope_proj_weight.GetPtr<void>(), v_head_proj_weight.GetPtr<void>(), kv_b_nope_weight_scale,
+        v_head_weight_scale, fp8_work_buffer, this->context_->ext->GetCublasHandles()[this->rank_],
+        this->context_->ext->GetCublasLtHandles()[this->rank_], rotary_embedding_pos.GetPtr<void>(),
+        rotary_embedding_mask.GetPtr<void>(), workspace_buffer.GetPtr<void>(), dp_input_offset.GetPtr<void>(),
+        dp_input_offset_int32.GetPtr<void>(), this->attn_scale_, this->rotary_embedding_cuda_, total_q_tokens,
+        max_tokens, batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_, this->kv_lora_rank_,
+        this->v_head_dim_, this->num_kv_heads_, this->k_scale_, this->v_scale_, this->is_causal_, this->rank_,
+        this->block_token_num_, k_list, v_list, dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(),
+        this->alibi_slopes_, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr,
+        block_table.GetPtr<int32_t>(), kv_cache_block_num, max_blocks_per_seq, max_forwarding_tokens,
+        total_prefix_tokens, dp_prefill_q_offset.GetPtr<void>(), dp_prefill_q_offset_int32.GetPtr<void>(),
+        this->mm_quant_mode_);
   }
 
   KLLM_LOG_DEBUG << "RecordLayerProgress, layer_index: " << this->layer_index_ << ", rank: " << this->rank_;

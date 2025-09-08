@@ -739,11 +739,11 @@ struct SM90_U32x4_STSM_T {
   }
 };
 
-__device__ void warpgroup_arrive() { asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory"); }
+__device__ inline void warpgroup_arrive() { asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory"); }
 
-__device__ void warpgroup_commit_batch() { asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory"); }
+__device__ inline void warpgroup_commit_batch() { asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory"); }
 
-__device__ void warpgroup_fence_operand(float& reg) { asm volatile("" : "+f"(reg)::"memory"); }
+__device__ inline void warpgroup_fence_operand(float& reg) { asm volatile("" : "+f"(reg)::"memory"); }
 
 __forceinline__ __device__ uint32_t get_lane_id() {
   uint32_t lane_id;
@@ -786,7 +786,7 @@ __device__ __forceinline__ void st_shared(uint32_t const* ptr, uint32_t val) {
 }
 
 template <int N>
-__device__ void warpgroup_wait() {
+__device__ inline void warpgroup_wait() {
   DG_STATIC_ASSERT(N >= 0 and N <= 7, "WGMMA wait: N must be in range [0, 7]");
   asm volatile("wgmma.wait_group.sync.aligned %0;\n" ::"n"(N) : "memory");
 }
@@ -827,7 +827,7 @@ union GmmaDescriptor {
 };
 
 template <class PointerType>
-__device__ GmmaDescriptor make_smem_desc(PointerType smem_ptr, int layout_type, int leading_byte_offset = 0,
+__device__ inline GmmaDescriptor make_smem_desc(PointerType smem_ptr, int layout_type, int leading_byte_offset = 0,
                                          int stride_byte_offset = 1024) {
   GmmaDescriptor desc;
   auto uint_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));

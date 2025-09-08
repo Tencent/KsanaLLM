@@ -44,6 +44,8 @@ class DeepSeekV3Test : public testing::Test {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
     } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
       model_path = "/model/DeepSeek-R1-0528-moe-int4-fix-mtp";
+    } else if (test_name.find("ForwardW4AFP8Test") != std::string::npos) {
+      model_path = "/model/DeepSeek-R1-0528-W4AFP8-mtpbfp8-venus-fix";
     } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
       model_path = "/model/deepseek_v3";
       expected_tokens = {{3648, 303, 19892}};
@@ -391,8 +393,7 @@ class DeepSeekV3Test : public testing::Test {
     int no_grammar_token = generated_tokens0[0];
 
     EXPECT_NE(grammar_token, no_grammar_token);
-    std::cout << fmt::format("grammar_token: {}, no_grammar_token: {}", grammar_token, no_grammar_token)
-              << std::endl;
+    std::cout << fmt::format("grammar_token: {}, no_grammar_token: {}", grammar_token, no_grammar_token) << std::endl;
 
     Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
 #endif
@@ -457,4 +458,27 @@ TEST_F(DeepSeekV3Test, EnableFullShardExpertTest) {
   model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
   runtime_config.enable_full_shared_expert = true;
   TestDeepSeekV3Forward<bfloat16>();
+}
+
+TEST_F(DeepSeekV3Test, ForwardW4AFP8Test) {
+#ifdef ENABLE_CUDA
+  model_config.is_quant = true;
+  model_config.weight_data_type = TYPE_BF16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
+  QuantConfig gptq_quant_config;
+  gptq_quant_config.method = QUANT_GPTQ;
+  gptq_quant_config.pattern_layers = {".mlp.experts."};
+  gptq_quant_config.ignored_layers = {"model.layers.4.mlp.experts."};
+  QuantConfig fp8_quant_config;
+  fp8_quant_config.method = QUANT_BLOCK_FP8_E4M3;
+  fp8_quant_config.is_fp8_blockwise = true;
+  fp8_quant_config.weight_block_size = {128, 128};
+  fp8_quant_config.pattern_layers = {};
+  fp8_quant_config.ignored_layers = {"model.layers.4.eh_proj"};
+  fp8_quant_config.enable_moe_int4 = true;
+  model_config.quant_config = fp8_quant_config;
+  model_config.sub_quant_configs = {gptq_quant_config};
+  std::cout << "Test W4AFP8 TYPE_BF16 weight_data_type forward." << std::endl;
+  TestDeepSeekV3Forward<bfloat16>();
+#endif
 }

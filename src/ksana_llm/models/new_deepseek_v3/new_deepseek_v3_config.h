@@ -14,6 +14,12 @@ struct NewDeepSeekV3Config : public BaseModelConfig {
 
   bool ContainGptqWeights() const;
 
+  QuantConfig GetGptqQuantConfig();
+
+  bool IsWeightMatchGptq(const std::string& weight_name);
+
+  bool IsGptqContain(const std::string& weight_name);
+
   std::string type;
 
   // Type of weight

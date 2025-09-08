@@ -52,11 +52,17 @@ Status InitializeExpertParallelDeepepWrapper(const ModelConfig& model_config, co
   size_t expert_topk = model_config.moe_config.experts_topk;
   size_t num_experts = model_config.moe_config.num_experts;
   size_t node_rank = context->GetExpertParallelExpertNodeRank();
-  if (num_ranks > 1) {
+  // TODO(zezhao): 当前仅有开启 enable_full_shared_expert 时才会使用 DeepEP，后续会将该变量更名并调整在 EP 中的耦合关系.
+  if (num_ranks > 1 && runtime_config.enable_full_shared_expert) {
+    // TODO(zezhao): 临时限制，Expert-Parallel 开启时 Data-Parallel 需相等，后续将支持 ATP > 1
+    if (runtime_config.parallel_basic_config.expert_parallel_size !=
+        runtime_config.parallel_basic_config.attn_data_parallel_size) {
+      KLLM_LOG_ERROR << fmt::format("Expert-Parallel only supports DP=EP");
+      KLLM_THROW(fmt::format("Expert-Parallel only supports DP=EP"));
+    }
     // Initialize deepep_wrapper when using Expert-Parallel
-    g_deepep_wrapper =
-        std::make_shared<ExpertParallelDeepepWrapper>(num_ranks, num_ranks_per_node, node_rank, max_token_num,
-                                                      hidden_size, expert_topk, num_experts, context);
+    g_deepep_wrapper = std::make_shared<ExpertParallelDeepepWrapper>(
+        num_ranks, num_ranks_per_node, node_rank, max_token_num, hidden_size, expert_topk, num_experts, context);
     g_deepep_wrapper->Init();
   }
   return Status();

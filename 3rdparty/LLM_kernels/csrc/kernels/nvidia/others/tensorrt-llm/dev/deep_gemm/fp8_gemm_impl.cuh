@@ -26,7 +26,7 @@ namespace deep_gemm {
 enum class Layout { RowMajor, ColMajor };
 
 template <uint32_t kNumTMAThreads, uint32_t kNumMathThreadsPerGroup>
-__device__ __host__ constexpr int get_num_threads_per_sm(int block_m) {
+__device__ __host__ inline constexpr int get_num_threads_per_sm(int block_m) {
   DG_STATIC_ASSERT(kNumMathThreadsPerGroup == 128, "Only support 128 threads per math group");
   return (block_m == 64 ? 1 : 2) * kNumMathThreadsPerGroup + kNumTMAThreads;
 }

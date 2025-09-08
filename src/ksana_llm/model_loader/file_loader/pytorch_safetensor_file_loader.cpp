@@ -49,9 +49,9 @@ PytorchSafetensorFileLoader::~PytorchSafetensorFileLoader() {
 }
 
 DataType GetTensorDataType(const std::string& safetensor_dtype) {
-  const std::map<std::string, DataType> type_map = {{"F16", TYPE_FP16},         {"F32", TYPE_FP32},
-                                                    {"BF16", TYPE_BF16},        {"I32", TYPE_INT32},
-                                                    {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}};
+  const std::map<std::string, DataType> type_map = {
+      {"F16", TYPE_FP16},         {"F32", TYPE_FP32},  {"BF16", TYPE_BF16}, {"I32", TYPE_INT32},
+      {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}, {"I8", TYPE_INT8}};
   return type_map.at(safetensor_dtype);
 }
 

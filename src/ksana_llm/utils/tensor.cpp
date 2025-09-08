@@ -181,6 +181,8 @@ void Tensor::AssignMembers(const Tensor& other) {
 
   input_scales = other.input_scales;
   weight_scales = other.weight_scales;
+
+  input_alpha = other.input_alpha;
 }
 
 uint8_t* Tensor::GetPtrImpl(bool check_empty) const {

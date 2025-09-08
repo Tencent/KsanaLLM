@@ -123,9 +123,11 @@ void ParseGPTQQuantConfig(const nlohmann::json &config_json,
   quant_config.method = QUANT_GPTQ;
   quant_config.bits = config_json.at("bits");
   quant_config.group_size = config_json.at("group_size");
-  quant_config.desc_act = config_json.at("desc_act");
-  KLLM_LOG_INFO << fmt::format("using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}",
-                               quant_config.bits, quant_config.group_size, quant_config.desc_act);
+  quant_config.desc_act = config_json.value("desc_act", false);
+  quant_config.input_scale = config_json.value("input_scale", false);
+  KLLM_LOG_INFO << fmt::format(
+      "using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}, input_scale: {}",
+      quant_config.bits, quant_config.group_size, quant_config.desc_act, quant_config.input_scale);
 }
 
 void ParseFP8QuantConfig(const nlohmann::json &config_json, std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config,
@@ -215,8 +217,7 @@ Status NewDeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_
   }
 
   // Deepseek only support machete backend
-  if (new_deepseek_v3_config->is_quant && (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ ||
-                                           new_deepseek_v3_config->quant_config.enable_moe_int4)) {
+  if (new_deepseek_v3_config->is_quant && new_deepseek_v3_config->ContainGptqWeights()) {
     new_deepseek_v3_config->quant_config.backend = MACHETE_BACKEND;
   } else {
     KLLM_LOG_INFO << "Not using any Quant Backend";

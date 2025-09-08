@@ -117,7 +117,8 @@ Status InferenceEngine::Initialize() {
 
   // TODO(zezhao): DeepEP 相关逻辑后续应迁移至 nvidia 目录下
   InitializeExpertParallelDeepepWrapper(model_config, runtime_config, context_);
-  if (!context_->IsExpertParallelStandalone()) {
+  // TODO(zezhao): 当前仅有开启 enable_full_shared_expert 时才会使用 DeepEP，后续会将该变量更名并调整在 EP 中的耦合关系.
+  if (!context_->IsExpertParallelStandalone() && runtime_config.enable_full_shared_expert) {
     distributed_coordinator_->SynchronizeNvshmemUniqueId();
   }
 
@@ -306,8 +307,7 @@ Status InferenceEngine::Initialize() {
   }
 
   // Create batch scheduler.
-  batch_scheduler_ =
-    std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
 
   // Register grammar backend if enabled
   if (grammar_backend_) {

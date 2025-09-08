@@ -24,7 +24,7 @@
  * [DeepSeek-V3 Project] https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/kernel.py#L84
  * [SGLang Project] https://github.com/sgl-project/sglang
  */
-#include "moe.h"
+#include "moe_utils.h"
 
 #include <cub/cub.cuh>
 #include <flashinfer/activation.cuh>

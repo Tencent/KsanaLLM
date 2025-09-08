@@ -6,6 +6,7 @@
 #include "ksana_llm/layers/batched_matmul_layer.h"
 #include "ksana_llm/layers/blockwise_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
+#include "ksana_llm/layers/cutlass_moe_layer.h"
 #include "ksana_llm/layers/fp8_matmul_layer.h"
 #include "ksana_llm/layers/fp8_moe_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
@@ -28,9 +29,14 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
   builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, MOE_QUANT_NONE, NONE_QUANT}] = &MoeLayerFactory::BuildLayer<MoeLayer>;
   builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, MOE_QUANT_NONE, NONE_QUANT}] = &MoeLayerFactory::BuildLayer<MoeLayer>;
   builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, MOE_QUANT_NONE, NONE_QUANT}] = &MoeLayerFactory::BuildLayer<MoeLayer>;
-  // for fused_moe_gtpq_triton
+
   builder_map_[{TYPE_UINT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, NONE_QUANT}] = &MoeLayerFactory::BuildLayer<MoeLayer>;
   builder_map_[{TYPE_UINT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, NONE_QUANT}] = &MoeLayerFactory::BuildLayer<MoeLayer>;
+
+  builder_map_[{TYPE_INT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, NONE_QUANT}] =
+      &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
+  builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, NONE_QUANT}] =
+      &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
 
   // for marlin gptq moe
   builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_BACKEND}] =
@@ -76,7 +82,23 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
                               runtime_config_.parallel_basic_config.expert_world_size));  // num_experts
   size_t up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2];
   size_t down_hidden_size = base_weight->GetModelWeights(weight_names[1]).shape[1];
-  if (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4) {
+  bool enable_moe_int4 = false;
+  if (model_config_.quant_config.method != QUANT_GPTQ && model_config_.sub_quant_configs.size() > 0 &&
+      model_config_.sub_quant_configs[0].method == QUANT_GPTQ) {
+    for (std::string& pattern_layer : model_config_.sub_quant_configs[0].pattern_layers) {
+      if (weight_names[0].find(pattern_layer) != std::string::npos) {
+        enable_moe_int4 = true;
+        break;
+      }
+    }
+    for (std::string& ignored_layer : model_config_.sub_quant_configs[0].ignored_layers) {
+      if (weight_names[0].find(ignored_layer) != std::string::npos) {
+        enable_moe_int4 = false;
+        break;
+      }
+    }
+  }
+  if (model_config_.quant_config.method == QUANT_GPTQ || enable_moe_int4) {
     if (use_vllm_moe) {
       up_gate_hidden_size = up_gate_hidden_size / 4 * (32 / model_config_.quant_config.bits);
     } else {  // marlin gptq
@@ -107,14 +129,13 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);                     // norm_topk_prob
   moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);              // routed_scaling_factor
   moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
-  if (model_config_.quant_config.enable_moe_int4) {
+  if (enable_moe_int4) {
     moe_matmul_param.push_back(DataType::TYPE_INVALID);
   } else {
     moe_matmul_param.push_back(model_config_.quant_config.is_fp8_blockwise ? DataType::TYPE_BLOCK_FP8_E4M3
                                                                            : DataType::TYPE_INVALID);
   }
-  if ((model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) ||
-      model_config_.quant_config.enable_moe_int4) {
+  if ((model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) || enable_moe_int4) {
     moe_matmul_param.push_back(DataType::TYPE_I4_GROUP);
     // group_size
     moe_matmul_param.push_back(static_cast<int>(model_config_.quant_config.group_size));
@@ -140,13 +161,14 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_FP8_E4M3, NONE_QUANT);
     }
   }
-  if (weight_type == TYPE_UINT8 &&
-      (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.enable_moe_int4)) {
-    return CreateLayer(TYPE_UINT8, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, NONE_QUANT);
+  if (model_config_.quant_config.method == QUANT_GPTQ || enable_moe_int4) {
+    if (weight_type == TYPE_UINT8 || weight_type == TYPE_INT8) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, NONE_QUANT);
+    }
   }
 
   if (!use_vllm_moe && (model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) ||
-      model_config_.quant_config.enable_moe_int4) {
+      enable_moe_int4) {
     return CreateLayer(TYPE_I4_GROUP, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_BACKEND);
   }
   return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_NONE, NONE_QUANT);

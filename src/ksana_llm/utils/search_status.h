@@ -1,6 +1,7 @@
 // Copyright 2025 Tencent Inc.  All rights reserved.
 #pragma once
 
+#include <fmt/format.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -95,6 +96,31 @@ class MacheteSearchStatus {
  private:
   std::unordered_map<size_t, std::unordered_map<size_t, std::vector<std::string>>> machete_schedule_cache;
   std::unordered_map<std::string, size_t> machete_workspace_cache;
+};
+
+class CutlassMoeSearchStatus {
+ public:
+  bool IsCutlassMoeScheduleContain(size_t s1, size_t s2, size_t s3, size_t s4) {
+    std::string key = fmt::format("({},{},{},{})", s1, s2, s3, s4);
+    auto it = cutlass_moe_schedule_cache.find(key);
+    return it != cutlass_moe_schedule_cache.end();
+  }
+
+  void AddCutlassMoeSchedule(size_t s1, size_t s2, size_t s3, size_t s4, std::vector<std::vector<int64_t>> val) {
+    std::string key = fmt::format("({},{},{},{})", s1, s2, s3, s4);
+    cutlass_moe_schedule_cache[key] = val;
+  }
+
+  std::vector<std::vector<int64_t>>& GetCutlassMoeSchedule(size_t s1, size_t s2, size_t s3, size_t s4) {
+    std::string key = fmt::format("({},{},{},{})", s1, s2, s3, s4);
+    auto it = cutlass_moe_schedule_cache.find(key);
+    return it->second;
+  }
+
+  void ClearCutlassMoeSchedule() { cutlass_moe_schedule_cache.clear(); }
+
+ private:
+  std::unordered_map<std::string, std::vector<std::vector<int64_t>>> cutlass_moe_schedule_cache;
 };
 
 }  // namespace ksana_llm

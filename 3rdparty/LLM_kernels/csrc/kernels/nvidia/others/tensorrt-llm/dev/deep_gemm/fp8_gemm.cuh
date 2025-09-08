@@ -44,7 +44,7 @@
 
 namespace deep_gemm {
 template <typename T>
-static CUtensorMap make_2d_tma_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
+static inline CUtensorMap make_2d_tma_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
                                       uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                       uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
@@ -53,7 +53,7 @@ static CUtensorMap make_2d_tma_a_desc(T* global_address, uint32_t shape_m, uint3
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_b_desc(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
+inline CUtensorMap make_2d_tma_b_desc(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
                                uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, shape_k,
@@ -62,7 +62,7 @@ CUtensorMap make_2d_tma_b_desc(T* global_address, uint32_t shape_n, uint32_t sha
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_d_desc(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
+inline CUtensorMap make_2d_tma_d_desc(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
                                uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
                                uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
@@ -72,7 +72,7 @@ CUtensorMap make_2d_tma_d_desc(T* global_address, uint32_t shape_m, uint32_t sha
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_scales_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
+inline CUtensorMap make_2d_tma_scales_a_desc(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
                                       uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                       uint64_t global_stride_in_bytes = 0) {
   // Make TMA aligned to 16 bytes
@@ -87,14 +87,14 @@ CUtensorMap make_2d_tma_scales_a_desc(T* global_address, uint32_t shape_m, uint3
 }
 
 template <typename T>
-CUtensorMap make_tma_scales_a_offset_desc(T* global_address, int64_t max_m_padded_total, uint32_t shape_k,
+inline CUtensorMap make_tma_scales_a_offset_desc(T* global_address, int64_t max_m_padded_total, uint32_t shape_k,
                                           uint32_t block_m, uint32_t block_k, uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, max_m_padded_total, ceil_div(shape_k, block_k), block_m, 1,
                           global_stride_in_bytes, CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE);
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_a_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
+inline CUtensorMap make_2d_tma_a_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_k, uint32_t block_m,
                                       uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                       uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor, shape_m * (gemm_type != GemmType::Normal ? num_groups : 1),
@@ -102,7 +102,7 @@ CUtensorMap make_2d_tma_a_desc_swapAB(T* global_address, uint32_t shape_m, uint3
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
+inline CUtensorMap make_2d_tma_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
                                       uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                       uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::ColMajor, shape_k,
@@ -111,7 +111,7 @@ CUtensorMap make_2d_tma_b_desc_swapAB(T* global_address, uint32_t shape_n, uint3
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_d_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
+inline CUtensorMap make_2d_tma_d_desc_swapAB(T* global_address, uint32_t shape_m, uint32_t shape_n, uint32_t block_m,
                                       uint32_t block_n, uint32_t num_groups, GemmType gemm_type,
                                       uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor,
@@ -121,7 +121,7 @@ CUtensorMap make_2d_tma_d_desc_swapAB(T* global_address, uint32_t shape_m, uint3
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
+inline CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t shape_n, uint32_t shape_k, uint32_t block_n,
                                              uint32_t block_k, uint32_t num_groups, GemmType gemm_type,
                                              uint64_t global_stride_in_bytes = 0) {
   // Make TMA aligned to 16 bytes
@@ -136,7 +136,7 @@ CUtensorMap make_2d_tma_scales_b_desc_swapAB(T* global_address, uint32_t shape_n
 }
 
 template <typename T>
-CUtensorMap make_tma_scales_b_offset_desc_swapAB(T* global_address, int64_t max_n_padded_total, uint32_t shape_k,
+inline CUtensorMap make_tma_scales_b_offset_desc_swapAB(T* global_address, int64_t max_n_padded_total, uint32_t shape_k,
                                                  uint32_t block_n, uint32_t block_k,
                                                  uint64_t global_stride_in_bytes = 0) {
   return make_2d_tma_desc(global_address, Layout::RowMajor, ceil_div(shape_k, block_k), max_n_padded_total, 1, block_n,
@@ -144,7 +144,7 @@ CUtensorMap make_tma_scales_b_offset_desc_swapAB(T* global_address, int64_t max_
 }
 
 template <typename T>
-CUtensorMap make_2d_tma_desc(T* global_address, Layout layout, uint32_t gmem_rows, uint32_t gmem_cols,
+inline CUtensorMap make_2d_tma_desc(T* global_address, Layout layout, uint32_t gmem_rows, uint32_t gmem_cols,
                              uint32_t smem_rows, uint32_t smem_cols, uint64_t global_stride_in_bytes,
                              CUtensorMapSwizzle swizzle_type = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B) {
   if (layout == Layout::RowMajor) {
@@ -161,7 +161,7 @@ CUtensorMap make_2d_tma_desc(T* global_address, Layout layout, uint32_t gmem_row
 }
 
 template <typename LayoutIndexType>
-void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
+inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
              float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
              uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
              LayoutIndexType* grouped_layout, cudaStream_t stream, int num_sms, uint32_t smem_size) {
@@ -204,7 +204,7 @@ void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, 
 }
 
 template <typename LayoutIndexType>
-void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d,
+inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d,
                    float* scales_a, float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
                    uint32_t block_m, uint32_t block_n, uint32_t block_k, uint32_t num_groups,
                    uint32_t num_tma_multicast, GemmType gemm_type, LayoutIndexType* grouped_layout, cudaStream_t stream,
@@ -246,7 +246,7 @@ void runGemmSwapAB(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int 
 }
 
 template <typename LayoutIndexType>
-void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
+inline void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, void* mat_d, int ld_d, float* scales_a,
              float* scales_b, uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
              uint32_t block_k, uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
              LayoutIndexType* problem_m_offsets, cudaStream_t stream, int num_sms, uint32_t smem_size,
@@ -287,7 +287,7 @@ void runGemm(cudaKernel_t kernel, void* mat_a, int ld_a, void* mat_b, int ld_b, 
 }
 
 template <typename LayoutIndexType>
-void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a, void* mat_b /* act*/, int ld_b, void* mat_d,
+inline void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a, void* mat_b /* act*/, int ld_b, void* mat_d,
                    int ld_d, float* scales_a /* weight scales*/, float* scales_b /* act scales*/, uint32_t shape_m,
                    uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n, uint32_t block_k,
                    uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type,
@@ -329,7 +329,7 @@ void runGemmSwapAB(cudaKernel_t kernel, void* mat_a /* weight*/, int ld_a, void*
   DG_HOST_ASSERT(status == cudaSuccess);
 }
 
-void runGemm(cudaKernel_t kernel, void* mat_a, uint64_t ld_a, uint64_t stride_a, void* mat_b, uint64_t ld_b,
+inline void runGemm(cudaKernel_t kernel, void* mat_a, uint64_t ld_a, uint64_t stride_a, void* mat_b, uint64_t ld_b,
              uint64_t stride_b, void* mat_d, uint64_t ld_d, uint64_t stride_d, float* scales_a, float* scales_b,
              uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n, uint32_t block_k,
              uint32_t num_groups, uint32_t num_tma_multicast, GemmType gemm_type, cudaStream_t stream, int num_sms,

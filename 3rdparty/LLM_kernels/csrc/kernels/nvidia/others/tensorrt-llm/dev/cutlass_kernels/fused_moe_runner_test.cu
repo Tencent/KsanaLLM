@@ -13,22 +13,10 @@
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/moeOp.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/utils.h"
 
 using namespace llm_kernels::nvidia;
 using namespace llm_kernels::nvidia::tensorrt_llm::dev;
-
-template <typename T>
-ScalarType GetScalarType();
-#define GET_SCALAR_TYPE(T, DATA_TYPE) \
-  template <>                         \
-  ScalarType GetScalarType<T>() {     \
-    return DATA_TYPE;                 \
-  }
-GET_SCALAR_TYPE(float, ScalarType::Float);
-GET_SCALAR_TYPE(half, ScalarType::Half);
-GET_SCALAR_TYPE(__nv_bfloat16, ScalarType::BFloat16);
-GET_SCALAR_TYPE(int32_t, ScalarType::Int);
-#undef GET_SCALAR_TYPE
 
 template <typename T>
 torch::ScalarType GetTorchDataType();

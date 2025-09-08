@@ -6,7 +6,7 @@ find_package(CUDAToolkit REQUIRED)
 
 add_library(llm_kernels_nvidia_kernel_triton STATIC ${TRITON_SRCS})
 target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBRARIES} -lcuda -lcudart ksana_llm_libs
-    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe_utils
     ${CUDA_LIBRARIES})
 
 file(GLOB_RECURSE KERNEL_WRAPPER_TEST_SRCS kernel_wrapper_test.cpp)

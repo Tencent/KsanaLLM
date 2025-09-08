@@ -4,6 +4,7 @@
 
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_impl.h"
 #include <numeric>
+#include "ksana_llm/model_loader/model_loader_utils.h"
 #include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
@@ -643,19 +644,60 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
       if (expert_idx_ < 0) {
         continue;
       }
+      if (host_weight_name.find(".input_scale") != std::string::npos) {
+        size_t input_scale_size = GetTypeSize(host_weight_tensor.dtype);
+        if (host_weight_name.find(".up_proj.") != std::string::npos ||
+            host_weight_name.find(".gate_proj.") != std::string::npos) {
+          std::string up_gate_experts_name =
+              fmt::format("model.layers.{}.mlp.experts.up_gate_proj.input_scale", layer_idx);
+          if (device_model_weights.find(up_gate_experts_name) == device_model_weights.end()) {
+            device_model_weights[up_gate_experts_name] =
+                Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, {num_experts_per_rank, 2}, dev_rank,
+                       nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+          }
+          Tensor& up_gate_experts_tensor = device_model_weights.at(up_gate_experts_name);
+          if (host_weight_name.find(".up_proj.") != std::string::npos) {
+            MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * input_scale_size * 2,
+                        host_weight_tensor.template GetPtr<void>(), input_scale_size, MEMCPY_HOST_TO_DEVICE,
+                        context_->GetMemoryManageStreams()[dev_rank]);
+          } else if (host_weight_name.find(".gate_proj.") != std::string::npos) {
+            MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * input_scale_size * 2 + input_scale_size,
+                        host_weight_tensor.template GetPtr<void>(), input_scale_size, MEMCPY_HOST_TO_DEVICE,
+                        context_->GetMemoryManageStreams()[dev_rank]);
+          }
+          continue;
+        }
+        if (host_weight_name.find(".down_proj.") != std::string::npos) {
+          std::string down_experts_name = fmt::format("model.layers.{}.mlp.experts.down_proj.input_scale", layer_idx);
+          if (device_model_weights.find(down_experts_name) == device_model_weights.end()) {
+            device_model_weights[down_experts_name] =
+                Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, {num_experts_per_rank, 1}, dev_rank,
+                       nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+          }
+          Tensor& down_experts_tensor = device_model_weights.at(down_experts_name);
+          MemcpyAsync(down_experts_tensor.GetPtr<void>() + expert_idx_ * input_scale_size,
+                      host_weight_tensor.template GetPtr<void>(), input_scale_size, MEMCPY_HOST_TO_DEVICE,
+                      context_->GetMemoryManageStreams()[dev_rank]);
+          continue;
+        }
+      }
+
       bool is_qweight = host_weight_name.find(".qweight") != std::string::npos;
       Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
                                  dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
       MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.template GetPtr<void>(),
                   host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
                   context_->GetMemoryManageStreams()[dev_rank]);
-      PermuteWeight(dev_tensor, {1, 0}, dev_rank);
+      StreamSynchronize(context_->GetMemoryManageStreams()[dev_rank]);
+      if (!new_deepseek_v3_config->GetGptqQuantConfig().input_scale) {
+        PermuteWeight(dev_tensor, {1, 0}, dev_rank);
+      }
       if (host_weight_name.find(".up_proj.") != std::string::npos ||
           host_weight_name.find(".gate_proj.") != std::string::npos) {
         std::string up_gate_experts_name =
             fmt::format("model.layers.{}.mlp.experts.up_gate_proj.{}", layer_idx, is_qweight ? "weight" : "scales");
 
-        if (is_qweight) {
+        if (is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
           // an uint8 weight actually contains two int4 weights
           dev_tensor.dtype = DataType::TYPE_UINT8;
           dev_tensor.shape[1] = dev_tensor.shape[1] * 4;  // int32->uint8
@@ -671,12 +713,18 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
                      &(context_->GetMemoryManageStreams()[dev_rank]));
         }
         Tensor& up_gate_experts_tensor = device_model_weights.at(up_gate_experts_name);
+        // NOTE(jinxcwu) up_gate权重名字有问题，实际是up在后，gate在前。当使用cutlass moe时up在前，gate在后
+        size_t up_offset = expert_pitch;
+        size_t gate_offset = 0;
+        if (new_deepseek_v3_config->GetGptqQuantConfig().input_scale) {
+          std::swap(up_offset, gate_offset);
+        }
         if (host_weight_name.find(".up_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + expert_pitch,
+          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + up_offset,
                       dev_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_DEVICE_TO_DEVICE,
                       context_->GetMemoryManageStreams()[dev_rank]);
         } else if (host_weight_name.find(".gate_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch,
+          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + gate_offset,
                       dev_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_DEVICE_TO_DEVICE,
                       context_->GetMemoryManageStreams()[dev_rank]);
         }
@@ -686,7 +734,7 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
         std::string down_experts_name =
             fmt::format("model.layers.{}.mlp.experts.down_proj.{}", layer_idx, is_qweight ? "weight" : "scales");
 
-        if (is_qweight) {
+        if (is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
           // an uint8 weight actually contains two int4 weights
           dev_tensor.dtype = DataType::TYPE_UINT8;
           dev_tensor.shape[1] = dev_tensor.shape[1] * 4;  // int32->uint8
@@ -823,14 +871,12 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
     return Status();
   }
 
-  QuantConfig& quant_config = new_deepseek_v3_config->quant_config.enable_moe_int4
-                                  ? new_deepseek_v3_config->sub_quant_configs[0]
-                                  : new_deepseek_v3_config->quant_config;
+  QuantConfig quant_config = new_deepseek_v3_config->GetGptqQuantConfig();
   std::vector<std::string> experts_weight_names;
   std::vector<std::string> qweight_names;
   qweight_names.reserve(device_model_weights.size());
   for (const auto& [weight_name, weight_tensor] : device_model_weights) {
-    if (weight_name.find(".experts.") != std::string::npos) {
+    if (weight_name.find(".experts.") != std::string::npos && new_deepseek_v3_config->IsWeightMatchGptq(weight_name)) {
       experts_weight_names.push_back(weight_name);
     }
     if (weight_name.find(".qweight") != std::string::npos) {
@@ -839,10 +885,62 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
   }
   // bind for moe weights
   for (const auto& experts_weight_name : experts_weight_names) {
+    if (experts_weight_name.find(".weight") == std::string::npos) {
+      continue;
+    }
     const std::string scales_name = GetReplacedName(experts_weight_name, "weight", "scales");
     auto itr = device_model_weights.find(scales_name);
     if (itr != device_model_weights.end()) {
-      device_model_weights.at(experts_weight_name).scales = &(itr->second);
+      Tensor& scale = itr->second;
+#ifdef ENABLE_CUDA
+      const std::string input_scale_name = GetReplacedName(experts_weight_name, "weight", "input_scale");
+      if (device_model_weights.find(input_scale_name) != device_model_weights.end()) {
+        // 强制要求TP=EP
+        if (new_deepseek_v3_config->moe_tensor_para_size != 1) {
+          KLLM_THROW("Currently, W4AFP8 strictly enforces TP=EP.");
+        }
+        // cutlass moe int4 算子对权重的特殊处理
+        // scale转换
+        std::vector<size_t> interleaves = GetCutlassMoeInterleave(new_deepseek_v3_config->hidden_units,
+                                                                  new_deepseek_v3_config->moe_config.moe_inter_size);
+        size_t interleave = interleaves[0];  // fc31也就是up_gate用0
+        if (experts_weight_name.find(".down_proj.") != std::string::npos) {
+          interleave = interleaves[1];  // fc2也就是down用1
+        }
+        std::vector<size_t> origin_shape = scale.shape;
+        scale.shape = {origin_shape[0], origin_shape[1], origin_shape[2] / interleave, interleave};
+        PermuteWeight(scale, {0, 2, 1, 3}, dev_rank);
+        scale.shape = {origin_shape[0], origin_shape[2] / interleave, origin_shape[1] * interleave};
+        // 计算input_scale的最大值
+        Tensor& input_scale = device_model_weights.at(input_scale_name);
+        torch::Tensor input_scale_torch = GetTorchTensorFromTensor(input_scale, dev_rank);
+        float input_scale_max = torch::max(input_scale_torch).item<float>();
+        auto float_option = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, dev_rank);
+        // 生成alpha
+        torch::Tensor alpha_tensor = torch::full({input_scale_torch.size(0), 1}, input_scale_max, float_option);
+        const std::string alpha_name = GetReplacedName(experts_weight_name, "weight", "alpha");
+        device_model_weights[alpha_name] =
+            Tensor(MemoryLocation::LOCATION_DEVICE, GetDataType<float>(), {input_scale_torch.size(0), 1}, dev_rank,
+                   nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+        MemcpyAsync(device_model_weights[alpha_name].GetPtr<void>(), alpha_tensor.data_ptr(),
+                    alpha_tensor.numel() * alpha_tensor.element_size(), MEMCPY_DEVICE_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[dev_rank]);
+        device_model_weights.at(experts_weight_name).input_alpha = &(device_model_weights[alpha_name]);
+        // 生成act_scale
+        torch::Tensor act_scale_tensor =
+            torch::full({1, new_deepseek_v3_config->hidden_units}, 1 / input_scale_max, float_option)
+                .to(GetTorchDataType<T>());
+        const std::string act_scale_name = GetReplacedName(experts_weight_name, "weight", "act_scale");
+        device_model_weights[act_scale_name] =
+            Tensor(MemoryLocation::LOCATION_DEVICE, GetDataType<T>(), {1, new_deepseek_v3_config->hidden_units},
+                   dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+        MemcpyAsync(device_model_weights[act_scale_name].GetPtr<void>(), act_scale_tensor.data_ptr(),
+                    act_scale_tensor.numel() * act_scale_tensor.element_size(), MEMCPY_DEVICE_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[dev_rank]);
+        device_model_weights.at(experts_weight_name).input_scales = &(device_model_weights[act_scale_name]);
+      }
+#endif
+      device_model_weights.at(experts_weight_name).scales = &scale;
     } else {
       KLLM_THROW(fmt::format("Can not find scales for weight {}", experts_weight_name));
     }
@@ -937,6 +1035,40 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
 
 #ifdef ENABLE_CUDA
 template <typename T>
+std::vector<size_t> NewDeepSeekV3WeightImpl<T>::GetCutlassMoeInterleave(size_t hidden_size_per_partition,
+                                                                        size_t intermediate_size_per_partition) {
+  uint32_t sm = context_->ext->GetComputeCapacity();
+  std::vector<size_t> interleave;
+  if (sm == 90) {
+    interleave.clear();
+    std::vector<size_t> k_shapes = {hidden_size_per_partition, intermediate_size_per_partition};
+    for (const size_t& k_shape : k_shapes) {
+      if (k_shape % 512 == 0) {
+        interleave.push_back(4);
+      } else if (k_shape % 256 == 0) {
+        interleave.push_back(2);
+      } else if (k_shape % 128 == 0) {
+        interleave.push_back(1);
+      } else {
+        KLLM_LOG_ERROR << fmt::format("K shape is required to be multiple of 128, received {}.", k_shape);
+      }
+    }
+  } else {
+    KLLM_LOG_ERROR << fmt::format("W4AFP8 MoE is unsupported on SM{}.", sm);
+  }
+  return interleave;
+}
+
+template <typename T>
+torch::Tensor NewDeepSeekV3WeightImpl<T>::GetTorchTensorFromTensor(const Tensor& tensor, int dev_rank) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, dev_rank).dtype(GetTorchTypeFromDataType(tensor.dtype));
+  std::vector<size_t> tensor_shape = tensor.shape;
+  torch::Tensor tensor_gpu =
+      torch::from_blob(tensor.GetPtr<void>(), std::vector<int64_t>(tensor_shape.begin(), tensor_shape.end()), options);
+  return tensor_gpu;
+}
+
+template <typename T>
 Tensor NewDeepSeekV3WeightImpl<T>::MachetePackWeight(Tensor& weight, int dev_rank, QuantMode quant_method) {
   llm_kernels::nvidia::vllm_dtype::ScalarType weight_type =
       (quant_method == QUANT_GPTQ) ? llm_kernels::nvidia::vllm_dtype::kU4B8 : llm_kernels::nvidia::vllm_dtype::kU4;
@@ -1000,9 +1132,7 @@ Tensor NewDeepSeekV3WeightImpl<T>::MarlinPermuteScales(Tensor& s, int dev_rank, 
 template <typename T>
 Tensor NewDeepSeekV3WeightImpl<T>::DequantGptqWeight(Tensor& qweight, int dev_rank,
                                                      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
-  QuantConfig& quant_config = new_deepseek_v3_config->quant_config.enable_moe_int4
-                                  ? new_deepseek_v3_config->sub_quant_configs[0]
-                                  : new_deepseek_v3_config->quant_config;
+  QuantConfig quant_config = new_deepseek_v3_config->GetGptqQuantConfig();
   size_t input_size_per_tp = qweight.shape[0];
   size_t pack_factor = 32 / quant_config.bits;
   Tensor eye_matrix;

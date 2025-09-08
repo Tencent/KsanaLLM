@@ -139,6 +139,12 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 // TODO(huicongyao): support all quant methods for new ds weight loader
 // TODO(huicongyao): reformat and unify all quant pack methods
 #ifdef ENABLE_CUDA
+  // TODO(jinxcwu) 后续要单独整理成cutlass_moe_utils
+  std::vector<size_t> GetCutlassMoeInterleave(size_t hidden_size_per_partition, size_t intermediate_size_per_partition);
+
+  // NOTE(jinxcwu) 需要去torch依赖
+  torch::Tensor GetTorchTensorFromTensor(const Tensor& tensor, int dev_rank);
+
   // For machete quant utils
   Tensor MachetePackWeight(Tensor& weight, int dev_rank, QuantMode quant_method);
 

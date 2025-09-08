@@ -142,8 +142,16 @@ size_t FusedMoeRunner::getRuntimeWorkspaceInfo(const Tensor& input, const Tensor
   int64_t num_rows = input.shape[0];
   int64_t hidden_size = fc2_expert_weights.shape[1];
   int64_t inter_size = fc2_expert_weights.shape[2] * mInnerDimMultiplier;
-
   int const num_experts_on_rank = fc2_expert_weights.shape[0];
+  return getRuntimeWorkspaceInfo(experts_per_token, num_rows, hidden_size, inter_size, num_experts_on_rank, tp_size,
+                                 tp_rank, ep_size, ep_rank, min_latency_mode, profile_ids);
+}
+
+size_t FusedMoeRunner::getRuntimeWorkspaceInfo(const size_t experts_per_token, const size_t num_rows,
+                                               const size_t hidden_size, const size_t inter_size,
+                                               const size_t num_experts_on_rank, int64_t const tp_size,
+                                               int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank,
+                                               bool min_latency_mode, const std::vector<int64_t>& profile_ids) {
   auto const num_experts_total = static_cast<int>(num_experts_on_rank * ep_size);
   auto parallelism_config = internal::kernels::MOEParallelismConfig(tp_size, tp_rank, ep_size, ep_rank);
   auto activation_type = internal::ActivationType::Swiglu;
@@ -162,8 +170,6 @@ void FusedMoeRunner::runMoe(Tensor& output, const Tensor& input, const Tensor& t
                             int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size,
                             int64_t const cluster_rank, bool const enable_alltoall, bool min_latency_mode,
                             const std::vector<int64_t>& profile_ids, cudaStream_t stream) {
-  std::lock_guard<std::mutex> lock(mMutex);
-
   KLLM_KERNEL_CHECK_WITH_INFO(cluster_size == 1 && cluster_rank == 0, "smart_router is supported in min_latency mode");
 
   KLLM_KERNEL_CHECK(input.dtype == mActivationDtype);
@@ -268,8 +274,6 @@ void FusedMoeRunner::runMoeMinLantency(Tensor& output, Tensor& num_active_expert
                                        int64_t const ep_rank, int64_t const cluster_size, int64_t const cluster_rank,
                                        bool const enable_alltoall, bool min_latency_mode,
                                        const std::vector<int64_t>& profile_ids, cudaStream_t stream) {
-  std::lock_guard<std::mutex> lock(mMutex);
-
   KLLM_KERNEL_CHECK(input.dtype == mActivationDtype);
   KLLM_KERNEL_CHECK(token_selected_experts.dtype == ScalarType::Int);
   if (token_final_scales.has_value()) {
@@ -365,7 +369,6 @@ void FusedMoeRunner::runMoeMinLantency(Tensor& output, Tensor& num_active_expert
 }
 
 int64_t FusedMoeRunner::getTacticNum() {
-  std::lock_guard<std::mutex> lock(mMutex);
   return mAllProfiles.size();
 }
 
@@ -375,8 +378,6 @@ size_t FusedMoeRunner::getProfileWorkspace(
     int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size,
     int64_t const cluster_rank, bool const enable_alltoall, bool const min_latency_mode, int64_t const gemm_idx,
     int64_t const profile_id, bool const do_preparation, cudaStream_t stream) {
-  std::lock_guard<std::mutex> lock(mMutex);
-
   // TODO: support profiling under fp8 block scaling in the future
   if (mUseDeepSeekFP8BlockScaling) {
     return 0;
@@ -423,8 +424,6 @@ void FusedMoeRunner::setProfileWorkspace(
     int64_t const top_k, int64_t const tp_size, int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank,
     int64_t const cluster_size, int64_t const cluster_rank, bool const enable_alltoall, bool const min_latency_mode,
     int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation, cudaStream_t stream) {
-  std::lock_guard<std::mutex> lock(mMutex);
-
   // TODO: support profiling under fp8 block scaling in the future
   if (mUseDeepSeekFP8BlockScaling) {
     return;
@@ -477,8 +476,6 @@ void FusedMoeRunner::runGemmProfile(const Tensor& fc1_expert_weights, const std:
                                     int64_t const cluster_size, int64_t const cluster_rank, bool const enable_alltoall,
                                     bool const min_latency_mode, int64_t const gemm_idx, int64_t const profile_id,
                                     bool const do_preparation, cudaStream_t stream) {
-  std::lock_guard<std::mutex> lock(mMutex);
-
   // TODO: support profiling under fp8 block scaling in the future
   if (mUseDeepSeekFP8BlockScaling) {
     return;

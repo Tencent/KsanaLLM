@@ -183,9 +183,10 @@ class RuntimeCache {
 };
 
 // 获取指定线程的RuntimeCache
-RuntimeCache& getThreadRuntimeCache(int thread_id = 0) { return RuntimeCache::getInstance(thread_id); }
+inline RuntimeCache& getThreadRuntimeCache(int thread_id = 0) { return RuntimeCache::getInstance(thread_id); }
 
 // 为了保持向后兼容性，保留原有的getGlobalRuntimeCache函数
-RuntimeCache& getGlobalRuntimeCache() { return RuntimeCache::getInstance(0); }
+// TODO(jinxcwu) 后面要删掉这种用法，强制使用getThreadRuntimeCache确保多线程安全
+inline RuntimeCache& getGlobalRuntimeCache() { return RuntimeCache::getInstance(0); }
 
 }  // namespace deep_gemm::jit

@@ -32,7 +32,7 @@
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
-#include "csrc/kernels/nvidia/moe/moe.h"
+#include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"

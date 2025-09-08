@@ -146,6 +146,7 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
     KLLM_LOG_DEBUG << "Start gptq post process";
     weight_impl_->PostProcessInt4QuantWeights(dev_weights_map, dev_rank, new_deepseek_v3_config);
   }
+
   return Status();
 }
 
@@ -208,10 +209,8 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   std::unordered_set<std::string> dequant_weights;
   for (auto& [file_weight_name, host_weight_tensor] : host_model_weights) {
     // for GPTQ weight or moe-int4(mixed with fp8) weight, save to host_gptq_weights and load later
-    if (new_deepseek_v3_config->ContainGptqWeights() &&
-        (file_weight_name.find("qweight") != std::string::npos ||
-         file_weight_name.find("scales") != std::string::npos || file_weight_name.find("qzeros") != std::string::npos ||
-         file_weight_name.find("g_idx") != std::string::npos)) {
+    if (new_deepseek_v3_config->ContainGptqWeights() && new_deepseek_v3_config->IsWeightMatchGptq(file_weight_name) &&
+        new_deepseek_v3_config->IsGptqContain(file_weight_name)) {
       host_gptq_weights.emplace(file_weight_name, host_weight_tensor);
       continue;
     }

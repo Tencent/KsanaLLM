@@ -4,11 +4,12 @@
 #include "csrc/utils/nvidia/workspace.h"
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
+#  include "csrc/kernels/nvidia/moe/expert_map/expert_map.h"
 #endif
 #include "ksana_llm/layers/base_layer.h"
+#include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/models/base/base_weight.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
-#include "ksana_llm/layers/grouped_topk_layer.h"
 
 namespace ksana_llm {
 
@@ -131,6 +132,10 @@ class MoeLayer : public BaseLayer {
   std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
 
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
+
+  bool using_deepep_;
+
+  std::shared_ptr<llm_kernels::nvidia::moe::ExpertMap> expert_map_;
 };
 #endif
 }  // namespace ksana_llm

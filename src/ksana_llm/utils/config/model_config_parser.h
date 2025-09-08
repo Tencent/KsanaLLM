@@ -105,6 +105,8 @@ struct QuantConfig {
   // (gptq) The desc act mode
   bool desc_act = false;
 
+  bool input_scale = false;
+
   GroupQuantBackend backend = NONE_QUANT;
 
   // (fp8) Whether weight_scale shape is empty.

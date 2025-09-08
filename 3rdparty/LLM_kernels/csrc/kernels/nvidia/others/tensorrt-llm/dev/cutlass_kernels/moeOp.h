@@ -32,28 +32,11 @@
 
 #include <fmt/format.h>
 
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/utils.h"
 #include "csrc/utils/nvidia/assert.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
-
-// All the available data types.
-enum ScalarType { Long, Float8_e4m3fn, QUInt4x2, Int, Float, BFloat16, Half };
-
-struct Tensor {
-  void* data;
-  std::vector<size_t> shape;
-  ScalarType dtype;
-
-  Tensor(void* data, const std::vector<size_t>& shape, ScalarType dtype) : data(data), shape(shape), dtype(dtype) {}
-
-  Tensor() : data(nullptr), dtype(ScalarType::Float) {}
-};
-
-struct WorkspaceInfo {
-  void* workspace{};
-  void* src_to_dest_map{};
-};
 
 namespace internal {
 namespace common = llm_kernels::nvidia::tensorrt_llm::dev::common;
@@ -80,6 +63,11 @@ class FusedMoeRunner {
                                  const Tensor& fc2_expert_weights, int64_t const tp_size, int64_t const tp_rank,
                                  int64_t const ep_size, int64_t const ep_rank, bool min_latency_mode,
                                  const std::vector<int64_t>& profile_ids);
+
+  size_t getRuntimeWorkspaceInfo(const size_t experts_per_token, const size_t num_rows, const size_t hidden_size,
+                                 const size_t inter_size, const size_t num_experts_on_rank, int64_t const tp_size,
+                                 int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank,
+                                 bool min_latency_mode, const std::vector<int64_t>& profile_ids);
 
   void setRuntimeWorkspaceInfo(void* workspace_ptr);
 
@@ -128,7 +116,6 @@ class FusedMoeRunner {
                       int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation, cudaStream_t stream);
 
  private:
-  std::mutex mMutex;
   std::shared_ptr<internal::kernels::CutlassMoeFCRunnerInterface> mKernelRunner;
   std::shared_ptr<internal::kernels::GemmProfilerBackend> mProfiler;
   ScalarType mActivationDtype;
