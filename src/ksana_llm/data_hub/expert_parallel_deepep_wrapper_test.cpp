@@ -168,7 +168,7 @@ class ExpertParallelDeepepWrapperTest : public testing::Test {
     return tensor;
   }
 
- private:
+ protected:
   size_t num_ranks_;
   size_t num_experts_;
   size_t max_token_num_;
@@ -277,4 +277,116 @@ TEST_F(ExpertParallelDeepepWrapperTest, DeepepWrapperTest) {
   for (size_t rank = 0; rank < num_ranks_; rank++) {
     ASSERT_FALSE(mock_deepep_->shared_data_->trigger_combine[rank]);
   }
+}
+
+TEST_F(ExpertParallelDeepepWrapperTest, TestWithUseScalesEnabled) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP_("Only Nvidia support this test temporary.");
+#endif
+
+  KLLM_LOG_INFO << fmt::format("ExpertParallelDeepepWrapperTest.TestWithUseScalesEnabled begin");
+
+  // 设置测试参数
+  size_t num_ranks_per_node = num_ranks_;
+  size_t node_rank = 0;
+
+  // 测试 DeepEP Wrapper 的初始化
+  std::thread deepep_wrapper_thread([&]() {
+    std::lock_guard<std::mutex> lock(deepep_wrapper_test_mutex_);
+    deepep_wrapper_ = std::make_shared<ExpertParallelDeepepWrapper>(
+        num_ranks_, num_ranks_per_node, node_rank, max_token_num_, hidden_size_, expert_topk_, num_experts_, context_);
+    deepep_wrapper_->Init();
+    KLLM_LOG_INFO << fmt::format("deepep_wrapper_ Init Success for use_scales test.");
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  // 模拟 DeepEP 进程启动
+  mock_deepep_->MockInit(node_rank);
+  ASSERT_NE(mock_deepep_->shared_data_, nullptr);
+
+  // 设置 use_scales 为 true（这是测试的重点）
+  mock_deepep_->shared_data_->use_scales = true;
+
+  // 模拟上报（仅标记上报成功，不实际上报）
+  mock_deepep_->MockUploadDeepEPMeta(num_ranks_per_node, node_rank);
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_NE(deepep_wrapper_, nullptr);
+
+  // 等待线程完成
+  deepep_wrapper_thread.join();
+
+  // 验证 use_scales 设置
+  ASSERT_TRUE(mock_deepep_->shared_data_->use_scales);
+
+  // 测试双方连通性
+  mock_deepep_->MockSetUnready();
+  deepep_wrapper_->SetReady();
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    ASSERT_TRUE(mock_deepep_->shared_data_->ipc_handle_ready[rank]);
+    ASSERT_TRUE(mock_deepep_->shared_data_->unique_id_ready[rank]);
+  }
+
+  // 测试带有 scales 的 Dispatch 和 Combine 功能
+  // 准备输入数据（包含 scales tensor）
+  std::vector<size_t> num_tokens = {4, 2};
+  // 创建输入输出 tensor，包括 scales tensor
+  std::vector<Tensor> x_tensors, topk_ids_tensors, topk_weights_tensors, out_x_tensors, scales_tensors;
+  for (int rank = 0; rank < static_cast<int>(num_ranks_); rank++) {
+    SetDevice(rank);
+    x_tensors.push_back(CreateDeviceTensor({max_token_num_, hidden_size_}, TYPE_FP16, rank));
+    topk_ids_tensors.push_back(CreateDeviceTensor({max_token_num_, expert_topk_}, TYPE_INT32, rank));
+    topk_weights_tensors.push_back(CreateDeviceTensor({max_token_num_, expert_topk_}, TYPE_FP32, rank));
+    out_x_tensors.push_back(CreateDeviceTensor({max_token_num_, hidden_size_}, TYPE_FP16, rank));
+    // 为 use_scales=true 的情况添加 scales tensor
+    scales_tensors.push_back(CreateDeviceTensor({max_token_num_, hidden_size_}, TYPE_FP32, rank));
+
+    x_tensors[rank].shape[0] = num_tokens[rank];
+    topk_ids_tensors[rank].shape[0] = num_tokens[rank];
+    topk_weights_tensors[rank].shape[0] = num_tokens[rank];
+    scales_tensors[rank].shape[0] = num_tokens[rank];
+  }
+
+  // Test Dispatch with scales
+  std::vector<std::thread> threads;
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    // 包含 scales tensor 的输入
+    std::vector<Tensor> input_tensors = {x_tensors[rank], topk_ids_tensors[rank], topk_weights_tensors[rank],
+                                         scales_tensors[rank]};
+    std::vector<Tensor> output_tensors = {out_x_tensors[rank], out_x_tensors[rank]};
+    std::thread dispatch_thread([this, rank, in = std::move(input_tensors), out = std::move(output_tensors)]() mutable {
+      deepep_wrapper_->Dispatch(in, out, rank);
+    });
+    threads.push_back(std::move(dispatch_thread));
+  }
+
+  // 由 MockDeepEP 汇总并处理 Dispatch
+  mock_deepep_->MockDispatch();
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    threads[rank].join();
+  }
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    ASSERT_FALSE(mock_deepep_->shared_data_->trigger_dispatch[rank]);
+  }
+  threads.clear();
+
+  // Test Combine with scales
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    std::vector<Tensor> input_tensors = {out_x_tensors[rank]};
+    std::vector<Tensor> output_tensors = {out_x_tensors[rank], out_x_tensors[rank]};
+    std::thread combine_thread([this, rank, in = std::move(input_tensors), out = std::move(output_tensors)]() mutable {
+      deepep_wrapper_->Combine(in, out, rank);
+    });
+    threads.push_back(std::move(combine_thread));
+  }
+
+  // 由 MockDeepEP 汇总并处理 Combine
+  mock_deepep_->MockCombine();
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    threads[rank].join();
+  }
+  for (size_t rank = 0; rank < num_ranks_; rank++) {
+    ASSERT_FALSE(mock_deepep_->shared_data_->trigger_combine[rank]);
+  }
+
+  KLLM_LOG_INFO << fmt::format("ExpertParallelDeepepWrapperTest.TestWithUseScalesEnabled completed successfully");
 }

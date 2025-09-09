@@ -1117,6 +1117,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   bool norm_topk_prob = false;
   float routed_scaling_factor = 1.0f;
   bool use_e_score_correction_bias = false;
+  bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
   DataType int_weight_dtype = DataType::TYPE_INVALID;
   int group_size = 0;
@@ -1138,6 +1139,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   params.push_back(norm_topk_prob);
   params.push_back(routed_scaling_factor);
   params.push_back(use_e_score_correction_bias);
+  params.push_back(enable_full_shared_expert);
   params.push_back(fp8_weight_dtype);
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
@@ -1236,6 +1238,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   bool norm_topk_prob = false;
   float routed_scaling_factor = 1.0f;
   bool use_e_score_correction_bias = false;
+  bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
@@ -1257,6 +1260,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   params.push_back(norm_topk_prob);
   params.push_back(routed_scaling_factor);
   params.push_back(use_e_score_correction_bias);
+  params.push_back(enable_full_shared_expert);
   params.push_back(fp8_weight_dtype);
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
@@ -1501,6 +1505,7 @@ TEST_F(LayerTest, MoeLayerTest) {
   bool norm_topk_prob = true;
   float routed_scaling_factor = 2.5f;
   bool use_e_score_correction_bias = false;  // 关闭方便测试
+  bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
@@ -1522,6 +1527,7 @@ TEST_F(LayerTest, MoeLayerTest) {
   params.push_back(norm_topk_prob);
   params.push_back(routed_scaling_factor);
   params.push_back(use_e_score_correction_bias);
+  params.push_back(enable_full_shared_expert);
   params.push_back(fp8_weight_dtype);
   params.push_back(int_weight_dtype);
   params.push_back(group_size);
@@ -1965,6 +1971,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   bool norm_topk_prob = true;
   float routed_scaling_factor = 2.5f;
   bool use_e_score_correction_bias = false;  // 关闭方便测试
+  bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
@@ -1986,6 +1993,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   params.push_back(norm_topk_prob);
   params.push_back(routed_scaling_factor);
   params.push_back(use_e_score_correction_bias);
+  params.push_back(enable_full_shared_expert);
   params.push_back(fp8_weight_dtype);
   params.push_back(int_weight_dtype);
   params.push_back(group_size);

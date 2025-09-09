@@ -5,6 +5,11 @@
 
 namespace ksana_llm {
 
+// Expert parallel wrapper tensor数量常量
+constexpr size_t kXTensorIndex = 3;           // x tensor在input_tensors中的索引（use_scales时）
+constexpr size_t kXScalesTensorIndex = 4;     // x_scales tensor在input_tensors中的索引
+constexpr size_t kWorkspaceTensorIndex = 5;   // workspace tensor在input_tensors中的索引
+
 static std::atomic_int barrier_count = 0;
 
 ExpertParallelDeepepWrapper::ExpertParallelDeepepWrapper(size_t num_ranks, size_t num_ranks_per_node, size_t node_rank,
@@ -80,7 +85,7 @@ void ExpertParallelDeepepWrapper::Init() {
   shared_data_->hidden_size = hidden_size_;
   shared_data_->num_topk = expert_topk_;
   shared_data_->num_experts = num_experts_;
-  shared_data_->use_scales = false;  // TODO(zezhao): support dispatch FP8
+  shared_data_->use_scales = true;
 
   // Create Cuda Device Buffer
   x_scales_ptrs_.resize(num_ranks_per_node_);
@@ -192,10 +197,21 @@ Status ExpertParallelDeepepWrapper::Dispatch(const std::vector<Tensor>& input_te
   shared_data_->output_buffer_idx[rank] = tensor_address_to_id_[rank][out];
   shared_data_->recv_token_num[rank] = num_tokens;
 
+  shared_data_->use_scales = input_tensors.size() > kWorkspaceTensorIndex;
   // 2.拷贝x_scales, topk_ids, topk_weights 到共享空间
   if (shared_data_->use_scales) {
+    x = input_tensors[kXTensorIndex].GetPtr<void>();
+    x_scales = input_tensors[kXScalesTensorIndex].GetPtr<void>();
+    void* workspace_ptr = input_tensors[kWorkspaceTensorIndex].GetPtr<void>();
     MemcpyAsync(x_scales_ptrs_[rank], x_scales, num_tokens * hidden_size_ / 128 * sizeof(float),
                 MEMCPY_DEVICE_TO_DEVICE, context_->GetComputeStreams()[rank]);
+
+    Tensor a1_q_tensor(input_tensors[1].location, TYPE_INT8, {1}, input_tensors[1].device_id, x);
+    if (!fp8_initialized_[rank]) {
+      shared_data_->x_fp8_offsets[rank] = reinterpret_cast<char*>(x) - reinterpret_cast<char*>(workspace_ptr);
+      cudaIpcGetMemHandle(&shared_data_->x_workspace[rank], workspace_ptr);
+      fp8_initialized_[rank] = true;
+    }
   }
   MemcpyAsync(topk_ids_ptrs_[rank], topk_ids, num_tokens * expert_topk_ * sizeof(int32_t), MEMCPY_DEVICE_TO_DEVICE,
               context_->GetComputeStreams()[rank]);

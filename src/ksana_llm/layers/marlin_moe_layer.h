@@ -43,6 +43,7 @@ class MarlinMoeLayer : public BaseLayer {
   bool norm_topk_prob_ = false;
   float routed_scaling_factor_ = 1.0f;
   bool use_e_score_correction_bias_ = false;
+  bool enable_full_shared_expert_ = false;
   size_t group_size_ = 128;
   bool apply_weight_ = false;
   size_t num_bits_ = 4;

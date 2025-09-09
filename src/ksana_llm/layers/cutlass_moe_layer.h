@@ -51,6 +51,7 @@ class CutlassMoeLayer : public BaseLayer {
   bool norm_topk_prob_ = false;
   float routed_scaling_factor_ = 1.0f;
   bool use_e_score_correction_bias_ = false;
+  bool enable_full_shared_expert_ = false;
   int group_size_;
   bool apply_weight_ = false;
 

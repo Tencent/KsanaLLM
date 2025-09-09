@@ -141,7 +141,7 @@ void Wrapper::IntranodeDispatch(const torch::Tensor& x, const std::optional<torc
   int num_worst_tokens = 0;
   auto result =
       buffer_->intranode_dispatch(x,                                           // const at::Tensor&
-                                  std::nullopt,                                // const std::optional<at::Tensor>&
+                                  x_scales,                                    // const std::optional<at::Tensor>&
                                   std::make_optional(topk_ids),                // const std::optional<at::Tensor>&
                                   std::make_optional(topk_weights),            // const std::optional<at::Tensor>&
                                   std::make_optional(num_tokens_per_rank_),    // const std::optional<at::Tensor>&
@@ -164,7 +164,7 @@ void Wrapper::IntranodeDispatch(const torch::Tensor& x, const std::optional<torc
   recv_num_tokens_ = std::get<0>(result);
   auto opt_recv_x_scales = std::get<1>(result);
   if (opt_recv_x_scales.has_value()) {
-    x_scales_ = opt_recv_x_scales.value();
+    x_scales_ = opt_recv_x_scales;
   }
   auto opt_recv_topk_ids = std::get<2>(result);
   if (opt_recv_topk_ids.has_value()) {
@@ -185,7 +185,7 @@ void Wrapper::InternodeDispatch(const torch::Tensor& x, const std::optional<torc
   int expert_alignment = 1;
   auto result =
       buffer_->internode_dispatch(x,                                              // const at::Tensor&
-                                  std::nullopt,                                   // const std::optional<at::Tensor>&
+                                  x_scales,                                       // const std::optional<at::Tensor>&
                                   std::make_optional(topk_ids),                   // const std::optional<at::Tensor>&
                                   std::make_optional(topk_weights),               // const std::optional<at::Tensor>&
                                   std::make_optional(num_tokens_per_rank_),       // const std::optional<at::Tensor>&
@@ -227,7 +227,7 @@ void Wrapper::InternodeDispatch(const torch::Tensor& x, const std::optional<torc
   recv_num_tokens_ = std::get<0>(result);
   auto opt_recv_x_scales = std::get<1>(result);
   if (opt_recv_x_scales.has_value()) {
-    x_scales_ = opt_recv_x_scales.value();
+    x_scales_ = opt_recv_x_scales;
   }
   auto opt_recv_topk_ids = std::get<2>(result);
   if (opt_recv_topk_ids.has_value()) {
@@ -285,6 +285,13 @@ void Wrapper::Dispatch() {
   if (shared_data_->use_scales) {
     x_scales_ = torch::from_blob(
         x_scales_ptr, {shared_data_->recv_token_num[local_rank_], shared_data_->hidden_size / 128}, float_options);
+    if (x_fp8_ptr == nullptr) {
+      cudaIpcOpenMemHandle(&x_fp8_ptr, shared_data_->x_workspace[local_rank_], cudaIpcMemLazyEnablePeerAccess);
+      x_fp8_ptr += shared_data_->x_fp8_offsets[local_rank_];
+    }
+    auto fp8_options = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(torch::kCUDA);
+    x_ = torch::from_blob(x_fp8_ptr, {shared_data_->recv_token_num[local_rank_], shared_data_->hidden_size},
+                          fp8_options);
   }
   auto topk_ids_int32 = torch::from_blob(
       topk_ids_ptr, {shared_data_->recv_token_num[local_rank_], shared_data_->num_topk}, int32_options);
@@ -306,8 +313,10 @@ void Wrapper::Dispatch() {
   shared_data_->recv_token_num[local_rank_] = recv_num_tokens_;
   if (recv_num_tokens_ > 0) {
     if (shared_data_->use_scales) {
-      cudaMemcpyAsync(x_scales_ptr, x_scales_.data_ptr(), x_scales_.numel() * x_scales_.element_size(),
-                      cudaMemcpyDeviceToDevice, stream_);
+      cudaMemcpyAsync(x_fp8_ptr, output_, recv_num_tokens_ * shared_data_->hidden_size, cudaMemcpyDeviceToDevice,
+                      stream_);
+      cudaMemcpyAsync(x_scales_ptr, x_scales_.value().data_ptr(),
+                      x_scales_.value().numel() * x_scales_.value().element_size(), cudaMemcpyDeviceToDevice, stream_);
     }
     auto topk_ids_int32 = topk_ids_.to(torch::kInt32);
     cudaMemcpyAsync(topk_ids_ptr, topk_ids_int32.data_ptr(), topk_ids_int32.numel() * topk_ids_int32.element_size(),

@@ -51,9 +51,11 @@ struct IPCData {
   size_t hidden_size;
 
   // 用于 KsanaLLM 与 DeepEPWrapper 进程间交互的显存数据
-  bool use_scales = false;
+  bool use_scales = true;
 #ifdef ENABLE_CUDA
   cudaIpcMemHandle_t x[kMaxNumRanks];
+  cudaIpcMemHandle_t x_workspace[kMaxNumRanks];
+  size_t x_fp8_offsets[kMaxNumRanks];
   cudaIpcMemHandle_t x_scales[kMaxNumRanks];
   cudaIpcMemHandle_t topk_ids[kMaxNumRanks];
   cudaIpcMemHandle_t topk_weights[kMaxNumRanks];
@@ -102,6 +104,7 @@ class ExpertParallelDeepepWrapper {
   size_t max_token_num_;
   size_t num_experts_;
   bool initialized_;
+  bool fp8_initialized_[kMaxNumRanks] = {false};
 
   std::vector<void*> x_scales_ptrs_;
   std::vector<void*> topk_ids_ptrs_;

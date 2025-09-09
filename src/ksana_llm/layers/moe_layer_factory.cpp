@@ -129,6 +129,7 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);                     // norm_topk_prob
   moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);              // routed_scaling_factor
   moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
+  moe_matmul_param.push_back(runtime_config_.enable_full_shared_expert);             // dp = ep
   if (enable_moe_int4) {
     moe_matmul_param.push_back(DataType::TYPE_INVALID);
   } else {

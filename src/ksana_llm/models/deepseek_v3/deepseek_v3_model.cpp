@@ -12,11 +12,14 @@
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
+#include "ksana_llm/utils/barrier.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
 
+// 用于MLA层张量并行处理的同步屏障
+static Barrier g_mla_tensor_parallel_barrier;
 DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                                                ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
                                                TensorBuffer* moe_buffer)
@@ -33,6 +36,7 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
     moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;
   }
 
+  g_mla_tensor_parallel_barrier.Init(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size);
   std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   pre_attention_add_norm_ = std::make_shared<AddNorm>(
@@ -91,7 +95,7 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   mla_->AcquireBuffers(forwarding_context);
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   mla_->ReleaseBuffers();
-
+  g_mla_tensor_parallel_barrier.arrive_and_wait();
   // Mla all reduce
   if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);

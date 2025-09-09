@@ -29,6 +29,7 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   norm_topk_prob_ = std::any_cast<bool>(parameters[parameter_index++]);
   routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
   use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
+  enable_full_shared_expert_ = std::any_cast<bool>(parameters[parameter_index++]);
   DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   group_size_ = std::any_cast<int>(parameters[parameter_index++]);

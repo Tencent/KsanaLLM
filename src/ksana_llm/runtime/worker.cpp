@@ -7,6 +7,7 @@
 #  include <c10/cuda/CUDAFunctions.h>
 #endif
 
+#include <pthread.h>
 #include <memory>
 
 #include "ksana_llm/profiler/reporter.h"
@@ -31,6 +32,18 @@ Status Worker::Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, 
 
 // This function is designed to be run by multiple threads in parallel
 void Worker::ThreadLoop() {
+  // 设置线程名称用于调试和监控
+  constexpr size_t kMaxThreadNameLength = 15;
+  std::string thread_name = "worker_" + std::to_string(rank_);
+#ifdef __linux__
+  // 在Linux上设置线程名称 (最大15个字符 + 空终止符)
+  if (thread_name.length() > kMaxThreadNameLength) {
+    thread_name = thread_name.substr(0, kMaxThreadNameLength);
+  }
+  pthread_setname_np(pthread_self(), thread_name.c_str());
+#endif
+  KLLM_LOG_INFO << "thread_name " << thread_name;
+
   while (running_) {
     WorkerTask task;
 

@@ -60,11 +60,12 @@ class Wrapper {
   cudaEvent_t combine_event;
 
   // input data
-  void* x_scales_ptr;
-  void* topk_ids_ptr;
-  void* topk_weights_ptr;
+  void* x_fp8_ptr = nullptr;
+  void* x_scales_ptr = nullptr;
+  void* topk_ids_ptr = nullptr;
+  void* topk_weights_ptr = nullptr;
   torch::Tensor x_;
-  torch::Tensor x_scales_;
+  std::optional<torch::Tensor> x_scales_;
   torch::Tensor topk_ids_;
   torch::Tensor topk_weights_;
   void* output_ = nullptr;

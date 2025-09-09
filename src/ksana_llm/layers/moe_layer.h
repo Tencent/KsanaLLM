@@ -39,6 +39,7 @@ class MoeLayer : public BaseLayer {
 
  private:
   // 执行 GroupedTopk 计算与 Dispatch 分发
+  template <typename T>
   Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
@@ -80,6 +81,7 @@ class MoeLayer : public BaseLayer {
   bool norm_topk_prob_ = false;
   float routed_scaling_factor_ = 1.0f;
   bool use_e_score_correction_bias_ = false;
+  bool enable_full_shared_expert_ = false;
 
   size_t scale_probabilities_size_;
   size_t src_to_dest_map_size_;

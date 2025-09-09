@@ -366,7 +366,7 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
                               const std::unordered_map<std::string, int>& config, DataType weight_dtype,
                               DataType compute_dtype, bool use_moe_wna16_cuda, void* dequant_workspace,
                               std::vector<int>& block_shape, int num_experts_per_node, bool fuse_silu_mul,
-                              const cudaStream_t& stream) {
+                              bool skip_quantization, const cudaStream_t& stream) {
   if (chunk_num_tokens < config.at("block_size_m")) {
     max_num_tokens_padded = std::min(max_num_tokens_padded, chunk_num_tokens * topk * config.at("block_size_m"));
   }
@@ -392,7 +392,9 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     } else if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3 && !has_zp) {  // TODO(jinxcwu) 目前只支持无zp的gptq
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+      if (!skip_quantization) {
+        InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+      }
       DequantInt4Fp8(stream, dequant_workspace, b, (size_t)num_experts_per_node * n * k / 2);
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
           a_q, dequant_workspace, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids,
@@ -410,9 +412,11 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream,
-                                         /*group_size*/ block_shape[1],
-                                         PerTokenGroupQuantFusionParams{.fuse_silu_mul = fuse_silu_mul});
+      if (!skip_quantization) {
+        InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream,
+                                           /*group_size*/ block_shape[1],
+                                           PerTokenGroupQuantFusionParams{.fuse_silu_mul = fuse_silu_mul});
+      }
       a = a_q;
     }
     // A [m, k]
@@ -585,7 +589,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
         curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr), reinterpret_cast<int32_t*>(expert_ids_ptr),
         reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk, tokens_in_chunk, numel, tokens_in_chunk,
         hidden_size, inter_size * 2, max_num_tokens_padded, config, weight_dtype, compute_dtype, use_moe_wna16_cuda,
-        dequant_workspace, block_shape, num_experts_per_node, /*fuse_silu_mul*/ false, stream);
+        dequant_workspace, block_shape, num_experts_per_node, /*fuse_silu_mul*/ false, hidden_states == nullptr,
+        stream);
 
     // When T is __nv_fp8e4m3, we fuse silu_mul into group quant
     bool fuse_silu_mul =
@@ -603,8 +608,15 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
         reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1,
         tokens_in_chunk * topk, numel, tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config,
         weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts_per_node,
-        fuse_silu_mul, stream);
+        fuse_silu_mul, false, stream);
 
+    // 使用fp8并且使用deepep，需要在这里更新a1_q和a2_q
+    if (hidden_states == nullptr) {
+      a1_q += chunk_size * hidden_size * i;
+      a2_q += chunk_size * hidden_size * i;
+      a1_scale += chunk_size * hidden_size * i * sizeof(float);
+      a2_scale += chunk_size * hidden_size * i * sizeof(float);
+    }
     void* curr_out_hidden_states = output_hidden_states + sizeof(T) * chunk_size * hidden_size * i;
     llm_kernels::nvidia::InvokeMoeSum<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,
                                                             tokens_in_chunk, topk, hidden_size, stream);

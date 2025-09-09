@@ -82,8 +82,10 @@ struct IPCData {
   size_t hidden_size;
 
   // 用于 KsanaLLM 与 DeepEPWrapper 进程间交互的显存数据
-  bool use_scales = false;
+  bool use_scales = true;
   cudaIpcMemHandle_t x[kMaxNumRanks];
+  cudaIpcMemHandle_t x_workspace[kMaxNumRanks];
+  size_t x_fp8_offsets[kMaxNumRanks];
   cudaIpcMemHandle_t x_scales[kMaxNumRanks];
   cudaIpcMemHandle_t topk_ids[kMaxNumRanks];
   cudaIpcMemHandle_t topk_weights[kMaxNumRanks];
