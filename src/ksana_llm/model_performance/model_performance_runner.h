@@ -9,11 +9,13 @@ namespace ksana_llm {
 
 struct PerfProfileConfig {
   struct PerfDpReqConfig {
-    size_t single_token_request_num = 0;
-    size_t single_token_request_cached_token_num = 0;
-    size_t multi_token_request_num = 0;
-    size_t multi_token_request_token_num = 0;
-    size_t multi_token_forwarding_token_num = 0;
+    struct RequestInfo {
+      size_t forwarding_token_num;
+      size_t sequence_len;
+      size_t request_num = 1;  // Default to 1 if not specified
+    };
+
+    std::vector<RequestInfo> reqs;
   };
 
   uint32_t config_id = 0;
@@ -25,17 +27,17 @@ struct PerfProfileConfig {
   std::string ToStr() const {
     std::ostringstream oss;
     oss << "config_id=" << config_id << ", warmup_round=" << warmup_round << ", profile_round=" << profile_round
-        << ", layer_forward_round=" << layer_forward_round << ", req_configs.size=" << req_configs.size()
-        << ", req_configs={ ";
+        << ", layer_forward_round=" << layer_forward_round;
     for (size_t dp_idx = 0; dp_idx < req_configs.size(); dp_idx++) {
       auto& config = req_configs[dp_idx];
-      oss << "\n  [" << dp_idx << "]={ st_req_num=" << config.single_token_request_num
-          << ", st_req_token_num=" << config.single_token_request_cached_token_num
-          << ", mt_req_num=" << config.multi_token_request_num
-          << ", mt_req_token_num=" << config.multi_token_request_token_num
-          << ", mt_f_token_num=" << config.multi_token_forwarding_token_num << " } ";
+      oss << "\n  batch " << dp_idx << ": [f_token_num,seq_len,req_num]={ ";
+      for (size_t req_idx = 0; req_idx < config.reqs.size(); req_idx++) {
+        if (req_idx > 0) oss << ", ";
+        oss << "[" << config.reqs[req_idx].forwarding_token_num << "," << config.reqs[req_idx].sequence_len << ","
+            << config.reqs[req_idx].request_num << "]";
+      }
+      oss << " }";
     }
-    oss << "}";
     return oss.str();
   }
 };
@@ -55,6 +57,8 @@ class ModelPerformanceRunner {
   Status RunPerformanceForward(const PerfProfileConfig& profile_config, PerfProfileResult& result);
 
   uint32_t GetAttnDpNum() { return attn_dp_worker_num_; }
+
+  size_t GetDecodeTokenNumThreshold() const { return decode_token_num_threshold_; }
 
  private:
   void InitEnvs(const std::string& config_path, const PerfProfileConfig& max_config, int16_t lower_layer_idx,
@@ -90,6 +94,10 @@ class ModelPerformanceRunner {
 
   size_t multi_batch_id_ = DEFAULT_MULTI_BATCH_ID;
 
+  // Threshold for determining decode vs prefill requests
+  // input_ids <= decode_token_num_threshold_ will be regarded as decode (use page attention), default is 1
+  size_t decode_token_num_threshold_ = 1;
+
   // requests
   std::shared_ptr<KsanaPythonInput> ksana_python_input_;
   std::vector<std::shared_ptr<InferRequest>> infer_reqs_;
@@ -106,12 +114,8 @@ class PerfProfileConfigBuilderInterface {
   ~PerfProfileConfigBuilderInterface() {}
 
   virtual PerfProfileConfig GetMaxPerfProfileConfig() = 0;
-  void SetAttnDpNum(size_t dp_num) { dp_num_ = dp_num; }
 
-  virtual void GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs) = 0;
-
- protected:
-  size_t dp_num_ = 0;
+  virtual void GetPerfProfileConfigs(std::vector<PerfProfileConfig>& configs, size_t attn_dp_num) = 0;
 };
 
 }  // namespace ksana_llm

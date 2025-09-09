@@ -1,0 +1,17 @@
+{
+    "layer_forward_round": 6,
+    "batch_0": {
+        "dp_0": [
+            {
+                "forwarding_token_num": 128,
+                "sequence_len": 192,
+                "request_num": 2
+            },
+            {
+                "forwarding_token_num": 128,
+                "sequence_len": 192,
+                "request_num": 1
+            }
+        ]
+    }
+}

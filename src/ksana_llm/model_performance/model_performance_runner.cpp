@@ -141,14 +141,15 @@ size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num, const P
   size_t max_block_num = 0;
 
   for (size_t dp_idx = 0; dp_idx < max_config.req_configs.size(); dp_idx++) {
-    auto& req_config = max_config.req_configs[0];
-    size_t dp_multi_token_request_block_num =
-        (req_config.multi_token_request_token_num + block_token_num) / block_token_num;
-    size_t dp_single_token_request_block_num =
-        (req_config.single_token_request_cached_token_num + 1 + block_token_num) / block_token_num;
-    size_t dp_max_block_num = dp_multi_token_request_block_num * req_config.multi_token_request_num +
-                              dp_single_token_request_block_num * req_config.single_token_request_num;
-    max_block_num = (dp_max_block_num > max_block_num) ? dp_max_block_num : max_block_num;
+    auto& req_config = max_config.req_configs[dp_idx];
+    size_t dp_total_block_num = 0;
+
+    for (const auto& req_info : req_config.reqs) {
+      size_t req_block_num = (req_info.sequence_len + block_token_num - 1) / block_token_num;
+      // Consider request_num when calculating total block number
+      dp_total_block_num += req_block_num * req_info.request_num;
+    }
+    max_block_num = std::max(dp_total_block_num, max_block_num);
   }
 
   return max_block_num + kExtraBlockNum;
@@ -249,46 +250,43 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
   for (size_t dp_idx = 0; dp_idx < profile_config.req_configs.size(); dp_idx++) {
     auto& req_config = profile_config.req_configs[dp_idx];
 
-    const size_t single_token_request_num = req_config.single_token_request_num;
-    const size_t single_token_request_cached_token_num = req_config.single_token_request_cached_token_num;
-    const size_t multi_token_request_num = req_config.multi_token_request_num;
-    const size_t multi_token_request_token_num = req_config.multi_token_request_token_num;
-    const size_t multi_token_cached_token_num =
-        req_config.multi_token_request_token_num - req_config.multi_token_forwarding_token_num;
+    for (size_t req_idx = 0; req_idx < req_config.reqs.size(); req_idx++) {
+      const auto& req_info = req_config.reqs[req_idx];
 
-    const size_t dp_req_num = single_token_request_num + multi_token_request_num;
-    for (size_t req_idx = 0; req_idx < dp_req_num; req_idx++) {
-      req_id++;
-      std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, 0);
+      // Expand request_num: create multiple InferRequest instances based on request_num
+      for (size_t repeat_idx = 0; repeat_idx < req_info.request_num; repeat_idx++) {
+        req_id++;
+        std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, 0);
 
-      infer_reqs_.push_back(infer_req);
-      infer_req->req_id = req_id;
-      infer_req->attn_dp_group_id = dp_idx;
-      infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
-      infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
-      infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
-      infer_req->model_instance = model_instance_;
-      infer_req->step = 0;  // not using
+        infer_reqs_.push_back(infer_req);
+        infer_req->req_id = req_id;
+        infer_req->attn_dp_group_id = dp_idx;
+        infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
+        infer_req->cache_manager = cache_managers_[infer_req->attn_dp_group_id];
+        infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
+        infer_req->model_instance = model_instance_;
+        infer_req->step = 0;  // not using
 
-      if (req_idx < multi_token_request_num) {  // multi_token_request
-        input_ids_map_[req_id].resize(multi_token_request_token_num);
+        // Set up request based on RequestInfo
+        input_ids_map_[req_id].resize(req_info.sequence_len);
         infer_req->input_tokens = input_ids_map_[req_id];
         std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
-        infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-        infer_req->kv_cached_token_num = multi_token_cached_token_num;
-        infer_req->prefix_cache_len = multi_token_cached_token_num;
-      } else {  // single_token_request
-        input_ids_map_[req_id].resize(single_token_request_cached_token_num + 1);
-        infer_req->input_tokens = input_ids_map_[req_id];
-        std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
-        infer_req->infer_stage = InferStage::STATE_DECODE;
-        infer_req->kv_cached_token_num = infer_req->input_tokens.size() - 1;
-      }
-      infer_req->forwarding_tokens = infer_req->input_tokens;
-      Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
-                                                                      infer_req->kv_cache_blocks);
-      if (!status.OK()) {
-        KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
+
+        if (req_info.forwarding_token_num <= decode_token_num_threshold_) {
+          // Decode request (forwarding_token_num <= threshold)
+          infer_req->infer_stage = InferStage::STATE_DECODE;
+        } else {
+          // Prefill request (multi token forwarding)
+          infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+          infer_req->kv_cached_token_num = req_info.sequence_len - req_info.forwarding_token_num;
+        }
+        infer_req->prefix_cache_len = req_info.sequence_len - req_info.forwarding_token_num;
+        infer_req->forwarding_tokens = infer_req->input_tokens;
+        Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
+                                                                        infer_req->kv_cache_blocks);
+        if (!status.OK()) {
+          KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
+        }
       }
     }
   }

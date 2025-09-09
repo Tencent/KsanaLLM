@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.13)
 
 file(GLOB_RECURSE model_performance_SRCS
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/perf_profile_config_builder_for_csv.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/perf_profile_config_builder_for_json.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/model_performance_runner.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/communication_performance_runner.cpp
   )
@@ -46,6 +46,13 @@ if(WITH_CUDA)
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/communication_performance_runner_test.cpp)
   cpp_test(communication_performance_runner_test
     SRCS ${communication_performance_runner_test_SRCS}
+    DEPS model_performance
+    LIBS -lnvToolsExt)
+
+  file(GLOB run_model_performance_test_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_model_performance_test.cpp)
+  cpp_test(run_model_performance_test
+    SRCS ${run_model_performance_test_SRCS}
     DEPS model_performance
     LIBS -lnvToolsExt)
 endif()
