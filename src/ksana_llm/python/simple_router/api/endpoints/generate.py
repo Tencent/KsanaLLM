@@ -36,23 +36,43 @@ DELIM = b"\0"  # Delimiter for separating chunks in the stream
 EOS = b"[DONE]"  # End of stream marker
 
 
-async def _drain_stream(
-    resp: httpx.Response, out_q: asyncio.Queue, only_first: bool = False
-):
+async def _drain_stream(resp: httpx.Response, out_q: asyncio.Queue, only_first: bool = False,
+                        first_token_ready=None, cons_done_event=None):
     """Process a token stream from a node and place tokens in the output queue"""
+    if first_token_ready and not only_first:
+        await first_token_ready.wait()
+
+    # Check if cons stream is already done before processing (for prod stream)
+    if only_first and cons_done_event and cons_done_event.is_set():
+        return
+
     async for chunk in resp.aiter_bytes():
+        # Check if cons stream completed while we were processing (for prod stream)
+        if only_first and cons_done_event and cons_done_event.is_set():
+            return
+
         # Split by the delimiter (might be multiple tokens in one chunk)
         parts = chunk.split(DELIM)
         for i, part in enumerate(parts):
             if not part:  # Skip empty parts
                 continue
 
+            # Check again before putting data in queue (for prod stream)
+            if only_first and cons_done_event and cons_done_event.is_set():
+                return
+
             # Put each part in the output queue
             await out_q.put(part + (DELIM if i < len(parts) - 1 else b""))
 
             # If we only want the first token and have seen a delimiter, stop
-            if only_first and i > 0:
+            if only_first:
+                if first_token_ready:
+                    first_token_ready.set()
                 return
+
+    # Mark cons stream as done (for cons stream)
+    if not only_first and cons_done_event:
+        cons_done_event.set()
 
 
 async def forward_request(req: Request, endpoint_path: str):
@@ -148,11 +168,16 @@ async def forward_request(req: Request, endpoint_path: str):
             )
 
             # ------- 并发读取 -------
+            first_token_ready = asyncio.Event()
+            cons_done_event = asyncio.Event()  # 标记 cons stream 是否已完成
+
             prod_task = asyncio.create_task(
-                _drain_stream(prod_resp, q, only_first=True)
+                _drain_stream(prod_resp, q, only_first=True, first_token_ready=first_token_ready,
+                              cons_done_event=cons_done_event)
             )
             cons_task = asyncio.create_task(
-                _drain_stream(cons_resp, q, only_first=False)
+                _drain_stream(cons_resp, q, only_first=False, first_token_ready=first_token_ready,
+                              cons_done_event=cons_done_event)
             )
 
             # ◎ 这一步骤可以让 Producer 在发完首 token 后就被关闭
