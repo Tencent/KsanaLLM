@@ -306,20 +306,16 @@ void InvokeAbsorbMlaPagedAttention(
 
   Intermediate Tensors:
   q_tensor        : q_tensor_ptr  [total_tokens, num_heads, kv_lora_rank + qk_rope_head_dim]
-  k_tensor        : k_tensor_ptr  [total_tokens, kv_lora_rank + qk_rope_head_dim]
   o_states        : output_ptr    [total_tokens, num_heads, kv_lora_rank]
 
   Output Parameters:
-  output_ptr : [o_states][q_tensor][k_tensor]
+  output_ptr : [o_states][q_tensor]
   */
   constexpr size_t kAlignSize = 1024;
   const size_t output_head_size = kv_lora_rank;
   const size_t o_tensor_size = total_tokens * num_heads * output_head_size * sizeof(SCALAR_T);
   const size_t q_tensor_offset = RoundUp(o_tensor_size, kAlignSize);
   void* q_tensor_ptr = output_ptr + q_tensor_offset;
-  const size_t q_tensor_size = total_tokens * num_heads * (kv_lora_rank + qk_rope_head_dim) * sizeof(SCALAR_T);
-  const size_t k_tensor_offset = RoundUp(q_tensor_offset + q_tensor_size, kAlignSize);
-  void* const k_tensor_ptr = output_ptr + k_tensor_offset;
 
   const size_t outer_q_dim_size = total_tokens * num_heads;
   const size_t outer_k_dim_size = total_tokens;
@@ -330,14 +326,10 @@ void InvokeAbsorbMlaPagedAttention(
   Concat<SCALAR_T>(q_nope_ptr, q_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_q_dim_size, kInnerDimSize, q_tensor_ptr,
                    stream);
 
-  // cat(v, k_pe)
-  Concat<SCALAR_T>(compressed_kv_ptr, k_pe_ptr, kv_lora_rank, qk_rope_head_dim, outer_k_dim_size, kInnerDimSize,
-                   k_tensor_ptr, stream);
-
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
-      reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(k_tensor_ptr), key_cache_ptrs,
-      key_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size,
-      batch, q_seq_len, 1, kv_lora_rank + qk_rope_head_dim, kv_lora_rank + qk_rope_head_dim, k_scale, v_scale, stream));
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaPagedKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+      reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), key_cache_ptrs,
+      reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, q_seq_len,
+      kv_lora_rank, qk_rope_head_dim, kv_lora_rank, qk_rope_head_dim, k_scale, stream));
 
   if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
     KLLM_THROW("Flash MLA not support fp8_e5m2 KV Cache. Please use fp8_e4m3.");
@@ -468,7 +460,7 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const size_t total_tokens = k_pe_tensor.shape[0];
   const size_t q_seq_len = total_tokens / batch_size;
 
-  const size_t layer_block_num = kv_list.shape[1] * 0.5;  // shape: [layer_num_on_node, total_block_num * 2]
+  const size_t layer_block_num = kv_list.shape[1] / 2;  // shape: [layer_num_on_node, total_block_num * 2]
   void** const k_list = kv_list.GetPtr<void*>() + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);
   void** const v_list = k_list + layer_block_num;
   const int64_t kv_cache_block_num = *(layer_kv_cache.GetPtr<int64_t>());

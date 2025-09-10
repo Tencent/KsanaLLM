@@ -354,7 +354,7 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
 
   // copy new k&v to kv cache block
   // Use compressed kvcache, k is [num_token, qk_rope_head_dim], v is  [num_token, kv_lora_rank]
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFlashKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), k_list, v_list,
       reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr),
       reinterpret_cast<int*>(block_offsets), block_size, batch, total_q_tokens, qk_rope_head_dim, kv_lora_rank, k_scale,
