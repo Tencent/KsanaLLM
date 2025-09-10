@@ -183,7 +183,7 @@ Status InferenceEngine::Initialize() {
 
   ProfilerConfig profiler_config;
   status = env->GetProfilerConfig(profiler_config);
-  Singleton<Profiler>::GetInstance()->Init(profiler_config);
+  Singleton<Profiler>::GetInstance()->InitMetrics(profiler_config);
 
   size_t max_batch_size = (size_t)runtime_config.max_batch_size;
   size_t max_vocab_size = (size_t)model_config.vocab_size;
@@ -379,15 +379,10 @@ Status InferenceEngine::InitializeMemoryPool(std::shared_ptr<Environment> env) {
 }
 
 Status InferenceEngine::HandleRequest(std::shared_ptr<Request> &req) {
-  std::unordered_map<std::string, std::string> filtered_ctx = *req->req_ctx;
-  filtered_ctx.erase("kv-comm-request-id");
-  opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(filtered_ctx);
-  REPORT_COUNTER(forward_req_total_num, static_cast<size_t>(1), attributes);
-  REPORT_METRIC(metric_input_tokens_num, req->input_tokens.size(), attributes);
+  REPORT_COUNTER("forward_req_total_num", static_cast<size_t>(1));
 
   Status handle_req_status = batch_manager_->Enqueue(req);
   if (!handle_req_status.OK()) {
-    REPORT_COUNTER(forward_req_error_num, static_cast<size_t>(1), attributes);
     return handle_req_status;
   }
   return Status();

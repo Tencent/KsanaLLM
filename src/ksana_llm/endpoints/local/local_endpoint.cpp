@@ -18,13 +18,8 @@ LocalEndpoint::LocalEndpoint(const EndpointConfig &endpoint_config,
 Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                              const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                              ksana_llm::KsanaPythonOutput &ksana_python_output) {
-  opentelemetry::trace::StartSpanOptions options;
-  auto span = REPORT_TRACE(local_endpoint_handle, options);
-  opentelemetry::trace::Scope scope(span);
-
   auto req = std::make_shared<Request>(ksana_python_input, req_ctx);
   req->waiter = std::make_shared<Waiter>(1);
-  req->span_context = span->GetContext();
   if (!ksana_python_input->sampling_config.stop_strings.empty()) {
     req->has_stop_strings = true;
   }
@@ -38,20 +33,15 @@ Status LocalEndpoint::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_pyth
   KLLM_LOG_DEBUG << "LocalEndpoint::Handle Wait finished.";
 
   ksana_python_output = KsanaPythonOutput(req);
-  STATUS_CHECK_AND_REPORT(req->finish_status, span);
+  STATUS_CHECK_AND_REPORT(req->finish_status);
 }
 
 Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                       const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                       std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  opentelemetry::trace::StartSpanOptions options;
-  auto span = REPORT_TRACE(local_endpoint_handle_streaming, options);
-  opentelemetry::trace::Scope scope(span);
-
   auto req = std::make_shared<Request>(ksana_python_input, req_ctx);
   req->step_waiter = std::make_shared<Waiter>(1);
   req->abort_waiter = std::make_shared<Waiter>(1);
-  req->span_context = span->GetContext();
   if (!ksana_python_input->sampling_config.stop_strings.empty()) {
     req->has_stop_strings = true;
   }
@@ -59,16 +49,12 @@ Status LocalEndpoint::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &k
 
   Status status = Status();
   request_queue_.Write(std::pair<Status, std::shared_ptr<Request>>(status, req));
-  STATUS_CHECK_AND_REPORT(status, span);
+  STATUS_CHECK_AND_REPORT(status);
 }
 
 Status LocalEndpoint::HandleForward(const std::string &request_bytes,
                                     const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                     std::string &response_bytes) {
-  opentelemetry::trace::StartSpanOptions options;
-  auto span = REPORT_TRACE(local_endpoint_handle_forward, options);
-  opentelemetry::trace::Scope scope(span);
-
   auto it = req_ctx->find("Content-Type");
   std::optional<std::string> content_type = (it != req_ctx->end()) ? std::make_optional(it->second) : std::nullopt;
 
@@ -90,7 +76,6 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
     auto req = std::make_shared<Request>(ksana_python_inputs[i], req_ctx);
     req->waiter = waiter;
     req->last_in_batch = (i == batch_size - 1);
-    req->span_context = span->GetContext();
     reqs.emplace_back(Status(), std::move(req));
   }
   // Write the batch of forward requests once
@@ -113,9 +98,9 @@ Status LocalEndpoint::HandleForward(const std::string &request_bytes,
   }
 
   // Pack ksana_python_output objects into response.
-  STATUS_CHECK_RETURN_AND_REPORT(
-      request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, status, response_bytes, content_type), span);
-  STATUS_CHECK_AND_REPORT(status, span);
+  request_packer_.Pack(ksana_python_inputs, ksana_python_outputs, status, response_bytes, content_type);
+
+  return status;
 }
 
 }  // namespace ksana_llm

@@ -223,9 +223,6 @@ class InferRequest {
   // is cudagraph capture call
   bool &is_cudagraph_capture_request;
 
-  // Opentelemetry SpanContext
-  opentelemetry::trace::SpanContext span_context;
-
   // The arrive time.
   uint64_t timestamp_in_ms;
 

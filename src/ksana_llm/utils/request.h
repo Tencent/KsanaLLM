@@ -238,9 +238,6 @@ class Request {
   // is cudagraph capture call
   bool is_cudagraph_capture_request = false;
 
-  // Opentelemetry SpanContext
-  opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
-
   // The arrive time.
   uint64_t timestamp_in_ms;
 

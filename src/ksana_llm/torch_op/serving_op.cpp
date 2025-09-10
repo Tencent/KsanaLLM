@@ -56,30 +56,21 @@ Status ServingOp::Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python
                            const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                            ksana_llm::KsanaPythonOutput &ksana_python_output) {
   KLLM_LOG_DEBUG << "ServingOp::Generate invoked.";
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(serving_op_generate_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(inference_server_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
+  STATUS_CHECK_AND_REPORT(inference_server_->Handle(ksana_python_input, req_ctx, ksana_python_output));
 }
 
 Status ServingOp::GenerateStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                     const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                     std::shared_ptr<StreamingIterator> &streaming_iterator) {
   KLLM_LOG_DEBUG << "ServingOp::GenerateStreaming invoked.";
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(serving_op_generate_streaming_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(inference_server_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
+  STATUS_CHECK_AND_REPORT(inference_server_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator));
 }
 
 Status ServingOp::Forward(const std::string &request_bytes,
                           const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                           std::string &response_bytes) {
   KLLM_LOG_DEBUG << "ServingOp::Forward invoked.";
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(serving_op_forward_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(inference_server_->HandleForward(request_bytes, req_ctx, response_bytes), span);
+  STATUS_CHECK_AND_REPORT(inference_server_->HandleForward(request_bytes, req_ctx, response_bytes));
 }
 
 }  // namespace ksana_llm

@@ -38,7 +38,6 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       output_mutex(request->output_mutex),
       beam_search_group(request->beam_search_group),
       is_cudagraph_capture_request(request->is_cudagraph_capture_request),
-      span_context(request->span_context),
       timestamp_in_ms(request->timestamp_in_ms),
       req_ctx(request->req_ctx),
       req_fsm(request->req_fsm),

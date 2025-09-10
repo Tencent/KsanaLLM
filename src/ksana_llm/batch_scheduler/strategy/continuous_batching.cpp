@@ -377,9 +377,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     req->last_step_token_num = req->accepted_tokens.size() + kStepGenerateTokenNum;
 
     req->req_ctx->emplace("status_code", std::to_string(static_cast<int>(req->finish_status.GetCode())));
-    std::unordered_map<std::string, std::string> filtered_ctx = *req->req_ctx;
-    filtered_ctx.erase("kv-comm-request-id");
-    opentelemetry::common::KeyValueIterableView<std::unordered_map<std::string, std::string>> attributes(filtered_ctx);
+
     if (!status.OK()) {
       KLLM_LOG_ERROR << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
       req->draft_tokens.clear();
@@ -394,27 +392,18 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     // Check if finished.
     if (CheckRequestFinish(req)) {
       const auto end_time = ProfileTimer::GetCurrentTimeInMs();
-      const size_t output_token_num = req->output_tokens.size();
+      const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
       const uint64_t duration = end_time - req->timestamp_in_ms;
       if (req->finish_status.GetCode() == RET_SUCCESS) {
-        REPORT_METRIC(forward_cost_time_ms, duration, attributes);
-        REPORT_METRIC(metric_output_token_num, output_token_num, attributes);
-        if (output_token_num == 0) {
-          REPORT_COUNTER(metric_zero_output_token_num, static_cast<size_t>(1), attributes);
-        }
+        REPORT_METRIC("total_latency_ms", duration);
+        REPORT_METRIC("output_token_len", output_token_num);
+        REPORT_METRIC("input_token_len", req->input_tokens.size());
       } else {
-        REPORT_COUNTER(forward_req_error_num, static_cast<size_t>(1), attributes);
+        REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }
 
-      // TODO(shawnding): Adjust to microsecond precision
-      if (duration != 0) {
-        REPORT_METRIC(time_to_per_output_token_ms, output_token_num / duration, attributes);
-      } else {
-        KLLM_LOG_DEBUG << fmt::format(
-            "Req duration is zero, req_id: {}, input_token_num: {}, output_token_num: {}, "
-            "req start time is: {}, req end time is: {}",
-            req->req_id, req->input_tokens.size(), output_token_num, req->timestamp_in_ms, end_time);
-        REPORT_METRIC(time_to_per_output_token_ms, output_token_num, attributes);
+      if (output_token_num != 0) {
+        REPORT_METRIC("time_per_output_token_ms", duration  / output_token_num);
       }
 
       // Record finish req_id
@@ -444,7 +433,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
     // Check timeout
     if (CheckRequestTimeout(req)) {
-      REPORT_COUNTER(forward_req_timeout_num, static_cast<size_t>(1), attributes);
+      REPORT_COUNTER("forward_req_timeout_num", static_cast<size_t>(1));
       KLLM_LOG_ERROR << "req timeout in running:" << req;
 
       StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."), false);
@@ -474,7 +463,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
         batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
       }
 
-      REPORT_COUNTER(forward_req_aborted_num, static_cast<size_t>(1), attributes);
+      REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
 
       continue;
     }
@@ -990,9 +979,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     req->is_use_prefix_cache = shared_token_num > 0;
 
     if (req->is_use_prefix_cache) {
-      REPORT_COUNTER(prefix_cache_hit_req_num, static_cast<size_t>(1));
-      REPORT_COUNTER(prefix_cache_hit_token_num, shared_token_num);
-      REPORT_COUNTER(prefix_cache_hit_block_num, shared_block_num);
+      REPORT_COUNTER("prefix_cache_hit_req_num", static_cast<size_t>(1));
+      REPORT_COUNTER("prefix_cache_hit_token_num", shared_token_num);
+      REPORT_COUNTER("prefix_cache_hit_block_num", shared_block_num);
     }
 
     const size_t current_token_num = req->forwarding_tokens.size();
@@ -1024,9 +1013,8 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->forwarding_tokens.size()) {
           KLLM_LOG_DEBUG << "Full matched, skip prefill, " << *req;
-          REPORT_COUNTER(full_prompt_matched_req_num, static_cast<size_t>(1));
-          REPORT_COUNTER(full_prompt_matched_block_num, shared_block_num);
-          REPORT_METRIC(time_to_first_token_ms, ProfileTimer::GetCurrentTimeInMs() - req->timestamp_in_ms);
+          REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
+          REPORT_COUNTER("full_prompt_matched_block_num", shared_block_num);
 
           req->infer_stage = InferStage::STATE_DECODE;
           req->kv_cached_token_num = shared_token_num - kStepGenerateTokenNum;
@@ -1223,8 +1211,8 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
     scheduler_ticktok_->Reorder();
   }
 
-  REPORT_COUNTER(batch_scheduler_pending_swapin_size, batch_state_->swapin_pending_requests_.size());
-  REPORT_COUNTER(batch_scheduler_pending_swapout_size, batch_state_->swapout_pending_requests_.size());
+  REPORT_COUNTER("batch_scheduler_pending_swapin_size", batch_state_->swapin_pending_requests_.size());
+  REPORT_COUNTER("batch_scheduler_pending_swapout_size", batch_state_->swapout_pending_requests_.size());
   if (batch_state_->schedule_output->running_reqs.size() > 0) {
     // This output will be executed. send swap waiting info to workers
     batch_state_->schedule_output->merged_swapin_req_ids.resize(1);

@@ -288,9 +288,9 @@ void BatchScheduler::BalancePPMultiBatchReqs(size_t multi_batch_id) {
 
 void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state) {
   size_t batch_size = batch_state->schedule_output->running_reqs.size();
-  REPORT_METRIC(batch_scheduler_batch_size, batch_size);
-  REPORT_METRIC(batch_scheduler_waiting_size, batch_state->waiting_queue.size());
-  REPORT_METRIC(batch_scheduler_swapped_size, batch_state->swapped_queue.size());
+  REPORT_METRIC("batch_scheduler_batch_size", batch_size);
+  REPORT_METRIC("batch_scheduler_waiting_size", batch_state->waiting_queue.size());
+  REPORT_METRIC("batch_scheduler_swapped_size", batch_state->swapped_queue.size());
 
   if (batch_size > 0) {
     size_t token_num = 0;
@@ -298,11 +298,10 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state) {
     for (const auto& req : batch_state->schedule_output->running_reqs) {
       token_num += req->forwarding_tokens.size();
       if (req->kv_cached_token_num == 0) {
-        REPORT_METRIC(batch_manager_schedule_ms, current_time - req->timestamp_in_ms);
+        REPORT_METRIC("batch_manager_schedule_ms", current_time - req->timestamp_in_ms);
       }
-      REPORT_METRIC(req_total_cost_in_queue_ms, current_time - req->timestamp_in_ms);
     }
-    REPORT_METRIC(token_num_in_batch, token_num);
+    REPORT_METRIC("num_tokens_to_schedule", token_num);
   }
 }
 

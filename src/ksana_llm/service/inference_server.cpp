@@ -50,28 +50,19 @@ InferenceServer::~InferenceServer() { KLLM_LOG_DEBUG << "InferenceServer destroy
 Status InferenceServer::Handle(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                ksana_llm::KsanaPythonOutput &ksana_python_output) {
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(inference_server_handle_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(local_endpoint_->Handle(ksana_python_input, req_ctx, ksana_python_output), span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->Handle(ksana_python_input, req_ctx, ksana_python_output));
 }
 
 Status InferenceServer::HandleStreaming(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,
                                         const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                         std::shared_ptr<StreamingIterator> &streaming_iterator) {
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(inference_server_handle_streaming_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator), span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleStreaming(ksana_python_input, req_ctx, streaming_iterator));
 }
 
 Status InferenceServer::HandleForward(const std::string &request_bytes,
                                       const std::shared_ptr<std::unordered_map<std::string, std::string>> &req_ctx,
                                       std::string &response_bytes) {
-  const HttpTextMapCarrier<const std::unordered_map<std::string, std::string>> carrier(*req_ctx);
-  auto span = REPORT_TRACE(inference_server_handle_forward_span, carrier);
-  opentelemetry::trace::Scope scope(span);
-  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleForward(request_bytes, req_ctx, response_bytes), span);
+  STATUS_CHECK_AND_REPORT(local_endpoint_->HandleForward(request_bytes, req_ctx, response_bytes));
 }
 
 Status InferenceServer::Start() {

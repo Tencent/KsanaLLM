@@ -61,35 +61,23 @@ class Status {
     }                                         \
   } while (0)
 
-#define STATUS_CHECK_RETURN_AND_REPORT(status, span)             \
-  do {                                                           \
-    auto &&_status = (status);                                   \
-    if (!_status.OK()) {                                         \
-      KLLM_LOG_ERROR << _status.GetMessage();                    \
-      span->SetStatus(opentelemetry::trace::StatusCode::kError); \
-      span->End();                                               \
-      return _status;                                            \
-    }                                                            \
+
+#define STATUS_CHECK_FAILURE(status)           \
+  do {                                         \
+    auto &&_status = (status);                 \
+    if (!_status.OK()) {                       \
+      KLLM_THROW(_status.GetMessage());        \
+    }                                          \
   } while (0)
 
-#define STATUS_CHECK_FAILURE(status)    \
-  do {                                  \
-    auto &&_status = (status);          \
-    if (!_status.OK()) {                \
-      KLLM_THROW(_status.GetMessage()); \
-    }                                   \
-  } while (0)
-
-#define STATUS_CHECK_AND_REPORT(status, span)                                                                  \
-  do {                                                                                                         \
-    auto &&_status = (status);                                                                                 \
-    bool is_ok = _status.OK();                                                                                 \
-    if (!is_ok) {                                                                                              \
-      KLLM_LOG_ERROR << _status.GetMessage();                                                                  \
-    }                                                                                                          \
-    span->SetStatus(is_ok ? opentelemetry::trace::StatusCode::kOk : opentelemetry::trace::StatusCode::kError); \
-    span->End();                                                                                               \
-    return _status;                                                                                            \
+#define STATUS_CHECK_AND_REPORT(status)        \
+  do {                                         \
+    auto &&_status = (status);                 \
+    bool is_ok = _status.OK();                 \
+    if (!is_ok) {                              \
+      KLLM_LOG_ERROR << _status.GetMessage();  \
+    }                                          \
+    return _status;                            \
   } while (0)
 
 #define DEFAULT_MULTI_BATCH_ID 0

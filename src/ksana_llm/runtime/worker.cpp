@@ -21,7 +21,6 @@ Status Worker::Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, 
                        InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue, RunMode run_mode) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
-  opentelemetry::trace::StartSpanOptions options;
 
   KLLM_LOG_DEBUG << "forwarding_tokens_num " << forward_reqs[0].forwarding_tokens[0].size() << ", req_id "
                  << forward_reqs[0].req_id << ",kv_cached_token_num " << forward_reqs[0].kv_cached_token_num

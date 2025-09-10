@@ -95,9 +95,6 @@ struct ForwardRequest {
   // The sampling config.
   SamplingConfig* sampling_config = nullptr;
 
-  // Opentelemetry SpanContext
-  opentelemetry::trace::SpanContext span_context = opentelemetry::trace::SpanContext::GetInvalid();
-
   // The arrive time.
   uint64_t timestamp_in_ms;
 

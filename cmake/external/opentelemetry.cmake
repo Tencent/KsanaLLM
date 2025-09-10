@@ -39,7 +39,6 @@ include_directories(${OPENTELEMETRY_CPP_INCLUDE_DIRS})
 
 # 设置 opentelemetry-cpp 的所有库
 set(OPENTELEMETRY_CPP_LIBRARIES
-opentelemetry_exporter_ostream_span
 opentelemetry_exporter_ostream_metrics
 opentelemetry_exporter_otlp_http
 opentelemetry_exporter_otlp_http_metric
@@ -48,7 +47,6 @@ opentelemetry_http_client_curl
 opentelemetry_metrics
 opentelemetry_otlp_recordable
 opentelemetry_resources
-opentelemetry_trace
 opentelemetry_common
 opentelemetry_version
 )

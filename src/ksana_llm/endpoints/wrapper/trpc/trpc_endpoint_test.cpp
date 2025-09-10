@@ -74,7 +74,8 @@ TEST_F(TrpcEndpointTest, ForwardHandlerTest) {
   RequestSerial request;
   request.input_tokens = {1, 1, 1};
   request.request_target.push_back(
-      TargetRequestSerial{"logits", std::vector<int>{}, std::vector<std::pair<int, int>>{{0, 1}}, "GATHER_TOKEN_ID"});
+      TargetRequestSerial{"logits", std::vector<int>{},
+      std::vector<int>{0, 1}, std::vector<std::pair<int, int>>{}, "GATHER_TOKEN_ID"});
   batch_req.requests.push_back(std::move(request));
   msgpack::pack(sbuf, batch_req);
   std::string request_bytes(sbuf.data(), sbuf.size());
@@ -97,7 +98,7 @@ TEST_F(TrpcEndpointTest, ForwardHandlerTest) {
   EXPECT_EQ(batch_rsp.code, 0);
 
   // Test case 2. Construct a bad forward request.
-  batch_req.requests[0].request_target[0].slice_pos[0] = std::make_pair<int, int>(0, 2);
+  batch_req.requests[0].request_target[0].slice_pos.push_back(std::make_pair(0, 2));
   sbuf.clear();
   msgpack::pack(sbuf, batch_req);
   request_bytes.assign(sbuf.data(), sbuf.size());

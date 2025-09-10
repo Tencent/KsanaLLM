@@ -101,7 +101,6 @@ setting:
       quant_method: auto
   # 性能统计相关配置
   profiler:
-    #trace_export_url: "http://example.com/v1/traces"
     #metrics_export_url: "http://example.com/v1/metrics"
     export_interval_millis: 30000
     export_timeout_millis: 1000

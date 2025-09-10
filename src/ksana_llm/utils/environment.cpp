@@ -67,8 +67,6 @@ Status Environment::ParseConfig(const std::string &config_file, const std::strin
   }
 
   // Read profiler config.
-  profiler_config_.trace_export_url =
-      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.profiler.trace_export_url", "");
   profiler_config_.metrics_export_url =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.profiler.metrics_export_url", "");
   profiler_config_.export_interval_millis =

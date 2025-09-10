@@ -55,7 +55,6 @@ struct EndpointConfig {
 // The config of profiler.
 struct ProfilerConfig {
   // The stat interval, in second.
-  std::string trace_export_url;
   std::string metrics_export_url;
   uint64_t export_interval_millis;
   uint64_t export_timeout_millis;

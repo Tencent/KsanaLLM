@@ -181,6 +181,13 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
                    << "ms, local token throughput(tokens/s): " << local_token_throuphput
                    << ", global token throughput(tokens/s): " << global_token_throughput;
     last_end_time_ms = end_time_ms;
+
+    REPORT_METRIC("global_token_throughput", global_token_throughput);
+    REPORT_METRIC("local_token_throughput", local_token_throuphput);
+    REPORT_METRIC("forwarding_token_num", forwarding_token_num);
+    REPORT_METRIC("1st_step_time_ms", middle_time_ms - start_time_ms);
+    REPORT_METRIC("2nd_step_time_ms", end_time_ms - middle_time_ms);
+    REPORT_METRIC("total_step_time_ms", end_time_ms - start_time_ms);
   }
 
   return Status();

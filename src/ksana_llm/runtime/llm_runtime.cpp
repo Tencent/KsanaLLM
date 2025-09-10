@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <execution>
+#include <atomic>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -115,7 +116,6 @@ void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req
   forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
   forward_req.is_cudagraph_capture_request = req_ptr->is_cudagraph_capture_request;
   forward_req.sampling_config = &(req_ptr->sampling_config);
-  forward_req.span_context = req_ptr->span_context;
   forward_req.timestamp_in_ms = req_ptr->timestamp_in_ms;
   forward_req.req_ctx = req_ptr->req_ctx;
   forward_req.cache_manager = req_ptr->cache_manager;
@@ -401,9 +401,14 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
 
   threadpool_->Submit([reqs]() mutable {
     const auto current_time = ProfileTimer::GetCurrentTimeInMs();
+    static std::atomic<time_t> s_last_call_finish_time_ms{0};
+    time_t prev = s_last_call_finish_time_ms.exchange(current_time);
+    if (prev != 0 && current_time > prev) {
+      REPORT_METRIC("inter_token_interval_latency_ms", current_time - prev);
+    }
     std::for_each(std::execution::par_unseq, reqs.begin(), reqs.end(), [current_time](const auto& req) {
-      if (req->infer_stage == STAGE_CONTEXT) {
-        REPORT_METRIC(time_to_first_token_ms, current_time - req->timestamp_in_ms);
+      if (req->step == 1) {
+        REPORT_METRIC("time_to_first_token_ms", current_time - req->timestamp_in_ms);
       }
     });
   });
