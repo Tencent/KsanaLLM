@@ -293,6 +293,11 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
 
   size_t step_token_num = 0, step_not_kv_cached_token_num = 0;
   size_t total_sampling_token_num = 0, req_num = 0;
+
+  // count how many tokens can be scheduled in this step
+  // the req_token_num is the snapshot when the request is added to running queue.
+  // it may be smaller than the actual token number when the request is running.
+  size_t local_step_token_num = 0;
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
     const auto &req = *it;
@@ -318,6 +323,7 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     scheduler_shared_counter_->step_batch_size.Increase(1);
     scheduler_shared_counter_->step_token_num.Increase(req_token_num);
     scheduler_shared_counter_->step_logits_num.Increase(req->sampling_token_num);
+    local_step_token_num += req_token_num;
     scheduler_ticktok_->Unlock();
 
     ++it;
@@ -326,7 +332,7 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
   // Current dp group finished, remove from loop list.
   scheduler_ticktok_->Skip();
 
-  return {step_token_num, step_not_kv_cached_token_num};
+  return {local_step_token_num, step_not_kv_cached_token_num};
 }
 
 void ContinuousBatchingStrategy::UpdateRunningRequests() {
