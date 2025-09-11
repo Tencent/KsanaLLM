@@ -104,10 +104,11 @@ void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req
   forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
   forward_req.logits_buf = logits_buf;
   forward_req.logits_offset = req_ptr->logits_offset;
-  forward_req.request_target = &req_ptr->request_target;
+  forward_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
   forward_req.response = &req_ptr->response;
   forward_req.draft_token_num = req_ptr->draft_tokens.size();
-  forward_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
+  forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
+  forward_req.origin_tokens = &(req_ptr->forwarding_tokens);
   forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
   forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
   forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
@@ -156,9 +157,9 @@ void LlmRuntime::BuildForwardRequests(
     forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
     forward_req.logits_buf = {};
     forward_req.logits_offset = ++logits_offset;
-    forward_req.request_target = &req_ptr->request_target;
+    forward_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
     forward_req.response = &req_ptr->response;
-    forward_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
+    forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
     forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
     forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
     forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
@@ -253,56 +254,16 @@ Status LlmRuntime::RunSerially(
   return result_status;
 }
 
-template <typename T>
-void LlmRuntime::ReorderInferRequests(std::vector<std::shared_ptr<T>>& reqs) {
-  PROFILE_EVENT_SCOPE(ReorderInferRequests, "ReorderInferRequests");
-  // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
-  // the requests are first sorted to utilize contiguous space for accelerated inference.
-  std::sort(reqs.begin(), reqs.end(), [this](const auto& a, const auto& b) {
-    // For dp case, the order is: [group1_prefill, group1_decode, group2_prefill, group2_decode, ...]
-    // NOTE: prefill may appear after decode (if they are in different dp groups)
-    if (a->attn_dp_group_id != b->attn_dp_group_id) {
-      return a->attn_dp_group_id < b->attn_dp_group_id;
-    }
-
-    // For non-dp case, the order is: [prefill, decode]
-    const size_t a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
-    const size_t b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
-
-    const static int decode_threshold_len = IsAbsorbWeightsEnabled() ? 2 : 1;
-
-    const bool is_a_decode = a_token_num <= decode_threshold_len && a->kv_cached_token_num != 0;
-    const bool is_b_decode = b_token_num <= decode_threshold_len && b->kv_cached_token_num != 0;
-
-    if (is_a_decode == is_b_decode) {
-      // Both prefill or decode, sort the infer_reqs list based on a_token_num and b_token_num,
-      // i.e., the number of tokens that need to be calculated for the KV cache.
-      // NOTE: a_token_num or b_token_num may be zero
-      if (a_token_num != b_token_num) {
-        return a_token_num > b_token_num;
-      }
-      if (a->kv_cached_token_num != b->kv_cached_token_num) {
-        return a->kv_cached_token_num < b->kv_cached_token_num;
-      }
-      return a->req_id < b->req_id;
-    } else {
-      // One is prefill, another is decode, prefill before decode
-      return !is_a_decode;
-    }
-  });
-}
-
-Status LlmRuntime::Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs, bool epilogue,
-                           RunMode run_mode) {
-  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
-  BuildForwardRequests(multi_batch_id, reqs, grouped_reqs);
+Status LlmRuntime::Forward(
+    size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs, bool epilogue,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    RunMode run_mode) {
   return AuxForward(multi_batch_id, grouped_reqs, epilogue, run_mode);
 }
 
-Status LlmRuntime::Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>>& reqs,
-                           bool epilogue) {
-  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
-  BuildForwardRequests(reqs, grouped_reqs);
+Status LlmRuntime::Forward(
+    size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>>& reqs, bool epilogue,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   return AuxForward(multi_batch_id, grouped_reqs, epilogue);
 }
 
@@ -344,16 +305,20 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
   for (std::shared_ptr<InferRequest> req_ptr : reqs) {
     SamplingRequest sampling_req;
     sampling_req.req_id = req_ptr->req_id;
+    sampling_req.step = req_ptr->step;
     sampling_req.logits_custom_length = req_ptr->logits_custom_length;
-    sampling_req.input_tokens = &(req_ptr->input_tokens);
+    sampling_req.input_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->input_tokens);
     sampling_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
+    sampling_req.origin_tokens = &(req_ptr->forwarding_tokens);
     sampling_req.sampling_token_num = req_ptr->sampling_token_num;
     sampling_req.last_step_token_num = req_ptr->last_step_token_num;
     sampling_req.sampling_result_tokens = &(req_ptr->sampling_result_tokens);
     sampling_req.sampling_result_tokens->clear();
     sampling_req.response = &(req_ptr->response);
-    sampling_req.request_target = &(req_ptr->request_target);
-    sampling_req.logprobs = &(req_ptr->logprobs);
+    sampling_req.request_target =
+        std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
+    sampling_req.logprobs =
+        std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>>(req_ptr, &req_ptr->logprobs);
     sampling_req.logits_offset = req_ptr->logits_offset;
     sampling_req.logits_buf = req_ptr->model_instance->GetLogitsPtr(multi_batch_id);
     sampling_req.sampling_config = &(req_ptr->sampling_config);
@@ -374,10 +339,8 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
 }
 
 Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                            bool apply_grammar_constraint) {
+                            std::vector<SamplingRequest>& sampling_reqs, bool apply_grammar_constraint) {
   PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
-  std::vector<SamplingRequest> sampling_reqs;
-  BuildSamplingRequest(multi_batch_id, reqs, sampling_reqs, apply_grammar_constraint);
 
   std::vector<std::future<Status>> results;
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
@@ -461,8 +424,10 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
   }
 }
 
-Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                              const bool epilogue) {
+Status LlmRuntime::MTPForward(
+    size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs, const bool epilogue,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs,
+    std::vector<SamplingRequest>& sampling_reqs) {
   if (!mtp_forward_ || !context_->IsChief()) {
     return Status();
   }
@@ -500,9 +465,14 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
   }
 
   ReorderInferRequests(mtp_reqs);
-  Forward(multi_batch_id, mtp_reqs, epilogue, RunMode::kNextN);
-  // Used in MTP mode to disable grammar for draft token generation
-  Sampling(multi_batch_id, mtp_reqs, false);
+
+  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_req;
+  std::vector<SamplingRequest> sampling_req;
+  BuildForwardRequests(multi_batch_id, mtp_reqs, grouped_req);
+  BuildSamplingRequest(multi_batch_id, mtp_reqs, sampling_req);
+
+  Forward(multi_batch_id, mtp_reqs, epilogue, grouped_req, RunMode::kNextN);
+  Sampling(multi_batch_id, mtp_reqs, sampling_reqs, false);
 
   for (size_t i = 0; i < mtp_reqs.size(); ++i) {
     auto& req = mtp_reqs[i];
@@ -555,20 +525,25 @@ void LlmRuntime::TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest
   transfer_engine->Send(reqs_transfer_tokens);
 }
 
-Status LlmRuntime::Step(ScheduleOutput* schedule_output, bool epilogue) {
+Status LlmRuntime::Step(
+    ScheduleOutput* schedule_output,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
   if (context_->IsChief()) {
-    return StepOnChief(schedule_output, epilogue);
+    return StepOnChief(schedule_output, grouped_reqs, sampling_reqs, epilogue);
   }
-  return StepOnWorker(schedule_output, epilogue);
+  return StepOnWorker(schedule_output, grouped_reqs, sampling_reqs, epilogue);
 }
 
-Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
+Status LlmRuntime::StepOnChief(
+    ScheduleOutput* schedule_output,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
   KLLM_LOG_MAIN << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                 << ", epilogue=" << epilogue;
   PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->running_reqs[0]->model_instance;
-  ReorderInferRequests(schedule_output->running_reqs);
 
   if (!epilogue) {
     // Alloc resources before forwarding
@@ -580,13 +555,17 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
     multi_batch_controller_->NotifyAnotherBatchCanRun(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "wait to recv cur_multi_batch_id=" << schedule_output->multi_batch_id;
     multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id);
-    SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
-    RecvHiddenUnits(schedule_output->multi_batch_id);
+    if (enable_async_) {
+      SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output, model_instance);
+    } else {
+      SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
+    }
 
+    RecvHiddenUnits(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "try to run multi_batch_id=" << schedule_output->multi_batch_id << " again, epilogue=true";
     multi_batch_controller_->WaitUntilCurrentBatchCanRun(schedule_output->multi_batch_id);
   }
-  Forward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
+  Forward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue, grouped_reqs);
   time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   KLLM_LOG_MAIN << "LlmRuntime Forward multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue
                 << ", time cost=" << end_time_ms - start_time_ms << "ms";
@@ -594,10 +573,9 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
   // Sampling only in standalone mode or epilogue=true in distributed mode
   if (context_->IsStandalone() || epilogue) {
     PROFILE_EVENT_SCOPE(SamplingAndMTP_, fmt::format("SamplingAndMTP_{}", schedule_output->multi_batch_id));
-    KLLM_LOG_MAIN << "start to run sampling and mtp cur_multi_batch_id=" << schedule_output->multi_batch_id;
-    Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs);
+    Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs, sampling_reqs);
     DraftTokenFilter(schedule_output->running_reqs);
-    MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue);
+    MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue, grouped_reqs, sampling_reqs);
     GenerateDraftToken(schedule_output->running_reqs);
     TransferGeneratedToken(schedule_output->running_reqs);
 
@@ -612,7 +590,10 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output, bool epilogue) {
   return Status();
 }
 
-Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) {
+Status LlmRuntime::StepOnWorker(
+    ScheduleOutput* schedule_output,
+    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs,
+    std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
   KLLM_LOG_DEBUG << "llm runtime StepOnWorker invoked multi_batch_id=" << schedule_output->multi_batch_id;
   PROFILE_EVENT_SCOPE(StepOnWorker_, fmt::format("StepOnWorker_{}_{}", schedule_output->multi_batch_id, epilogue));
   // Worker always pass result to next step
@@ -693,7 +674,7 @@ Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output, bool epilogue) 
 
   SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->worker_running_reqs, model_instance);
   RecvHiddenUnits(schedule_output->multi_batch_id);
-  Forward(schedule_output->multi_batch_id, schedule_output->worker_running_reqs, epilogue);
+  Forward(schedule_output->multi_batch_id, schedule_output->worker_running_reqs, epilogue, grouped_reqs);
   model_instance->FreeResources(schedule_output->multi_batch_id);
   return Status();
 }

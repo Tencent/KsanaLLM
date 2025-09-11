@@ -106,7 +106,7 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
   }
 
   virtual Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override {
-    KLLM_CHECK_WITH_INFO(false, "GetBlockPtrs not implemented");
+    KLLM_LOG_DEBUG << "GetBlockPtrs should only be invoked in asynchronous mode.";
     return Status();
   }
 

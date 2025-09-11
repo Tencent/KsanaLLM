@@ -271,6 +271,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_mtp_module", false);
   batch_scheduler_config_.enable_xgrammar =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", false);
+  batch_scheduler_config_.enable_async =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_async", false);
 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
@@ -579,6 +581,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
   runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
   runtime_config_.enable_mtp_module = batch_scheduler_config_.enable_mtp_module;
+  runtime_config_.enable_async = batch_scheduler_config_.enable_async;
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);

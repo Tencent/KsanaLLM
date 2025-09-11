@@ -154,7 +154,7 @@ inline void InitLoguru(bool force = false) {
 #define NO_CC_IF if  // For CodeCC compatibility.
 
 #define KLLM_LOG_DEBUG LOG_S(1) << "DEBUG| " << __FUNCTION__ << " | "
-#define KLLM_LOG_ATTENTION LOG_S(1)  << "ATTENTION| " << __FUNCTION__ << " | "
+#define KLLM_LOG_ATTENTION LOG_S(1) << "ATTENTION| " << __FUNCTION__ << " | "
 #define KLLM_LOG_COMMUNICATION LOG_S(1) << "COMMUNICATION| " << __FUNCTION__ << " | "
 #define KLLM_LOG_MOE LOG_S(1) << "MOE| " << __FUNCTION__ << " | "
 #define KLLM_LOG_MODEL LOG_S(1) << "MODEL| " << __FUNCTION__ << " | "

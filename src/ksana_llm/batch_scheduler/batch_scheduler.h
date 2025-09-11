@@ -22,6 +22,7 @@
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/grammar_backend.h"
+#include "ksana_llm/utils/scheduleoutput_process.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -41,6 +42,10 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Set the cache manager instance of batch scheduler.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int attn_dp_idx) override;
 
+  void SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) override;
+
+  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) override;
+
   std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) override;
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
@@ -48,7 +53,19 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void WaitUntilHaveReqs(size_t multi_batch_id) override;
 
+  // Start the batch_scheduler.
+  void Start() override;
+
+  // Stop the batch_scheduler.
   void Stop() override;
+
+  // submit the shceduler task
+  std::future<ScheduleTaskPtr> SubmitSchedulingTask(size_t multi_batch_id) override;
+
+  // scheduler worker thread
+  void SchedulingWorkerLoop();
+
+  void ProcessSchedulingTask(ScheTask &task);
 
   // Register grammar backend for structured output
   void RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend);
@@ -129,6 +146,15 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
   std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;
+
+  // The scheduler threads.
+  std::vector<std::unique_ptr<std::thread>> sched_threads_;
+
+  BlockingQueue<ScheTask> task_queue_;
+
+  std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
+
+  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
 };
 
 }  // namespace ksana_llm

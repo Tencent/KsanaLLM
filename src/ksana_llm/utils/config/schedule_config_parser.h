@@ -95,6 +95,7 @@ struct BatchSchedulerConfig {
 
   bool enable_speculative_decoding = false;
   bool enable_mtp_module = false;
+  bool enable_async = false;
 
   bool enable_xgrammar = false;
 };
@@ -319,6 +320,7 @@ struct RuntimeConfig {
 
   bool enable_mtp_module = false;
   bool enable_speculative_decoding = false;
+  bool enable_async = false;
   // DataType kv_cache_dtype;
 
   // TODO(robertyuan): No body set it?

@@ -9,8 +9,21 @@
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/runtime/forward_request.h"
+#include "ksana_llm/runtime/sampling_request.h"
+#include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
+#include "ksana_llm/runtime/llm_runtime.h"
 
 namespace ksana_llm {
+
+using ScheduleTaskPtr = std::pair<std::shared_ptr<ScheduleOutput>, std::pair<
+    std::shared_ptr<std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>,
+    std::shared_ptr<std::vector<SamplingRequest>>>>;
+
+struct ScheTask {
+  std::promise<ScheduleTaskPtr> promise;
+  size_t multi_batch_id = DEFAULT_MULTI_BATCH_ID;
+};
 
 class BatchSchedulerInterface {
  public:
@@ -19,11 +32,17 @@ class BatchSchedulerInterface {
   // Get the next infer reqs that ready to run.
   virtual std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) = 0;
 
+  virtual std::future<ScheduleTaskPtr> SubmitSchedulingTask(size_t multi_batch_id) = 0;
+
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;
 
   // Set the cache manager instance of batch scheduler.
   virtual void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int attn_dp_idx) = 0;
+
+  virtual void SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) = 0;
+
+  virtual void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) = 0;
 
   // Get cache manager
   virtual std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) = 0;
@@ -32,6 +51,8 @@ class BatchSchedulerInterface {
   virtual bool IsIdle(size_t multi_batch_id) = 0;
 
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) = 0;
+
+  virtual void Start() = 0;
 
   virtual void Stop() = 0;
 };

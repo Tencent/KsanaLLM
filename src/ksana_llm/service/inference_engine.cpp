@@ -318,11 +318,15 @@ Status InferenceEngine::Initialize() {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }
 
+  batch_scheduler_->SetLlmRuntime(llm_runtime_);
+  batch_scheduler_->SetMultiBatchController(multi_batch_controller_);
+
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, runtime_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
   llm_runtime_->SetMultiBatchController(multi_batch_controller_);
   llm_runtime_->SetMtpForward(runtime_config.enable_mtp_module && model_config.num_nextn_predict_layers > 0);
+  llm_runtime_->SetAsync(batch_scheduler_config.enable_async);
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
   if (batch_scheduler_config.enable_speculative_decoding) {
@@ -504,7 +508,6 @@ Status InferenceEngine::Start() {
       cache_manager->InitializeCachedBlocks();
     }
   }
-
   // Start batch manager.
   batch_manager_->Start();
 

@@ -65,6 +65,8 @@ setting:
     enable_mtp_module: false
     # 是否使用Xgrammar作为约束解码后端，开启后则进行特定格式的约束解码
     enable_xgrammar: false
+    # 是否开启async模块，开启后将使用异步调度减少GPU空泡
+    enable_async: false
   # 显存块相关配置
   block_manager:
     # 单个block可处理的最大token个数

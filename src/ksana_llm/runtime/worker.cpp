@@ -22,10 +22,10 @@ Status Worker::Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, 
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
 
-  KLLM_LOG_DEBUG << "forwarding_tokens_num " << forward_reqs[0].forwarding_tokens[0].size() << ", req_id "
+  KLLM_LOG_DEBUG << "forwarding_tokens_num " << forward_reqs[0].forwarding_tokens.get()[0].size() << ", req_id "
                  << forward_reqs[0].req_id << ",kv_cached_token_num " << forward_reqs[0].kv_cached_token_num
                  << ", prefix_cache_len" << forward_reqs[0].prefix_cache_len << ", tokens[1]_num "
-                 << forward_reqs[0].forwarding_tokens[1].size();
+                 << forward_reqs[0].forwarding_tokens.get()[1].size();
   return model->Forward(multi_batch_id, weight, forward_reqs, epilogue, run_mode);
 }
 

@@ -60,6 +60,10 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
 
+  void AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
+
+  void AsyncDestroyFinishedRequest();
+
   // Check the running queue to determine whether it exceeds the max_step_token_num.
   // return [step_token_with_kv_cache, step_token_without_kv_cache]
   std::pair<size_t, size_t> CheckRunningQueueStepTokens();
@@ -143,6 +147,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Current active dp group id, only ranks where (active_dp_group_id % world_size == rank % world_size)
   // will be scheduled
   size_t active_dp_group_id_ = 0;
+
+  std::vector<int64_t> cached_destroyed_ids_;
 };
 
 }  // namespace ksana_llm

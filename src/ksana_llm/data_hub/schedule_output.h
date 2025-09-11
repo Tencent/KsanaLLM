@@ -135,6 +135,8 @@ struct ScheduleOutput {
   // The unique id for one schedule step.
   size_t multi_batch_id = DEFAULT_MULTI_BATCH_ID;
 
+  size_t hidden_token_num = 0;
+
   // NOTE(karlluo): finished req ids, outer vector is for attention data parallelism.
   std::vector<std::vector<int64_t>> finish_req_ids;
 

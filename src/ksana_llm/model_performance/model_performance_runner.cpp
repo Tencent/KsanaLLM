@@ -183,12 +183,16 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   float milliseconds = 0;
   llm_runtime_->ReorderInferRequests<InferRequest>(infer_reqs_);
 
+  std::unordered_map<ModelInstance*, std::unordered_map<InferStage,
+  std::vector<ForwardRequest>>> grouped_reqs;
+
+  llm_runtime_->BuildForwardRequests(multi_batch_id_, infer_reqs_, grouped_reqs);
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
   // warmup
   Status warmup_status = Status();
   for (size_t i = 0; i < profile_config.warmup_round; ++i) {
-    warmup_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
+    warmup_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false, grouped_reqs);
   }
 
   // Sleep 100 ms to make nsys results easier to be analyzed
@@ -200,7 +204,7 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   g_profile_layer_forwarding_round = profile_config.layer_forward_round;
   Status result_status = Status();
   for (size_t i = 0; i < profile_config.profile_round; ++i) {
-    result_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false);
+    result_status = llm_runtime_->Forward(multi_batch_id_, infer_reqs_, false, grouped_reqs);
     if (!result_status.OK()) {
       KLLM_LOG_ERROR << "Forward error. Msg: " << result_status.GetMessage();
       return result_status;

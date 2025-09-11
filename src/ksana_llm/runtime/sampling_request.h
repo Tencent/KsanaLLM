@@ -17,6 +17,8 @@ struct SamplingRequest {
   // The req id of the user's request.
   int64_t req_id;
 
+  int step = 0;
+
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
 
@@ -27,9 +29,14 @@ struct SamplingRequest {
   std::vector<float*> logits_buf;
   size_t logits_offset;
 
-  std::vector<int>* input_tokens = nullptr;
+  std::shared_ptr<std::vector<int>> input_tokens;
 
   std::vector<int>* forwarding_tokens = nullptr;
+
+  // NOTE(david): should be modified later, only deepcopy infer_request
+  std::vector<int>* origin_tokens = nullptr;
+
+  bool is_deepcopy = false;
 
   // Generated tokens in this sampling.
   std::vector<int>* sampling_result_tokens = nullptr;
@@ -40,13 +47,13 @@ struct SamplingRequest {
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
-  const std::map<std::string, TargetDescribe>* request_target = nullptr;
+  std::shared_ptr<const std::map<std::string, TargetDescribe>> request_target;
 
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;
 
   // Store token and their corresponding float probability values.
-  std::vector<std::vector<std::pair<int, float>>>* logprobs = nullptr;
+  std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>> logprobs;
 
   // Beam Search Group
   std::vector<std::shared_ptr<InferRequest>>* req_group = nullptr;

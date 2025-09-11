@@ -53,14 +53,20 @@ struct ForwardRequest {
   // forwarding_tokens contains tokens used in forwarding step. There are two parts:
   // 1. tokens have kv-caches, kv_cached_token_num is the number
   // 2. tokens need to be processed, their kv-caches are generated during computation
-  std::vector<int>* forwarding_tokens;
+  std::shared_ptr<std::vector<int>> forwarding_tokens;
+
+  // Record the address of the infer forward token in the asynchronous process,
+  // to facilitate the quick acquisition of the generation result information after deep copy
+  std::vector<int>* origin_tokens;
+
+  bool is_deepcopy = false;
 
   // Embedding slice used to refit input embedding
   EmbeddingSlice* input_refit_embedding;
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
-  const std::map<std::string, TargetDescribe>* request_target = nullptr;
+  std::shared_ptr<const std::map<std::string, TargetDescribe>> request_target;
 
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;

@@ -255,6 +255,23 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
   ResetRequest(req, req_status, is_swap_req, true);
 }
 
+void ContinuousBatchingStrategy::AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status,
+                                                  bool is_swap_req) {
+  KLLM_LOG_DEBUG << "ResetRequest " << *req << ", req_status:" << req_status.ToString()
+                 << ", is_swapped_req:" << is_swap_req << ", terminated:" << "true";
+  req->finish_status = req_status;
+  req->finished = true;
+  cached_destroyed_ids_.push_back(req->req_id);
+  req->Notify();
+}
+
+void ContinuousBatchingStrategy::AsyncDestroyFinishedRequest() {
+  for (int64_t id : cached_destroyed_ids_) {
+    cache_manager_->DestroyFinishedRequest(id);
+  }
+  cached_destroyed_ids_.clear();
+}
+
 void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req,
                                               bool terminate) {
   KLLM_LOG_DEBUG << "ResetRequest " << *req << ", req_status:" << req_status.ToString()
@@ -337,6 +354,9 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
 
 void ContinuousBatchingStrategy::UpdateRunningRequests() {
   batch_state_->ResetInfoBeforeSchedule();
+  if (batch_scheduler_config_.enable_async) {
+    AsyncDestroyFinishedRequest();
+  }
   KLLM_LOG_DEBUG << "update running requests size:" << batch_state_->schedule_output->running_reqs.size();
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
@@ -345,6 +365,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     req->infer_stage = InferStage::STATE_DECODE;
 
     // remove rejected draft token
+    // TODO(david): for mtp, it should consider step. The accepted token num equal mtp times.
     req->forwarding_tokens.resize(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num +
                                   req->accepted_tokens.size());
     // current token has kv_cache
@@ -352,10 +373,17 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     req->prefix_cache_len = req->kv_cached_token_num;
 
     // Always update cache manager, even if request is finished.
+    // TODO(david): for mtp, it should consider fake prefix.
+    // If the fake prefix block will be removed for the LRU algorithm.
     Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->forwarding_tokens, req->kv_cached_token_num,
                                                         req->kv_cache_blocks);
 
-    if (req->forwarding_tokens.size() - req->accepted_tokens.size() < req->output_tokens.size()) {
+    //  if it is async, req->output_tokens.size() should minus 1
+    int real_output_num = req->output_tokens.size();
+    if (batch_scheduler_config_.enable_async) {
+      real_output_num -= 1;
+    }
+    if (req->forwarding_tokens.size() - req->accepted_tokens.size() < real_output_num) {
       // When the request actually needs to calculate Multi-Token, insert the request into the waiting queue.
       // This is primarily used for the split-fuse feature.
       req->infer_stage = InferStage::STAGE_CONTEXT;
@@ -371,15 +399,20 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     }
 
     // append generated token
+    // for async, the generated_token is faked
     req->forwarding_tokens.emplace_back(req->generated_token);
     req->sampling_token_num = kStepGenerateTokenNum;
 
     // append new tokens to output_tokens
-    req->output_mutex.lock();
-    req->output_tokens.insert(req->output_tokens.end(),
-                              req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
-                              req->forwarding_tokens.end());
-    req->output_mutex.unlock();
+    // for async, it should append after forward finishing
+    if (!batch_scheduler_config_.enable_async) {
+      req->output_mutex.lock();
+      req->output_tokens.insert(req->output_tokens.end(),
+                                req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
+                                req->forwarding_tokens.end());
+      req->output_mutex.unlock();
+    }
+    // TODO(david): for mtp, req->accepted_tokens.size() should fake
     req->last_step_token_num = req->accepted_tokens.size() + kStepGenerateTokenNum;
 
     req->req_ctx->emplace("status_code", std::to_string(static_cast<int>(req->finish_status.GetCode())));
@@ -420,8 +453,12 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
         }
       }
       batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
-
-      StopRequest(req, Status(RET_SUCCESS), false);
+      // for async, the kvblock should be destroyed later to avoid the trash token forward error.
+      if (batch_scheduler_config_.enable_async) {
+        AsyncStopRequest(req, Status(RET_SUCCESS), false);
+      } else {
+        StopRequest(req, Status(RET_SUCCESS), false);
+      }
       if (connector_config_.group_role == GroupRole::PREFILL) {
         KLLM_LOG_DEBUG << "Prefill enter transfer queue for tranfer task to Decode, req id:" << req->kv_comm_request_id;
         batch_state_->transfer_queue.emplace_back(req);
@@ -478,6 +515,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     req->NotifyStep();
 
     // append draft tokens
+    // TODO(david): for mtp, the draft token should modify in step 0 to avoid exceeding max_seq_len
     std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
     req->forwarding_tokens.insert(req->forwarding_tokens.end(), draft_tokens.begin(), draft_tokens.end());
     req->forwarding_tokens_draft_num = req->draft_tokens.size();

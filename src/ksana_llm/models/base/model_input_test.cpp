@@ -113,7 +113,7 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
       ForwardRequest forward_req;
       const size_t output_tokens_size = std::rand() % 4096 + 10;
       output_tokens.emplace_back(output_tokens_size);
-      forward_req.forwarding_tokens = &output_tokens.back();
+      forward_req.forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
       EmbeddingSlice embedding_slice;
       const int input_refit_size = std::rand() % 3 + 1;
       for (int j = 0; j < input_refit_size; j++) {
@@ -188,7 +188,7 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   std::map<std::string, ksana_llm::TargetDescribe> targets_empty = {{"lm_head", target_desc_empty}};
   auto req_targets_empty = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets_empty);
   ForwardRequest req_empty;
-  req_empty.request_target = req_targets_empty.get();
+  req_empty.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets_empty.get());
   std::vector<ForwardRequest> forward_reqs_empty = {req_empty};
   model_input->model_config_.num_layer = 42;
   model_input->PrepareCutoffLayer(forward_reqs_empty);
@@ -200,7 +200,7 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   std::map<std::string, ksana_llm::TargetDescribe> targets = {{"lm_head", target_desc}};
   auto req_targets = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets);
   ForwardRequest req;
-  req.request_target = req_targets.get();
+  req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets.get());
   std::vector<ForwardRequest> forward_reqs = {req};
   model_input->PrepareCutoffLayer(forward_reqs);
   EXPECT_EQ(model_input->cutoff_layer, 7);
@@ -214,8 +214,8 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   sampling_config2.max_new_tokens = 2;
   // Construct forward requests as test input.
   ForwardRequest forward_req1, forward_req2;
-  forward_req1.forwarding_tokens = &forwarding_tokens;
-  forward_req2.forwarding_tokens = &forwarding_tokens;
+  forward_req1.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
+  forward_req2.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
   forward_req1.sampling_config = &sampling_config1;
   forward_req2.sampling_config = &sampling_config2;
 
@@ -325,7 +325,7 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   std::vector<std::vector<int>> req_tokens(kReqNum);
   for (size_t i = 0; i < kReqNum; ++i) {
     req_tokens[i].resize(RandomNum(0, kMaxReqLen));
-    forward_reqs[i].forwarding_tokens = &req_tokens[i];
+    forward_reqs[i].forwarding_tokens = std::make_shared<std::vector<int>>(req_tokens[i]);
     forward_reqs[i].kv_cached_token_num = RandomNum(0, req_tokens[i].size());
     forward_reqs[i].req_id = i;
   }
@@ -413,7 +413,7 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
       ForwardRequest forward_req;
       const size_t token_size = 10 + i * 5;
       output_tokens.emplace_back(token_size);
-      forward_req.forwarding_tokens = &output_tokens.back();
+      forward_req.forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
       EmbeddingSlice embedding_slice;
       embedding_slices.push_back(std::move(embedding_slice));
       forward_req.input_refit_embedding = &embedding_slices.back();
@@ -468,7 +468,7 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
     std::vector<EmbeddingSlice> embedding_slices(1);
     std::vector<int64_t> mrotary_offsets(1, 0);
 
-    forward_reqs[0].forwarding_tokens = &output_tokens[0];
+    forward_reqs[0].forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens[0]);
     forward_reqs[0].input_refit_embedding = &embedding_slices[0];
     forward_reqs[0].mrotary_embedding_pos_offset = &mrotary_offsets[0];
 

@@ -143,7 +143,7 @@ class QwenTest : public testing::Test {
         2556,  17288, 621,    4385,  34666,  271,    2792,  2130,  768,   939,    23,     15,     3425,  15,     3130,
         271,   2056,  768,    12183, 9617,   128804};
     forward.attn_dp_group_id = 0;
-    forward.forwarding_tokens = &input_ids;
+    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     forward.draft_token_num = 0;
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
@@ -164,8 +164,8 @@ class QwenTest : public testing::Test {
     forward.kv_cache_ptrs.resize(1);  // rank num = 1
     block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
 
-    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids},
-                                       forward.atb_kv_cache_base_blk_ids, cache_manager);
+    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward.atb_kv_cache_base_blk_ids,
+                                       cache_manager);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
       Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
       KLLM_LOG_DEBUG << fmt::format(
@@ -176,13 +176,12 @@ class QwenTest : public testing::Test {
     ForwardRequest decode_forward = forward;
     decode_forward.cache_manager = cache_manager;
     std::vector<int> decode_ids = input_ids;
-    decode_forward.forwarding_tokens = &decode_ids;
+    decode_forward.forwarding_tokens = std::make_shared<std::vector<int>>(decode_ids);
     decode_forward.infer_stage = InferStage::STATE_DECODE;
     decode_forward.kv_cached_token_num = decode_forward.forwarding_tokens->size() - 1;
     std::vector<ForwardRequest> forward_reqs = {forward, decode_forward};
     Singleton<LayerProgressTracker>::GetInstance()->Initialize(
-        runtime_config.parallel_basic_config.tensor_parallel_size,
-        model_config.num_layer);
+        runtime_config.parallel_basic_config.tensor_parallel_size, model_config.num_layer);
     Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
       KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;
     });
@@ -213,11 +212,11 @@ class QwenTest : public testing::Test {
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     std::vector<int> generated_tokens0, generated_tokens1;
-    sample_req.input_tokens = &input_ids;
+    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
     sample_req.sampling_token_num = 1;
     sample_req.logits_offset = forward_reqs[0].logits_offset;
     sample_req.sampling_result_tokens = &generated_tokens0;
-    sample_req.logprobs = &logprobs;
+    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
     sample_req.logits_buf = forward_reqs[0].logits_buf;
     sample_req.model_config = &model_config;

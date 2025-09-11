@@ -191,11 +191,11 @@ class LlamaTest : public testing::Test {
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     std::vector<int> sampling_result_tokens;
-    sample_req.input_tokens = &input_ids;
+    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
     sample_req.logits_offset = forward_reqs[0].logits_offset;
     sample_req.sampling_token_num = 1;
     sample_req.sampling_result_tokens = &sampling_result_tokens;
-    sample_req.logprobs = &logprobs;
+    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
     sample_req.logits_buf = forward_reqs[0].logits_buf;
     sample_req.model_config = &model_config;
@@ -250,14 +250,14 @@ class LlamaTest : public testing::Test {
 
     // Test logits_custom_length
     std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-    forward.forwarding_tokens = &prompt_probs_input_tokens;
+    forward.forwarding_tokens = std::make_shared<std::vector<int>>(prompt_probs_input_tokens);
     forward.logits_custom_length = 5;
     forward.sampling_token_num = forward.logits_custom_length;
     std::map<std::string, ksana_llm::TargetDescribe> request_target;
     ksana_llm::TargetDescribe target_describe;
     target_describe.slice_pos.push_back({0, 4});
     request_target["logits"] = target_describe;
-    forward.request_target = &request_target;
+    forward.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
     std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
     ModelInput model_input(model_config, runtime_config, 0, context_);
     model_input.ParseFromRequests(prompt_probs_forward_reqs);

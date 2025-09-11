@@ -53,6 +53,8 @@ Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_pt
 Status SetHiddenUnitMeta(size_t multi_batch_id,
                          const std::vector<std::shared_ptr<WorkerInferRequest>>& worker_running_reqs,
                          std::shared_ptr<ModelInstance> model_instance);
+Status SetHiddenUnitMeta(size_t multi_batch_id, ScheduleOutput* schedule_output,
+                         std::shared_ptr<ModelInstance> model_instance);
 
 // Send hidden_units to downstream.
 Status SendHiddenUnits(size_t multi_batch_id);

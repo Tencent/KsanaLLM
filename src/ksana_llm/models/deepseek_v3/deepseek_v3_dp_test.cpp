@@ -131,7 +131,7 @@ class DeepSeekV3DPTest : public testing::Test {
     forward.req_id = req_id;
     forward.cache_manager = cache_managers[dp_group_id];
     forward.attn_dp_group_id = dp_group_id;
-    forward.forwarding_tokens = &input_ids;
+    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     forward.draft_token_num = 0;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(2);  // tp 2
@@ -176,7 +176,7 @@ class DeepSeekV3DPTest : public testing::Test {
     sample_req.sampling_token_num = 1;
     sample_req.logits_offset = forward_req.logits_offset;
     sample_req.sampling_result_tokens = &generated_tokens;
-    sample_req.logprobs = &logprobs;
+    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
     sample_req.logits_buf = forward_req.logits_buf;
     sample_req.model_config = &model_config;

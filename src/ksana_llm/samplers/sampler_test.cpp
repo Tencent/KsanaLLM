@@ -67,14 +67,14 @@ class SamplerTest : public testing::Test {
 
   SamplingRequest GetSamlingRequest() {
     SamplingRequest sample_req;
-    sample_req.input_tokens = &token_ids_;
+    sample_req.input_tokens = std::make_shared<std::vector<int>>(token_ids_);
     sample_req.sampling_token_num = sampling_token_num_;
     sample_req.sampling_result_tokens = &sampling_result_tokens_;
     std::vector<int> forwarding_tokens = token_ids_;
     sample_req.forwarding_tokens = &forward_token_ids_;
     sampling_result_tokens_.clear();
     sample_req.logits_offset = 0;
-    sample_req.logprobs = &logprobs_;
+    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs_);
     sample_req.ngram_dict = &ngram_dict_;
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
     sample_req.model_config = &model_config_;
@@ -253,7 +253,7 @@ TEST_F(SamplerTest, LogitsTargetGatherAllTest) {
   target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 logits
   target_describe.token_reduce_mode = TokenReduceMode::GATHER_ALL;
   request_target["logits"] = target_describe;
-  sample_req.request_target = &request_target;
+  sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
 
   // 设置 logits_custom_length
   sample_req.logits_custom_length = 2;  // 对应 slice_pos 中的 token 数量
@@ -295,15 +295,15 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
   std::vector<SamplingRequest> sample_reqs = {sample_req};
 
   sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
-  EXPECT_EQ(1, logprobs_.size());
+  EXPECT_EQ(1, sample_req.logprobs->size());
 
   // logprobs is not supported in ACL.
 #ifdef ENABLE_CUDA
-  EXPECT_EQ(2, logprobs_[0].size());
-  EXPECT_EQ(2, logprobs_[0][0].first);
-  EXPECT_NEAR(-0.598139f, logprobs_[0][0].second, 1e-6);
-  EXPECT_EQ(5, logprobs_[0][1].first);
-  EXPECT_NEAR(-0.798139f, logprobs_[0][1].second, 1e-6);
+  EXPECT_EQ(2, (*sample_req.logprobs.get())[0].size());
+  EXPECT_EQ(2, (*sample_req.logprobs.get())[0][0].first);
+  EXPECT_NEAR(-0.598139f, (*sample_req.logprobs.get())[0][0].second, 1e-6);
+  EXPECT_EQ(5, (*sample_req.logprobs.get())[0][1].first);
+  EXPECT_NEAR(-0.798139f, (*sample_req.logprobs.get())[0][1].second, 1e-6);
 #endif
 
   sampling_config_.logprobs_num = 0;
@@ -352,14 +352,14 @@ TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
   std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
   SetLogitsBuf(logits_buf_cpu);
 
-  float* device_logits = reinterpret_cast<float*>(logits_buf_);
+  float *device_logits = reinterpret_cast<float *>(logits_buf_);
   SamplingDeviceParameter sampling_device_parameter;
   sampling_device_parameter.vocab_size_padded = vocab_size_;
 
   // Test with no grammar matcher (should return early due to enable_xgrammar=false)
   sample_reqs[0].grammar_matcher = nullptr;
   sampler_->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
-                            context_->GetComputeStreams()[device_id_]);
+                             context_->GetComputeStreams()[device_id_]);
 
   EXPECT_TRUE(true);  // Test passes if no exception is thrown
 #else
@@ -381,19 +381,19 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
   std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
   SetLogitsBuf(logits_buf_cpu);
 
-  float* device_logits = reinterpret_cast<float*>(logits_buf_);
+  float *device_logits = reinterpret_cast<float *>(logits_buf_);
   SamplingDeviceParameter sampling_device_parameter;
   sampling_device_parameter.vocab_size_padded = vocab_size_;
 
   // Test with no grammar matcher (should return early due to empty grammar_req_indices)
   sample_reqs[0].grammar_matcher = nullptr;
   grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
-                                   context_->GetComputeStreams()[device_id_]);
+                                    context_->GetComputeStreams()[device_id_]);
 
   // Test with MTP (should be skipped even if grammar matcher exists)
   sample_reqs[0].sampling_token_num = 2;
   grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
-                                   context_->GetComputeStreams()[device_id_]);
+                                    context_->GetComputeStreams()[device_id_]);
 
   EXPECT_TRUE(true);  // Test passes if no exception is thrown
 #else
@@ -433,15 +433,15 @@ TEST_F(SamplerTest, ApplyTokenBitmaskTest) {
   const int bitmask_elements = static_cast<int>(std::ceil(vocab_size_ / 32.0));
   std::vector<int32_t> bitmask_cpu(bitmask_elements, 0xFFFFFFFA);  // Mask bits 0 and 2
 
-  void* device_bitmask;
+  void *device_bitmask;
   Malloc(&device_bitmask, bitmask_elements * sizeof(int32_t));
-  MemcpyAsync(device_bitmask, bitmask_cpu.data(), bitmask_elements * sizeof(int32_t),
-              MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[device_id_]);
+  MemcpyAsync(device_bitmask, bitmask_cpu.data(), bitmask_elements * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[device_id_]);
 
   // Test ApplyTokenBitmaskSelective
   std::vector<size_t> logits_offsets = {0};
-  sampler_->ApplyTokenBitmaskSelective(reinterpret_cast<float*>(logits_buf_), device_bitmask,
-                                      vocab_size_, logits_offsets, context_->GetComputeStreams()[device_id_]);
+  sampler_->ApplyTokenBitmaskSelective(reinterpret_cast<float *>(logits_buf_), device_bitmask, vocab_size_,
+                                       logits_offsets, context_->GetComputeStreams()[device_id_]);
 
   StreamSynchronize(context_->GetComputeStreams()[device_id_]);
   Free(device_bitmask);

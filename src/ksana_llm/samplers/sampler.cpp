@@ -390,7 +390,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     const int vocab_size = batch_schedule_config_.max_vocab_size;
     if (sampling_config->repetition_penalty != 1.0f) {
       for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
-        ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens,
+        ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens.get(),
                                sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
                                stream);
       }

@@ -400,7 +400,7 @@ class MlaTest : public testing::Test {
     forward.attn_dp_group_id = 0;
     forward.cache_manager = cache_manager;
     std::vector<int> input_ids = {233, 1681};
-    forward.forwarding_tokens = &input_ids;
+    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     forward.sampling_config = &sampling_config;
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;

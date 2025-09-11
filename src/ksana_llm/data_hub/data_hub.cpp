@@ -321,6 +321,13 @@ Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_pt
   return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units}, model_config.weight_data_type);
 }
 
+Status SetHiddenUnitMeta(size_t multi_batch_id, ScheduleOutput* schedule_output,
+                         std::shared_ptr<ModelInstance> model_instance) {
+  ModelConfig model_config = model_instance->GetModelConfig();
+  size_t tokens = schedule_output->hidden_token_num;
+  return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units}, model_config.weight_data_type);
+}
+
 Status SetHiddenUnitMeta(size_t multi_batch_id,
                          const std::vector<std::shared_ptr<WorkerInferRequest>>& worker_running_reqs,
                          std::shared_ptr<ModelInstance> model_instance) {
