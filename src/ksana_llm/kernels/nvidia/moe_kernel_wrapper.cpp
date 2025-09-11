@@ -495,7 +495,8 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                 {"num_stages", 3}};
     }
   } else if (weight_dtype == DataType::TYPE_I4_GROUP && (!block_shape.empty())) {
-    use_moe_wna16_cuda = ShouldMoeWna16UseCuda(M * topk, block_shape[1], num_experts_per_node, 4);
+    use_moe_wna16_cuda =
+        ShouldMoeWna16UseCuda(M * topk, block_shape[1], num_experts_per_node, 4) && hidden_states != nullptr;
     if (use_moe_wna16_cuda) {
       config = {{"block_size_m", std::min(16, M)}};
     } else if (M <= 20) {
