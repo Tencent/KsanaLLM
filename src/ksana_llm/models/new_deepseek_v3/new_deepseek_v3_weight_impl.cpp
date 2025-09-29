@@ -1148,7 +1148,8 @@ Tensor NewDeepSeekV3WeightImpl<T>::DequantGptqWeight(Tensor& qweight, int dev_ra
                             {input_size_per_tp * pack_factor, qweight.shape[1]}, dev_rank, nullptr,
                             &(context_->GetMemoryManageStreams()[dev_rank]));
   }
-  if (new_deepseek_v3_config->quant_config.backend == MACHETE_BACKEND && new_deepseek_v3_config->ContainGptqWeights()) {
+  if (new_deepseek_v3_config->quant_config.backend == MACHETE_LINEAR_BACKEND &&
+      new_deepseek_v3_config->ContainGptqWeights()) {
     size_t m = input_size_per_tp * pack_factor;
     size_t n = qweight.shape[1];
     // 获取 workspace

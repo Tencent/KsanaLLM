@@ -3,20 +3,20 @@
 ==============================================================================*/
 #include <stdlib.h>
 #include <filesystem>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 
 #include "ksana_llm/data_hub/data_hub.h"
-#include "ksana_llm/modules/basic/bmm.h"
 #include "ksana_llm/models/common/common_weight.h"
+#include "ksana_llm/modules/basic/bmm.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 
+#include "ksana_llm/models/base/fake_weight_for_test.h"
+#include "ksana_llm/utils/context.h"
+#include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/tensor.h"
-#include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/context.h"
-#include "ksana_llm/models/base/fake_weight_for_test.h"
 #include "tests/test.h"
 // #include <cuda_runtime.h>
 
@@ -62,32 +62,32 @@ void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector) {
 }
 
 void RandomizeInputData(std::vector<float>& input_data1, size_t tokens, size_t heads, size_t qk_nope_dim) {
-    size_t total_elements = tokens * heads * qk_nope_dim;
-    CustomRandomGenerator generator;
-    generator.FillNormal(input_data1, total_elements, 1.0, 0.5);
+  size_t total_elements = tokens * heads * qk_nope_dim;
+  CustomRandomGenerator generator;
+  generator.FillNormal(input_data1, total_elements, 1.0, 0.5);
 }
 
 // Batched matrix multiplication: output = input_data * weight
 template <typename T>
 void BatchedMatmul(const std::vector<T>& input_data, const std::vector<T>& weight, std::vector<T>& output,
                    size_t tokens, size_t heads, size_t qk_nope_dim, size_t kv_lora_rank) {
-    size_t output_size = heads * tokens * kv_lora_rank;
-    assert(output.size() == output_size);
+  size_t output_size = heads * tokens * kv_lora_rank;
+  assert(output.size() == output_size);
 
-    for (size_t h = 0; h < heads; ++h) {  // heads
-        for (size_t t = 0; t < tokens; ++t) {  // tokens
-            for (size_t n = 0; n < kv_lora_rank; ++n) {  // kv_lora_rank
-                T sum = 0;
-                for (size_t k = 0; k < qk_nope_dim; ++k) {  // qk_nope_dim
-                    // input_data[tokens, heads, qk_nope_dim] 乘 weight[heads, qk_nope_dim, kv_lora_rank]
-                    sum += input_data[t * heads * qk_nope_dim + h * qk_nope_dim + k] *
-                           weight[h * qk_nope_dim * kv_lora_rank + k * kv_lora_rank + n];
-                }
-                // output[heads, tokens, kv_lora_rank]
-                output[t * heads * kv_lora_rank + h * kv_lora_rank + n] = sum;
-            }
+  for (size_t h = 0; h < heads; ++h) {             // heads
+    for (size_t t = 0; t < tokens; ++t) {          // tokens
+      for (size_t n = 0; n < kv_lora_rank; ++n) {  // kv_lora_rank
+        T sum = 0;
+        for (size_t k = 0; k < qk_nope_dim; ++k) {  // qk_nope_dim
+          // input_data[tokens, heads, qk_nope_dim] 乘 weight[heads, qk_nope_dim, kv_lora_rank]
+          sum += input_data[t * heads * qk_nope_dim + h * qk_nope_dim + k] *
+                 weight[h * qk_nope_dim * kv_lora_rank + k * kv_lora_rank + n];
         }
+        // output[heads, tokens, kv_lora_rank]
+        output[t * heads * kv_lora_rank + h * kv_lora_rank + n] = sum;
+      }
     }
+  }
 }
 
 float GetAllowedDiff(const std::string& test_type) {
@@ -121,8 +121,8 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   model_config.weight_data_type = GetKsanaDataType<T>();
 
   RuntimeConfig runtime_config;
-  runtime_config.inter_data_type = GetKsanaDataType<T>();;
-  runtime_config.inter_data_type = GetKsanaDataType<T>();;
+  runtime_config.inter_data_type = GetKsanaDataType<T>();
+  runtime_config.inter_data_type = GetKsanaDataType<T>();
 
   int rank = 0;
   auto ctx = std::make_shared<Context>(1, 1, 1);
@@ -147,8 +147,8 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   cudaError_t e = cudaMalloc(&new_buf, byte_size1);
   ASSERT_EQ(e, cudaSuccess) << "CUDA memory allocation failed for gpu_buf: " << cudaGetErrorString(e);
 
-  Tensor new_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(),
-  {heads, qk_nope_dim, kv_lora_rank}, 0, new_buf);
+  Tensor new_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, qk_nope_dim, kv_lora_rank}, 0,
+                    new_buf);
 
   vector<float> input_data(new_tensor.GetElementNumber());
   RandomizeInputData(input_data, heads, qk_nope_dim, kv_lora_rank);
@@ -162,7 +162,7 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   BufferManager buffer_mgr;
   buffer_mgr.SetRank(rank);
 
-  GroupQuantBackend backend = NONE_QUANT;
+  LinearComputeBackend backend = DEFAULT_LINEAR_BACKEND;
   LayerCreationContext creation_ctx;
   creation_ctx.Init(bmm_weight, ctx, rank, *pipeline_config, model_config, runtime_config, &buffer_mgr);
 
@@ -172,29 +172,27 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   void* gpu_buf = nullptr;
   cudaError_t err = cudaMalloc(&gpu_buf, byte_size2);
   ASSERT_EQ(err, cudaSuccess) << "CUDA memory allocation failed for gpu_buf: " << cudaGetErrorString(err);
-  Tensor gpu_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(),
-    {tokens, heads, qk_nope_dim}, 0, gpu_buf);
+  Tensor gpu_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, qk_nope_dim}, 0, gpu_buf);
   std::vector<float> input_data1(tokens * heads * qk_nope_dim);
   RandomizeInputData(input_data1, tokens, heads, qk_nope_dim);
   AssignFromVector(gpu_tensor, input_data1);
   void* gpu_buf1 = nullptr;
   cudaError_t err1 = cudaMalloc(&gpu_buf1, byte_size2);
   ASSERT_EQ(err1, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err1);
-  Tensor gpu_tensor1(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(),
-    {heads, tokens, qk_nope_dim}, 0, gpu_buf1);
+  Tensor gpu_tensor1(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, tokens, qk_nope_dim}, 0, gpu_buf1);
 
   void* gpu_buf2 = nullptr;
   cudaError_t err2 = cudaMalloc(&gpu_buf2, byte_size3);
   ASSERT_EQ(err2, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err2);
-  Tensor gpu_tensor2(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(),
-    {heads, tokens, kv_lora_rank}, 0, gpu_buf2);
+  Tensor gpu_tensor2(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, tokens, kv_lora_rank}, 0,
+                     gpu_buf2);
 
   // The space used for calculating the output
   void* gpu_buf3 = nullptr;
   cudaError_t err3 = cudaMalloc(&gpu_buf3, byte_size3);
   ASSERT_EQ(err3, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err3);
-  Tensor gpu_tensor3(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(),
-    {tokens, heads, kv_lora_rank}, 0, gpu_buf3);
+  Tensor gpu_tensor3(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, kv_lora_rank}, 0,
+                     gpu_buf3);
 
   std::vector<Tensor> input_tensors = {gpu_tensor, gpu_tensor1, gpu_tensor2};
   std::vector<Tensor> output_tensors = {gpu_tensor3};
@@ -203,8 +201,8 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
 
   std::vector<T> res(output_tensors[0].GetElementNumber());
 
-  Memcpy(res.data(), output_tensors[0].template GetPtr<void>(),
-             sizeof(T) * output_tensors[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(res.data(), output_tensors[0].template GetPtr<void>(), sizeof(T) * output_tensors[0].GetElementNumber(),
+         MEMCPY_DEVICE_TO_HOST);
 
   std::vector<float> output(output_tensors[0].GetElementNumber());
   BatchedMatmul<float>(input_data1, input_data, output, tokens, heads, qk_nope_dim, kv_lora_rank);

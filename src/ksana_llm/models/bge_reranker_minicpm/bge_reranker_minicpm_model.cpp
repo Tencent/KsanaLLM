@@ -133,7 +133,7 @@ void BgeRerankerMinicpmModel::InitRunConfig(const ModelRunConfig& model_run_conf
     DataType output_type = weight_type;
 
     lm_head_proj_layer_ = this->layer_creation_context_.matmul_layer_factory->AutoCreateLayer(
-        base_weight, "lm_head.0.linear_head.weight", weight_type, input_type, output_type, NONE_QUANT, {});
+        base_weight, "lm_head.0.linear_head.weight", weight_type, input_type, output_type, DEFAULT_LINEAR_BACKEND, {});
   }
 #endif
 }

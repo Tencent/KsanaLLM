@@ -73,12 +73,63 @@ __attribute__((unused)) static std::string GetQuantModeString(QuantMode quant_mo
   return quant_mode_map.count(quant_mode) ? quant_mode_map.at(quant_mode) : "Unknown";
 }
 
-enum GroupQuantBackend { NONE_QUANT, CUTLASS_BACKEND, MARLIN_BACKEND, MACHETE_BACKEND };
+/*
+ * LinearComputeBackend:
+ * - DEFAULT_LINEAR_BACKEND:
+ *     The default linear backend. Suitable for FP8, FP16, BF16 and FP32 models.
+ *     Internally may use cuBLAS, CUTLASS or other implementations.
+ * - CUTLASS_LINEAR_BACKEND:
+ *     An int4-only backend. It is the default choice for int4 inference and
+ *     is suitable for GPTQ/AWQ models.
+ * - MARLIN_LINEAR_BACKEND:
+ *     An int4-only backend suitable for GPTQ/AWQ models. Additionally supports the
+ *     `act_order` feature.
+ * - MACHETE_LINEAR_BACKEND:
+ *     An int4-only backend restricted to SM90 (NVIDIA Hopper class). Currently
+ *     only used by DeepSeek GPTQ int4 model.
+ */
+enum LinearComputeBackend {
+  DEFAULT_LINEAR_BACKEND,
+  CUTLASS_LINEAR_BACKEND,
+  MARLIN_LINEAR_BACKEND,
+  MACHETE_LINEAR_BACKEND
+};
 
-__attribute__((unused)) static std::string GetGroupQuantBackendString(GroupQuantBackend group_quant_backend) {
-  static const std::unordered_map<GroupQuantBackend, std::string> group_quant_backend_map{
-      {NONE_QUANT, "None"}, {CUTLASS_BACKEND, "cutlass"}, {MARLIN_BACKEND, "marlin"}, {MACHETE_BACKEND, "machete"}};
-  return group_quant_backend_map.count(group_quant_backend) ? group_quant_backend_map.at(group_quant_backend)
+__attribute__((unused)) static std::string GetLinearComputeBackendString(LinearComputeBackend linear_compute_backend) {
+  static const std::unordered_map<LinearComputeBackend, std::string> linear_compute_backend_map{
+      {DEFAULT_LINEAR_BACKEND, "default_linear"},
+      {CUTLASS_LINEAR_BACKEND, "cutlass_linear"},
+      {MARLIN_LINEAR_BACKEND, "marlin_linear"},
+      {MACHETE_LINEAR_BACKEND, "machete_linear"}};
+  return linear_compute_backend_map.count(linear_compute_backend)
+             ? linear_compute_backend_map.at(linear_compute_backend)
+             : "Unknown";
+}
+
+/*
+ * MoeComputeBackend:
+ * - DEFAULT_MOE_BACKEND:
+ *     The default MoE backend based on cutlass. General-purpose implementation that supports
+ *     common models such as Qwen, LLaMA, etc.
+ * - MARLIN_MOE_BACKEND:
+ *     An int4-only MoE backend. Intended for int4 versions of models like Qwen
+ *     and LLaMA.
+ * - TRITON_MOE_BACKEND:
+ *     DeepSeek-only backend that implements a fused-MoE strategy (using Triton).
+ *     Supports FP16, BF16, FP8-blockwise and int4.
+ * - CUTLASS_MOE_BACKEND:
+ *     DeepSeek-only backend that implements a group-GEMM strategy (using CUTLASS).
+ *     Only supports the w4afp8 weight format.
+ */
+enum MoeComputeBackend { DEFAULT_MOE_BACKEND, CUTLASS_MOE_BACKEND, MARLIN_MOE_BACKEND, TRITON_MOE_BACKEND };
+
+__attribute__((unused)) static std::string GetMoeComputeBackendString(MoeComputeBackend moe_compute_backend) {
+  static const std::unordered_map<MoeComputeBackend, std::string> moe_compute_backend_map{
+      {DEFAULT_MOE_BACKEND, "default_moe"},
+      {CUTLASS_MOE_BACKEND, "cutlass_moe"},
+      {MARLIN_MOE_BACKEND, "marlin_moe"},
+      {TRITON_MOE_BACKEND, "triton_moe"}};
+  return moe_compute_backend_map.count(moe_compute_backend) ? moe_compute_backend_map.at(moe_compute_backend)
                                                             : "Unknown";
 }
 
@@ -107,7 +158,7 @@ struct QuantConfig {
 
   bool input_scale = false;
 
-  GroupQuantBackend backend = NONE_QUANT;
+  LinearComputeBackend backend = DEFAULT_LINEAR_BACKEND;
 
   // (fp8) Whether weight_scale shape is empty.
   bool is_fp8_blockwise = false;

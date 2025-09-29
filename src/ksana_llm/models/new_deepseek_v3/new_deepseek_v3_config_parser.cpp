@@ -218,7 +218,7 @@ Status NewDeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_
 
   // Deepseek only support machete backend
   if (new_deepseek_v3_config->is_quant && new_deepseek_v3_config->ContainGptqWeights()) {
-    new_deepseek_v3_config->quant_config.backend = MACHETE_BACKEND;
+    new_deepseek_v3_config->quant_config.backend = MACHETE_LINEAR_BACKEND;
   } else {
     KLLM_LOG_INFO << "Not using any Quant Backend";
   }

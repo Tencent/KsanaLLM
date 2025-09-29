@@ -258,7 +258,7 @@ TEST_F(QuantWeightLoadTest, GPTQMoeQuantWeightloadTest) {
 
 TEST_F(QuantWeightLoadTest, CommonDeQuantTest) {
   model_config_.quant_config.method = QUANT_GPTQ;
-  model_config_.quant_config.backend = MACHETE_BACKEND;
+  model_config_.quant_config.backend = MACHETE_LINEAR_BACKEND;
 
   std::shared_ptr<QuantWeight<half>> quant_weight_solver = std::make_shared<QuantWeight<half>>(
       model_config_, runtime_config_, rank, context_, weights_map_, weights_data_type_map_);

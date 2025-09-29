@@ -30,7 +30,7 @@ class MoeLayerFactory {
 
   std::shared_ptr<BaseLayer> CreateLayer(DataType weight_type, DataType input_type, DataType output_type,
                                          const std::vector<std::any>& init_params, QuantMode quant_mode,
-                                         GroupQuantBackend backend);
+                                         MoeComputeBackend backend);
 
  private:
   std::shared_ptr<Context> context_;
@@ -39,7 +39,7 @@ class MoeLayerFactory {
   RuntimeConfig runtime_config_;
 
   // std::map<std::tuple<weight_type, input_type, output_type, quant_mode, backend>, BuildLayerFunc>
-  std::map<std::tuple<DataType, DataType, DataType, QuantMode, GroupQuantBackend>, BuildLayerFunc> builder_map_;
+  std::map<std::tuple<DataType, DataType, DataType, QuantMode, MoeComputeBackend>, BuildLayerFunc> builder_map_;
 };
 
 }  // namespace ksana_llm

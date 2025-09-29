@@ -10,10 +10,10 @@
 namespace ksana_llm {
 
 Bmm::Bmm(const std::string& weight_name, const LayerCreationContext& creation_context,
-         const GroupQuantBackend& group_quant_backend) {
+         const LinearComputeBackend& linear_compute_backend) {
   bmm_layer_ = creation_context.matmul_layer_factory->AutoCreateLayer(
       creation_context.base_weight, "", TYPE_VOID, creation_context.input_type, creation_context.output_type,
-      group_quant_backend, {});
+      linear_compute_backend, {});
 
   bmm_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspace(bmm_layer_->GetWorkSpaceSize()));
   bmm_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);

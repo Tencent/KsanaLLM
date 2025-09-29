@@ -23,56 +23,56 @@ MatMulLayerFactory::MatMulLayerFactory(const ModelConfig& model_config, const Ru
   model_config_ = model_config;
   runtime_config_ = runtime_config;
 
-  builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_FP32, TYPE_FP32, TYPE_FP32, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MatMulLayer>;
-  builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MatMulLayer>;
-  builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MatMulLayer>;
 
-  builder_map_[{TYPE_VOID, TYPE_FP32, TYPE_FP32, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_VOID, TYPE_FP32, TYPE_FP32, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
-  builder_map_[{TYPE_VOID, TYPE_FP16, TYPE_FP16, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_VOID, TYPE_FP16, TYPE_FP16, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
-  builder_map_[{TYPE_VOID, TYPE_BF16, TYPE_BF16, QUANT_NONE, NONE_QUANT}] =
+  builder_map_[{TYPE_VOID, TYPE_BF16, TYPE_BF16, QUANT_NONE, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BatchedMatMulLayer>;
 
 #ifdef ENABLE_CUDA
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, CUTLASS_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, CUTLASS_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<CutlassMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, CUTLASS_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, CUTLASS_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<CutlassMatMulLayer>;
 
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MARLIN_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MARLIN_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MARLIN_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MARLIN_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MARLIN_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MARLIN_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MarlinMatMulLayer>;
 
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MACHETE_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_GPTQ, MACHETE_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MACHETE_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_AWQ, MACHETE_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MACHETE_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_GPTQ, MACHETE_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
-  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_AWQ, MACHETE_BACKEND}] =
+  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_AWQ, MACHETE_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
 
 #endif
 #ifdef ENABLE_FP8
-  builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
-  builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
-  builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<Fp8MatMulLayer>;
 
-  builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_BLOCK_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
-  builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_FP16, TYPE_FP16, QUANT_BLOCK_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
-  builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_BLOCK_FP8_E4M3, NONE_QUANT}] =
+  builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, QUANT_BLOCK_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
 
 #endif
@@ -81,7 +81,7 @@ MatMulLayerFactory::MatMulLayerFactory(const ModelConfig& model_config, const Ru
 std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<BaseWeight> base_weight,
                                                                std::string weight_name, DataType weight_type,
                                                                DataType input_type, DataType output_type,
-                                                               GroupQuantBackend backend,
+                                                               LinearComputeBackend backend,
                                                                const std::vector<std::any>& init_params) {
   // gptq layer
   if (model_config_.is_quant &&
@@ -147,7 +147,8 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
         group_matmul_param.push_back(true);                                                               // cuda gemv
         group_matmul_param.push_back(TYPE_I4_GROUP);  // weight data type
         if (weight_name.find("kv_a_rope_proj") != std::string::npos) {
-          return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ, MARLIN_BACKEND);
+          return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ,
+                             MARLIN_LINEAR_BACKEND);
         }
         return CreateLayer(TYPE_I4_GROUP, input_type, output_type, group_matmul_param, QUANT_GPTQ, backend);
       }
@@ -164,29 +165,31 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
       // block_k size
       fp8_blockwise_matmul_params.push_back(model_config_.quant_config.weight_block_size[1]);
       return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_blockwise_matmul_params, QUANT_BLOCK_FP8_E4M3,
-                         NONE_QUANT);
+                         DEFAULT_LINEAR_BACKEND);
     } else {
       std::vector<std::any> fp8_matmul_params;
       // max_m_
       fp8_matmul_params.push_back(runtime_config_.max_step_token_num);
       // weight is [n, k], k is shape[1]
       fp8_matmul_params.push_back(size_t(base_weight->GetModelWeights(weight_name).shape[1]));
-      return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_matmul_params, QUANT_FP8_E4M3, NONE_QUANT);
+      return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_matmul_params, QUANT_FP8_E4M3,
+                         DEFAULT_LINEAR_BACKEND);
     }
   }
   // batched matmul has no weight
   if (weight_name == "" && weight_type == TYPE_VOID) {
-    return CreateLayer(weight_type, input_type, output_type, init_params, QUANT_NONE, NONE_QUANT);
+    return CreateLayer(weight_type, input_type, output_type, init_params, QUANT_NONE, DEFAULT_LINEAR_BACKEND);
   }
   // default layer
-  return CreateLayer(base_weight, weight_name, input_type, output_type, init_params, QUANT_NONE, NONE_QUANT);
+  return CreateLayer(base_weight, weight_name, input_type, output_type, init_params, QUANT_NONE,
+                     DEFAULT_LINEAR_BACKEND);
 }
 
 std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(std::shared_ptr<BaseWeight> base_weight,
                                                            std::string weight_name, DataType input_type,
                                                            DataType output_type,
                                                            const std::vector<std::any>& init_params,
-                                                           QuantMode quant_mode, GroupQuantBackend backend) {
+                                                           QuantMode quant_mode, LinearComputeBackend backend) {
   DataType weight_type = base_weight->GetModelWeights(weight_name).dtype;
   // deepseek v3
   if (weight_type == TYPE_INVALID) {
@@ -195,14 +198,14 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(std::shared_ptr<BaseW
   KLLM_LOG_DEBUG << fmt::format(
       "MatMul Creating weight_name: {}, weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
       weight_name, GetTypeString(weight_type), GetTypeString(input_type), GetTypeString(output_type),
-      GetQuantModeString(quant_mode), GetGroupQuantBackendString(backend));
+      GetQuantModeString(quant_mode), GetLinearComputeBackendString(backend));
   return CreateLayer(weight_type, input_type, output_type, init_params, quant_mode, backend);
 }
 
 std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(DataType weight_type, DataType input_type,
                                                            DataType output_type,
                                                            const std::vector<std::any>& init_params,
-                                                           QuantMode quant_mode, GroupQuantBackend backend) {
+                                                           QuantMode quant_mode, LinearComputeBackend backend) {
   auto it = builder_map_.find({weight_type, input_type, output_type, quant_mode, backend});
   if (it != builder_map_.end()) {
     std::shared_ptr<BaseLayer> layer = (this->*(it->second))();
@@ -212,7 +215,7 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::CreateLayer(DataType weight_type,
     KLLM_THROW(
         fmt::format("MatMul Not support weight_type {}, input_type {}, output_type {}, quant_mode {}, backend {}.",
                     GetTypeString(weight_type), GetTypeString(input_type), GetTypeString(output_type),
-                    GetQuantModeString(quant_mode), GetGroupQuantBackendString(backend)));
+                    GetQuantModeString(quant_mode), GetLinearComputeBackendString(backend)));
   }
 }
 

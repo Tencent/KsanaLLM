@@ -974,8 +974,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
           matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
                                             {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
                                              cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
-                                            QUANT_GPTQ, MACHETE_BACKEND);
-      layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+                                            QUANT_GPTQ, MACHETE_LINEAR_BACKEND);
+      layer->SetWorkspaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkspaceSize()));
       layer->Preprocess(model_config, runtime_config);
     }
   }
@@ -995,8 +995,8 @@ TEST_F(LayerTest, MacheteSearchStatusTest) {
               matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
                                                 {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
                                                  cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
-                                                QUANT_GPTQ, MACHETE_BACKEND);
-          layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+                                                QUANT_GPTQ, MACHETE_LINEAR_BACKEND);
+          layer->SetWorkspaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkspaceSize()));
           layer->Preprocess(model_config, runtime_config);
         }
       }
@@ -1045,8 +1045,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
           matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
                                             {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
                                              cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
-                                            QUANT_GPTQ, CUTLASS_BACKEND);
-      layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+                                            QUANT_GPTQ, CUTLASS_LINEAR_BACKEND);
+      layer->SetWorkspaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkspaceSize()));
       layer->Preprocess(model_config, runtime_config);
     }
   }
@@ -1066,8 +1066,8 @@ TEST_F(LayerTest, CutlassSearchStatusTest) {
               matmul_layer_factory->CreateLayer(TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16,
                                                 {max_m, nk.first, nk.second, groupsize, is_awq, is_gptq_desc, is_k_full,
                                                  cutlass_use_gemv_cuda_core, TYPE_I4_GROUP},
-                                                QUANT_GPTQ, CUTLASS_BACKEND);
-          layer->SetWorkSpaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkSpaceSize()));
+                                                QUANT_GPTQ, CUTLASS_LINEAR_BACKEND);
+          layer->SetWorkspaceBuffer(workspace_mgr->GetWorkspace(layer->GetWorkspaceSize()));
           layer->Preprocess(model_config, runtime_config);
         }
       }

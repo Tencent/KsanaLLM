@@ -493,7 +493,7 @@ bool QuantWeight<T>::LoadQuantWeight(const std::string& tensor_name, std::vector
 #ifdef ENABLE_CUDA
 template <typename T>
 torch::Tensor QuantWeight<T>::TrySmartAutoUnpack(const std::string& tensor_name, torch::Tensor& tensor) {
-  if (model_config_.quant_config.backend != CUTLASS_BACKEND) {
+  if (model_config_.quant_config.backend != CUTLASS_LINEAR_BACKEND) {
     return tensor;
   }
   if (tensor_name.find(".qweight") != std::string::npos) {
@@ -539,11 +539,11 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
       AddWeightFromTorchTensor(perm_name, perm_gpu);
     }
     torch::Tensor qweight_gpu = GetTorchTensorFromWeight(qweight_name);
-    if (model_config_.quant_config.backend == CUTLASS_BACKEND && !is_experts) {
+    if (model_config_.quant_config.backend == CUTLASS_LINEAR_BACKEND && !is_experts) {
       torch::Tensor processed_tensor_gpu = cutlass_helper_->CutlassPreprocessWeightsForMixedGemmWarpper(
           qweight_gpu, llm_kernels::nvidia::QuantType::W4_A16);
       AddWeightFromTorchTensor(weight_name, processed_tensor_gpu);
-    } else if (model_config_.quant_config.backend == MARLIN_BACKEND || is_experts) {
+    } else if (model_config_.quant_config.backend == MARLIN_LINEAR_BACKEND || is_experts) {
       if (model_config_.quant_config.method == QUANT_GPTQ) {
         std::optional<torch::Tensor> perm_gpu = std::nullopt;
         if (model_config_.quant_config.desc_act == true) {
@@ -557,7 +557,7 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
       } else {
         KLLM_THROW("Unsupported group quant method, only support GPTQ and AWQ.");
       }
-    } else if (model_config_.quant_config.backend == MACHETE_BACKEND) {
+    } else if (model_config_.quant_config.backend == MACHETE_LINEAR_BACKEND) {
       torch::Tensor processed_tensor_gpu =
           machete_helper_->PackWeight<T>(qweight_gpu, model_config_.quant_config.method);
       AddWeightFromTorchTensor(weight_name, processed_tensor_gpu);
@@ -568,7 +568,7 @@ Status QuantWeight<T>::PackAndBindGroupTensor(int layer_idx, const std::string& 
     weights_map_.erase(qweight_name);
 
     // In Marlin, GPTQ and AWQ share the same scale layout
-    if (model_config_.quant_config.backend == MARLIN_BACKEND || is_experts) {
+    if (model_config_.quant_config.backend == MARLIN_LINEAR_BACKEND || is_experts) {
       torch::Tensor scales_gpu = GetTorchTensorFromWeight(scales_name);
       scales_gpu = marlin_helper_->MarlinPermuteScales<T>(
           scales_gpu, model_config_.quant_config.group_size * scales_gpu.size(-2), scales_gpu.size(-1));
@@ -732,7 +732,7 @@ Status QuantWeight<T>::ConvertGroupTensor() {
         torch::Tensor qzeros_gpu = GetTorchTensorFromWeight(qzeros_name);
 
         torch::Tensor zeros_cpu;
-        if (model_config_.quant_config.backend == CUTLASS_BACKEND) {
+        if (model_config_.quant_config.backend == CUTLASS_LINEAR_BACKEND) {
           // In AWQ: weight@fp16 = scale@fp16 * (qweight@uint4 - zeros@uint4)
           // In cutlass kernel: weight@fp16 = scale@fp16 * qweight@int4 + zeros@fp16
           // So: weight = scale * (qweight - zeros)
@@ -740,7 +740,7 @@ Status QuantWeight<T>::ConvertGroupTensor() {
           //            = scale * (qweight - 8) + scale * (8 - zeros)
           int8_t zero = std::pow(2, model_config_.quant_config.bits - 1);
           zeros_cpu = (scales_gpu * (zero - qzeros_gpu)).to(torch::kCPU).contiguous();
-        } else if (model_config_.quant_config.backend == MARLIN_BACKEND) {
+        } else if (model_config_.quant_config.backend == MARLIN_LINEAR_BACKEND) {
           torch::Tensor qzeros_cpu = qzeros_gpu.to(torch::kCPU);
           zeros_cpu = marlin_helper_->MarlinAwqToMarlinZeroPoints(qzeros_cpu, scales_gpu.size(0), scales_gpu.size(1));
         } else {
@@ -1169,7 +1169,7 @@ Tensor QuantWeight<T>::CommonDequantTensor(const std::string& weight_name, bool 
     tensor_manager_->AddWeightTensor(
         dequant_weight_name, {input_size_per_tp * pack_factor, weights_map_[weight_name].shape[1]}, weight_data_type_);
   }
-  if (model_config_.quant_config.backend == MACHETE_BACKEND && model_config_.quant_config.method == QUANT_GPTQ) {
+  if (model_config_.quant_config.backend == MACHETE_LINEAR_BACKEND && model_config_.quant_config.method == QUANT_GPTQ) {
     size_t m = input_size_per_tp * pack_factor;
     size_t n = weights_map_[weight_name].shape[1];
     // 获取 workspace

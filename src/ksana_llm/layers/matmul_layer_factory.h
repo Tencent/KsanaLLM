@@ -24,16 +24,16 @@ class MatMulLayerFactory {
   }
   std::shared_ptr<BaseLayer> AutoCreateLayer(std::shared_ptr<BaseWeight> base_weight, std::string weight_name,
                                              DataType weight_type, DataType input_type, DataType output_type,
-                                             GroupQuantBackend backend, const std::vector<std::any>& init_params);
+                                             LinearComputeBackend backend, const std::vector<std::any>& init_params);
 
   std::shared_ptr<BaseLayer> CreateLayer(std::shared_ptr<BaseWeight> base_weight, std::string weight_name,
                                          DataType input_type, DataType output_type,
                                          const std::vector<std::any>& init_params, QuantMode quant_mode,
-                                         GroupQuantBackend backend);
+                                         LinearComputeBackend backend);
 
   std::shared_ptr<BaseLayer> CreateLayer(DataType weight_type, DataType input_type, DataType output_type,
                                          const std::vector<std::any>& init_params, QuantMode quant_mode,
-                                         GroupQuantBackend backend);
+                                         LinearComputeBackend backend);
 
  private:
   std::shared_ptr<Context> context_;
@@ -42,7 +42,7 @@ class MatMulLayerFactory {
   RuntimeConfig runtime_config_;
 
   // std::map<std::tuple<weight_type, input_type, output_type, quant_mode, backend>, BuildLayerFunc>
-  std::map<std::tuple<DataType, DataType, DataType, QuantMode, GroupQuantBackend>, BuildLayerFunc> builder_map_;
+  std::map<std::tuple<DataType, DataType, DataType, QuantMode, LinearComputeBackend>, BuildLayerFunc> builder_map_;
 };
 
 }  // namespace ksana_llm

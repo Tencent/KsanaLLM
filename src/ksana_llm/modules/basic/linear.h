@@ -13,7 +13,7 @@ class Linear {
  public:
   // Disable a default constructor
   Linear(const std::string& weight_name, const LayerCreationContext& creation_context,
-         const GroupQuantBackend& group_quant_backend);
+         const LinearComputeBackend& linear_compute_backend);
 
   ~Linear();
   Status Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors);

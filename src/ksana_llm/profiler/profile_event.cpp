@@ -6,7 +6,7 @@
 #include "ksana_llm/utils/logger.h"
 
 #ifdef ENABLE_CUDA
-#include "nvToolsExt.h"
+#  include "nvtx3/nvToolsExt.h"
 #endif
 
 namespace ksana_llm {
@@ -23,7 +23,6 @@ static bool ReadEnableProfileEventFlag() {
 }
 
 static bool g_enable_profile_event = ReadEnableProfileEventFlag();
-
 
 void ProfileEvent::PushEvent(const std::string& profile_event_name, int rank) {
 #ifdef ENABLE_CUDA

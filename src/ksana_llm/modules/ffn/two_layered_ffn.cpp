@@ -48,15 +48,15 @@ void TwoLayeredFFN::InitConfig(int layer_idx, LayerCreationContext& creation_con
 void TwoLayeredFFN::InitLayers(int layer_idx, LayerCreationContext& creation_context,
                                ModelCreationConfig& model_creation_config, const std::string& weight_name_format) {
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
-  GroupQuantBackend linear_group_quant_backend = model_creation_config.attn_config.model_config.quant_config.backend;
+  LinearComputeBackend linear_compute_backend = model_creation_config.attn_config.model_config.quant_config.backend;
   if (fuse_gate_up_proj_) {
     mlp_gate_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_up_proj"),
-                                                  creation_context, linear_group_quant_backend);
+                                                  creation_context, linear_compute_backend);
   } else {
     mlp_gate_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "gate_proj"),
-                                               creation_context, linear_group_quant_backend);
+                                               creation_context, linear_compute_backend);
     mlp_up_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "up_proj"),
-                                             creation_context, linear_group_quant_backend);
+                                             creation_context, linear_compute_backend);
   }
   if (mlp_bias_) {
     mlp_gate_bias_tensor_ = creation_context.base_weight->GetModelWeights(
@@ -66,7 +66,7 @@ void TwoLayeredFFN::InitLayers(int layer_idx, LayerCreationContext& creation_con
     adds_ = std::make_shared<Add>(creation_context);
   }
   mlp_down_projs_ = std::make_shared<Linear>(fmt::format(layer_prefix + weight_name_format, "down_proj"),
-                                             creation_context, linear_group_quant_backend);
+                                             creation_context, linear_compute_backend);
   if (!fuse_silu_mul_) {
     silu_muls_ = std::make_shared<SiluMul>(creation_context);
   }

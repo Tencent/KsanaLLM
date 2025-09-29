@@ -152,22 +152,22 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
   }
 
   if (model_config.quant_config.method == QUANT_GPTQ && model_config.quant_config.desc_act == true) {
-    model_config.quant_config.backend = MARLIN_BACKEND;
+    model_config.quant_config.backend = MARLIN_LINEAR_BACKEND;
     KLLM_LOG_INFO << "Using MARLIN Quant Backend, only support MARLIN backend in desc_act mode";
   } else if (model_config.quant_config.method == QUANT_GPTQ || model_config.quant_config.method == QUANT_AWQ) {
     if (yaml_gptq_backend == "cutlass") {
-      model_config.quant_config.backend = CUTLASS_BACKEND;
+      model_config.quant_config.backend = CUTLASS_LINEAR_BACKEND;
       KLLM_LOG_INFO << "Using CUTLASS Quant Backend";
     } else if (yaml_gptq_backend == "marlin") {
-      model_config.quant_config.backend = MARLIN_BACKEND;
+      model_config.quant_config.backend = MARLIN_LINEAR_BACKEND;
       KLLM_LOG_INFO << "Using MARLIN Quant Backend";
     } else {
       KLLM_THROW(fmt::format("Not support quant backend {}.", yaml_gptq_backend));
     }
-    if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
-      // TODO(winminkong): MACHETE_BACKEND will be compatible with all models, int4 matmul layer will be able to
+    if (model_config.type == "deepseek_v3" || model_config.type == "kimi_k2" || model_config.type == "deepseek_v2") {
+      // TODO(winminkong): MACHETE_LINEAR_BACKEND will be compatible with all models, int4 matmul layer will be able to
       // automatically select the optimal backend based on conditions such as sm and performance.
-      model_config.quant_config.backend = MACHETE_BACKEND;
+      model_config.quant_config.backend = MACHETE_LINEAR_BACKEND;
       KLLM_LOG_INFO << "Using MACHETE Quant Backend, DeepSeek only support MACHETE backend at present";
     }
   } else {
