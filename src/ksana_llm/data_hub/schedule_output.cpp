@@ -10,6 +10,47 @@
 
 namespace ksana_llm {
 
+ForwardRequest* WorkerInferRequest::GetForwardRequest(const size_t logits_offset) {
+  if (forward_request_ == nullptr) {
+    forward_request_ = std::make_unique<ForwardRequest>();
+    forward_request_->response = &response;
+    forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
+    forward_request_->input_refit_embedding = &input_refit_embedding;
+    forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+    forward_request_->forwarding_tokens =
+        std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens)*) {});
+    forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward_request_->logits_custom_length = 0;
+    forward_request_->logits_buf.clear();
+    forward_request_->is_cudagraph_capture_request = false;
+    forward_request_->cache_manager = cache_manager;
+
+    const size_t rank_num = kv_cache_blocks.size();
+    forward_request_->kv_cache_ptrs.resize(rank_num);
+    forward_request_->atb_kv_cache_base_blk_ids.resize(rank_num);
+  }
+
+  forward_request_->req_id = req_id;
+  forward_request_->infer_stage = infer_stage;
+  forward_request_->step = step;
+  forward_request_->kv_cached_token_num = kv_cached_token_num;
+  forward_request_->logits_offset = logits_offset;
+  forward_request_->is_use_prefix_cache = is_use_prefix_cache;
+  forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
+  forward_request_->attn_dp_group_id = attn_dp_group_id;
+
+  // rebuild in worker
+  forward_request_->kv_cache_ptrs.clear();
+  forward_request_->atb_kv_cache_base_blk_ids.clear();
+  UpdateBlockPtrs(forward_request_->kv_cache_ptrs);
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+  AppendFlatKVCacheBlkIds(model_instance->GetLayerNum(), kv_cache_blocks, forward_request_->atb_kv_cache_base_blk_ids,
+                          cache_manager);
+#endif
+
+  return forward_request_.get();
+}
+
 std::string ScheduleOutput::ToString() {
   std::string result;
   result += "{\n";

@@ -20,6 +20,18 @@
 
 namespace ksana_llm {
 
+void ApplyAsyncForwardingTokens(
+    const std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>> &deep_copy_forwarding_tokens,
+    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs) {
+  for (auto &[model_inst, stage_vec_reqs] : grouped_reqs) {
+    for (auto &[stage, vec_req] : stage_vec_reqs) {
+      for (auto &req : vec_req) {
+        req->forwarding_tokens = deep_copy_forwarding_tokens.at(req->req_id);
+      }
+    }
+  }
+}
+
 BatchManager::BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context) {
   context_ = context;
   runtime_config_ = runtime_config;
@@ -100,48 +112,30 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   return enqueue_status;
 }
 
-Status BatchManager::ProcessScheduleData(
-    const std::pair<std::shared_ptr<ScheduleOutput>,
-                    std::pair<std::shared_ptr<std::unordered_map<
-                                  ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>,
-                              std::shared_ptr<std::vector<SamplingRequest>>>> &schedule_data) {
-  using GroupedReqsPtr =
-      std::shared_ptr<std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>;
-
+Status BatchManager::ProcessScheduleData(const ScheduleTaskPtr &schedule_data) {
   auto schedule_output = schedule_data.first;
-  GroupedReqsPtr grouped_reqs = schedule_data.second.first;
+  auto deep_copy_forwarding_tokens = schedule_data.second.first;
   auto sampling_reqs = schedule_data.second.second;
-
-  for (auto it = schedule_output->running_reqs.begin(); it != schedule_output->running_reqs.end();) {
-    auto req = *it;
+  for (auto &req : schedule_output->running_reqs) {
     // In the current assumption, asynchronous scheduling will change the content of req in advance,
     // so overwriting is required. However, the first round did not form an asynchronous process, so it was skipped.
-    if (req->step != 1) {
-      req->forwarding_tokens[req->forwarding_tokens.size() - 1] = req->generated_token;
-      req->output_mutex.lock();
-      req->output_tokens.insert(req->output_tokens.end(),
-                                req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
-                                req->forwarding_tokens.end());
-      req->output_mutex.unlock();
+    if (req->step == 0) {
+      continue;
     }
-    ++it;
-  }
-
-  for (auto &[model_inst, stage_vec_reqs] : *grouped_reqs) {
-    for (auto &[stage, vec_req] : stage_vec_reqs) {
-      for (const auto &req : vec_req) {
-        if (req.step != 1) {
-          (*req.forwarding_tokens)[req.forwarding_tokens->size() - 1] =
-              (*req.origin_tokens)[req.origin_tokens->size() - 1];
-        }
-      }
-    }
+    req->forwarding_tokens.back() = req->generated_token;
+    (*deep_copy_forwarding_tokens)[req->req_id]->back() = req->generated_token;
+    req->output_mutex.lock();
+    req->output_tokens.insert(req->output_tokens.end(),
+                              req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
+                              req->forwarding_tokens.end());
+    req->output_mutex.unlock();
   }
 
   for (const auto &req : *sampling_reqs) {
-    if (req.step != 1) {
-      (*req.forwarding_tokens)[req.forwarding_tokens->size() - 1] = (*req.origin_tokens)[req.origin_tokens->size() - 1];
+    if (req.step == 0) {
+      continue;
     }
+    req.forwarding_tokens->back() = req.origin_tokens->back();
   }
   return Status();
 }
@@ -155,24 +149,29 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   static time_t last_end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   std::future<ScheduleTaskPtr> sche_output;
   auto schedule_output = std::make_shared<ScheduleOutput>();
-  using GroupedMap = std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>;
+  using GroupedMap = std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>>;
 
   if (runtime_config_.enable_async) {
     sche_output = batch_scheduler_->SubmitSchedulingTask(multi_batch_id);
   }
+
+  std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
+  auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
+
   while (!terminated_) {
     if (terminated_) break;
-    time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
-    auto grouped_reqs = std::make_shared<GroupedMap>();
-    auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
+    const time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
 
     if (runtime_config_.enable_async) {
       auto schedule_data = sche_output.get();
       if (schedule_data.first == nullptr) continue;
+
       ProcessScheduleData(schedule_data);
       schedule_output = schedule_data.first;
-      grouped_reqs = schedule_data.second.first;
       sampling_reqs = schedule_data.second.second;
+
+      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs, grouped_reqs);
+      ApplyAsyncForwardingTokens(*schedule_data.second.first, grouped_reqs);
     } else {
       std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(multi_batch_id);
       schedule_output = std::make_shared<ScheduleOutput>(MergeScheduleOutputGroup(schedule_output_group));
@@ -200,10 +199,9 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     if (!runtime_config_.enable_async) {
       schedule_output->multi_batch_id = multi_batch_id;
       llm_runtime_->ReorderInferRequests(schedule_output->running_reqs);
-      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *grouped_reqs.get());
+      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs, grouped_reqs);
       llm_runtime_->BuildSamplingRequest(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *sampling_reqs.get());
+                                         *sampling_reqs);
     }
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
@@ -221,7 +219,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     if (runtime_config_.enable_async) {
       sche_output = batch_scheduler_->SubmitSchedulingTask(schedule_output->multi_batch_id);
     }
-    Status status = llm_runtime_->Step(schedule_output.get(), *grouped_reqs.get(), *sampling_reqs.get(), false);
+    Status status = llm_runtime_->Step(schedule_output.get(), grouped_reqs, *sampling_reqs, false);
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
     }
@@ -239,7 +237,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       RecordRequestSchedEvents(schedule_output->running_reqs, 0, schedule_output->multi_batch_id, 0,
                                "PrepareForwarding", RequestEventPhase::Begin);
 
-      status = llm_runtime_->Step(schedule_output.get(), *grouped_reqs.get(), *sampling_reqs.get(), true);
+      status = llm_runtime_->Step(schedule_output.get(), grouped_reqs, *sampling_reqs, true);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
@@ -250,7 +248,8 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
     int global_token_throughput =
         (end_time_ms - last_end_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - last_end_time_ms) : -1;
-    int local_token_throuphput = forwarding_token_num * 1000 / (end_time_ms - start_time_ms);
+    int local_token_throuphput =
+        (end_time_ms - start_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - start_time_ms) : -1;
     KLLM_LOG_MAIN << "multi_batch_id=" << multi_batch_id
                   << ", running_reqs.size=" << schedule_output->running_reqs.size()
                   << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
@@ -263,8 +262,8 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     REPORT_METRIC("global_token_throughput", global_token_throughput);
     REPORT_METRIC("local_token_throughput", local_token_throuphput);
     REPORT_METRIC("forwarding_token_num", forwarding_token_num);
-    REPORT_METRIC("1st_step_time_ms", middle_time_ms - start_time_ms);
-    REPORT_METRIC("2nd_step_time_ms", end_time_ms - middle_time_ms);
+    REPORT_METRIC("first_step_time_ms", middle_time_ms - start_time_ms);
+    REPORT_METRIC("second_step_time_ms", end_time_ms - middle_time_ms);
     REPORT_METRIC("total_step_time_ms", end_time_ms - start_time_ms);
   }
 
@@ -286,7 +285,7 @@ Status BatchManager::WorkerProcess() {
 
     llm_runtime_->ReorderInferRequests(schedule_output->worker_running_reqs);
 
-    std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs;
+    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
     llm_runtime_->BuildForwardRequests(schedule_output->worker_running_reqs, grouped_reqs);
 
     std::vector<SamplingRequest> sampling_reqs;

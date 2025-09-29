@@ -147,10 +147,10 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
 }
 
 bool BatchScheduler::IsIdle(size_t multi_batch_id) {
-  bool waiting_buffer_emtpy = false;
+  bool waiting_buffer_empty = false;
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
-    waiting_buffer_emtpy = waiting_reqs_.empty();
+    waiting_buffer_empty = waiting_reqs_.empty();
   }
 
   bool batch_state_queue_empty = true;
@@ -161,7 +161,7 @@ bool BatchScheduler::IsIdle(size_t multi_batch_id) {
                               batch_state->waiting_queue.empty() && batch_state->transfer_queue.empty();
   }
 
-  return (waiting_buffer_emtpy && batch_state_queue_empty);
+  return (waiting_buffer_empty && batch_state_queue_empty);
 }
 
 void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
@@ -204,7 +204,7 @@ void BatchScheduler::SchedulingWorkerLoop() {
 
 void BatchScheduler::ProcessSchedulingTask(ScheTask& task) {
   bool find = false;
-  size_t multi_batch_id = task.multi_batch_id;
+  const size_t multi_batch_id = task.multi_batch_id;
   while (!find && !terminating_) {
     std::shared_ptr<ScheduleOutputGroup> schedule_output_group = Schedule(multi_batch_id);
 
@@ -229,36 +229,22 @@ void BatchScheduler::ProcessSchedulingTask(ScheTask& task) {
 
       // async build
       llm_runtime_->ReorderInferRequests(schedule_output->running_reqs);
-      std::shared_ptr<std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>
-          grouped_reqs = std::make_shared<
-              std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>();
-      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *grouped_reqs.get());
 
-      std::shared_ptr<std::vector<SamplingRequest>> origin_sampling_reqs =
-          std::make_shared<std::vector<SamplingRequest>>();
+      auto deep_copy_forwarding_tokens = DeepCopyForwardRequest(schedule_output->running_reqs);
+
+      auto origin_sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
       llm_runtime_->BuildSamplingRequest(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *origin_sampling_reqs.get());
-
-      // copy forward_request and sampling_request to avoid async append
-      for (auto& [model_inst, stage_vec_reqs] : *grouped_reqs) {
-        for (auto& [stage, vec_req] : stage_vec_reqs) {
-          for (auto& req : vec_req) {
-            DeepCopyForwardRequest(req);
-          }
-        }
-      }
+                                         *origin_sampling_reqs);
       for (auto& req : *origin_sampling_reqs) {
         DeepCopySamplingRequest(req);
       }
 
       size_t tokens = 0;
-      for (size_t i = 0; i < schedule_output->running_reqs.size(); ++i) {
-        tokens += schedule_output->running_reqs[i]->forwarding_tokens.size() -
-                  schedule_output->running_reqs[i]->kv_cached_token_num;
+      for (const auto& req : schedule_output->running_reqs) {
+        tokens += req->forwarding_tokens.size() - req->kv_cached_token_num;
       }
       schedule_output->hidden_token_num = tokens;
-      task.promise.set_value({schedule_output, {grouped_reqs, origin_sampling_reqs}});
+      task.promise.set_value({schedule_output, {deep_copy_forwarding_tokens, origin_sampling_reqs}});
     }
   }
   if (terminating_) {

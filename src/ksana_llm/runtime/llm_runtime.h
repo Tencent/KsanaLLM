@@ -88,6 +88,15 @@ class LlmRuntime {
         return !is_a_decode;
       }
     });
+
+    // reset logits offset after reorder
+    if constexpr (std::is_same_v<T, InferRequest>) {
+      size_t logits_offset = 0;
+      for (auto &req : reqs) {
+        req->logits_offset = logits_offset;
+        logits_offset += req->sampling_token_num;
+      }
+    }
   }
 
   // Build forward request, group by model name and stage, for distributed worker node.

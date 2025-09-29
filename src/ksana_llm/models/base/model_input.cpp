@@ -354,11 +354,11 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
   }
 }
 
-void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
-  PROFILE_EVENT_SCOPE(PrepareNetxnGatherIdx, "PrepareNetxnGatherIdx", rank_);
-  if (run_mode == RunMode::kMain) {
-    mtp_req_id_to_pos_.clear();
-  }
+void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode) {
+  PROFILE_EVENT_SCOPE(PrepareNextnGatherIdx, "PrepareNextnGatherIdx", rank_);
+
+  std::unordered_map<size_t, size_t> updated_mtp_req_id_to_pos;
+  updated_mtp_req_id_to_pos.reserve(forward_reqs.size());
 
   std::vector<size_t> mtp_hidden_gather_idx;
   size_t total_len = 0;
@@ -1143,10 +1143,9 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     // Skip prefix token(include flexible cache token)
     const size_t skip_token_num = std::max(req.kv_cached_token_num, req.prefix_cache_len);
     const size_t input_ids_len = input_length - skip_token_num;
-    KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num "
-                   << forwarding_tokens.size() << ", skip_token_num " << skip_token_num << ",kv_cached_token_num "
-                   << req.kv_cached_token_num << ", prefix_cache_len" << req.prefix_cache_len << ", input_length "
-                   << input_length;
+    KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num " << input_length
+                   << ", skip_token_num " << skip_token_num << ",kv_cached_token_num " << req.kv_cached_token_num
+                   << ", prefix_cache_len" << req.prefix_cache_len;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);

@@ -40,11 +40,7 @@ class BatchManager {
   // Enqueue a request to waiting queue.
   Status Enqueue(std::shared_ptr<Request> &request);
 
-  Status ProcessScheduleData(
-      const std::pair<std::shared_ptr<ScheduleOutput>,
-                      std::pair<std::shared_ptr<std::unordered_map<
-                                    ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>,
-                                std::shared_ptr<std::vector<SamplingRequest>>>> &schedule_data);
+  Status ProcessScheduleData(const ScheduleTaskPtr &schedule_data);
 
   // Wait all requests done.
   Status WaitAllDone();

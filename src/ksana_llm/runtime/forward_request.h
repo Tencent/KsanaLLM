@@ -25,7 +25,7 @@ enum class ForwardRequestType : uint8_t {
 // The information used for forward.
 struct ForwardRequest {
   // The request id.
-  size_t req_id;
+  int64_t req_id;
 
   // The infer stage, context decode or decode.
   InferStage infer_stage = InferStage::STAGE_CONTEXT;

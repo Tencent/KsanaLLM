@@ -244,6 +244,14 @@ std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy:
   req->suggested_draft_num = 0;
   req->prefix_cache_len = 0;
 
+  if (connector_config_.group_role != GroupRole::NONE) {
+    KLLM_LOG_INFO << "Request " << req->req_id << "  and kv_comm_request_id: " << req->kv_comm_request_id
+                  << " is recomputed due to exceeding max_step_token_num or max_batch_size in decode group.";
+    Status status(RET_PREDICTOR_DISCARD, "Disaggregation of prefill and decoding could not be recomputed.");
+    ResetRequest(req, status, is_swap_req, true);
+    return batch_state_->schedule_output->running_reqs.erase(it);
+  }
+
   static constexpr bool terminate = false;
   ResetRequest(req, Status(RET_SUCCESS, "RecomputeRequest"), is_swap_req, terminate);
 
@@ -279,6 +287,7 @@ void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req,
 
   req->finish_status = req_status;
   req->finished = terminate;
+  req->reset_forward_request_ = true;
 
   if (is_swap_req) {
     cache_manager_->DestroySwappedRequest(req->req_id);
@@ -1053,6 +1062,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       Status status = cache_manager_->AllocateRequestBlocks(req->req_id, unique_block_num, req->kv_cache_blocks);
       if (status.OK()) {
         step_not_kv_cached_token_num += current_token_num - shared_token_num;
+        req->reset_forward_request_ = true;
 
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->forwarding_tokens.size()) {

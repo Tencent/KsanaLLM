@@ -245,32 +245,29 @@ TEST_F(BatchManagerTest, ProcessScheduleDataBasic) {
   auto schedule_output = std::make_shared<ScheduleOutput>();
   schedule_output->running_reqs.push_back(infer_req);
 
-  auto grouped_reqs = std::make_shared<
-      std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>();
-
-  ForwardRequest fwd_req;
-  fwd_req.step = 2;
-  fwd_req.forwarding_tokens = std::make_shared<std::vector<int>>(std::initializer_list<int>{5, 6, 7});
-  fwd_req.origin_tokens = new std::vector<int>({15, 16, 17});
-  (*grouped_reqs)[nullptr][InferStage::STAGE_CONTEXT].push_back(fwd_req);
-
+  auto deep_copy_forwarding_tokens = std::make_shared<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>>();
+  auto forward_req = std::make_unique<ForwardRequest>();
+  forward_req->req_id = infer_req->req_id;
+  forward_req->step = 2;
+  forward_req->forwarding_tokens = std::make_shared<std::vector<int>>(std::initializer_list<int>{5, 6, 7});
+  forward_req->origin_tokens = new std::vector<int>({15, 16, 17});
+  (*deep_copy_forwarding_tokens)[forward_req->req_id] =
+      std::make_shared<std::vector<int>>(*forward_req->forwarding_tokens);
   auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
   SamplingRequest smp_req;
   smp_req.step = 2;
   smp_req.forwarding_tokens = new std::vector<int>({8, 9, 10});
   smp_req.origin_tokens = new std::vector<int>({18, 19, 20});
   sampling_reqs->push_back(smp_req);
-
-  auto schedule_data = std::make_pair(schedule_output, std::make_pair(grouped_reqs, sampling_reqs));
-
+  auto schedule_data = std::make_pair(schedule_output, std::make_pair(deep_copy_forwarding_tokens, sampling_reqs));
   batch_manager_->ProcessScheduleData(schedule_data);
 
   EXPECT_EQ(infer_req->forwarding_tokens.back(), infer_req->generated_token);
   EXPECT_FALSE(infer_req->output_tokens.empty());
   EXPECT_EQ(infer_req->output_tokens.back(), infer_req->forwarding_tokens.back());
 
-  auto& vec_req = (*grouped_reqs)[nullptr][InferStage::STAGE_CONTEXT];
-  EXPECT_EQ(vec_req[0].forwarding_tokens->back(), vec_req[0].origin_tokens->back());
+  const auto& vec_req = (*deep_copy_forwarding_tokens)[forward_req->req_id];
+  EXPECT_EQ(vec_req->back(), infer_req->forwarding_tokens.back());
 
   EXPECT_EQ(sampling_reqs->at(0).forwarding_tokens->back(), sampling_reqs->at(0).origin_tokens->back());
 }

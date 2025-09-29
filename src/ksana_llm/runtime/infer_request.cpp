@@ -160,4 +160,99 @@ std::vector<int> InferRequest::GetKVOccupiedDevices() {
   return kv_occupied_devices;
 }
 
+ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logits_buf) {
+  if (forward_request_ == nullptr || reset_forward_request_) {
+    reset_forward_request_ = false;
+    forward_request_ = std::make_unique<ForwardRequest>();
+    forward_request_->req_id = req_id;
+    forward_request_->req_ctx = req_ctx;
+    forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
+    forward_request_->input_refit_embedding = &input_refit_embedding;
+    forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+    forward_request_->response = &response;
+    forward_request_->origin_tokens = &forwarding_tokens;
+    forward_request_->sampling_config = &sampling_config;
+    forward_request_->forwarding_tokens =
+        std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens) *) {});
+    forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward_request_->cache_manager = cache_manager;
+
+    const size_t rank_num = kv_cache_blocks.size();
+    forward_request_->kv_cache_ptrs.resize(rank_num);
+    forward_request_->atb_kv_cache_base_blk_ids.resize(rank_num);
+  }
+
+  forward_request_->infer_stage = infer_stage;
+  forward_request_->step = step;
+  forward_request_->kv_cached_token_num = kv_cached_token_num;
+  forward_request_->logits_custom_length = logits_custom_length;
+  forward_request_->sampling_token_num = sampling_token_num;
+  forward_request_->last_step_token_num = last_step_token_num;
+  forward_request_->logits_buf = logits_buf;
+  forward_request_->logits_offset = logits_offset;
+  forward_request_->draft_token_num = draft_tokens.size();
+  forward_request_->is_use_prefix_cache = is_use_prefix_cache;
+  forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
+  forward_request_->is_cudagraph_capture_request = is_cudagraph_capture_request;
+  forward_request_->attn_dp_group_id = attn_dp_group_id;
+
+  UpdateBlockPtrs(forward_request_->kv_cache_ptrs);
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+  AppendFlatKVCacheBlkIds(model_instance->GetLayerNum(), kv_cache_blocks, forward_request_->atb_kv_cache_base_blk_ids,
+                          cache_manager);
+#endif
+
+  return forward_request_.get();
+}
+
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+// NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
+// The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
+// guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
+// head_dim], where 2 represents key and value. The Ascend ATB kv cache consists of kcache and vcache, which are
+// independent contiguous storage spaces. The shapes of kcache and vcache are [num_blocks * layer_num,
+// block_token_num, head_num, head_dim]. Each block has a size of [block_token_num, head_num, head_dim]. To
+// interface with the NPU, Ascend ATB (hereinafter referred to as ATB) needs to be used. In order for the NPU's
+// self/paged attention to utilize Ksana's kv cache and share the underlying memory/GPU memory management
+// capabilities, the Ksana kv cache needs to be converted to the Ascend ATB kv cache format.
+// 1. Change the block allocation method so that the blocks are contiguous in physical memory, while the upper-level
+// pointers point to different storage spaces. Originally, each block in the Ksana kv cache called malloc once. This
+// should be changed to pre-allocate a contiguous storage space of size [num_blocks, 2, layer_num, block_token_num,
+// head_num, head_dim]. The pointers of each block should then point to cache_base_ptr + (block index * 2 *
+// layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
+// 2. During each inference process, each prompt will carry an array of block IDs, which can be used to obtain the
+// pointers to the storage space. For ATB, conversion is required to use these pointers. The conversion process is
+// as follows:
+//    - Given a block ID array [b0, b1, b2, b3, b4] and the base address pointer of the Ksana kv cache after the
+//    modification in step 1, cache_base_ptr.
+//    - For ATB: The Ksana kv cache has a total of num_blocks * 2 * layer_num blocks.
+//    - Therefore, the block ID array for ATB is [b0 * layer_num * 2, b1 * layer_num * 2, b2 * layer_num * 2, b3 *
+//    layer_num * 2, b4 * layer_num * 2].
+//    - Ksana's kv cache swaps memory/GPU memory at the block level, so to reuse Ksana's kv cache's underlying
+//    memory/GPU memory management capabilities, ATB's kcache and vcache share the same Ksana kv cache.
+//    - Since each block in Ksana is divided into K and V parts, each part having a size of [layer_num,
+//    block_token_num, head_num, head_dim].
+//    - To allow ATB's kcache and vcache to share the same block ID array, the kcache pointer is cache_base_ptr, and
+//    the vcache pointer is cache_base_ptr + (layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
+//    - Therefore, the block ID array for kcache/vcache is [b0 * layer_num * 2 + layer_idx, b1 * layer_num * 2 +
+//    layer_idx, b2 * layer_num * 2 + layer_idx, b3 * layer_num * 2 + layer_idx, b4 * layer_num * 2 + layer_idx].
+// More detail refer to docs/Technology/kvcache-relationship-between-ascend-atb-and-ksana.md
+void AppendFlatKVCacheBlkIds(const uint32_t layer_num, const std::vector<std::vector<int>> &device_block_ids,
+                             std::vector<std::vector<int32_t>> &atb_block_ids,
+                             std::shared_ptr<CacheManagerInterface> cache_manager) {
+  const size_t rank_num = device_block_ids.size();
+  for (size_t rank = 0; rank < rank_num; ++rank) {
+    // for dedicate device kv blocks
+    const size_t base_id = cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlocksBaseId();
+    const auto &device_blocks = device_block_ids[rank];
+    auto &atb_blocks = atb_block_ids[rank];
+    const size_t exist_blocks = atb_blocks.size();
+    atb_blocks.resize(device_blocks.size());
+    for (size_t i = exist_blocks; i < device_blocks.size(); ++i) {
+      // NOTE(karlluo): only support bfloat16 or float16, so we just dedicate sizeof(float16) here
+      atb_blocks[i] = (device_blocks[i] - base_id) * layer_num * 2;
+    }
+  }
+}
+#endif
 }  // namespace ksana_llm

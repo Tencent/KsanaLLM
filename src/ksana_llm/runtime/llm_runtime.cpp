@@ -66,67 +66,15 @@ void LlmRuntime::BuildForwardRequests(
     size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
     std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
   PROFILE_EVENT_SCOPE(BuildForwardRequests, fmt::format("BuildForwardRequests_{}", multi_batch_id));
-  // maybe async
-  int logits_offset = 0;
-  for (auto& req_ptr : reqs) {
-    req_ptr->step += 1;
-    req_ptr->logits_offset = logits_offset;
-    logits_offset += req_ptr->sampling_token_num;
 
-    ModelInstance* key = req_ptr->model_instance.get();
-    InferStage grouped_stage = kGroupStageMap[req_ptr->infer_stage];
-
-    if (grouped_reqs.find(key) == grouped_reqs.end()) {
-      grouped_reqs[key] = {};
-    }
-
-    if (grouped_reqs[key].find(grouped_stage) == grouped_reqs[key].end()) {
-      grouped_reqs[key][grouped_stage] = {};
-    }
-
-    ForwardRequest forward_req;
-    BuildForwardRequestFromInferRequest(forward_req, req_ptr, req_ptr->model_instance->GetLayerNum(),
-                                        key->GetLogitsPtr(multi_batch_id));
-    grouped_reqs[key][grouped_stage].push_back(forward_req);
+  grouped_reqs.clear();
+  for (auto& req : reqs) {
+    ++req->step;
+    ModelInstance* const key = req->model_instance.get();
+    auto& group_reqs = grouped_reqs[key][GetGroupStage(req->infer_stage)];
+    group_reqs.reserve(reqs.size());
+    group_reqs.emplace_back(req->GetForwardRequest(key->GetLogitsPtr(multi_batch_id)));
   }
-}
-
-void LlmRuntime::BuildForwardRequestFromInferRequest(ForwardRequest& forward_req,
-                                                     std::shared_ptr<InferRequest>& req_ptr, uint32_t layer_num,
-                                                     std::vector<float*> logits_buf) {
-  forward_req.req_id = req_ptr->req_id;
-  forward_req.infer_stage = req_ptr->infer_stage;
-  forward_req.step = req_ptr->step;
-  forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
-  forward_req.logits_custom_length = req_ptr->logits_custom_length;
-  forward_req.sampling_token_num = req_ptr->sampling_token_num;
-  forward_req.last_step_token_num = req_ptr->last_step_token_num;
-  forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
-  forward_req.logits_buf = logits_buf;
-  forward_req.logits_offset = req_ptr->logits_offset;
-  forward_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
-  forward_req.response = &req_ptr->response;
-  forward_req.draft_token_num = req_ptr->draft_tokens.size();
-  forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
-  forward_req.origin_tokens = &(req_ptr->forwarding_tokens);
-  forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
-  forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
-  forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
-  forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
-  forward_req.flexible_cache_len = req_ptr->flexible_cached_copy_tasks.size();
-  forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
-  forward_req.is_cudagraph_capture_request = req_ptr->is_cudagraph_capture_request;
-  forward_req.sampling_config = &(req_ptr->sampling_config);
-  forward_req.timestamp_in_ms = req_ptr->timestamp_in_ms;
-  forward_req.req_ctx = req_ptr->req_ctx;
-  forward_req.cache_manager = req_ptr->cache_manager;
-  forward_req.attn_dp_group_id = req_ptr->attn_dp_group_id;
-
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
-  forward_req.accepted_hidden_states_ptr = &(req_ptr->accepted_hidden_states);
-  BuildFlatKVCacheBlkIds(layer_num, req_ptr->kv_cache_blocks, forward_req.atb_kv_cache_base_blk_ids,
-                         req_ptr->cache_manager);
-#endif
 }
 
 void LlmRuntime::BuildForwardRequests(

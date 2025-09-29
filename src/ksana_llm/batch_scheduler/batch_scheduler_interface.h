@@ -8,17 +8,18 @@
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/data_hub/schedule_output.h"
-#include "ksana_llm/runtime/infer_request.h"
-#include "ksana_llm/runtime/forward_request.h"
-#include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
+#include "ksana_llm/runtime/forward_request.h"
+#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/sampling_request.h"
 
 namespace ksana_llm {
 
-using ScheduleTaskPtr = std::pair<std::shared_ptr<ScheduleOutput>, std::pair<
-    std::shared_ptr<std::unordered_map<ModelInstance *, std::unordered_map<InferStage, std::vector<ForwardRequest>>>>,
-    std::shared_ptr<std::vector<SamplingRequest>>>>;
+using ScheduleTaskPtr =
+    std::pair<std::shared_ptr<ScheduleOutput>,
+              std::pair<std::shared_ptr<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>>,
+                        std::shared_ptr<std::vector<SamplingRequest>>>>;
 
 struct ScheTask {
   std::promise<ScheduleTaskPtr> promise;

@@ -237,6 +237,19 @@ class InferRequest {
 
   // The current state id of the FSM (Finite State Machine).
   size_t fsm_state_id = 0;
+
+ public:
+  // ForwardRequest's lifecycle is bound to InferRequest's, making smart pointers redundant. Any use of ForwardRequest*
+  // requires the guaranteed existence of its associated InferRequest.
+  ForwardRequest *GetForwardRequest(const std::vector<float *> &logits_buf);
+  std::unique_ptr<ForwardRequest> forward_request_;
+  bool reset_forward_request_ = true;
 };
+
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+void AppendFlatKVCacheBlkIds(const uint32_t layer_num, const std::vector<std::vector<int>> &device_block_ids,
+                             std::vector<std::vector<int32_t>> &atb_block_ids,
+                             std::shared_ptr<CacheManagerInterface> cache_manager);
+#endif
 
 }  // namespace ksana_llm
