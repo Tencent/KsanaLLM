@@ -1122,10 +1122,12 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_INVALID;
   int group_size = 0;
   bool apply_weight = false;
+  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
   params.push_back(max_token_num);
+  params.push_back(layer_idx);
   params.push_back(expert_num);
   params.push_back(expert_hidden_size);
   params.push_back(expert_inter_size);
@@ -1166,6 +1168,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
       tensor.fill_(89);
     }
   }
+  inputs.push_back(Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {0}, kDeviceRank));
 
   // initialize scales tensor
   std::vector<Tensor> scales(4);
@@ -1287,6 +1290,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
       tensor.fill_(1754889370);
     }
   }
+  inputs.push_back(Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {0}, kDeviceRank));
 
   // initialize scales tensor
   std::vector<Tensor> scales(2);
@@ -1510,10 +1514,12 @@ TEST_F(LayerTest, MoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
+  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
   params.push_back(max_token_num);
+  params.push_back(layer_idx);
   params.push_back(expert_num);
   params.push_back(expert_hidden_size);
   params.push_back(expert_inter_size);
@@ -1734,7 +1740,7 @@ TEST_F(LayerTest, MoeLayerTest) {
     cutlass_moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
     cutlass_moe_layer.Preprocess(new_model_config, new_runtime_config);
     // 构建输入 input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
-    std::vector<Tensor> inputs(4);
+    std::vector<Tensor> inputs(5);
     inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
                        {static_cast<size_t>(hidden_states.size(0)), static_cast<size_t>(hidden_states.size(1))},
                        kDeviceRank, hidden_states.data_ptr());
@@ -1749,6 +1755,7 @@ TEST_F(LayerTest, MoeLayerTest) {
                        {static_cast<size_t>(w2_weight.size(0)), static_cast<size_t>(w2_weight.size(1)),
                         static_cast<size_t>(w2_weight.size(2))},
                        kDeviceRank, w2_weight.data_ptr());
+    inputs[4] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {0}, kDeviceRank);
     std::vector<Tensor> scales(2);
     scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
                        {static_cast<size_t>(fc13_weight_scale.size(0)), static_cast<size_t>(fc13_weight_scale.size(1)),
@@ -1831,7 +1838,7 @@ TEST_F(LayerTest, MoeLayerTest) {
     moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
     moe_layer.Preprocess(new_model_config, new_runtime_config);
     // 构建输入 input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
-    std::vector<Tensor> inputs(4);
+    std::vector<Tensor> inputs(5);
     inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
                        {static_cast<size_t>(hidden_states.size(0)), static_cast<size_t>(hidden_states.size(1))},
                        kDeviceRank, hidden_states.data_ptr());
@@ -1846,6 +1853,7 @@ TEST_F(LayerTest, MoeLayerTest) {
                        {static_cast<size_t>(down_weight.size(0)), static_cast<size_t>(down_weight.size(1)),
                         static_cast<size_t>(down_weight.size(2))},
                        kDeviceRank, down_weight.data_ptr());
+    inputs[4] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {0}, kDeviceRank);
     std::vector<Tensor> scales(2);
     scales[0] =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
@@ -1976,10 +1984,12 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
+  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
   params.push_back(max_token_num);
+  params.push_back(layer_idx);
   params.push_back(expert_num);
   params.push_back(expert_hidden_size);
   params.push_back(expert_inter_size);

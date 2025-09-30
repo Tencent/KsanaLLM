@@ -572,7 +572,8 @@ template <typename T>
 Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::string, Tensor>& host_gptq_weights,
                                                        int dev_rank,
                                                        std::unordered_map<std::string, Tensor>& device_model_weights,
-                                                       std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
+                                                       std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
+                                                       std::vector<std::vector<int>>& expert_map) {
   SetDevice(dev_rank);
   // Prapare params that need to use
   int32_t layer_idx = -1, expert_idx = -1;
@@ -584,17 +585,6 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
   size_t moe_tp_rank = dev_rank / expert_parallel_config.expert_para_size;
 
-  // init expert map
-  std::vector<int> expert_map(num_experts, -1);
-  size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
-  size_t expert_offset = (global_expert_para_size > 1)
-                             ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
-                             : 0;
-  size_t expert_start_id = rank_expert_offset + expert_offset;
-  size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank);
-  for (size_t i = expert_start_id; i < expert_end_id; ++i) {
-    expert_map[i] = i - expert_start_id;
-  }
   size_t moe_inter_size_per_rank =
       DivRoundUp(new_deepseek_v3_config->moe_config.moe_inter_size, new_deepseek_v3_config->moe_tensor_para_size);
   size_t hidden_units = new_deepseek_v3_config->hidden_units;
@@ -640,7 +630,7 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
       if (layer_idx < 0 || expert_idx < 0) {
         continue;
       }
-      int expert_idx_ = expert_map[expert_idx];
+      int expert_idx_ = expert_map[layer_idx][expert_idx];
       if (expert_idx_ < 0) {
         continue;
       }

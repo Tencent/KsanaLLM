@@ -31,7 +31,7 @@ Qwen2MoeDecoderLayer::Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buff
   // MoE related blocks
   expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
-  moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+  moes_ = std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
                                 MoeScaleNormMode::NO_NORM);
   shared_mlps_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
@@ -155,7 +155,6 @@ Status Qwen2Moe::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext
   return Status();
 }
 
-
 /* **************************************
  * Qwen2MoeModel
  */
@@ -179,6 +178,5 @@ Status Qwen2MoeModel::LayerForward(ForwardingContext& forwarding_context, const 
 
   return Status();
 }
-
 
 }  // namespace ksana_llm

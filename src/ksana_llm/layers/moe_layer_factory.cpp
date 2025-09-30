@@ -70,7 +70,7 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
 std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<BaseWeight> base_weight,
                                                                std::vector<std::string> weight_names,
                                                                DataType weight_type, DataType input_type,
-                                                               DataType output_type,
+                                                               DataType output_type, int layer_idx,
                                                                const std::vector<std::any>& init_params) {
   // moe layer   (weight_names[0]: up_gate_experts, weight_names[1]: down_experts)
   bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
@@ -127,6 +127,7 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
 
   std::vector<std::any> moe_matmul_param = init_params;                                    // moe_scale_norm_mode
   moe_matmul_param.push_back(runtime_config_.max_step_token_num);                          // max_token_num
+  moe_matmul_param.push_back(layer_idx);                                                   // layer_idx
   moe_matmul_param.push_back(expert_num_per_node);                                         // expert_num_per_node
   moe_matmul_param.push_back(hidden_size);                                                 // hidden_size
   moe_matmul_param.push_back(moe_inter_size_per_rank);                                     // Inter_size

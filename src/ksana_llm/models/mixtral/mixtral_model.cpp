@@ -30,7 +30,7 @@ MixtralDecoderLayer::MixtralDecoderLayer(int layer_idx, LayerCreationContext& cr
   // MoE related blocks
   expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
-  moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+  moes_ = std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
                                 MoeScaleNormMode::RE_NORM);
 }
@@ -99,7 +99,6 @@ Status Mixtral::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext&
   return Status();
 }
 
-
 /* **************************************
  * MixtralModel
  */
@@ -123,6 +122,5 @@ Status MixtralModel::LayerForward(ForwardingContext& forwarding_context, const R
 
   return Status();
 }
-
 
 }  // namespace ksana_llm

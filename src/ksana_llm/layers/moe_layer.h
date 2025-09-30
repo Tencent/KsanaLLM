@@ -46,6 +46,8 @@ class MoeLayer : public BaseLayer {
   Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
   Status Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
+  Status DumpEplbData(Tensor& topk_ids);
+
   template <typename T>
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                std::shared_ptr<Context> context, int rank);
@@ -72,6 +74,7 @@ class MoeLayer : public BaseLayer {
   size_t expert_topk_;
   size_t global_expert_para_size_;  // expert_para_size* expert_world_size
   int tp_size_;
+  int layer_idx_;
   bool use_lora_ = false;
   bool use_vllm_moe_ = false;
   uint32_t num_expert_group_ = 1;
@@ -136,6 +139,12 @@ class MoeLayer : public BaseLayer {
   std::vector<llm_kernels::nvidia::cutlass_extensions::CutlassGemmConfig> tactics_;
 
   bool using_deepep_;
+
+  // Used for Expert-Parallel load balancer.
+  bool enable_load_eplb_weight_ = false;
+  bool enable_dump_eplb_data_ = false;
+  int eplb_dump_step_ = 0;
+  std::string eplb_dump_path_;
 
   std::shared_ptr<llm_kernels::nvidia::moe::ExpertMap> expert_map_;
 };

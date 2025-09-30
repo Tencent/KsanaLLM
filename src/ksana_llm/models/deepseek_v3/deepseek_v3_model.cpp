@@ -58,11 +58,11 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
                                             model_creation_config.attn_config.model_config.quant_config.backend);
     if (model_creation_config.attn_config.model_config.moe_config.use_e_score_correction_bias) {
       moe_ = std::make_shared<MoE>(
-          layer_prefix + ".mlp.experts.up_gate_proj.weight", layer_prefix + ".mlp.experts.down_proj.weight",
+          layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight", layer_prefix + ".mlp.experts.down_proj.weight",
           layer_prefix + ".mlp.gate.e_score_correction_bias", creation_context, moe_scale_norm_mode);
     } else {
       moe_ =
-          std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+          std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context, moe_scale_norm_mode);
     }
   } else {

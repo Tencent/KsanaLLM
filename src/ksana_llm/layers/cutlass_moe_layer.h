@@ -26,7 +26,14 @@ class CutlassMoeLayer : public BaseLayer {
 
  private:
   // 执行 GroupedTopk 计算的辅助函数
-  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens);
+  Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+  // Used for distributing and gathering topk_ids and hidden_buffer in Expert-Parallel scenarios
+  Status Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+  // Used for Expert-Parallel load balancer.
+  Status DumpEplbData(Tensor& topk_ids);
 
   template <typename T>
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -43,6 +50,7 @@ class CutlassMoeLayer : public BaseLayer {
   size_t expert_inter_size_;
   size_t expert_topk_;
   int tp_size_;
+  int layer_idx_;
   bool use_vllm_moe_ = false;
   uint32_t num_expert_group_ = 1;
   uint32_t expert_groups_topk_ = 1;
@@ -61,6 +69,19 @@ class CutlassMoeLayer : public BaseLayer {
   size_t topk_ids_ptr_size;
   void* kernel_workspace_ptr_;
   size_t kernel_workspace_size;
+
+  size_t global_expert_para_size_;
+  size_t global_expert_para_rank_;
+
+  bool using_deepep_;
+
+  std::shared_ptr<llm_kernels::nvidia::moe::ExpertMap> expert_map_;
+
+  // Used for Expert-Parallel load balancer.
+  bool enable_load_eplb_weight_ = false;
+  bool enable_dump_eplb_data_ = false;
+  int eplb_dump_step_ = 0;
+  std::string eplb_dump_path_;
 
   std::vector<std::vector<int64_t>> config_map_;
 

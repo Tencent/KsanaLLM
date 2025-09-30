@@ -43,6 +43,7 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   int parameter_index = 0;
   moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
   max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
+  layer_idx_ = std::any_cast<int>(parameters[parameter_index++]);
   expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -85,8 +86,26 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
       std::make_shared<llm_kernels::nvidia::CutlassMoeWrapper>(1, 0, ep_size, ep_rank, 1, 0, expert_topk_);
   cutlass_moe_wrapper_->Init<T>();
 
-  config_map_.clear();
+  // EPLB data dump is off by default; when enabled, pick up the output directory
+  // from env-var DUMP_EPLB_PATH or fall back to the canonical EPLB cache path.
+  enable_dump_eplb_data_ = runtime_config.enable_dump_eplb_data;
+  if (enable_dump_eplb_data_) {
+    const char* eplb_dump_path = std::getenv("DUMP_EPLB_PATH");
+    if (eplb_dump_path) {
+      eplb_dump_path_ = eplb_dump_path;
+    } else {
+      const char* home_dir = std::getenv("HOME");
+      eplb_dump_path_ = home_dir ? fmt::format("{}/.cache/KsanaLLM/EPLB/", std::string(home_dir)) : "./EPLB/";
+    }
+  }
 
+  // When EPLB acceleration is enabled, initialize the expert_map_.
+  enable_load_eplb_weight_ = runtime_config.enable_load_eplb_weight;
+  if (enable_load_eplb_weight_ || using_deepep_) {
+    size_t total_expert_num = expert_num_per_node_ * global_expert_para_size_;
+    expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(global_expert_para_size_,
+                                                                        global_expert_para_rank_, total_expert_num);
+  }
   return Status();
 }
 
@@ -276,8 +295,8 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
   grouped_topk_input_tensors.push_back(input_tensors[1]);
 
   // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
-  if (input_tensors.size() > 4) {
-    grouped_topk_input_tensors.push_back(input_tensors[4]);
+  if (input_tensors.size() > 5) {
+    grouped_topk_input_tensors.push_back(input_tensors[5]);
   }
 
   // 输出: topk_weights_ptr
@@ -293,7 +312,64 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
   grouped_topk_output_tensors.push_back(topk_ids_tensor);
 
   // 调用 GroupedTopkLayer
-  return grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+  Status status = grouped_topk_layer_->Forward(grouped_topk_input_tensors, grouped_topk_output_tensors);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
+    return status;
+  }
+
+  if (enable_dump_eplb_data_) {
+    DumpEplbData(topk_ids_tensor);
+  }
+
+  if (enable_load_eplb_weight_ && input_tensors[4].shape[0] > layer_idx_) {
+    size_t num_experts = input_tensors[4].shape[1];
+    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+                                        reinterpret_cast<int32_t*>(layer_expert_ptr),
+                                        context_->GetComputeStreams()[rank_].Get());
+  }
+
+  // TODO(jinxcwu) 支持deepep的量化传输
+  if (using_deepep_) {
+    // LCOV_EXCL_START
+    // 调用 Dispatch 分发
+    // 分发结果将被存储到 common_mlp_tensor, topk_ids, topk_weights 中
+    std::vector<Tensor> deepep_input_tensors = {input_tensors[0], topk_ids_tensor, topk_weights_tensor};
+    std::vector<Tensor>& deepep_output_tensors = output_tensors;
+    KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch shape {} {}", deepep_input_tensors[0].shape[0],
+                                  deepep_input_tensors[1].shape[0]);
+    Dispatch(deepep_input_tensors, deepep_output_tensors);
+    KLLM_LOG_DEBUG << fmt::format("ExecuteGroupedTopk: Dispatch output shape {} {}", deepep_output_tensors[0].shape[0],
+                                  deepep_output_tensors[1].shape[0]);
+    topk_ids_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    topk_weights_tensor.shape[0] = deepep_output_tensors[0].shape[0];
+    // LCOV_EXCL_STOP
+  }
+  return Status();
 }
+
+Status CutlassMoeLayer::DumpEplbData(Tensor& topk_ids) {
+  topk_ids.SaveToNpyFile(
+      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
+  eplb_dump_step_ += 1;
+  return Status();
+}
+
+// LCOV_EXCL_START
+Status CutlassMoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (GetExpertParallelDeepepWrapper()) {
+    GetExpertParallelDeepepWrapper()->Dispatch(input_tensors, output_tensors, rank_);
+  }
+  return Status();
+}
+
+Status CutlassMoeLayer::Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+  if (GetExpertParallelDeepepWrapper()) {
+    GetExpertParallelDeepepWrapper()->Combine(input_tensors, output_tensors, rank_);
+  }
+  return Status();
+}
+// LCOV_EXCL_STOP
 
 }  // namespace ksana_llm

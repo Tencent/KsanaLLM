@@ -34,6 +34,11 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
  private:
   Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config);
 
+  // Load EPLB mapping configuration from JSON file
+  Status InitExpertMap(const size_t& num_experts, const size_t& expert_start_id, const size_t& expert_end_id,
+                       int dev_rank, std::vector<std::vector<int>>& expert_map,
+                       std::unordered_map<std::string, Tensor>& device_model_weights);
+
  private:
   PipelineConfig pipeline_config_;
   RuntimeConfig runtime_config_;

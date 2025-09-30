@@ -25,6 +25,22 @@ __global__ void ExpertMapKernel(int32_t* data, size_t data_size, int32_t start_e
   }
 }
 
+__global__ void ExpertMapInvKernel(int32_t* data, size_t data_size, int32_t start_expert) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < data_size) {
+    if (data[idx] != -1) {
+      data[idx] += start_expert;
+    }
+  }
+}
+
+__global__ void ExpertMapKernel(int32_t* data, size_t data_size, int32_t* expert_map) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < data_size) {
+    data[idx] = expert_map[data[idx]];
+  }
+}
+
 ExpertMap::ExpertMap(size_t ep_size, size_t ep_rank, size_t expert_num) {
   KLLM_KERNEL_CHECK_WITH_INFO(expert_num % ep_size == 0, "expert_num must be divisible by ep_size");
   size_t expert_per_rank = expert_num / ep_size;
@@ -36,6 +52,18 @@ void ExpertMap::InvokeExpertMapInplace(int32_t* data, size_t data_size, cudaStre
   const int threads_per_block = 128;
   const int blocks = (data_size + threads_per_block - 1) / threads_per_block;
   ExpertMapKernel<<<blocks, threads_per_block, 0, stream>>>(data, data_size, start_expert_, end_expert_);
+}
+
+void ExpertMap::InvokeExpertMapInverseInplace(int32_t* data, size_t data_size, cudaStream_t stream) {
+  const int threads_per_block = 128;
+  const int blocks = (data_size + threads_per_block - 1) / threads_per_block;
+  ExpertMapInvKernel<<<blocks, threads_per_block, 0, stream>>>(data, data_size, start_expert_);
+}
+
+void ExpertMap::InvokeExpertMapInplace(int32_t* data, size_t data_size, int32_t* expert_map, cudaStream_t stream) {
+  const int threads_per_block = 128;
+  const int blocks = (data_size + threads_per_block - 1) / threads_per_block;
+  ExpertMapKernel<<<blocks, threads_per_block, 0, stream>>>(data, data_size, expert_map);
 }
 
 }  // namespace moe

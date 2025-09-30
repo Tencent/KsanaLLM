@@ -12,10 +12,10 @@ namespace ksana_llm {
 class MoE {
  public:
   // Disable a default constructor
-  MoE(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
+  MoE(const int& layer_idx, const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
       const LayerCreationContext& creation_context, MoeScaleNormMode moe_scale_norm_mode);
 
-  MoE(const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
+  MoE(const int& layer_idx, const std::string& up_gate_proj_weight_name, const std::string& down_proj_weight_name,
       const std::string& e_score_correction_bias_weight_name, const LayerCreationContext& creation_context,
       MoeScaleNormMode moe_scale_norm_mode);
 
@@ -33,7 +33,11 @@ class MoE {
   Tensor up_gate_proj_weight_;
   Tensor down_proj_weight_;
 
+  Tensor eplb_expert_map_;
+
   bool use_e_score_correction_bias_;
   Tensor e_score_correction_bias_weight_;
+
+  int layer_idx_;
 };
 }  // namespace ksana_llm

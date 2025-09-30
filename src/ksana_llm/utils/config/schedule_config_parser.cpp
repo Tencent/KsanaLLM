@@ -181,6 +181,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
     runtime_config_.parallel_basic_config.tensor_parallel_size = static_cast<size_t>(device_size);
   }
 
+  // Load EPLB-related environment variable configurations.
+  const char *enable_dump_eplb_data = std::getenv("ENABLE_DUMP_EPLB_DATA");
+  if (enable_dump_eplb_data) {
+    runtime_config_.enable_dump_eplb_data = true;
+  }
+  const char *enable_load_eplb_weight = std::getenv("EPLB_WEIGHT");
+  if (enable_load_eplb_weight) {
+    runtime_config_.enable_load_eplb_weight = true;
+  }
+
   KLLM_CHECK_WITH_INFO(
       runtime_config_.parallel_basic_config.tensor_parallel_size >=
           runtime_config_.parallel_basic_config.attn_data_parallel_size,

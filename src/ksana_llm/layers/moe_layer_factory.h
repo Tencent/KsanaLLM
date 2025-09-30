@@ -25,7 +25,7 @@ class MoeLayerFactory {
 
   std::shared_ptr<BaseLayer> AutoCreateMoeLayer(std::shared_ptr<BaseWeight> base_weight,
                                                 std::vector<std::string> weight_names, DataType weight_type,
-                                                DataType input_type, DataType output_type,
+                                                DataType input_type, DataType output_type, int layer_idx,
                                                 const std::vector<std::any>& init_params);
 
   std::shared_ptr<BaseLayer> CreateLayer(DataType weight_type, DataType input_type, DataType output_type,

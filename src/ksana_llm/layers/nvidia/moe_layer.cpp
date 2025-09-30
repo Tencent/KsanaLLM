@@ -46,6 +46,7 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   int parameter_index = 0;
   moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
   max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
+  layer_idx_ = std::any_cast<int>(parameters[parameter_index++]);
 
   expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -96,16 +97,24 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
       use_e_score_correction_bias_};
   grouped_topk_layer_->Init(grouped_topk_params, runtime_config, context, rank);
 
-  // 判断是否在使用DeepEP
-  using_deepep_ =
-      (global_expert_para_size_ > 1) && (GetExpertParallelDeepepWrapper() != nullptr) || enable_full_shared_expert_;
-  // 初始化非DeepEP的EP ExpertMap映射
-  if (global_expert_para_size_ > 1 && !using_deepep_) {
-    size_t ep_rank =
-        context_->GetExpertParallelExpertNodeRank() * runtime_config.parallel_basic_config.expert_parallel_size + rank_;
-    size_t total_expert_num = expert_num_per_node_ * global_expert_para_size_;
-    expert_map_ =
-        std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(global_expert_para_size_, ep_rank, total_expert_num);
+  // EPLB data dump is off by default; when enabled, pick up the output directory
+  // from env-var DUMP_EPLB_PATH or fall back to the canonical EPLB cache path.
+  enable_dump_eplb_data_ = runtime_config.enable_dump_eplb_data;
+  if (enable_dump_eplb_data_) {
+    const char* eplb_dump_path = std::getenv("DUMP_EPLB_PATH");
+    if (eplb_dump_path) {
+      eplb_dump_path_ = eplb_dump_path;
+    } else {
+      const char* home_dir = std::getenv("HOME");
+      eplb_dump_path_ = home_dir ? fmt::format("{}/.cache/KsanaLLM/EPLB/", std::string(home_dir)) : "./EPLB/";
+    }
+  }
+
+  // When EPLB acceleration is enabled, initialize the expert_map_.
+  enable_load_eplb_weight_ = runtime_config.enable_load_eplb_weight;
+  if (enable_load_eplb_weight_ || !using_deepep_) {
+    expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(
+        global_expert_para_size_, global_expert_para_rank_, expert_num_per_node_ * global_expert_para_size_);
   }
   return Status();
 }
@@ -184,13 +193,14 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
   //  1: gating_output
   //  2: up_gate_proj_weight
   //  3: down_proj_weight
-  //  (*)4: e_score_correction_bias_weight
+  //  4: eplb_expert_map
+  //  (*)5: e_score_correction_bias_weight
   const size_t num_tokens = input_tensors[0].shape[0];
   const size_t hidden_size = input_tensors[0].shape[1];
   size_t best_config_index = 0;  // TODO(winminkong): op optimization
   void* e_score_correction_bias_weight_void = nullptr;
   if (use_e_score_correction_bias_) {
-    e_score_correction_bias_weight_void = input_tensors[4].GetPtr<void>();
+    e_score_correction_bias_weight_void = input_tensors[5].GetPtr<void>();
   }
 
   // SetWorkSpaceBuffer只保证空间足够大，不能保证后续地址不发生改变，要写死就只能在Forward中做
@@ -416,8 +426,8 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
   grouped_topk_input_tensors.push_back(input_tensors[1]);
 
   // 输入: e_bias (直接传递，让 GroupedTopkLayer 内部判断是否使用)
-  if (input_tensors.size() > 4) {
-    grouped_topk_input_tensors.push_back(input_tensors[4]);
+  if (input_tensors.size() > 5) {
+    grouped_topk_input_tensors.push_back(input_tensors[5]);
   }
 
   // 输出: topk_weights_ptr
@@ -435,6 +445,18 @@ Status MoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, st
   if (!status.OK()) {
     KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
     return status;
+  }
+
+  if (enable_dump_eplb_data_) {
+    DumpEplbData(topk_ids_tensor);
+  }
+
+  if (enable_load_eplb_weight_ && input_tensors[4].shape[0] > layer_idx_) {
+    size_t num_experts = input_tensors[4].shape[1];
+    void* layer_expert_ptr = input_tensors[4].GetPtr<void>() + layer_idx_ * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+                                        reinterpret_cast<int32_t*>(layer_expert_ptr),
+                                        context_->GetComputeStreams()[rank_].Get());
   }
 
   if (using_deepep_) {
@@ -477,6 +499,14 @@ Status MoeLayer::Combine(const std::vector<Tensor>& input_tensors, std::vector<T
   if (GetExpertParallelDeepepWrapper()) {
     GetExpertParallelDeepepWrapper()->Combine(input_tensors, output_tensors, rank_);
   }
+  return Status();
+}
+
+Status MoeLayer::DumpEplbData(Tensor& topk_ids) {
+  // TODO(zezhao): 高并发的 SaveToNpyFile 会出现
+  topk_ids.SaveToNpyFile(
+      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
+  eplb_dump_step_ += 1;
   return Status();
 }
 

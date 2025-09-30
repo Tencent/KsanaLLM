@@ -3,7 +3,13 @@
 ==============================================================================*/
 
 #include <stdlib.h>
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <numeric>
+#include <random>
+#include <sstream>
+#include <vector>
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
@@ -44,12 +50,13 @@ class DeepSeekV3Test : public testing::Test {
       model_path = "/model/DeepSeek-R1-17832-fix-mtp-bf16-w4g128-auto-gptq";
     } else if (test_name.find("ForwardMoeInt4Test") != std::string::npos) {
       model_path = "/model/DeepSeek-R1-0528-moe-int4-fix-mtp";
-    } else if (test_name.find("ForwardW4AFP8Test") != std::string::npos) {
-      model_path = "/model/DeepSeek-R1-0528-W4AFP8-mtpbfp8-venus-fix";
     } else if (test_name.find("SmallExpertsTest") != std::string::npos) {
       model_path = "/model/deepseek_v3";
       expected_tokens = {{3648, 303, 19892}};
     } else {
+      if (test_name.find("ForwardW4AFP8Test") != std::string::npos) {
+        model_path = "/model/DeepSeek-R1-0528-W4AFP8-mtpbfp8-venus-fix";
+      }
       expected_tokens = {{5306, 13245, 15354}, /*without fastmath*/ {5306, 13245, 536}, {28570, 27932, 4180}};
     }
 
@@ -479,6 +486,34 @@ TEST_F(DeepSeekV3Test, ForwardW4AFP8Test) {
   model_config.quant_config = fp8_quant_config;
   model_config.sub_quant_configs = {gptq_quant_config};
   std::cout << "Test W4AFP8 TYPE_BF16 weight_data_type forward." << std::endl;
+
+  // test EPLB config.json
+  runtime_config.enable_load_eplb_weight = true;
+  std::string eplb_config_filename = std::filesystem::temp_directory_path() / "DeepSeekV3Test_eplb_config.json";
+  {
+    std::vector<int> data(256);
+    std::iota(data.begin(), data.end(), 0);
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(data.begin(), data.end(), g);
+    std::string eplb_expert_map = "{\"layer_3\": [";
+    for (size_t i = 0; i < data.size(); ++i) {
+      if (i > 0) {
+        eplb_expert_map += ", ";
+      }
+      eplb_expert_map += fmt::format("{}", data[i]);
+    }
+    eplb_expert_map += "]}";
+    {
+      std::ofstream ofs(eplb_config_filename);
+      ASSERT_TRUE(ofs) << fmt::format("open {}", eplb_config_filename);
+      ofs << eplb_expert_map;
+      setenv("EPLB_WEIGHT", eplb_config_filename.c_str(), 1);
+    }
+    std::cout << fmt::format("set env EPLB_WEIGHT={}", eplb_config_filename) << std::endl;
+  }
+
   TestDeepSeekV3Forward<bfloat16>();
+  unlink(eplb_config_filename.c_str());
 #endif
 }

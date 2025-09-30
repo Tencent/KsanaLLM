@@ -309,6 +309,10 @@ struct RuntimeConfig {
   bool enable_prefix_caching = false;  // Whether enable prefix caching.
   bool enable_flexible_caching = false;
 
+  // Whether to dump eplb data.
+  bool enable_dump_eplb_data = false;
+  bool enable_load_eplb_weight = false;
+
   // Whether to normalize q and k before rotary position embedding in attention.
   // bool enable_qk_pre_norm_before_rotary_pos = false;
 

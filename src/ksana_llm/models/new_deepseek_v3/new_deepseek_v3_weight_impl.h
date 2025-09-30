@@ -76,7 +76,8 @@ class NewDeepSeekV3WeightImplBase {
 
   virtual Status LoadInt4QuantWeight(std::unordered_map<std::string, Tensor>& host_gptq_weights, int dev_rank,
                                      std::unordered_map<std::string, Tensor>& device_model_weights,
-                                     std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) = 0;
+                                     std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
+                                     std::vector<std::vector<int>>& expert_map) = 0;
 
   virtual Status PostProcessInt4QuantWeights(std::unordered_map<std::string, Tensor>& device_model_weights,
                                              int dev_rank,
@@ -131,7 +132,8 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 
   Status LoadInt4QuantWeight(std::unordered_map<std::string, Tensor>& host_gptq_weights, int dev_rank,
                              std::unordered_map<std::string, Tensor>& device_model_weights,
-                             std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) override;
+                             std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
+                             std::vector<std::vector<int>>& expert_map) override;
 
   Status PostProcessInt4QuantWeights(std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
                                      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) override;

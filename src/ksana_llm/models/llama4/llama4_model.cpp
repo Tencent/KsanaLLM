@@ -31,7 +31,7 @@ Llama4DecoderLayer::Llama4DecoderLayer(int layer_idx, TensorBuffer* moe_buffer, 
     // MoE related blocks
     expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                              model_creation_config.attn_config.model_config.quant_config.backend);
-    moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+    moes_ = std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                   layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
                                   MoeScaleNormMode::NO_NORM);
     std::vector<std::string> shared_expert_weight_names = {".mlp.shared_expert.gate_proj.weight",
@@ -151,7 +151,6 @@ Status Llama4::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& 
   return Status();
 }
 
-
 /* **************************************
  * Llama4Model
  */
@@ -175,6 +174,5 @@ Status Llama4Model::LayerForward(ForwardingContext& forwarding_context, const Ru
 
   return Status();
 }
-
 
 }  // namespace ksana_llm

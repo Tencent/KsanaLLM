@@ -32,7 +32,7 @@ Qwen3MoeDecoderLayer::Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buff
   // // MoE related blocks
   expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
-  moes_ = std::make_shared<MoE>(layer_prefix + ".mlp.experts.up_gate_proj.weight",
+  moes_ = std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context,
                                 MoeScaleNormMode::RE_NORM);
 }

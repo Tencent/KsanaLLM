@@ -166,16 +166,20 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   size_t global_expert_para_size = expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
   size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
   // init expert map
-  std::vector<int> expert_map(num_experts, -1);
-  size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
-  size_t expert_offset = (global_expert_para_size > 1)
-                             ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
-                             : 0;
-  size_t expert_start_id = rank_expert_offset + expert_offset;
-  size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank);
-  for (size_t i = expert_start_id; i < expert_end_id; ++i) {
-    expert_map[i] = static_cast<int>(i - expert_start_id);
+  const size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
+  const size_t expert_offset = (global_expert_para_size > 1)
+                                   ? ((dev_rank % new_deepseek_v3_config->expert_para_size) * num_experts_per_rank)
+                                   : 0;
+  const size_t expert_start_id = rank_expert_offset + expert_offset;
+  const size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank);
+
+  size_t num_layers = new_deepseek_v3_config->num_layer;
+  if (pipeline_config_.lower_nextn_layer_idx >= num_layers) {
+    num_layers += pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
   }
+  std::vector<std::vector<int>> expert_map(num_layers, std::vector<int>(num_experts, -1));
+  InitExpertMap(num_experts, expert_start_id, expert_end_id, dev_rank, expert_map, device_model_weights);
+
   KLLM_LOG_INFO << fmt::format("expert_world_size = {}, expert_para_size = {}, global_expert_para_size = {}",
                                expert_parallel_config.expert_world_size, expert_parallel_config.expert_para_size,
                                global_expert_para_size);
@@ -228,7 +232,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       if (layer_idx < 0 || expert_idx < 0) {
         continue;
       }
-      int expert_idx_ = expert_map[expert_idx];
+      int expert_idx_ = expert_map[layer_idx][expert_idx];
       if (expert_idx_ < 0) {
         // Skip load weight when the expert_id will be not used in current rank.
         continue;
@@ -622,13 +626,85 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 
   // Load gptq weights here
   if (new_deepseek_v3_config->ContainGptqWeights()) {
-    weight_impl_->LoadInt4QuantWeight(host_gptq_weights, dev_rank, device_model_weights, new_deepseek_v3_config);
+    weight_impl_->LoadInt4QuantWeight(host_gptq_weights, dev_rank, device_model_weights, new_deepseek_v3_config,
+                                      expert_map);
   }
 
   return Status();
 }
 
-Status NewDeepSeekV3WeightLoader::InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
+Status NewDeepSeekV3WeightLoader::InitExpertMap(const size_t& num_experts, const size_t& expert_start_id,
+                                                const size_t& expert_end_id, int dev_rank,
+                                                std::vector<std::vector<int>>& expert_map,
+                                                std::unordered_map<std::string, Tensor>& device_model_weights) {
+  // Load EPLB mapping configuration from JSON file
+  const char* eplb_weight = std::getenv("EPLB_WEIGHT");
+  std::unordered_map<int, std::vector<int>> eplb_map;
+  if (eplb_weight) {
+    std::string eplb_config = eplb_weight;
+    std::ifstream config_file(eplb_config);
+    if (config_file.is_open()) {
+      nlohmann::json json_config;
+      config_file >> json_config;
+      for (auto& [key, value] : json_config.items()) {
+        if (key.substr(0, 6) == "layer_" && value.is_array()) {
+          int layer_idx = std::stoi(key.substr(6));  // 提取layer_后面的数字
+          std::vector<int> eplb_data = value.get<std::vector<int>>();
+          if (eplb_data.size() != num_experts) {
+            KLLM_LOG_WARNING << fmt::format(
+                "EPLB config file {} load failed in {}: wrong expert nums {} vs {}(actual model expert nums)",
+                eplb_config, key, eplb_data.size(), num_experts);
+          } else {
+            eplb_map[layer_idx] = eplb_data;
+          }
+        }
+      }
+      KLLM_LOG_INFO << fmt::format("Successed to load EPLB map from {}.", eplb_config);
+    }
+  }
+
+  int layer_num = static_cast<int>(expert_map.size());
+  if (!eplb_map.empty()) {
+    // 摊平 expert_map 到一维，以拷贝到 Device 空间
+    std::vector<int> full_expert_map(static_cast<size_t>(layer_num) * num_experts);
+    for (int layer_idx = 0; layer_idx < layer_num; layer_idx++) {
+      for (size_t i = 0; i < num_experts; ++i) {
+        if (eplb_map.find(layer_idx) != eplb_map.end()) {
+          if (i >= expert_start_id && i < expert_end_id) {
+            expert_map[layer_idx][eplb_map[layer_idx][i]] = static_cast<int>(i - expert_start_id);
+          }
+          full_expert_map[layer_idx * num_experts + eplb_map[layer_idx][i]] = static_cast<int>(i);
+        } else {
+          if (i >= expert_start_id && i < expert_end_id) {
+            expert_map[layer_idx][i] = static_cast<int>(i - expert_start_id);
+          }
+          full_expert_map[layer_idx * num_experts + i] = static_cast<int>(i);
+        }
+      }
+    }
+    std::string expert_map_name = "expert_map";
+    Tensor dev_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {static_cast<size_t>(layer_num), num_experts}, dev_rank,
+               nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+    MemcpyAsync(dev_tensor.GetPtr<void>(), full_expert_map.data(), full_expert_map.size() * sizeof(int),
+                MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+    device_model_weights[expert_map_name] = dev_tensor;
+  } else {
+    // Without eplb map
+    for (int layer_idx = 0; layer_idx < layer_num; layer_idx++) {
+      for (size_t i = expert_start_id; i < expert_end_id; ++i) {
+        expert_map[layer_idx][i] = static_cast<int>(i - expert_start_id);
+      }
+    }
+    Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {0}, dev_rank, nullptr,
+                               &(context_->GetMemoryManageStreams()[dev_rank]));
+    device_model_weights["expert_map"] = dev_tensor;
+  }
+  return Status();
+}
+
+Status NewDeepSeekV3WeightLoader::InitWeightLoaderImpl(
+    const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
   switch (new_deepseek_v3_config->weight_data_type) {
     case DataType::TYPE_FP32:
       weight_impl_ = std::make_unique<NewDeepSeekV3WeightImpl<float>>(context_, runtime_config_);
