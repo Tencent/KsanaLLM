@@ -56,6 +56,9 @@ class BatchSchedulerInterface {
   virtual void Start() = 0;
 
   virtual void Stop() = 0;
+
+  // Process async finished requests for all strategies
+  virtual void NotifyAsyncFinishedRequests() = 0;
 };
 
 }  // namespace ksana_llm

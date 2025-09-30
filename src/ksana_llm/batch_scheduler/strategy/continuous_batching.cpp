@@ -265,19 +265,34 @@ void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, 
 
 void ContinuousBatchingStrategy::AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status,
                                                   bool is_swap_req) {
-  KLLM_LOG_DEBUG << "ResetRequest " << *req << ", req_status:" << req_status.ToString()
-                 << ", is_swapped_req:" << is_swap_req << ", terminated:" << "true";
-  req->finish_status = req_status;
-  req->finished = true;
-  cached_destroyed_ids_.push_back(req->req_id);
-  req->Notify();
+  KLLM_LOG_DEBUG << "AsyncStopRequest " << *req << ", ret_status:" << ret_status.ToString()
+                 << ", is_swapped_req:" << is_swap_req << ", delay finish and notify";
+
+  // 设置完成状态但不设置 finished=true，也不调用 Notify()
+  req->finish_status = ret_status;
+  // 将请求放入延迟处理队列，等待在推理完成之后处理。这是为了避免在推理过程中释放请求，
+  // 导致 Request 对象在请求处理（Step）尚未完成时就被销毁，从而引发了对已释放成员变量的非法访问。
+  async_destroyed_reqs_.push_back(req);
+
+  // Record finish req_id
+  if (req->attn_dp_group_id >= batch_state_->schedule_output->finish_req_ids.size()) {
+    size_t needed_push_size = req->attn_dp_group_id - batch_state_->schedule_output->finish_req_ids.size() + 1;
+    for (size_t idx = 0; idx < needed_push_size; ++idx) {
+      batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{});
+    }
+  }
+  batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
 }
 
-void ContinuousBatchingStrategy::AsyncDestroyFinishedRequest() {
-  for (int64_t id : cached_destroyed_ids_) {
-    cache_manager_->DestroyFinishedRequest(id);
+void ContinuousBatchingStrategy::NotifyAsyncFinishedRequests() {
+  // 处理延迟的请求完成通知
+  for (auto &req : async_destroyed_reqs_) {
+    req->finished = true;
+    req->Notify();
+    cache_manager_->DestroyFinishedRequest(req->req_id);
+    KLLM_LOG_DEBUG << "Async request " << req->req_id << " completion notification sent";
   }
-  cached_destroyed_ids_.clear();
+  async_destroyed_reqs_.clear();
 }
 
 void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req,
@@ -363,9 +378,6 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
 
 void ContinuousBatchingStrategy::UpdateRunningRequests() {
   batch_state_->ResetInfoBeforeSchedule();
-  if (batch_scheduler_config_.enable_async) {
-    AsyncDestroyFinishedRequest();
-  }
   KLLM_LOG_DEBUG << "update running requests size:" << batch_state_->schedule_output->running_reqs.size();
   for (auto it = batch_state_->schedule_output->running_reqs.begin();
        it != batch_state_->schedule_output->running_reqs.end();) {
@@ -662,6 +674,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
           cache_manager_->DestroyFinishedRequest(req->req_id);
           req->kv_cache_blocks.clear();
           req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
+          req->reset_forward_request_ = true;
           KLLM_LOG_WARNING << fmt::format("Split fuse disabled due to allocation failure for request ID {}",
                                           req->req_id);
         }

@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "ksana_llm/batch_scheduler/strategy/continuous_batching.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_request.h"
@@ -514,6 +515,16 @@ void BatchScheduler::ReportTotalState() {
 void BatchScheduler::RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend) {
   grammar_backend_ = grammar_backend;
   KLLM_LOG_INFO << "Grammar backend registered successfully";
+}
+
+void BatchScheduler::NotifyAsyncFinishedRequests() {
+  // Process async finished requests for all strategies
+  for (size_t i = 0; i < dp_num_; i++) {
+    auto continuous_strategy = std::dynamic_pointer_cast<ContinuousBatchingStrategy>(schedule_strategies_[i]);
+    if (continuous_strategy) {
+      continuous_strategy->NotifyAsyncFinishedRequests();
+    }
+  }
 }
 
 void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req) {

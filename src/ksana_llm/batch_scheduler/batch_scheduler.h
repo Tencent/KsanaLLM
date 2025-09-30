@@ -70,6 +70,9 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Register grammar backend for structured output
   void RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend);
 
+  // Process async finished requests for all strategies
+  void NotifyAsyncFinishedRequests();
+
   std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
 
  private:

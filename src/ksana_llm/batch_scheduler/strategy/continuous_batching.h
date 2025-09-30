@@ -23,6 +23,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   virtual void UpdateSwapPendingRequests() override;
 
+  // Process delayed request completion notifications
+  void NotifyAsyncFinishedRequests();
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
@@ -61,8 +64,6 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   void StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
 
   void AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
-
-  void AsyncDestroyFinishedRequest();
 
   // Check the running queue to determine whether it exceeds the max_step_token_num.
   // return [step_token_with_kv_cache, step_token_without_kv_cache]
@@ -148,7 +149,7 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // will be scheduled
   size_t active_dp_group_id_ = 0;
 
-  std::vector<int64_t> cached_destroyed_ids_;
+  std::vector<std::shared_ptr<InferRequest>> async_destroyed_reqs_;
 };
 
 }  // namespace ksana_llm

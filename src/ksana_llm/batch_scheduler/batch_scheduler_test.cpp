@@ -283,3 +283,14 @@ TEST_F(BatchSchedulerTest, RegisterGrammarTest) {
     EXPECT_NO_THROW(batch_scheduler->RegisterGrammar(valid_grammar_backend));
   }
 }
+
+TEST_F(BatchSchedulerTest, NotifyAsyncFinishedRequestsBasicTest) {
+  KLLM_LOG_INFO << "BatchSchedulerTest: NotifyAsyncFinishedRequestsBasicTest";
+
+  CommonSetUp();
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+
+  // 测试基本的 NotifyAsyncFinishedRequests 调用
+  // 在没有异步完成请求的情况下，应该能正常执行而不出错
+  EXPECT_NO_THROW(batch_scheduler->NotifyAsyncFinishedRequests());
+}

@@ -21,6 +21,8 @@ using namespace ksana_llm;
 class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
  public:
   using ContinuousBatchingStrategy::AddTransferMeta;
+  using ContinuousBatchingStrategy::async_destroyed_reqs_;
+  using ContinuousBatchingStrategy::AsyncStopRequest;
   using ContinuousBatchingStrategy::ContinuousBatchingStrategy;
   using ContinuousBatchingStrategy::ProcessDecodeTransferQueue;
   using ContinuousBatchingStrategy::ProcessPrefillTransferQueue;
@@ -33,6 +35,12 @@ class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
     TransferEngine::GetInstance()->SetGroupRole(role);
   }
+
+  // 添加一个方法来访问 async_destroyed_reqs_ 的大小
+  size_t GetAsyncDestroyedReqsSize() const { return async_destroyed_reqs_.size(); }
+
+  // 添加一个方法来清空 async_destroyed_reqs_
+  void ClearAsyncDestroyedReqs() { async_destroyed_reqs_.clear(); }
 };
 
 class ContinuousBatchingTest : public testing::Test {
@@ -44,7 +52,7 @@ class ContinuousBatchingTest : public testing::Test {
     constexpr int kMultiBatchNum = 1;
     BatchSchedulerConfig batch_scheduler_config;
     batch_scheduler_config.split_fuse_token_num = 256;
-    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
     if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos ||
         test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
@@ -95,7 +103,7 @@ class ContinuousBatchingTest : public testing::Test {
   ~ContinuousBatchingTest() {
     DestroyScheduleOutputPool();
     TransferEngine::GetInstance()->CleanupTransferMeta(123);
-    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
     if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos) {
       auto env = Singleton<Environment>::GetInstance();
@@ -541,4 +549,78 @@ TEST_F(ContinuousBatchingTest, ProcessStructuredOutputTest) {
   ASSERT_EQ(req->kv_cached_token_num, 0);
   ASSERT_EQ(req->prefix_cache_len, 0);
   Singleton<Tokenizer>::GetInstance()->DestroyTokenizer();
+}
+
+// 测试 NotifyAsyncFinishedRequests 函数
+TEST_F(ContinuousBatchingTest, NotifyAsyncFinishedRequestsTest) {
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  request->req_id = 100;
+  request->waiter = std::make_shared<Waiter>(1);
+
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->req_id = 100;
+  req->finished = false;
+
+  // 测试1: 空的 async_destroyed_reqs_ 列表
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
+  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
+
+  // 测试2: 使用 AsyncStopRequest 添加请求到 async_destroyed_reqs_
+  Status stop_status(RET_SUCCESS);
+  continuous_batching_strategy_->AsyncStopRequest(req, stop_status, false);
+
+  // 验证请求被添加到 async_destroyed_reqs_
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 1);
+  EXPECT_FALSE(req->finished);
+
+  // 测试3: 调用 NotifyAsyncFinishedRequests 处理异步完成的请求
+  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
+
+  // 验证请求状态被正确更新
+  EXPECT_TRUE(req->finished);
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
+
+  // 测试4: 多个异步完成请求的处理
+  std::vector<std::shared_ptr<Request>> test_requests;
+  std::vector<std::shared_ptr<InferRequest>> test_infer_requests;
+  for (int i = 0; i < 3; ++i) {
+    auto test_req_input = std::make_shared<KsanaPythonInput>();
+    auto test_req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+    auto test_request = std::make_shared<Request>(test_req_input, test_req_ctx);
+    test_requests.push_back(test_request);
+    test_request->req_id = 200 + i;
+    test_request->waiter = std::make_shared<Waiter>(1);
+
+    auto test_req = std::make_shared<InferRequest>(test_request, 0);
+    test_req->req_id = 200 + i;
+    test_req->finished = false;
+    test_infer_requests.push_back(test_req);
+
+    // 添加到异步销毁列表
+    Status test_status(RET_SUCCESS);
+    continuous_batching_strategy_->AsyncStopRequest(test_req, test_status, false);
+  }
+
+  // 验证所有请求都被添加
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 3);
+  for (auto& test_req : test_infer_requests) {
+    EXPECT_FALSE(test_req->finished);
+  }
+
+  // 调用 NotifyAsyncFinishedRequests 处理所有异步完成的请求
+  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
+
+  // 验证所有请求都被正确处理
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
+  for (auto& test_req : test_requests) {
+    EXPECT_TRUE(test_req->finished);
+  }
+
+  // 测试5: 重复调用 NotifyAsyncFinishedRequests（应该安全处理空列表）
+  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
+  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
 }

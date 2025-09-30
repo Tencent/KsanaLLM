@@ -223,6 +223,10 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
     }
+    if (runtime_config_.enable_async) {
+      // 开启异步调度之后，当请求完成不能直接stop，因为此时该请求还在推理中，Notify后请求就会析构，不应该再访问，因此延迟到Step结束之后再Notify。
+      batch_scheduler_->NotifyAsyncFinishedRequests();
+    }
 
     time_t middle_time_ms = ProfileTimer::GetCurrentTimeInMs();
 
