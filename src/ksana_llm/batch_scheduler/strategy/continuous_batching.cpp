@@ -110,8 +110,7 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
   if (std::find(stop_token_ids.begin(), stop_token_ids.end(), req->output_tokens.back()) != stop_token_ids.end() ||
       (req->sampling_config.max_new_tokens > 0 &&
        req->output_tokens.size() >= req->input_tokens.size() + req->sampling_config.max_new_tokens) ||
-      req->output_tokens.size() >= batch_scheduler_config_.max_token_len ||
-      (req->req_fsm != nullptr && req->req_fsm->IsStopState(req->fsm_state_id))) {
+      req->output_tokens.size() >= batch_scheduler_config_.max_token_len) {
     stop_checker_->CheckCompleteStopStrings(req);
     KLLM_LOG_DEBUG << "Request " << req->req_id << " had finished."
                    << " req output_tokens size: " << req->output_tokens.size()
@@ -121,101 +120,6 @@ bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferR
 
   // When stop strings are checked and matched, stop early
   return stop_checker_->CheckIncrementalStopStrings(req);
-}
-
-void ContinuousBatchingStrategy::ExtendTokensWithRetokenization(std::shared_ptr<InferRequest> req) {
-  // First, convert the output_tokens into a string A (excluding the input_tokens part).
-  // Then, concatenate the original prompt, the string A, and the fixed string defined in the structured output regex.
-  // Finally, the combined string is encoded using a tokenizer to obtain the new output_tokens.
-  std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
-
-  // detokenize the newly generated token sequence to obtain the corresponding string.
-  std::string structure_text = "";
-  std::vector<int> new_tokens;
-  if (req->output_tokens.size() > req->input_tokens.size()) {
-    new_tokens = std::vector<int>(req->output_tokens.begin() + req->input_tokens.size(), req->output_tokens.end());
-    Singleton<Tokenizer>::GetInstance()->Decode(new_tokens, structure_text);
-  }
-
-  // collapse consecutive non-generation states into one.
-  while (state->state_type_ == FiniteStateType::NON_GENERATION_STATE) {
-    structure_text += state->GetEdge().first;
-    state = req->req_fsm->GetState(state->GetNextStateId());
-  }
-
-  // Clear the request for assignment.
-  req->output_tokens = req->input_tokens;
-  new_tokens.clear();
-
-  // Assign values.
-  Singleton<Tokenizer>::GetInstance()->Encode(structure_text, new_tokens, /* add_special_tokens */ false);
-  // TODO(robertyuan): if tokens have kv-caches are replaced, kv_cached_token_num should be adjusted.
-  req->output_tokens.insert(req->output_tokens.end(), new_tokens.begin(), new_tokens.end());
-
-  // add new tokens to forwarding_tokens, their kv-cache will be generated.
-  req->forwarding_tokens = req->output_tokens;
-
-  if (!cache_manager_->IsPrefixCachingEnabled()) {
-    req->kv_cached_token_num = 0;
-    req->prefix_cache_len = 0;
-  }
-
-  req->NotifyStep();
-
-  // State transition.
-  req->fsm_state_id = state->state_id_;
-}
-
-void ContinuousBatchingStrategy::ExtendTokensWithoutRetokenization(std::shared_ptr<InferRequest> req) {
-  // Unlike the ExtendTokensWithRetokenization, in this function, the fixed string defined in the structured
-  // output regex has already been preconverted into the corresponding token_id_list. Therefore, we only need to
-  // append the new token to the output_tokens.
-  std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
-
-  while (state->state_type_ == FiniteStateType::NON_GENERATION_STATE) {
-    std::vector<int> jump_tokens = req->req_fsm->GetStringTokens(state->GetEdge().first);
-    req->output_tokens.insert(req->output_tokens.end(), jump_tokens.begin(), jump_tokens.end());
-    state = req->req_fsm->GetState(state->GetNextStateId());
-  }
-
-  // add new tokens to forwarding_tokens, their kv-cache will be generated.
-  req->forwarding_tokens = req->output_tokens;
-
-  req->NotifyStep();
-  req->fsm_state_id = state->state_id_;
-}
-
-void ContinuousBatchingStrategy::JumpForwardRequest(std::shared_ptr<InferRequest> req) {
-  // When the request is in a Non-Generatrion state, perform a Jump-Forward using a constant string.
-  if (req->req_fsm.get() == nullptr) {
-    return;
-  }
-  std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
-  if (state->state_type_ == FiniteStateType::NON_GENERATION_STATE) {
-    // Refer to https://lmsys.org/blog/2024-02-05-compressed-fsm/#tokenization-boundary-handling
-    // We use retokenizer to avoid issues related to tokenization boundaries during constrained decoding.
-    ExtendTokensWithRetokenization(req);
-  }
-}
-
-void ContinuousBatchingStrategy::ProcessStructuredOutput(std::shared_ptr<InferRequest> req) {
-  // Determine that whether the request can transition to the next state and perform a Jump-Forward
-  if (req->req_fsm.get() == nullptr) {
-    return;
-  }
-  std::shared_ptr<FiniteStateNode> state = req->req_fsm->GetState(req->fsm_state_id);
-  if (state->state_type_ == FiniteStateType::GENERATION_STATE) {
-    size_t next_state_id = state->GetNextStateId(req->output_tokens.back());
-    if (next_state_id != req->fsm_state_id) {
-      // The requested end token satisfies the jump condition, and the request will transition to the next state.
-      if (cache_manager_->IsPrefixCachingEnabled()) {
-        req->prefix_cache_len = req->output_tokens.size() - 1;
-      }
-      req->req_fsm->CheckFSMPopToken(req->fsm_state_id, req->output_tokens);
-      req->fsm_state_id = next_state_id;
-      JumpForwardRequest(req);
-    }
-  }
 }
 
 void ContinuousBatchingStrategy::DetermineDraftNum(std::shared_ptr<InferRequest> req) {
@@ -445,9 +349,6 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       it = RecomputeRequest(it);
       continue;
     }
-
-    // Checking if the request can perform a StructuredOutput optimization.
-    ProcessStructuredOutput(req);
 
     // Check if finished.
     if (CheckRequestFinish(req)) {
@@ -992,14 +893,6 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
     req->cache_manager = cache_manager_;
-    JumpForwardRequest(req);
-
-    if (req->req_fsm != nullptr && CheckRequestFinish(req)) {
-      KLLM_LOG_DEBUG << "stop req_id:" << req->req_id << " finished.";
-      StopRequest(req, Status(RET_SUCCESS), false);
-      it = batch_state_->waiting_queue.erase(it);
-      continue;
-    }
     ++it;
   }
 

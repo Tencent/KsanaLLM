@@ -13,6 +13,7 @@
 #include "ksana_llm/batch_scheduler/state/scheduler_shared_counter.h"
 #include "ksana_llm/batch_scheduler/state/scheduler_tick_tok.h"
 #include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/batch_scheduler/workload_balance/pp_multibatch_balancer.h"
 #include "ksana_llm/runtime/infer_request.h"
 
@@ -21,7 +22,6 @@
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/scheduleoutput_process.h"
 #include "ksana_llm/utils/status.h"
 
@@ -67,8 +67,7 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void ProcessSchedulingTask(ScheTask &task);
 
-  // Register grammar backend for structured output
-  void RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend);
+  void RegisterStructuredGeneratorFactory(std::shared_ptr<StructuredGeneratorFactory> generator_factory);
 
   // Process async finished requests for all strategies
   void NotifyAsyncFinishedRequests();
@@ -96,7 +95,7 @@ class BatchScheduler : public BatchSchedulerInterface {
   // report the state of all instance
   void ReportTotalState();
 
-  // grammar compilation
+  // structured generator compilation
   void ProcessGrammarCompilation(std::shared_ptr<InferRequest> req);
 
  private:
@@ -144,8 +143,8 @@ class BatchScheduler : public BatchSchedulerInterface {
   // To avoid variables destruction， while mock req will reference KsanaPythonInput and Request.
   std::shared_ptr<Request> alias_mock_request_;
   std::shared_ptr<KsanaPythonInput> alias_python_input_;
-  // The grammar backend for structured output.
-  std::shared_ptr<GrammarBackend> grammar_backend_ = nullptr;
+
+  std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;
 
   std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
   std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;

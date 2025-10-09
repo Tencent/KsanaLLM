@@ -107,9 +107,8 @@ Status InferenceEngine::Initialize() {
       GetExpertHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
     }
 
-    distributed_coordinator_ =
-        std::make_shared<DistributedCoordinator>(context_, GetPacketObject, GetScheduleOutputPool(),
-                                                 GetHiddenUnitBufferPool(), GetExpertHiddenUnitBufferPool(), env);
+    distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
+        context_, GetPacketObject, GetScheduleOutputPool(), GetHiddenUnitBufferPool(), env);
 
     KLLM_LOG_INFO << "Initialize distributed coordinator succeed.";
     distributed_coordinator_->InitializeCluster();
@@ -285,7 +284,7 @@ Status InferenceEngine::Initialize() {
   // Initialize tokenzier
   Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_instances_[0]->GetModelConfig().path);
 
-  // Initialize grammar backend for structured output
+  // Initialize structured generator factory for structured output
   if (batch_scheduler_config.enable_xgrammar) {
     std::vector<std::string> vocab;
     int vocab_size = static_cast<int>(model_config.vocab_size);
@@ -295,23 +294,24 @@ Status InferenceEngine::Initialize() {
     status = tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
     if (status.OK()) {
       try {
-        grammar_backend_ = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
-        KLLM_LOG_INFO << "Grammar backend initialized with final vocab_size: " << vocab_size;
+        structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>(vocab, vocab_size, stop_token_ids);
+        KLLM_LOG_INFO << "Structured generator factory initialized with final vocab_size: " << vocab_size;
       } catch (const std::exception &e) {
-        return Status(RET_RUNTIME_FAILED, "Grammar backend initialization failed: " + std::string(e.what()));
+        return Status(RET_RUNTIME_FAILED,
+                      "Structured generator factory initialization failed: " + std::string(e.what()));
       }
     } else {
       KLLM_LOG_WARNING << "Failed to get vocab info: " << status.GetMessage() << ". Structured output disabled.";
-      grammar_backend_ = nullptr;
+      structured_generator_factory_ = nullptr;
     }
   }
 
   // Create batch scheduler.
   batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
 
-  // Register grammar backend if enabled
-  if (grammar_backend_) {
-    batch_scheduler_->RegisterGrammar(grammar_backend_);
+  // Register structured generator factory if enabled
+  if (structured_generator_factory_) {
+    batch_scheduler_->RegisterStructuredGeneratorFactory(structured_generator_factory_);
   }
 
   for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {

@@ -33,21 +33,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // True if request finished, that is, arrive max output len or encounter eos.
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
 
-  // When the request is in a non-generation state, perform a jump-forward using a constant string.
-  void JumpForwardRequest(std::shared_ptr<InferRequest> req);
-
-  // When the request is in a generation state, determine if it can transition to the next state and perform a
-  // jump-forward.
-  void ProcessStructuredOutput(std::shared_ptr<InferRequest> req);
-
   // Determine the number of draft_tokens to generate in the current step based on the scheduling status.
   void DetermineDraftNum(std::shared_ptr<InferRequest> req);
-
-  // Expand structured output with a constant string (dependent on the execution of Retokenizationr by Tokenizer).
-  void ExtendTokensWithRetokenization(std::shared_ptr<InferRequest> req);
-
-  // Expand structured output with a constant string (independent of Retokenizationr execution by Tokenizer).
-  void ExtendTokensWithoutRetokenization(std::shared_ptr<InferRequest> req);
 
   // Reset the req and cache status, destroy swap or finish req
   // If terminated is true, the request is terminated, and will notify to stop this request.

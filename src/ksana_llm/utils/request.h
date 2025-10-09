@@ -7,9 +7,8 @@
 #include <map>
 #include <vector>
 
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/profiler/profiler.h"
-#include "ksana_llm/utils/finite_state_machine.h"
-#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -201,6 +200,8 @@ class Request {
   // The config of sampling.
   SamplingConfig sampling_config;
 
+  StructuredGeneratorConfig structured_generator_config;
+
   // The waiter notified when request finished.
   std::shared_ptr<Waiter> waiter = nullptr;
 
@@ -245,12 +246,6 @@ class Request {
 
   // Whether the request contains stop strings
   bool has_stop_strings = false;
-
-  // The FiniteStateMachine when using structured output optimization.
-  std::shared_ptr<FiniteStateMachine> req_fsm;
-
-  // grammar matcher
-  std::shared_ptr<GrammarMatcherWrapper> grammar_matcher = nullptr;
 
   // This is a unique ID for the KV transformer group.
   int64_t kv_comm_request_id;

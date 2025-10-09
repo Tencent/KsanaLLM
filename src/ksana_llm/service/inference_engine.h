@@ -5,13 +5,13 @@
 
 #include <memory>
 #include "ksana_llm/batch_manager/batch_manager.h"
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/distributed/distributed_coordinator.h"
 #include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance_inferface.h"
 #include "ksana_llm/utils/channel.h"
-#include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
@@ -81,8 +81,8 @@ class InferenceEngine {
 
   std::vector<std::shared_ptr<WeightInstanceInterface>> weight_instances_;
 
-  // Grammar backend for structured output
-  std::shared_ptr<GrammarBackend> grammar_backend_ = nullptr;
+  // Structured generator factory for structured output
+  std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;

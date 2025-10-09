@@ -278,11 +278,9 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
       sampling_req.sampling_config->topk =
           std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
     }
-    sampling_req.ngram_dict = &(req_ptr->ngram_dict);
-    sampling_req.model_config = &(req_ptr->model_instance->GetModelConfig());
-    sampling_req.grammar_matcher = req_ptr->grammar_matcher;
-    sampling_req.apply_grammar_constraint = apply_grammar_constraint;
-    sampling_reqs.push_back(sampling_req);
+    sampling_req.ngram_dict = &(req->ngram_dict);
+    sampling_req.structured_generator = req->structured_generator;
+    sampling_req.apply_structured_constraint = apply_grammar_constraint;
   }
 }
 
@@ -343,18 +341,13 @@ void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& re
       if (req->sampling_result_tokens[i] != draft_tokens[i]) {
         break;
       }
-      // stop if stop token
-      if (std::find(req->sampling_config.stop_token_ids.begin(), req->sampling_config.stop_token_ids.end(),
-                    draft_tokens[i]) != req->sampling_config.stop_token_ids.end()) {
-        break;
-      }
-      // Grammar check for the new generated token
-      if (req->grammar_matcher != nullptr) {
-        int new_token = req->sampling_result_tokens[i + 1];
-        bool new_token_accepted = req->grammar_matcher->AcceptToken(new_token);
-        if (!new_token_accepted) {
-          // Grammar rejects the new_token
-          KLLM_LOG_DEBUG << "Grammar rejected new_token " << new_token << " for request " << req->req_id
+
+      // Structured constraint check for the new generated token
+      if (req->structured_generator != nullptr) {
+        const int new_token = req->sampling_result_tokens[i + 1];
+        if (!req->structured_generator->AcceptToken(new_token)) {
+          // Structured constraint rejects the new_token
+          KLLM_LOG_DEBUG << "Structured constraint rejected new_token " << new_token << " for request " << req->req_id
                          << ", will not use it as generated_token";
           break;
         }

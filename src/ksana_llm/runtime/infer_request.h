@@ -9,14 +9,13 @@
 #include <string>
 #include <vector>
 
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/draft_generator/draft_tokens.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
-#include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
@@ -120,6 +119,8 @@ class InferRequest {
   // The sampling config of this request.
   SamplingConfig &sampling_config;
 
+  StructuredGeneratorConfig &structured_generator_config;
+
   // The waiter used to notify when request finished.
   std::shared_ptr<Waiter> &waiter;
 
@@ -163,6 +164,9 @@ class InferRequest {
 
   // This key for kv transformer group.
   std::string kv_comm_group_key;
+
+  // structured generator
+  std::shared_ptr<StructuredGeneratorInterface> structured_generator = nullptr;
 
   /*******************************************************************
    * State info used in generation
@@ -231,12 +235,6 @@ class InferRequest {
 
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
-
-  // The output structure fsm
-  std::shared_ptr<FiniteStateMachine> req_fsm;
-
-  // The current state id of the FSM (Finite State Machine).
-  size_t fsm_state_id = 0;
 
  public:
   // ForwardRequest's lifecycle is bound to InferRequest's, making smart pointers redundant. Any use of ForwardRequest*

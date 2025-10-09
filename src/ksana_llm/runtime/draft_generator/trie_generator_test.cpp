@@ -9,6 +9,7 @@
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/utils/environment.h"
@@ -264,20 +265,25 @@ TEST_F(TrieGeneratorTest, HitRateTest) {
 }
 
 // Tests for LlmRuntime::DraftTokenFilter
-// Mock GrammarMatcherWrapper for testing
-class MockGrammarMatcher : public GrammarMatcherWrapper {
+// Mock StructuredGeneratorInterface for testing
+class MockStructuredGenerator : public StructuredGeneratorInterface {
  public:
-  explicit MockGrammarMatcher(const std::vector<int>& accepted_tokens)
-      : GrammarMatcherWrapper(nullptr), accepted_tokens_(accepted_tokens) {}
-
-  bool FillNextTokenBitmask(void* bitmask_data, int batch_index = 0) override { return true; }
-  bool IsTerminated() const override { return false; }
-  bool IsInitialized() const override { return true; }
+  explicit MockStructuredGenerator(const std::vector<int>& accepted_tokens) : accepted_tokens_(accepted_tokens) {}
 
   bool AcceptToken(int token_id) override {
     // 只接受在 accepted_tokens_ 列表中的 token
     return std::find(accepted_tokens_.begin(), accepted_tokens_.end(), token_id) != accepted_tokens_.end();
   }
+
+  bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
+
+  bool FindJumpForwardTokens(int& rollback_token_num, std::vector<int>& jump_tokens) override { return false; }
+
+  bool IsTerminated() const override { return false; }
+
+  bool IsValid() const override { return true; }
+
+  StructuredConstraintType GetConstraintType() const override { return StructuredConstraintType::NONE; }
 
  private:
   std::vector<int> accepted_tokens_;
@@ -295,7 +301,7 @@ class DraftTokenFilterTest : public testing::Test {
   std::shared_ptr<InferRequest> CreateMockInferRequest(
       const std::vector<int>& draft_tokens_mtp, const std::vector<int>& draft_tokens_trie,
       const std::vector<int>& sampling_result_tokens, const std::vector<int>& stop_token_ids = {},
-      std::shared_ptr<GrammarMatcherWrapper> grammar_matcher = nullptr) {
+      std::shared_ptr<StructuredGeneratorInterface> structured_generator = nullptr) {
     auto python_input = std::make_shared<KsanaPythonInput>();
     python_input->model_name = "test_model";
     python_input->input_tokens = {1, 2, 3};
@@ -312,12 +318,12 @@ class DraftTokenFilterTest : public testing::Test {
     request->sampling_config.stop_token_ids = stop_token_ids;
     request->finished = false;
     request->aborted = false;
-    request->grammar_matcher = grammar_matcher;
 
     auto infer_req = std::make_shared<InferRequest>(request, 0);
     infer_req->draft_tokens.mtp = draft_tokens_mtp;
     infer_req->draft_tokens.trie = draft_tokens_trie;
     infer_req->sampling_result_tokens = sampling_result_tokens;
+    infer_req->structured_generator = structured_generator;
 
     return infer_req;
   }
@@ -328,14 +334,14 @@ class DraftTokenFilterTest : public testing::Test {
   std::shared_ptr<LlmRuntime> llm_runtime_;
 };
 
-TEST_F(DraftTokenFilterTest, GrammarMatcherRejectsNewToken) {
-  // 测试 grammar_matcher 拒绝新生成 token 的情况
+TEST_F(DraftTokenFilterTest, StructuredGeneratorRejectsNewToken) {
+  // 测试 structured_generator 拒绝新生成 token 的情况
   std::vector<int> draft_mtp = {10};
   std::vector<int> draft_trie = {20, 30};
   std::vector<int> sampling_result = {10, 20, 30, 40};
 
-  auto grammar_matcher = std::make_shared<MockGrammarMatcher>(std::vector<int>{20});
-  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, grammar_matcher);
+  auto structured_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{20});
+  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, structured_generator);
   std::vector<std::shared_ptr<InferRequest>> reqs = {req};
 
   llm_runtime_->DraftTokenFilter(reqs);
@@ -345,14 +351,14 @@ TEST_F(DraftTokenFilterTest, GrammarMatcherRejectsNewToken) {
   EXPECT_EQ(req->generated_token, 20);
 }
 
-TEST_F(DraftTokenFilterTest, GrammarMatcherAcceptsAllTokens) {
-  // 测试 grammar_matcher 接受所有 tokens 的情况
+TEST_F(DraftTokenFilterTest, StructuredGeneratorAcceptsAllTokens) {
+  // 测试 structured_generator 接受所有 tokens 的情况
   std::vector<int> draft_mtp = {10};
   std::vector<int> draft_trie = {20, 30};
   std::vector<int> sampling_result = {10, 20, 30, 40};
 
-  auto grammar_matcher = std::make_shared<MockGrammarMatcher>(std::vector<int>{20, 30, 40});
-  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, grammar_matcher);
+  auto structured_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{20, 30, 40});
+  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, structured_generator);
   std::vector<std::shared_ptr<InferRequest>> reqs = {req};
 
   llm_runtime_->DraftTokenFilter(reqs);

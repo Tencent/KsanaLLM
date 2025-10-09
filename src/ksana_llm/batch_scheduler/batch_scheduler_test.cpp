@@ -221,17 +221,18 @@ TEST_F(BatchSchedulerTest, ProcessGrammarCompilationTest) {
   // 测试1: 没有 grammar_backend_ 的情况
   {
     // 设置 structured output 相关配置
-    infer_req->sampling_config.enable_structured_output = true;
-    infer_req->sampling_config.json_schema = R"({"type": "object", "properties": {"name": {"type": "string"}}})";
+    infer_req->structured_generator_config.constraint_type = StructuredConstraintType::JSON;
+    infer_req->structured_generator_config.constraint_spec =
+        R"({"type": "object", "properties": {"name": {"type": "string"}}})";
 
-    // 确保 grammar_matcher 初始为 nullptr
-    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+    // 确保 structured_generator 初始为 nullptr
+    EXPECT_EQ(infer_req->structured_generator, nullptr);
 
     // 调用 ProcessGrammarCompilation，由于没有 grammar_backend_，应该直接返回
     batch_scheduler->ProcessGrammarCompilation(infer_req);
 
-    // grammar_matcher 应该仍然为 nullptr
-    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+    // structured_generator 应该仍然为 nullptr
+    EXPECT_EQ(infer_req->structured_generator, nullptr);
   }
 }
 
@@ -241,12 +242,12 @@ TEST_F(BatchSchedulerTest, RegisterGrammarTest) {
   CommonSetUp();
   BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
 
-  // 测试1: 注册 nullptr grammar backend
+  // 测试1: 注册 nullptr structured generator factory
   {
-    std::shared_ptr<GrammarBackend> null_grammar_backend = nullptr;
+    std::shared_ptr<StructuredGeneratorFactory> null_generator_factory = nullptr;
 
     // 调用 RegisterGrammar 传入 nullptr，应该能正常执行
-    EXPECT_NO_THROW(batch_scheduler->RegisterGrammar(null_grammar_backend));
+    EXPECT_NO_THROW(batch_scheduler->RegisterStructuredGeneratorFactory(null_generator_factory));
 
     // 验证内部 grammar_backend_ 被设置为 nullptr
     // 通过创建一个带有 structured output 的请求来间接验证
@@ -260,27 +261,18 @@ TEST_F(BatchSchedulerTest, RegisterGrammarTest) {
     auto infer_req = std::make_shared<InferRequest>(mock_req, 0);
 
     // 设置 structured output 相关配置
-    infer_req->sampling_config.enable_structured_output = true;
-    infer_req->sampling_config.json_schema = R"({"type": "object", "properties": {"name": {"type": "string"}}})";
+    infer_req->structured_generator_config.constraint_type = StructuredConstraintType::JSON;
+    infer_req->structured_generator_config.constraint_spec =
+        R"({"type": "object", "properties": {"name": {"type": "string"}}})";
 
-    // 确保 grammar_matcher 初始为 nullptr
-    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
+    // 确保 structured_generator 初始为 nullptr
+    EXPECT_EQ(infer_req->structured_generator, nullptr);
 
     // 调用 ProcessGrammarCompilation，由于 grammar_backend_ 为 nullptr，应该直接返回
     batch_scheduler->ProcessGrammarCompilation(infer_req);
 
-    // grammar_matcher 应该仍然为 nullptr
-    EXPECT_EQ(infer_req->grammar_matcher, nullptr);
-  }
-
-  // 测试2: 注册有效的 grammar backend（如果可用
-  {
-    // 注意：这里我们只测试接口调用，不测试具体的 grammar backend 实现
-    // 因为具体的 grammar backend 可能依赖于特定的硬件或库
-    std::shared_ptr<GrammarBackend> valid_grammar_backend = nullptr;
-
-    // 再次调用 RegisterGrammar，验证可以重复注册
-    EXPECT_NO_THROW(batch_scheduler->RegisterGrammar(valid_grammar_backend));
+    // structured_generator 应该仍然为 nullptr
+    EXPECT_EQ(infer_req->structured_generator, nullptr);
   }
 }
 

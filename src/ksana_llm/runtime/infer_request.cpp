@@ -29,6 +29,7 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       response(request->response),
       cumulative_score(0),
       sampling_config(request->sampling_config),
+      structured_generator_config(request->structured_generator_config),
       waiter(request->waiter),
       step_waiter(request->step_waiter),
       abort_waiter(request->abort_waiter),
@@ -36,14 +37,12 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
       aborted(request->aborted),
       finish_status(request->finish_status),
       output_mutex(request->output_mutex),
+      kv_comm_request_id(request->kv_comm_request_id),
+      kv_comm_group_key(request->kv_comm_group_key),
       beam_search_group(request->beam_search_group),
       is_cudagraph_capture_request(request->is_cudagraph_capture_request),
       timestamp_in_ms(request->timestamp_in_ms),
-      req_ctx(request->req_ctx),
-      req_fsm(request->req_fsm),
-      kv_comm_request_id(request->kv_comm_request_id),
-      grammar_matcher(request->grammar_matcher),
-      kv_comm_group_key(request->kv_comm_group_key) {}
+      req_ctx(request->req_ctx) {}
 
 InferRequest::~InferRequest() { KLLM_LOG_DEBUG << "req " << req_id << " destroyed."; }
 

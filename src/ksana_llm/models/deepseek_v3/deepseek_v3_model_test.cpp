@@ -11,6 +11,7 @@
 #include <sstream>
 #include <vector>
 
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
@@ -19,8 +20,6 @@
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
-#include "ksana_llm/utils/grammar_backend.h"
-#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
@@ -363,7 +362,7 @@ class DeepSeekV3Test : public testing::Test {
     generated_tokens0.clear();
     generated_tokens1.clear();
 
-    std::unique_ptr<GrammarBackend> grammar_backend_;
+    std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_;
     std::vector<std::string> vocab;
     int vocab_size = static_cast<int>(model_config.vocab_size);
     std::vector<int> stop_token_ids;
@@ -371,15 +370,17 @@ class DeepSeekV3Test : public testing::Test {
     Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_path);
     auto tokenizer = Singleton<Tokenizer>::GetInstance();
     tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
-    grammar_backend_ = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
+    structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>(vocab, vocab_size, stop_token_ids);
 
     std::string json_schema = R"({
       "type": "object"
     })";
-    auto compiled_grammar = grammar_backend_->CompileJSONSchema(json_schema);
+
+    StructuredGeneratorConfig config(StructuredConstraintType::JSON, json_schema);
+    auto structured_generator = structured_generator_factory_->CreateGenerator(config);
 
     SamplingRequest grammar_sample_req = sample_req;
-    grammar_sample_req.grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
+    grammar_sample_req.structured_generator = structured_generator;
     std::vector<SamplingRequest> grammar_sample_reqs = {grammar_sample_req};
 
     for (auto &forward_req : forward_reqs) {

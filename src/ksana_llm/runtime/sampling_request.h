@@ -6,8 +6,8 @@
 #include <cstddef>
 #include <vector>
 
-#include "ksana_llm/runtime/infer_request.h"
-#include "ksana_llm/utils/grammar_matcher.h"
+#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
+#include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
@@ -64,14 +64,12 @@ struct SamplingRequest {
   // The no_reapete_ngram sampling map
   NgramDict* ngram_dict = nullptr;
 
-  std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
-
   // Grammar matcher for constrained generation, defaults to nullptr (no grammar constraints)
   std::shared_ptr<GrammarMatcherWrapper> grammar_matcher;
 
-  // Flag to control whether to apply grammar constraints during sampling
-  // Used in MTP mode to disable grammar for draft token generation
-  bool apply_grammar_constraint = true;
+  // Flag to control whether to apply structured constraints during sampling
+  // Used in MTP mode to disable constraints for draft token generation
+  bool apply_structured_constraint = true;
 };
 
 }  // namespace ksana_llm

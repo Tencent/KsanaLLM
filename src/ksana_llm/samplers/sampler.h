@@ -7,7 +7,6 @@
 #include "ksana_llm/samplers/base/base_sampling.h"
 #include "ksana_llm/samplers/topk/topk_sampling.h"
 #include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 

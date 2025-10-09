@@ -357,7 +357,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
   sampling_device_parameter.vocab_size_padded = vocab_size_;
 
   // Test with no grammar matcher (should return early due to enable_xgrammar=false)
-  sample_reqs[0].grammar_matcher = nullptr;
+  sample_reqs[0].structured_generator = nullptr;
   sampler_->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
                              context_->GetComputeStreams()[device_id_]);
 
@@ -386,7 +386,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
   sampling_device_parameter.vocab_size_padded = vocab_size_;
 
   // Test with no grammar matcher (should return early due to empty grammar_req_indices)
-  sample_reqs[0].grammar_matcher = nullptr;
+  sample_reqs[0].structured_generator = nullptr;
   grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
                                     context_->GetComputeStreams()[device_id_]);
 
@@ -406,7 +406,7 @@ TEST_F(SamplerTest, UpdateGrammarStateTest) {
   SamplingRequest sample_req = GetSamlingRequest();
 
   // Test with no grammar matcher (should handle gracefully)
-  sample_req.grammar_matcher = nullptr;
+  sample_req.structured_generator = nullptr;
   std::vector<int> result_tokens = {42};
   sample_req.sampling_result_tokens = &result_tokens;
   std::vector<SamplingRequest> sample_reqs = {sample_req};

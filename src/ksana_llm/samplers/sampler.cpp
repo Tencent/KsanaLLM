@@ -46,7 +46,6 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
   aligned_memory_queue.Add(device_prob_ptrs_, max_logits_num);
 
   // vocab mask buffer
-  // TODO(ethanyczeng): if(!grammar_backend_)
   if (batch_schedule_config_.enable_xgrammar && rank_ == 0) {
     const int bitmask_elements = static_cast<int>(std::ceil(batch_schedule_config_.max_vocab_size / kBitsPerInt));
     const size_t vocab_mask_elements = batch_schedule_config_.max_batch_size * bitmask_elements;
@@ -472,80 +471,81 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
   const int32_t full_mask = -1;  // All bits set to 1
 
   // Track which requests have grammar constraints
-  std::vector<size_t> grammar_req_indices;
-  std::vector<size_t> grammar_req_offsets;
+  std::vector<size_t> structured_req_indices;
+  std::vector<size_t> structured_req_offsets;
 
-  // Process each sampling request to identify grammar-enabled requests
+  // Process each sampling request to identify structured-enabled requests
   for (size_t req_idx = 0; req_idx < sampling_reqs.size(); ++req_idx) {
     auto& req = sampling_reqs[req_idx];
 
-    if (!req.grammar_matcher || !req.apply_grammar_constraint) {
+    if (!req.structured_generator || !req.apply_structured_constraint) {
       continue;
     }
 
     // Record the request index and its logits offset (only first token position for MTP)
-    grammar_req_indices.push_back(req_idx);
-    grammar_req_offsets.push_back(req.logits_offset);
+    structured_req_indices.push_back(req_idx);
+    structured_req_offsets.push_back(req.logits_offset);
   }
 
-  if (grammar_req_indices.empty()) {
-    return;  // No requests with grammar constraints
+  if (structured_req_indices.empty()) {
+    return;  // No requests with structured constraints
   }
 
-  // Allocate bitmask only for grammar-enabled requests
-  const size_t grammar_req_num = grammar_req_indices.size();
-  std::fill(host_vocab_mask_.begin(), host_vocab_mask_.begin() + grammar_req_num * bitmask_elements, full_mask);
+  // Allocate bitmask only for structured-enabled requests
+  const size_t structured_req_num = structured_req_indices.size();
+  std::fill(host_vocab_mask_.begin(), host_vocab_mask_.begin() + structured_req_num * bitmask_elements, full_mask);
 
-  // Fill bitmasks for grammar-enabled requests
-  bool has_active_grammar = false;
-  for (size_t i = 0; i < grammar_req_num; ++i) {
-    size_t req_idx = grammar_req_indices[i];
+  // Fill bitmasks for structured-enabled requests
+  bool has_active_constraint = false;
+  for (size_t i = 0; i < structured_req_num; ++i) {
+    size_t req_idx = structured_req_indices[i];
     auto& req = sampling_reqs[req_idx];
 
     // Fill the bitmask at position i (not req_idx)
     int32_t* batch_bitmask = host_vocab_mask_.data() + i * bitmask_elements;
-    bool needs_mask = req.grammar_matcher->FillNextTokenBitmask(batch_bitmask, 0);
+    bool needs_mask = req.structured_generator->FillNextTokenBitmask(batch_bitmask);
 
     if (needs_mask) {
-      has_active_grammar = true;
-      KLLM_LOG_DEBUG << fmt::format("Grammar applied: req={} idx={}/{}, sampling_token_num={}", req.req_id, req_idx, i,
-                                    req.sampling_token_num);
+      has_active_constraint = true;
+      KLLM_LOG_DEBUG << fmt::format("Structured constraint applied: req={} idx={}/{}, sampling_token_num={}",
+                                    req.req_id, req_idx, i, req.sampling_token_num);
     }
   }
 
-  if (has_active_grammar) {
-    KLLM_LOG_DEBUG << "Applying grammar mask: " << grammar_req_num << "/" << sampling_reqs.size() << " requests";
+  if (has_active_constraint) {
+    KLLM_LOG_DEBUG << "Applying structured constraint mask: " << structured_req_num << "/" << sampling_reqs.size()
+                   << " requests";
 
-    // Copy bitmask to device (only for grammar requests)
-    const size_t vocab_mask_size = grammar_req_num * bitmask_elements * sizeof(int32_t);
+    // Copy bitmask to device (only for structured requests)
+    const size_t vocab_mask_size = structured_req_num * bitmask_elements * sizeof(int32_t);
     MemcpyAsync(device_vocab_mask_, host_vocab_mask_.data(), vocab_mask_size, MEMCPY_HOST_TO_DEVICE, stream);
 
-    // Apply bitmask only to grammar-enabled requests
+    // Apply bitmask only to structured-enabled requests
     ApplyTokenBitmaskSelective(device_logits, device_vocab_mask_, sampling_device_parameter.vocab_size_padded,
-                               grammar_req_offsets, stream);
+                               structured_req_offsets, stream);
   }
 }
 
 void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
   for (auto& req : sampling_reqs) {
-    if (!req.grammar_matcher || !req.apply_grammar_constraint || !req.sampling_result_tokens ||
+    if (!req.structured_generator || !req.apply_structured_constraint || !req.sampling_result_tokens ||
         req.sampling_result_tokens->empty()) {
       continue;
     }
 
-    if (req.grammar_matcher->IsTerminated()) {
+    if (req.structured_generator->IsTerminated()) {
       // Note: The request termination should be handled by the caller
-      KLLM_LOG_DEBUG << "Grammar completed for request " << req.req_id;
+      KLLM_LOG_DEBUG << "Structured generation completed for request " << req.req_id;
     }
 
-    // In MTP mode, only update grammar state for the first token (verify_token)
+    // In MTP mode, only update structured state for the first token (verify_token)
     // The second token (new_token) will be handled in DraftTokenFilter if needed
     int token_id = req.sampling_result_tokens->front();
-    bool accepted = req.grammar_matcher->AcceptToken(token_id);
+    bool accepted = req.structured_generator->AcceptToken(token_id);
 
     if (!accepted) {
       // In production, this should rarely happen if the mask was applied correctly
-      KLLM_LOG_WARNING << "Grammar rejected token " << token_id << " for request " << req.req_id;
+      KLLM_LOG_WARNING << "Structured constraint rejected token " << token_id << " for request " << req.req_id;
     }
   }
 }

@@ -139,7 +139,7 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
 
   // Process grammar compilation for structured output
   for (auto& req : infer_request_group) {
-    if (req->sampling_config.enable_structured_output && !req->sampling_config.json_schema.empty()) {
+    if (req->structured_generator_config.HaveConstraint()) {
       ProcessGrammarCompilation(req);
     }
   }
@@ -512,9 +512,9 @@ void BatchScheduler::ReportTotalState() {
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "%";
 }
 
-void BatchScheduler::RegisterGrammar(std::shared_ptr<GrammarBackend> grammar_backend) {
-  grammar_backend_ = grammar_backend;
-  KLLM_LOG_INFO << "Grammar backend registered successfully";
+void BatchScheduler::RegisterStructuredGeneratorFactory(std::shared_ptr<StructuredGeneratorFactory> generator_factory) {
+  structured_generator_factory_ = generator_factory;
+  KLLM_LOG_INFO << "Structured generator factory registered successfully";
 }
 
 void BatchScheduler::NotifyAsyncFinishedRequests() {
@@ -528,21 +528,30 @@ void BatchScheduler::NotifyAsyncFinishedRequests() {
 }
 
 void BatchScheduler::ProcessGrammarCompilation(std::shared_ptr<InferRequest> req) {
-  if (!grammar_backend_) {
-    KLLM_LOG_WARNING << "Grammar backend not available, skipping grammar compilation for request " << req->req_id;
+  if (!req->structured_generator_config.HaveConstraint()) {
+    KLLM_LOG_DEBUG << "Structured output not enabled for request " << req->req_id;
+    return;
+  }
+
+  if (!structured_generator_factory_) {
+    KLLM_LOG_DEBUG << "Structured generator factory not registered";
     return;
   }
 
   try {
-    auto compiled_grammar = grammar_backend_->CompileJSONSchema(req->sampling_config.json_schema);
+    auto structured_generator = structured_generator_factory_->CreateGenerator(req->structured_generator_config);
 
-    // Create grammar matcher
-    req->grammar_matcher = grammar_backend_->CreateMatcher(compiled_grammar);
+    if (!structured_generator) {
+      KLLM_LOG_WARNING << "Failed to create structured generator for request " << req->req_id;
+      return;
+    }
 
-    KLLM_LOG_DEBUG << "Grammar compiled successfully for request " << req->req_id;
+    req->structured_generator = std::move(structured_generator);
+
+    KLLM_LOG_DEBUG << "Structured generator created successfully for request " << req->req_id;
   } catch (const std::exception& e) {
-    KLLM_LOG_WARNING << "Failed to compile grammar for request " << req->req_id << ": " << e.what();
-    req->grammar_matcher = nullptr;
+    KLLM_LOG_WARNING << "Failed to create structured generator for request " << req->req_id << ": " << e.what();
+    req->structured_generator = nullptr;
   }
 }
 

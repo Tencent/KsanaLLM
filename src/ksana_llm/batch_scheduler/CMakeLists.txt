@@ -22,3 +22,7 @@ cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_sch
 cpp_test(batch_scheduler_balance_reqs_algo_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/batch_scheduler_balance_reqs_algo_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(pp_multibatch_wb_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler//workload_balance/pp_multibatch_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+if (WITH_CUDA)
+  cpp_test(xgrammar_generator_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/batch_scheduler/structured_generation/xgrammar/xgrammar_structured_generator_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+endif()

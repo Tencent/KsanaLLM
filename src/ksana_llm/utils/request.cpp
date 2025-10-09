@@ -4,7 +4,6 @@
 
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/profiler/reporter.h"
-#include "ksana_llm/utils/finite_state_machine.h"
 #include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
@@ -66,11 +65,12 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       logits_custom_length += (r - l + 1);
     }
   }
-  if (!ksana_python_input->structured_output_regex.empty()) {
-    std::string& output_structure = ksana_python_input->structured_output_regex;
-    std::shared_ptr<FiniteStateMachineController> fsm_controller =
-        Singleton<FiniteStateMachineController>::GetInstance();
-    req_fsm = fsm_controller->CreateOrGetFSM(output_structure);
+
+  // Process structed generation config
+  // TODO(robertyuan) : support regex
+  if (sampling_config.enable_structured_output && !sampling_config.json_schema.empty()) {
+    structured_generator_config =
+        StructuredGeneratorConfig(StructuredConstraintType::JSON, sampling_config.json_schema);
   }
 
   kv_comm_request_id = 0;
