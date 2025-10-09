@@ -347,8 +347,51 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
     int k = std::get<1>(size);
     int n = std::get<2>(size);
 
-    const int block_size_n = 128;
-    const int block_size_k = 128;
+  const int block_size_n = 128;
+  const int block_size_k = 128;
+  const size_t min_m_for_buffer_size = 2048;
+  const int tp = 8;  // tensor parallelism
+
+  std::vector<size_t> m_list = {1, 16, 64, 256, 2048};
+  size_t max_m = *std::max_element(m_list.begin(), m_list.end());
+
+  // Some typical (k, n) pairs in deepseek-r1 model, but for faster unit test execution,
+  // we only test a subset
+  std::vector<std::tuple<int, int>> k_n_list = {{7168, (1536 + 512 + 64)}, {1536, 128 * 192 / tp}};
+  const size_t max_k = std::get<0>(*std::max_element(
+      k_n_list.begin(), k_n_list.end(), [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); }));
+  const size_t max_n = std::get<1>(*std::max_element(
+      k_n_list.begin(), k_n_list.end(), [](const auto& a, const auto& b) { return std::get<1>(a) < std::get<1>(b); }));
+  const size_t max_num_blocks_n = (max_n + block_size_n - 1) / block_size_n;
+  const size_t max_num_blocks_k = (max_k + block_size_k - 1) / block_size_k;
+  size_t max_cutlass_buffer_size = 0;
+  for (auto [k, n] : k_n_list) {
+    for (size_t m : m_list) {
+      max_cutlass_buffer_size = std::max(max_cutlass_buffer_size, GetBlockwiseGemmWorkspaceSize<half>(m, k, n));
+    }
+  }
+
+  half* a_device;
+  half* b_device;
+  half* c_device;
+  float* a_scales_device;
+  float* b_scales_device;
+  __nv_fp8_e4m3* a_fp8_device;
+  __nv_fp8_e4m3* b_fp8_device;
+  void* cutlass_buffer = nullptr;
+
+  std::cout << " cudaMalloc max sizes: m " << max_m << ", k " << max_k << ", n " << max_n << std::endl;
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_device, max_m * max_k * sizeof(half)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_device, max_k * max_n * sizeof(half)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&c_device, max_m * max_n * sizeof(half)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_scales_device, max_m * max_num_blocks_k * sizeof(float)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_scales_device, max_num_blocks_n * max_num_blocks_k * sizeof(float)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_fp8_device, max_m * max_k * sizeof(__nv_fp8_e4m3)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_fp8_device, max_k * max_n * sizeof(__nv_fp8_e4m3)));
+  CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&cutlass_buffer, max_cutlass_buffer_size));
+
+  for (const auto& [k, n] : k_n_list) {
+    for (size_t m : m_list) {
 
     const int num_blocks_n = (n + block_size_n - 1) / block_size_n;
     const int num_blocks_k = (k + block_size_k - 1) / block_size_k;

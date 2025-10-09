@@ -50,8 +50,9 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
 size_t BlockwiseMatMulLayer::GetWorkSpaceSize() {
   size_t input_size = max_m_ * k_ * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = max_m_ * DivRoundUp(k_, block_size_) * GetTypeSize(TYPE_FP32);
-  size_t cutlass_buffer_size = max_m_ * k_ * GetTypeSize(TYPE_FP8_E4M3);
-  workspace_size_ = input_size + scale_size + cutlass_buffer_size;
+  input_buffer_size_ = input_size + scale_size;
+  gemm_workspace_size_ = GetCachedCutlassBufferSize<T>();
+  workspace_size_ = input_size + scale_size + gemm_workspace_size_;
   if (kDeepGemmMaxMThreshold_ > 0) {
     workspace_size_ = std::max(workspace_size_, deepgemm_matmul_layer_.GetWorkSpaceSize());
   }
@@ -88,8 +89,7 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
     T* a = static_cast<T*>(input_tensors[0].GetPtr<void>());
     void* a_q = workspace_buffer_->GetPtr<void>();
     float* a_s = static_cast<float*>(a_q + GetTypeSize(TYPE_FP8_E4M3) * m * k_);
-    void* cutlass_buffer = a_s + m * DivRoundUp(k_, block_size_) * GetTypeSize(TYPE_FP32);
-    size_t cutlass_buffer_size = m * k_ * GetTypeSize(TYPE_FP8_E4M3);
+    void* cutlass_buffer = workspace_buffer_->GetPtr<void>() + input_buffer_size_;
 
     InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, m, k_, /*is_column_major*/ true,
                                        context_->GetComputeStreams()[rank_].Get(), block_size_,
@@ -100,8 +100,7 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
 
     T* output = static_cast<T*>(output_tensors[0].GetPtr<void>());
     InvokeBlockGemm<T>(a_q, a_s, b, b_scale, output, m, k_, n_, context_->GetComputeStreams()[rank_].Get(),
-                       cutlass_buffer, cutlass_buffer_size);
-
+                       cutlass_buffer, gemm_workspace_size_);
     output_tensors[0].shape = {m, n_};
     output_tensors[0].dtype = input_tensors[0].dtype;
   }

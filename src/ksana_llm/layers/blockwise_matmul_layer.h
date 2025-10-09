@@ -33,6 +33,13 @@ class BlockwiseMatMulLayer : public BaseLayer {
   size_t block_size_;
   size_t workspace_size_;
   size_t kDeepGemmMaxMThreshold_ = 0;
+  size_t input_buffer_size_ = 0;
+  size_t gemm_workspace_size_ = 0;
+
+  // key: "DataType_max_m_k_n", value: cutlass_buffer_size
+  static inline std::unordered_map<std::string, size_t> cutlass_buffer_size_cache_;
+  static inline std::mutex cache_mutex_;
+
 #  ifdef ENABLE_CUDA
   DeepGemmMatMulLayer deepgemm_matmul_layer_;
 #  endif
