@@ -22,7 +22,7 @@
 #include "ksana_llm/runtime/threadpool.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/scheduleoutput_process.h"
+#include "ksana_llm/utils/schedule_output_process.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {

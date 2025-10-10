@@ -160,26 +160,23 @@ std::vector<int> InferRequest::GetKVOccupiedDevices() {
 }
 
 ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logits_buf) {
-  if (forward_request_ == nullptr || reset_forward_request_) {
-    reset_forward_request_ = false;
-    forward_request_ = std::make_unique<ForwardRequest>();
-    forward_request_->req_id = req_id;
-    forward_request_->req_ctx = req_ctx;
-    forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    forward_request_->input_refit_embedding = &input_refit_embedding;
-    forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
-    forward_request_->response = &response;
-    forward_request_->origin_tokens = &forwarding_tokens;
-    forward_request_->sampling_config = &sampling_config;
-    forward_request_->forwarding_tokens =
-        std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens) *) {});
-    forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
-    forward_request_->cache_manager = cache_manager;
+  forward_request_ = std::make_unique<ForwardRequest>();
+  forward_request_->req_id = req_id;
+  forward_request_->req_ctx = req_ctx;
+  forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
+  forward_request_->input_refit_embedding = &input_refit_embedding;
+  forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+  forward_request_->response = &response;
+  forward_request_->origin_tokens = &forwarding_tokens;
+  forward_request_->sampling_config = &sampling_config;
+  forward_request_->forwarding_tokens =
+      std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens) *) {});
+  forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+  forward_request_->cache_manager = cache_manager;
+  forward_request_->is_cudagraph_capture_request = is_cudagraph_capture_request;
 
-    const size_t rank_num = kv_cache_blocks.size();
-    forward_request_->kv_cache_ptrs.resize(rank_num);
-    forward_request_->atb_kv_cache_base_blk_ids.resize(rank_num);
-  }
+  forward_request_->kv_cache_ptrs.resize(kv_cache_blocks.size());
+  forward_request_->atb_kv_cache_base_blk_ids.resize(kv_cache_blocks.size());
 
   forward_request_->infer_stage = infer_stage;
   forward_request_->step = step;
@@ -192,7 +189,6 @@ ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logi
   forward_request_->draft_token_num = draft_tokens.size();
   forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
-  forward_request_->is_cudagraph_capture_request = is_cudagraph_capture_request;
   forward_request_->attn_dp_group_id = attn_dp_group_id;
 
   UpdateBlockPtrs(forward_request_->kv_cache_ptrs);

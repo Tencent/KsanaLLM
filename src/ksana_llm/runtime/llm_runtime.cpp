@@ -79,104 +79,13 @@ void LlmRuntime::BuildForwardRequests(
 
 void LlmRuntime::BuildForwardRequests(
     std::vector<std::shared_ptr<WorkerInferRequest>>& reqs,
-    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>>& grouped_reqs) {
-  int logits_offset = 0;
+    std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>>& grouped_reqs) {
   PROFILE_EVENT_SCOPE(BuildForwardRequests, "BuildForwardRequests");
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    std::shared_ptr<WorkerInferRequest>& req_ptr = reqs[i];
-    req_ptr->step += 1;
-    ModelInstance* key = req_ptr->model_instance.get();
-    InferStage grouped_stage = kGroupStageMap[req_ptr->infer_stage];
-
-    if (grouped_reqs.find(key) == grouped_reqs.end()) {
-      grouped_reqs[key] = {};
-    }
-
-    if (grouped_reqs[key].find(grouped_stage) == grouped_reqs[key].end()) {
-      grouped_reqs[key][grouped_stage] = {};
-    }
-
-    ForwardRequest forward_req;
-    forward_req.req_id = req_ptr->req_id;
-    forward_req.infer_stage = req_ptr->infer_stage;
-    forward_req.step = req_ptr->step;
-    forward_req.kv_cached_token_num = req_ptr->kv_cached_token_num;
-    forward_req.logits_custom_length = 0;
-    forward_req.kv_cache_ptrs = req_ptr->GetBlockPtrs();
-    forward_req.logits_buf = {};
-    forward_req.logits_offset = ++logits_offset;
-    forward_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
-    forward_req.response = &req_ptr->response;
-    forward_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->forwarding_tokens);
-    forward_req.flexible_cached_copy_tasks = &(req_ptr->flexible_cached_copy_tasks);
-    forward_req.input_refit_embedding = &(req_ptr->input_refit_embedding);
-    forward_req.mrotary_embedding_pos_offset = &(req_ptr->mrotary_embedding_pos_offset);
-    forward_req.is_use_prefix_cache = req_ptr->is_use_prefix_cache;
-    forward_req.flexible_cache_len = 0;
-    forward_req.prefix_cache_len = req_ptr->prefix_cache_len + forward_req.flexible_cache_len;
-    forward_req.is_cudagraph_capture_request = false;
-    forward_req.timestamp_in_ms = 0;
-    forward_req.cache_manager = req_ptr->cache_manager;
-    forward_req.attn_dp_group_id = req_ptr->attn_dp_group_id;
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
-    // forward_req.accepted_hidden_states_ptr = &(req_ptr->accepted_hidden_states);
-    uint32_t layer_num = req_ptr->model_instance->GetLayerNum();
-    BuildFlatKVCacheBlkIds(layer_num, req_ptr->kv_cache_blocks, forward_req.atb_kv_cache_base_blk_ids,
-                           req_ptr->cache_manager);
-
-#endif
-    grouped_reqs[key][grouped_stage].emplace_back(std::move(forward_req));
-  }
-}
-
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
-// NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
-// The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
-// guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
-// head_dim], where 2 represents key and value. The Ascend ATB kv cache consists of kcache and vcache, which are
-// independent contiguous storage spaces. The shapes of kcache and vcache are [num_blocks * layer_num,
-// block_token_num, head_num, head_dim]. Each block has a size of [block_token_num, head_num, head_dim]. To
-// interface with the NPU, Ascend ATB (hereinafter referred to as ATB) needs to be used. In order for the NPU's
-// self/paged attention to utilize Ksana's kv cache and share the underlying memory/GPU memory management
-// capabilities, the Ksana kv cache needs to be converted to the Ascend ATB kv cache format.
-// 1. Change the block allocation method so that the blocks are contiguous in physical memory, while the upper-level
-// pointers point to different storage spaces. Originally, each block in the Ksana kv cache called malloc once. This
-// should be changed to pre-allocate a contiguous storage space of size [num_blocks, 2, layer_num, block_token_num,
-// head_num, head_dim]. The pointers of each block should then point to cache_base_ptr + (block index * 2 *
-// layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
-// 2. During each inference process, each prompt will carry an array of block IDs, which can be used to obtain the
-// pointers to the storage space. For ATB, conversion is required to use these pointers. The conversion process is
-// as follows:
-//    - Given a block ID array [b0, b1, b2, b3, b4] and the base address pointer of the Ksana kv cache after the
-//    modification in step 1, cache_base_ptr.
-//    - For ATB: The Ksana kv cache has a total of num_blocks * 2 * layer_num blocks.
-//    - Therefore, the block ID array for ATB is [b0 * layer_num * 2, b1 * layer_num * 2, b2 * layer_num * 2, b3 *
-//    layer_num * 2, b4 * layer_num * 2].
-//    - Ksana's kv cache swaps memory/GPU memory at the block level, so to reuse Ksana's kv cache's underlying
-//    memory/GPU memory management capabilities, ATB's kcache and vcache share the same Ksana kv cache.
-//    - Since each block in Ksana is divided into K and V parts, each part having a size of [layer_num,
-//    block_token_num, head_num, head_dim].
-//    - To allow ATB's kcache and vcache to share the same block ID array, the kcache pointer is cache_base_ptr, and
-//    the vcache pointer is cache_base_ptr + (layer_num * block_token_num * head_num * head_dim * sizeof(DTYPE)).
-//    - Therefore, the block ID array for kcache/vcache is [b0 * layer_num * 2 + layer_idx, b1 * layer_num * 2 +
-//    layer_idx, b2 * layer_num * 2 + layer_idx, b3 * layer_num * 2 + layer_idx, b4 * layer_num * 2 + layer_idx].
-// More detail refer to docs/Technology/kvcache-relationship-between-ascend-atb-and-ksana.md
-void LlmRuntime::BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<std::vector<int>>& device_block_ids,
-                                        std::vector<std::vector<int32_t>>& atb_block_ids,
-                                        std::shared_ptr<CacheManagerInterface> cache_manager) {
-  size_t rank_num = device_block_ids.size();
-  atb_block_ids.resize(rank_num);
-  for (size_t rank = 0; rank < rank_num; ++rank) {
-    atb_block_ids[rank].clear();
-    // for dedicate device kv blocks
-    size_t base_id = cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlocksBaseId();
-    atb_block_ids[rank].reserve(device_block_ids[rank].size());
-    std::transform(device_block_ids[rank].begin(), device_block_ids[rank].end(),
-                   std::back_inserter(atb_block_ids[rank]), [base_id, layer_num](int block_id) {
-                     size_t original_block_id = block_id - base_id;
-                     // NOTE(karlluo): only support bfloat16 or float16, so we just dedicate sizeof(float16) here
-                     return original_block_id * layer_num * 2;
-                   });
+  for (auto& req : reqs) {
+    ++req->step;
+    auto& group_reqs = grouped_reqs[req->model_instance.get()][GetGroupStage(req->infer_stage)];
+    group_reqs.reserve(reqs.size());
+    group_reqs.emplace_back(req->GetForwardRequest());
   }
 }
 #endif

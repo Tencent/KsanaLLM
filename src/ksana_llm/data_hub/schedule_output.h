@@ -83,6 +83,11 @@ struct WorkerInferRequest {
 
   // Not used.
   std::map<std::string, PythonTensor> response;
+
+  ForwardRequest* GetForwardRequest();
+
+ private:
+  std::unique_ptr<ForwardRequest> forward_request_;
 };
 
 // The scheduler output of every step.

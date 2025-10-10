@@ -1,7 +1,7 @@
 /* Copyright 2025 Tencent Inc.
 ==============================================================================*/
 
-#include "ksana_llm/utils/scheduleoutput_process.h"
+#include "ksana_llm/utils/schedule_output_process.h"
 
 namespace ksana_llm {
 

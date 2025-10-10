@@ -33,10 +33,7 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
   }
 
-  if (IsAbsorbWeightsEnabled()) {
-    decode_token_num_threshold_ = 2;  // input_ids <= 2 will regard as decode, using page attention
-  }
-  size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
+  const size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   /* TODO(zezhao):
    * 在多机 EP 场景下，每台机器都持有完整的 MLA、Embedding 以及 LmHead，多台机器间仅在 MOE 层进行数据共享
    * 对于每台机器，MLA 部分的所有 DP 节点，每轮调度后会产出最多 max_step_token_num 的 token。
@@ -71,11 +68,11 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
   KLLM_LOG_DEBUG << "RecomputeMockRequest " << req;
 
   // Add request to the beginning of waiting queue.
-  req->kv_cache_blocks.clear();
   RuntimeConfig runtime_config;
   Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
-  req->kv_cache_blocks.resize(runtime_config.parallel_basic_config.attn_tensor_parallel_size);
-  req->infer_stage = InferStage::STAGE_CONTEXT;
+  req->kv_cache_blocks.assign(runtime_config.parallel_basic_config.attn_tensor_parallel_size, {});
+  req->RebuildBlockPtrs();
+  req->infer_stage = InferStage::kContext;
   req->step = 0;
   req->kv_cached_token_num = 0;
   req->suggested_draft_num = 0;
@@ -163,8 +160,20 @@ std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy:
   return batch_state_->schedule_output->running_reqs.erase(it);
 }
 
-void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req) {
-  ResetRequest(req, req_status, is_swap_req, true);
+void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status ret_status,
+                                             RequestState req_state) {
+  const bool is_swap_req = (req_state == RequestState::REQUEST_STATE_SWAPPED);
+  ResetRequest(req, ret_status, is_swap_req, true);
+  // Record finish req_id
+  if (req_state == RequestState::REQUEST_STATE_RUNNING || req_state == RequestState::REQUEST_STATE_SWAPPED) {
+    if (req->attn_dp_group_id >= batch_state_->schedule_output->finish_req_ids.size()) {
+      size_t needed_push_size = req->attn_dp_group_id - batch_state_->schedule_output->finish_req_ids.size() + 1;
+      for (size_t idx = 0; idx < needed_push_size; ++idx) {
+        batch_state_->schedule_output->finish_req_ids.push_back(std::vector<int64_t>{});
+      }
+    }
+    batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
+  }
 }
 
 void ContinuousBatchingStrategy::AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status,
@@ -206,7 +215,7 @@ void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req,
 
   req->finish_status = req_status;
   req->finished = terminate;
-  req->reset_forward_request_ = true;
+  req->RebuildBlockPtrs();
 
   if (is_swap_req) {
     cache_manager_->DestroySwappedRequest(req->req_id);
@@ -304,10 +313,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
                                                         req->kv_cache_blocks);
 
     //  if it is async, req->output_tokens.size() should minus 1
-    int real_output_num = req->output_tokens.size();
-    if (batch_scheduler_config_.enable_async) {
-      real_output_num -= 1;
-    }
+    const int real_output_num = req->output_tokens.size() - (batch_scheduler_config_.enable_async ? 1 : 0);
     if (req->forwarding_tokens.size() - req->accepted_tokens.size() < real_output_num) {
       // When the request actually needs to calculate Multi-Token, insert the request into the waiting queue.
       // This is primarily used for the split-fuse feature.
@@ -319,7 +325,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       req->last_step_token_num = kStepGenerateTokenNum;
       batch_state_->waiting_queue.emplace_front(req);
       it = batch_state_->schedule_output->running_reqs.erase(it);
-      KLLM_LOG_DEBUG << "splitfuse cal multi-token" << req;
+      KLLM_LOG_DEBUG << "splitfuse cal multi-token" << *req;
       continue;
     }
 
@@ -453,7 +459,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
 size_t ContinuousBatchingStrategy::GetRunningRequestsBlockNeed() {
   size_t total_needed_block_num = 0;
-  for (auto &req : batch_state_->schedule_output->running_reqs) {
+  for (const auto &req : batch_state_->schedule_output->running_reqs) {
     total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
   }
   return total_needed_block_num;
@@ -525,7 +531,8 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     auto req = *it;
 
     // No need to check max_batch_size and max_step_token_num here.
-    size_t swapout_block_threshold = std::ceil(running_batch_size * batch_scheduler_config_.swapout_block_threshold);
+    const size_t swapout_block_threshold =
+        std::ceil(running_batch_size * batch_scheduler_config_.swapout_block_threshold);
 
     // Whether the allocation operation is successful.
     bool allocate_block_succ = true;
@@ -567,15 +574,13 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     }
 
     // If allocation failed, disable split fuse.
-    if (batch_state_->waiting_queue.size() > 0 && batch_scheduler_config_.split_fuse_token_num > 0) {
-      for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end(); it++) {
-        auto req = *it;
-        if (req->kv_cache_blocks[0].size() > 0) {
+    if (!batch_state_->waiting_queue.empty() && batch_scheduler_config_.split_fuse_token_num > 0) {
+      for (auto &req : batch_state_->waiting_queue) {
+        if (!req->kv_cache_blocks[0].empty()) {
           // Note(TJ): maybe cloud use StopRequest
           cache_manager_->DestroyFinishedRequest(req->req_id);
-          req->kv_cache_blocks.clear();
-          req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
-          req->reset_forward_request_ = true;
+          req->kv_cache_blocks.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, {});
+          req->RebuildBlockPtrs();
           KLLM_LOG_WARNING << fmt::format("Split fuse disabled due to allocation failure for request ID {}",
                                           req->req_id);
         }
@@ -606,6 +611,7 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
         status =
             cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num, swapout_memory_blocks);
         if (status.OK()) {
+          req->RebuildBlockPtrs();
           batch_state_->swapout_pending_requests_[req->req_id] = req;
           batch_state_->schedule_output->running_reqs.erase(it);
 
@@ -968,7 +974,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       Status status = cache_manager_->AllocateRequestBlocks(req->req_id, unique_block_num, req->kv_cache_blocks);
       if (status.OK()) {
         step_not_kv_cached_token_num += current_token_num - shared_token_num;
-        req->reset_forward_request_ = true;
+        req->RebuildBlockPtrs();
 
         // if full matched, skip decode and put it to the end of decode list.
         if (shared_token_num == req->forwarding_tokens.size()) {

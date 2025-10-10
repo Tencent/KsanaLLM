@@ -10,9 +10,10 @@
 
 namespace ksana_llm {
 
-ForwardRequest* WorkerInferRequest::GetForwardRequest(const size_t logits_offset) {
+ForwardRequest* WorkerInferRequest::GetForwardRequest() {
   if (forward_request_ == nullptr) {
     forward_request_ = std::make_unique<ForwardRequest>();
+    forward_request_->req_id = req_id;
     forward_request_->response = &response;
     forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward_request_->input_refit_embedding = &input_refit_embedding;
@@ -30,11 +31,9 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest(const size_t logits_offset
     forward_request_->atb_kv_cache_base_blk_ids.resize(rank_num);
   }
 
-  forward_request_->req_id = req_id;
   forward_request_->infer_stage = infer_stage;
   forward_request_->step = step;
   forward_request_->kv_cached_token_num = kv_cached_token_num;
-  forward_request_->logits_offset = logits_offset;
   forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;

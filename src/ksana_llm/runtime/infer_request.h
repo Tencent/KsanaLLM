@@ -45,6 +45,8 @@ class InferRequest {
   // Get addr ptr of blocks.
   std::vector<std::vector<void *>> GetBlockPtrs();
 
+  void RebuildBlockPtrs() { last_block_id_ = -1; }
+
   // Get this infer request's KV occupied devices.
   std::vector<int> GetKVOccupiedDevices();
 
@@ -241,7 +243,7 @@ class InferRequest {
   // requires the guaranteed existence of its associated InferRequest.
   ForwardRequest *GetForwardRequest(const std::vector<float *> &logits_buf);
   std::unique_ptr<ForwardRequest> forward_request_;
-  bool reset_forward_request_ = true;
+  int last_block_id_ = -1;
 };
 
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
