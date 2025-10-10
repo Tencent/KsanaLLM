@@ -51,23 +51,38 @@ void ContinuousBatchingStrategy::AddTransferMeta(std::vector<std::shared_ptr<Inf
  */
 void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
   KLLM_LOG_DEBUG << "ProcessDecodeTransferQueue invoked, transfer queue size:" << batch_state_->transfer_queue.size();
-
+  scheduler_ticktok_->Barrier();
+  if (dp_group_id_ == 0) {
+    scheduler_ticktok_->Reset();
+    scheduler_shared_counter_->step_batch_size.Reset(0);
+  }
+  scheduler_ticktok_->Barrier();
+  scheduler_shared_counter_->step_batch_size.Increase(batch_state_->schedule_output->running_reqs.size());
+  scheduler_ticktok_->Barrier();
   if (batch_state_->transfer_queue.empty()) {
     KLLM_LOG_DEBUG << "transfer queue empty, return";
+    scheduler_ticktok_->Skip();
     return;
   }
   auto transfer_engine = TransferEngine::GetInstance();
-
+  // 对transfer_queue排序，kv_comm_request_id小的在前
+  std::sort(batch_state_->transfer_queue.begin(), batch_state_->transfer_queue.end(),
+            [](const auto& a, const auto& b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
-    // 检查是否达到最大的batch
-    if (batch_state_->schedule_output->running_reqs.size() >= dp_max_decode_batch_size_) {
-      KLLM_LOG_DEBUG << "max batch size reached, stop processing transfer queue";
-      return;
-    }
     auto req = *it;
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
     std::vector<int> first_tokens = transfer_engine->IsRecvDone(req->kv_comm_request_id);
     if (first_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
+      // 检查是否达到最大的batch
+      scheduler_ticktok_->Lock();
+      size_t step_batch_size = scheduler_shared_counter_->step_batch_size.Get();
+      if (step_batch_size >= dp_max_decode_batch_size_) {
+        KLLM_LOG_DEBUG << "max batch size reached, stop processing transfer queue";
+        scheduler_ticktok_->Unlock();
+        break;
+      }
+      scheduler_shared_counter_->step_batch_size.Increase(1);
+      scheduler_ticktok_->Unlock();
       // 接收完成，更新请求状态
       req->kv_cached_token_num = req->forwarding_tokens.size();
       req->prefix_cache_len = req->kv_cached_token_num;
@@ -98,6 +113,7 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
   if (batch_state_->schedule_output->running_reqs.size() == 0) {
     KLLM_LOG_DEBUG << "no req in running queue, return";
   }
+  scheduler_ticktok_->Skip();
 }
 
 /**

@@ -192,6 +192,13 @@ void LayerProgressTracker::ResetState() {
     return;
   }
 
+  while (true) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pending_events_.empty()) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+  }
   std::lock_guard<std::mutex> lock(mutex_);
 
   // 清除所有设备的层进度记录
@@ -200,11 +207,6 @@ void LayerProgressTracker::ResetState() {
   // 重置所有事件的处理状态为已处理（不需要监控）
   for (auto& pair : events_map_) {
     pair.second.processed = true;
-  }
-
-  // 清空优先队列
-  while (!pending_events_.empty()) {
-    pending_events_.pop();
   }
 }
 

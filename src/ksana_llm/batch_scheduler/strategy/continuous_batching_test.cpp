@@ -54,7 +54,7 @@ class ContinuousBatchingTest : public testing::Test {
     batch_scheduler_config.split_fuse_token_num = 256;
     const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string test_name = test_info->name();
-    if (test_name.find("ProcessDecodeTransferQueueTest") != std::string::npos ||
+    if (test_name.find("ProcessDecodeTransferQueue") != std::string::npos ||
         test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
       auto env = Singleton<Environment>::GetInstance();
       ConnectorConfig connector_config;
@@ -96,6 +96,13 @@ class ContinuousBatchingTest : public testing::Test {
     auto cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
     continuous_batching_strategy_->SetCacheManager(cache_manager);
+
+    // 初始化调度同步器与共享计数器，避免 SchedulerTickTok::Barrier 未初始化导致的测试崩溃
+    auto scheduler_shared_counter = std::make_shared<SchedulerSharedCounter>(1);
+    auto scheduler_ticktok = std::make_shared<SchedulerTickTok>(1);
+    continuous_batching_strategy_->SetSharedCounter(scheduler_shared_counter);
+    continuous_batching_strategy_->SetSchedulerTickTok(scheduler_ticktok);
+    continuous_batching_strategy_->SetDataParaGroupId(0);
 
     pybind11::initialize_interpreter();
   }
@@ -311,6 +318,62 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 8);
 
   for (int i = 0; i < 20; ++i) {
+    TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
+  }
+}
+
+// 当 step_batch_size >= dp_max_decode_batch_size_ 时不再增加 running_reqs
+TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
+  // 设置为DECODE节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
+
+  // 预先填充 running_reqs 到达到最大 decode batch size
+  const size_t max_decode_bs = continuous_batching_strategy_->batch_state_->batch_scheduler_config_.max_batch_size;
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+
+  for (size_t i = 0; i < max_decode_bs; ++i) {
+    auto dummy_req = std::make_shared<InferRequest>(request, 0);
+    continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.push_back(dummy_req);
+  }
+  size_t transfer_req_num = 20;
+  continuous_batching_strategy_->batch_state_->transfer_queue.clear();
+  // 构造若干 transfer_queue 请求，若处理应进入 running_reqs，但由于达到上限，应被阻止
+  for (int i = 0; i < transfer_req_num; ++i) {
+    auto req = std::make_shared<InferRequest>(request, 0);
+    req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+    // 设置KV缓存块
+    req->kv_cache_blocks.resize(2);
+    for (size_t i = 0; i < 2; ++i) {
+      req->kv_cache_blocks[i].resize(3);
+      for (size_t j = 0; j < 3; ++j) {
+        req->kv_cache_blocks[i][j] = j + i * 10;
+      }
+    }
+    req->kv_comm_request_id = 123 + i;
+    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+    req->kv_cached_token_num = 0;
+    req->block_token_num = 16;
+    std::vector<std::shared_ptr<InferRequest>> queue;
+    queue.push_back(req);
+
+    // 调用AddTransferMeta函数
+    continuous_batching_strategy_->AddTransferMeta(queue);
+    continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+  }
+
+  // 调用处理函数
+  continuous_batching_strategy_->ProcessDecodeTransferQueue();
+
+  // 验证：running_reqs 未超过最大 decode batch size，上限触发后不再增加
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), max_decode_bs);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), transfer_req_num);
+
+  // 清理传输元数据
+  for (int i = 0; i < transfer_req_num; ++i) {
     TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
   }
 }

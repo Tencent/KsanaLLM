@@ -54,8 +54,8 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     dp_max_decode_batch_size_ = dp_max_batch_size_;
     // 增加预参数的大小
     dp_max_batch_size_ = batch_scheduler_config_.max_batch_size +
-                         (batch_scheduler_config_.max_pretransfer_batch_size / attn_data_parallel_size);
-    KLLM_LOG_DEBUG << "decode dp_max_batch_size_:" << dp_max_batch_size_
+                         (batch_scheduler_config_.max_pretransfer_batch_size);
+    KLLM_LOG_INFO << "decode dp_max_batch_size_:" << dp_max_batch_size_
                    << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
   }
 }
@@ -861,7 +861,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
   const size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
   auto [step_token_num, step_not_kv_cached_token_num] = CheckRunningQueueStepTokens();
 
-  size_t step_batch_size = batch_state_->schedule_output->running_reqs.size();
+  size_t step_batch_size = batch_state_->schedule_output->running_reqs.size() + batch_state_->transfer_queue.size();
   size_t step_logits_num = 0;
   for (const auto &req : batch_state_->schedule_output->running_reqs) {
     step_logits_num += req->sampling_token_num;
@@ -1162,7 +1162,11 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
     scheduler_shared_counter_->step_token_num.Reset(0);
     scheduler_shared_counter_->step_logits_num.Reset(0);
   }
-
+  if (connector_config_.group_role != GroupRole::NONE) {
+    // 对waiting_reqs排序，kv_comm_request_id小的在前
+    std::sort(waiting_reqs.begin(), waiting_reqs.end(),
+              [](const auto &a, const auto &b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
+  }
   batch_state_->MergeWaitingReqs(waiting_reqs);
   ProcessRunningQueue();
   ProcessSwappedQueue();

@@ -498,7 +498,7 @@ void TaskDispatcher::AddTensorForTask(const std::shared_ptr<TransferTask>& task,
     tensors.push_back(task->tensor.src_ptr);
   }
 
-  tensor_sizes.push_back(task->tensor.GetElementNumber() * GetTypeSize(task->tensor.dtype));
+  tensor_sizes.push_back(task->tensor.GetElementNumber());
   data_types.push_back(task->tensor.dtype);
 }
 
