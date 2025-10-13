@@ -8,6 +8,7 @@
 
 #include "ksana_llm/connector/device_info_manager.h"
 #include "ksana_llm/transfer/transfer_engine.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 
@@ -197,7 +198,6 @@ std::vector<int> TransferEngine::IsRecvDone(int request_id) {
 
       expected_tasks = block_num * chunks_per_device * (deocode_device_num / decode_dp_num);
     }
-
     KLLM_LOG_DEBUG << "TransferTask IsDone? request id:" << request_id
                    << " finished:" << meta->finished_tasks_deque_.size() << " expected:" << expected_tasks
                    << " (block_num:" << block_num << ", chunks_per_device:" << chunks_per_device
@@ -209,6 +209,7 @@ std::vector<int> TransferEngine::IsRecvDone(int request_id) {
 
     // 检查所有任务是否完成（管道并行异构模式）
     if (block_num > 0 && meta->finished_tasks_deque_.size() == expected_tasks && meta->first_tokens[0] != -1) {
+      REPORT_METRIC("transfer_tasks_per_request", expected_tasks);
       return meta->first_tokens;
     }
   }

@@ -1168,10 +1168,15 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
               [](const auto &a, const auto &b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
   }
   batch_state_->MergeWaitingReqs(waiting_reqs);
+  auto start_us = ProfileTimer::GetCurrentTimeInUs();
   ProcessRunningQueue();
+  REPORT_METRIC("batch_scheduler_running_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
   ProcessSwappedQueue();
+  REPORT_METRIC("batch_scheduler_swapped_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
   ProcessWaitingQueue();
+  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
   ProcessTransferQueue();
+  REPORT_METRIC("batch_scheduler_transfer_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
 
   // Must barrier before reorder.
   scheduler_ticktok_->Barrier();

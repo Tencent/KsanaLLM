@@ -12,6 +12,7 @@
 #include "ksana_llm/connector/communicator/communicator_manager.h"
 #include "ksana_llm/connector/task_manager.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/profiler/reporter.h"
 
 #include "ksana_llm/connector/communicator/zmq/zmq_communicator.h"
 #ifdef ENABLE_CUDA
@@ -222,9 +223,13 @@ void TaskDispatcher::HandlePrefillGroupBatch(
   }
   KLLM_LOG_DEBUG << "Step_3: Prefill signal sent to Decode for group_key=" << group_key
                  << ", device_idx=" << src_device_idx << ", first task_keys is: " << group_vec[0].ToString();
+  auto start_time = ProfileTimer::GetCurrentTimeInUs();
   if (config_.communication_type == CommunicationType::NCCL) {
 #ifdef ENABLE_CUDA
     SendDataToDecodeWithNccl(group_key, src_device_idx, dst_device_idx, group_vec);
+    if (group_vec.size() > 0) {
+      REPORT_METRIC("pd_task_send_data_cost_us", (ProfileTimer::GetCurrentTimeInUs() - start_time) / group_vec.size());
+    }
     return;
 #endif
   } else if (config_.communication_type == CommunicationType::ZMQ) {
@@ -509,7 +514,6 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
 
   // Use the new circular buffer batch method - naturally parallel by req_id
   std::vector<TaskKey> raw_tasks = task_manager_->GetProcessingBufferBatch(batch_size);
-
   if (raw_tasks.empty()) {
     return std::vector<TaskKey>();
   }
@@ -584,7 +588,8 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
     std::sort(batch.begin(), batch.end(),
               [](const TaskKey& a, const TaskKey& b) { return a.start_time_us < b.start_time_us; });
   }
-
+  REPORT_METRIC("pd_transfer_task_batch_size", batch.size());
+  REPORT_METRIC("pd_transfer_skipped_task_num", skipped_tasks_num);
   KLLM_LOG_DEBUG << "Taking " << batch.size() << " tasks from circular processing buffers for prefill role, skipping "
                  << skipped_tasks_num << " tasks, the max batch size is " << batch_size;
   return batch;
@@ -642,10 +647,11 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
   std::vector<DataType> data_types;
 
   // 遍历所有任务，收集有效的张量
+  auto cur_us = ProfileTimer::GetCurrentTimeInUs();
   for (const auto& tk : group_vec) {
     KLLM_LOG_DEBUG << "Step_5: Prefill preparing task_keys and tensors for group_key: " << group_key
                    << " and task_key is: " << tk.ToString()
-                   << ", befor start nccl send time cost: " << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
+                   << ", befor start nccl send time cost: " << (cur_us - tk.start_time_us);
     auto task = task_manager_->GetTask(tk);
     if (!task) {
       KLLM_LOG_ERROR << "Task not found for key: " << tk.ToString();
@@ -654,6 +660,8 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
     if (tk.tensor_size > 0) {
       AddTensorForTask(task, tk, tensors, tensor_sizes, data_types);
     }
+    // 任务在真实传输之前的meta信息处理耗时
+    REPORT_METRIC("pd_task_prepare_cost_us", cur_us - tk.start_time_us);
   }
 
   nccl_communicator_->Send(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), block->device_ptr,
@@ -669,7 +677,6 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
   for (auto ptr : tensors) const_tensors.push_back(ptr);
   nccl_communicator_->SendGroup(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), const_tensors,
                                 tensor_sizes, data_types[0]);
-
   KLLM_LOG_DEBUG << "Step_8: Prefill task data sent to Decode and task_key[0]= "
                  << (group_vec.empty() ? "" : group_vec[0].ToString()) << " batch size: " << group_vec.size();
   return;
@@ -678,6 +685,7 @@ void TaskDispatcher::SendDataToDecodeWithNccl(const std::string& group_key, int 
 void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_device_idx, int dst_device_idx,
                                           size_t count) {
   CUDA_CHECK(cudaSetDevice(src_device_idx));
+  auto start_us = ProfileTimer::GetCurrentTimeInUs();
   PinnedMemoryBufferBlock* block = buffer_pool_->get_block(src_device_idx);
   if (!block) {
     KLLM_LOG_WARNING << "Failed to get buffer block for device_idx: " << src_device_idx;
@@ -728,6 +736,11 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_
                    << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
   }
   buffer_pool_->put_block(block);
+
+  if (count > 0) {
+    // task任务数据接收耗时
+    REPORT_METRIC("pd_task_recv_data_cost_us", (ProfileTimer::GetCurrentTimeInUs() - start_us) / count);
+  }
 }
 #endif
 }  // namespace ksana_llm

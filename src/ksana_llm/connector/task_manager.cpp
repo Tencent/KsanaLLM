@@ -7,6 +7,7 @@
 #include <atomic>
 
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/profiler/reporter.h"
 
 namespace ksana_llm {
 
@@ -153,9 +154,11 @@ std::vector<std::shared_ptr<TransferTask>> TaskManager::GetTasksBatch(const std:
 void TaskManager::CompleteTask(const TaskKey& key) {
   auto& shard = GetShard(key.req_id);
   typename decltype(shard.request_map)::accessor accessor;
-
   if (shard.request_map.find(accessor, key)) {
     if (accessor->second) {
+      // 任务从PushTask到CompleteTask的总耗时
+      REPORT_METRIC("pd_task_total_cost_us",
+        ProfileTimer::GetCurrentTimeInUs() - accessor->first.start_time_us);
       accessor->second->is_completed = true;
     }
     accessor.release();
@@ -200,7 +203,7 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
     size_t shard_idx = GetShardIndex(task_key.req_id);
     shard_tasks[shard_idx].push_back(task_key);
   }
-
+  auto cur_us = ProfileTimer::GetCurrentTimeInUs();
   // Process each shard's tasks in parallel
   task_arena_.execute([&]() {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, circular_bucket_num_),
@@ -208,19 +211,14 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
                         for (size_t shard_idx = range.begin(); shard_idx != range.end(); ++shard_idx) {
                           auto& shard = *shards_[shard_idx];
                           const auto& shard_task_keys = shard_tasks[shard_idx];
-
-                          for (const auto& task_key : shard_task_keys) {
+                          for (auto& task_key : shard_task_keys) {
                             // Insert into decode confirmed tasks
-                            typename decltype(shard.decode_confirmed_tasks)::accessor decode_accessor;
-                            shard.decode_confirmed_tasks.insert(decode_accessor, task_key);
-                            decode_accessor->second = now;
-                            decode_accessor.release();
-
-                            // Check if this task was waiting in prefill pending
-                            typename decltype(shard.prefill_pending_tasks)::accessor prefill_accessor;
-                            KLLM_LOG_DEBUG << "RegisterDecodeConfirmedTasks: " << task_key.ToString();
-                            if (shard.prefill_pending_tasks.find(prefill_accessor, task_key)) {
-                              TaskKey actual_key = prefill_accessor->first;
+                            typename decltype(shard.decode_confirmed_tasks)::accessor accessor;
+                            if (!shard.decode_confirmed_tasks.insert(accessor, task_key)) {
+                              REPORT_METRIC("pd_task_waiting_cost_us", cur_us - accessor->first.start_time_us);
+                              // Key already exists: re-key with updated decode device fields, preserve metadata
+                              const std::time_t prev_start_time = accessor->second.start_time;
+                              TaskKey actual_key = accessor->first;
                               actual_key.decode_device_id = task_key.decode_device_id;
                               actual_key.decode_device_offset = task_key.decode_device_offset;
                               KLLM_LOG_DEBUG << "prefill_pending_tasks find and update: " << actual_key.ToString();
