@@ -68,6 +68,10 @@ struct SamplingRequest {
   // Flag to control whether to apply structured constraints during sampling
   // Used in MTP mode to disable constraints for draft token generation
   bool apply_structured_constraint = true;
+
+  // Flag to control whether to apply no repeat ngram sample constraints during sampling
+  // Used in MTP mode to disable constraints for draft token generation
+  bool apply_no_repeat_ngram_constraint = true;
 };
 
 }  // namespace ksana_llm

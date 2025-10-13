@@ -193,7 +193,8 @@ Status LlmRuntime::AuxForward(
 }
 
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                                      std::vector<SamplingRequest>& sampling_reqs, bool apply_grammar_constraint) {
+                                      std::vector<SamplingRequest>& sampling_reqs,
+                                      bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
   sampling_reqs.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); ++i) {
@@ -227,12 +228,13 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     }
     sampling_req.ngram_dict = &(req->ngram_dict);
     sampling_req.structured_generator = req->structured_generator;
-    sampling_req.apply_structured_constraint = apply_grammar_constraint;
+    sampling_req.apply_structured_constraint = enable_main_layers_sampler;
+    sampling_req.apply_no_repeat_ngram_constraint = enable_main_layers_sampler;
   }
 }
 
 Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                            std::vector<SamplingRequest>& sampling_reqs, bool apply_grammar_constraint) {
+                            std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
 
   std::vector<std::future<Status>> results;

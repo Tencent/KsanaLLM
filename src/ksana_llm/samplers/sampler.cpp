@@ -396,7 +396,11 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     }
 
     const int input_tokens_size = sampling_req.input_tokens->size();
-    // NOTE(winminkong): When MTP is enabled, the NoRepeatNgram sampling is applied only to the first token generated.
+    // NOTE(winminkong): Do not apply NoRepeatNgram sampling when sample req is mtp req.
+    if (!sampling_req.apply_no_repeat_ngram_constraint) {
+      continue;
+    }
+    // NOTE(winminkong): When mtp_step_num > 0, the NoRepeatNgram sampling is applied only to the first token generated.
     if (sampling_config->no_repeat_ngram_size > 0) {
       NoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
                              sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict, vocab_size,

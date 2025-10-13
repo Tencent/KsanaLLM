@@ -110,7 +110,7 @@ class LlmRuntime {
 
   // Build sampling request.
   void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                            std::vector<SamplingRequest> &sampling_reqs, bool apply_grammar_constraint = true);
+                            std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
 
   void DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs,
                                        std::vector<SamplingRequest> &sampling_reqs);
@@ -127,7 +127,7 @@ class LlmRuntime {
  private:
   // Execute the sampling.
   Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                  std::vector<SamplingRequest> &sampling_reqs, bool apply_grammar_constraint = true);
+                  std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
 
   // Run multi-token and single-token serially in single thread.
   Status RunSerially(size_t multi_batch_id,
