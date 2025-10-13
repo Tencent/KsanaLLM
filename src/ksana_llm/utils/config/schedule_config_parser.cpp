@@ -423,7 +423,9 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
                                          std::string &kv_cache_dtype_str) {
   DataType kv_cache_dtype = model_config.weight_data_type;
 
-  if (runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv && IsPrefixCachingEnabled()) {
+  bool is_deepseek_model = (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2");
+  if (!is_deepseek_model && runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
+      IsPrefixCachingEnabled() && (model_config.type != "kimi_k2")) {
     if (kv_cache_dtype_str == "fp8_e5m2" || kv_cache_dtype_str == "fp8_e4m3") {
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
