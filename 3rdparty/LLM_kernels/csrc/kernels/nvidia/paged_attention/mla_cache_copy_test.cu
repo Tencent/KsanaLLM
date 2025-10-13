@@ -478,6 +478,134 @@ TEST_F(MlaPagedAttentionTestSuit, MlaGetFromCompressedCacheTest) {
   cudaFree(dev_rope_buffer);
 }
 
+TEST_F(MlaPagedAttentionTestSuit, MlaReverseFlashKVCacheCopyTest) {
+  // 初始化缓存块数据
+  const size_t kv_stride_size = kv_lora_rank_ + qk_rope_head_dim_;
+  std::vector<std::vector<float>> host_block_list(host_block_offsets_.back());
+  for (size_t i = 0; i < static_cast<size_t>(host_block_offsets_.back()); ++i) {
+    host_block_list[i].resize(block_size_ * kv_stride_size);
+  }
+
+  // 为每个块填充测试数据
+  std::default_random_engine random_engine;
+  std::uniform_real_distribution<float> random_range(0, 1);
+  for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
+    const size_t base_block_offset = host_block_offsets_[batch_idx];
+    const size_t token_num = input_token_num_[batch_idx];
+
+    const size_t block_num = (token_num + block_size_ - 1) / block_size_;
+    for (size_t block_idx = 0; block_idx < block_num; ++block_idx) {
+      const size_t total_block_idx = base_block_offset + block_idx;
+      for (size_t i = 0; i < block_size_ * kv_stride_size; ++i) {
+        host_block_list[total_block_idx][i] = random_range(random_engine);
+      }
+      cudaMemcpyAsync(host_k_list_ptrs_[total_block_idx], host_block_list[total_block_idx].data(),
+                      host_block_list[total_block_idx].size() * sizeof(float), cudaMemcpyHostToDevice, stream);
+    }
+  }
+  cudaStreamSynchronize(stream);
+
+  // 准备输出缓冲区
+  const int total_len = total_len_with_prefix_;
+  const int total_q_len = total_len_without_prefix_;
+  std::vector<float> host_latent_buffer(total_len * kv_lora_rank_);
+  std::vector<float> host_rope_buffer(total_len * qk_rope_head_dim_);
+
+  float *dev_latent_buffer, *dev_rope_buffer;
+  cudaMalloc(&dev_latent_buffer, host_latent_buffer.size() * sizeof(float));
+  cudaMalloc(&dev_rope_buffer, host_rope_buffer.size() * sizeof(float));
+
+  // 执行kernel
+  MlaFlashPrefixKVReverseCacheCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+      dev_rope_buffer, dev_latent_buffer, dev_k_list_, dev_prefix_offsets_, dev_input_offsets_, dev_block_offsets_,
+      block_size_, total_len, qk_rope_head_dim_, kv_lora_rank_, k_scale_, v_scale_, stream);
+  MlaFlashWithoutPrefixKVCopy<float, float, llm_kernels::utils::KVCacheType::kAuto>(
+      dev_rope_buffer, dev_latent_buffer, dev_k_src_, dev_v_src_, dev_prefix_offsets_, dev_without_prefix_offsets_,
+      total_q_len, qk_rope_head_dim_, kv_lora_rank_, stream);
+
+  cudaStreamSynchronize(stream);
+
+  // 将结果复制回主机
+  cudaMemcpy(host_latent_buffer.data(), dev_latent_buffer, host_latent_buffer.size() * sizeof(float),
+             cudaMemcpyDeviceToHost);
+  cudaMemcpy(host_rope_buffer.data(), dev_rope_buffer, host_rope_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost);
+
+  // 验证结果
+  const float* host_latent_ptr = host_latent_buffer.data();
+  const float* host_rope_ptr = host_rope_buffer.data();
+  const float* host_k_src_ptr = host_k_src_.data();
+  const float* host_v_src_ptr = host_v_src_.data();
+
+  for (size_t batch_idx = 0; batch_idx < batch_size_; ++batch_idx) {
+    size_t token_offset = host_input_offsets_[batch_idx];
+    size_t prefix_num = input_prefix_len_[batch_idx];
+    size_t token_num = input_token_num_[batch_idx];
+    size_t base_block_offset = host_block_offsets_[batch_idx];
+
+    size_t token_idx = 0;
+    for (; token_idx < prefix_num; ++token_idx) {
+      size_t block_idx = token_idx / block_size_;
+      size_t token_offset_in_block = token_idx % block_size_;
+      size_t total_block_idx = base_block_offset + block_idx;
+
+      for (int i = 0; i < kv_lora_rank_; ++i) {
+        const size_t src_offset = token_offset_in_block * kv_stride_size + i;
+        EXPECT_FLOAT_EQ(*host_latent_ptr++, host_block_list[total_block_idx][src_offset]);
+      }
+      for (int i = 0; i < qk_rope_head_dim_; ++i) {
+        const size_t src_offset = token_offset_in_block * kv_stride_size + kv_lora_rank_ + i;
+        EXPECT_FLOAT_EQ(*host_rope_ptr++, host_block_list[total_block_idx][src_offset]);
+      }
+    }
+
+    for (; token_idx < token_num; ++token_idx) {
+      for (int i = 0; i < kv_lora_rank_; ++i) {
+        EXPECT_FLOAT_EQ(*host_latent_ptr++, *host_v_src_ptr++);
+      }
+      for (int i = 0; i < qk_rope_head_dim_; ++i) {
+        EXPECT_FLOAT_EQ(*host_rope_ptr++, *host_k_src_ptr++);
+      }
+    }
+  }
+
+  // 释放临时分配的内存
+  cudaFree(dev_latent_buffer);
+  cudaFree(dev_rope_buffer);
+}
+
+TEST_F(MlaPagedAttentionTestSuit, MlaFillKVScaleIntoBufferTest) {
+  // 初始化测试数据
+  const size_t num_heads = 128;
+  float k_scale = 0.5f;
+  float v_scale = 1.5f;
+
+  // 准备输出缓冲区
+  void* dev_k_scale_buffer;
+  void* dev_v_scale_buffer;
+  cudaMalloc(&dev_k_scale_buffer, num_heads * sizeof(float));
+  cudaMalloc(&dev_v_scale_buffer, num_heads * sizeof(float));
+
+  // 执行kernel
+  InvokeFillKVScaleIntoBuffer(dev_k_scale_buffer, dev_v_scale_buffer, &k_scale, &v_scale, num_heads, stream);
+  cudaStreamSynchronize(stream);
+
+  // 将结果复制回主机
+  std::vector<float> host_k_scale_buffer(num_heads);
+  std::vector<float> host_v_scale_buffer(num_heads);
+  cudaMemcpy(host_k_scale_buffer.data(), dev_k_scale_buffer, num_heads * sizeof(float), cudaMemcpyDeviceToHost);
+  cudaMemcpy(host_v_scale_buffer.data(), dev_v_scale_buffer, num_heads * sizeof(float), cudaMemcpyDeviceToHost);
+
+  // 验证结果
+  for (int i = 0; i < num_heads; ++i) {
+    EXPECT_FLOAT_EQ(host_k_scale_buffer[i], k_scale);
+    EXPECT_FLOAT_EQ(host_v_scale_buffer[i], v_scale);
+  }
+
+  // 释放临时分配的内存
+  cudaFree(dev_k_scale_buffer);
+  cudaFree(dev_v_scale_buffer);
+}
+
 }  // namespace test
 }  // namespace nvidia
 }  // namespace llm_kernels

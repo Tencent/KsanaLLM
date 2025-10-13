@@ -209,7 +209,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     auto cache_options = options;
     if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
         KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
-      // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kInt8);
+      // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8);
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
     // kv_cache[num_blocks, block_size, num_kv_heads, head_size]
@@ -246,10 +246,80 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   } else {
     c10::optional<at::Tensor> block_table = c10::nullopt;  // batch_size x max_num_blocks_per_seq
 
+    // Only use fp8 inference for FA3
+    // FA3 is only applicable to Hopper architecture, so it is unnecessary to check the compute capability
+    void* k_scale_ptr = nullptr;
+    void* v_scale_ptr = nullptr;
+    c10::optional<at::Tensor> k_descale = c10::nullopt;
+    c10::optional<at::Tensor> v_descale = c10::nullopt;
+    // InvokeMhaVarlenFwd will not call FA3 if there is alibi_slopes
+    if (IsUsingFA3() && !alibi_slopes.has_value()) {
+      if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+        KLLM_THROW("Flash Attention 3 not support fp8_e5m2 KV Cache. Please use fp8_e4m3.");
+      } else if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+        if constexpr (!std::is_same<SCALAR_T, __nv_bfloat16>::value) {
+          KLLM_THROW("Flash Attention 3 only supports BF16 output for FP8 input.");
+        }
+
+        // Quantize Q tensor for E4M3 KV cache type
+        KLLM_LOG_DEBUG << "FP8 kv cache and flash attention 3 enabled, using FP8 inference, quantizing q tensor.";
+
+        auto cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn);
+        const size_t quant_qkv_offset = total_tokens * num_heads * head_size * sizeof(SCALAR_T);
+        void* const quant_qkv_ptr = out + quant_qkv_offset;
+        torch::Tensor quant_qkv_tensor =
+            torch::from_blob(quant_qkv_ptr, {total_tokens, (num_heads + num_kv_heads * 2) * head_size}, cache_options);
+        auto split_quant_qkv_tensors =
+            quant_qkv_tensor.split({num_heads * head_size, num_kv_heads * head_size, num_kv_heads * head_size}, -1);
+        torch::Tensor quant_q_tensor = split_quant_qkv_tensors[0];
+        torch::Tensor quant_k_tensor = split_quant_qkv_tensors[1];
+        torch::Tensor quant_v_tensor = split_quant_qkv_tensors[2];
+
+        // Quant q to cache type
+        const float q_scale = k_scale;
+        llm_kernels::nvidia::ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+            /*q_src*/ reinterpret_cast<SCALAR_T*>(q_tmp_tensor.data_ptr()),
+            /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_tensor.data_ptr()), total_tokens, num_heads, head_size,
+            stride_size, q_scale, stream);
+
+        // Copy kv from cache
+        if (use_cache) {
+          CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FP8WithPrefixReverseCacheCopy<CACHE_T>(
+              reinterpret_cast<CACHE_T*>(quant_k_tensor.data_ptr()),
+              reinterpret_cast<CACHE_T*>(quant_v_tensor.data_ptr()), k_list, v_list, reinterpret_cast<size_t*>(seqlen),
+              reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size,
+              stride_size, sizeof(SCALAR_T), stream));
+        } else {
+          KLLM_THROW("Please enable kv cache to use flash attention 3 fp8 inference.");
+        }
+
+        q_tmp_tensor = torch::reshape(quant_q_tensor, {total_tokens, num_heads, head_size});
+        k_tensor = torch::reshape(quant_k_tensor, {total_tokens, num_kv_heads, head_size});
+        v_tensor = torch::reshape(quant_v_tensor, {total_tokens, num_kv_heads, head_size});
+
+        // FA3 requires scale inputs in [batch = 1, num_heads]
+        // qkv_ptr layout: [qkv]
+        // out ptr layout: [out] [quant_qkv] [kv scale]
+        if (k_scale != 1.0f || v_scale != 1.0f) {
+          KLLM_LOG_DEBUG << "Valid kv scale detected, preparing FA3 scale inputs.";
+          const size_t scale_k_offset = total_tokens * (num_heads + num_kv_heads * 2) * head_size * sizeof(CACHE_T);
+          const size_t scale_v_offset = num_heads * sizeof(float);
+          k_scale_ptr = quant_qkv_ptr + scale_k_offset;
+          v_scale_ptr = k_scale_ptr + scale_v_offset;
+          llm_kernels::nvidia::InvokeFillKVScaleIntoBuffer(k_scale_ptr, v_scale_ptr, &k_scale, &v_scale, num_kv_heads,
+                                                           stream);
+
+          const auto scale_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<float>());
+          k_descale = torch::from_blob(k_scale_ptr, {1, num_kv_heads}, scale_options);
+          v_descale = torch::from_blob(v_scale_ptr, {1, num_kv_heads}, scale_options);
+        }
+      }
+    }
+
     MhaVarlenFwdParams params;
     params.q = q_tmp_tensor;
     params.k = torch::reshape(k_tensor, {total_tokens, num_kv_heads, head_size});
-    params.v = torch::reshape(tt[2], {total_tokens, num_kv_heads, head_size});
+    params.v = torch::reshape(v_tensor, {total_tokens, num_kv_heads, head_size});
     params.out = out_tensor;
     params.seqlen_q = seqlen_tensor.to(torch::kInt32);
     params.seqlen_k = seqlen_tensor.to(torch::kInt32);
@@ -267,6 +337,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
     params.softcap = 0.f;
     params.return_softmax = false;
     params.gen = c10::nullopt;
+    params.q_descale = k_descale;
+    params.k_descale = k_descale;
+    params.v_descale = v_descale;
     mha_output = InvokeMhaVarlenFwd(params);
   }
 

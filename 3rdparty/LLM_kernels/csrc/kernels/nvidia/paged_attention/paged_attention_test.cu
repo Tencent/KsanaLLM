@@ -319,6 +319,165 @@ TEST(ConvertQToCacheTypeTest, ConvertQToCacheTypeTest) {
   cudaFree(d_dst);
 }
 
+TEST(ConvertToCacheTypeTest, ConvertToCacheTypeTest) {
+  int bs = 1;
+  int total_len = 65536;
+  int num_heads = 5;
+  int head_size = 8;
+  int token_data_size = num_heads * head_size;
+  int stride_size = num_heads * head_size;
+  float q_scale = 1.0f;
+  std::vector<int16_t> h_src;
+  for (int i = 1; i <= bs; i++) {
+    for (int j = 1; j <= total_len; j++) {
+      for (int k = 1; k <= token_data_size; k++) {
+        h_src.push_back(16224);
+      }
+    }
+  }
+
+  // 分配设备内存
+  float* d_src;
+  float* d_dst;
+  cudaMalloc(&d_src, h_src.size() * sizeof(int16_t));
+  cudaMalloc(&d_dst, h_src.size() * sizeof(uint8_t));
+
+  // 将主机数据复制到设备上
+  cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(int16_t), cudaMemcpyHostToDevice);
+
+  // 创建CUDA流
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
+  // 调用核函数
+  llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+      reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads, head_size,
+      stride_size, q_scale, stream);
+  cudaStreamSynchronize(stream);
+
+  // 将结果从设备复制回主机并验证
+  std::vector<uint8_t> h_dst(h_src.size());
+  cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+
+  // 验证结果
+  bool correct = true;
+  for (size_t i = 0; i < h_src.size(); ++i) {
+    if (h_dst[i] != 54) {
+      printf("%d ", h_dst[i]);
+      correct = false;
+      break;
+    }
+  }
+  EXPECT_TRUE(correct);
+
+  // 释放设备内存
+  cudaStreamDestroy(stream);
+  cudaFree(d_src);
+  cudaFree(d_dst);
+}
+
+TEST(FP8WithPrefixReverseCacheCopyTest, FP8WithPrefixReverseCacheCopyTest) {
+  std::vector<size_t> h_input_offsets = {0};
+  std::vector<int> h_block_offsets = {0};
+  size_t block_size = 8;
+  int bs = 2;
+  int num_heads = 5;
+  int head_size = 8;
+  int x = 16 / sizeof(__nv_bfloat16);
+  int token_data_size = num_heads * head_size;
+  int stride_size = num_heads * head_size;
+  float k_scale = 1.0f;
+  float v_scale = 1.0f;
+  std::vector<int> inputs = {17, 41};
+  for (int i = 0; i < bs; i++) {
+    h_input_offsets.push_back(inputs[i] + h_input_offsets.back());
+    h_block_offsets.push_back((inputs[i] + block_size - 1) / block_size + h_block_offsets.back());
+  }
+  int total_len = h_input_offsets.back();
+  std::vector<__nv_bfloat16> h_src;
+  for (int i = 1; i <= bs; i++) {
+    for (int j = 1; j <= inputs[i - 1]; j++) {
+      for (int k = 1; k <= token_data_size; k++) {
+        h_src.push_back(16224);
+      }
+    }
+  }
+
+  // 分配设备内存
+  __nv_bfloat16* d_src;
+  cudaMalloc(&d_src, h_src.size() * sizeof(__nv_bfloat16));
+  uint8_t* d_dst;
+  cudaMalloc(&d_dst, h_src.size() * sizeof(uint8_t));
+  void** d_k_list;
+  cudaMalloc(&d_k_list, h_block_offsets.back() * sizeof(void*));
+  void** d_v_list;
+  cudaMalloc(&d_v_list, h_block_offsets.back() * sizeof(void*));
+  size_t* d_input_offsets;
+  cudaMalloc(&d_input_offsets, h_input_offsets.size() * sizeof(size_t));
+  size_t* d_prefix_offsets;
+  cudaMalloc(&d_prefix_offsets, h_input_offsets.size() * sizeof(size_t));
+  int* d_block_offsets;
+  cudaMalloc(&d_block_offsets, h_block_offsets.size() * sizeof(int));
+
+  // 将主机数据复制到设备上
+  cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_input_offsets, h_input_offsets.data(), h_input_offsets.size() * sizeof(size_t), cudaMemcpyHostToDevice);
+  cudaMemset(d_prefix_offsets, 0, h_input_offsets.size() * sizeof(size_t));
+  cudaMemcpy(d_block_offsets, h_block_offsets.data(), h_block_offsets.size() * sizeof(int), cudaMemcpyHostToDevice);
+
+  // 为 k_list 分配内存并初始化
+  std::vector<float*> h_k_list_ptrs(h_block_offsets.back());
+  for (int i = 0; i < h_block_offsets.back(); i++) {
+    cudaMalloc(&h_k_list_ptrs[i], block_size * token_data_size * sizeof(__nv_bfloat16));
+  }
+  // 为 v_list 分配内存并初始化
+  std::vector<float*> h_v_list_ptrs(h_block_offsets.back());
+  for (int i = 0; i < h_block_offsets.back(); i++) {
+    cudaMalloc(&h_v_list_ptrs[i], block_size * token_data_size * sizeof(__nv_bfloat16));
+  }
+  cudaMemcpy(d_k_list, h_k_list_ptrs.data(), h_k_list_ptrs.size() * sizeof(__nv_bfloat16*), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_v_list, h_v_list_ptrs.data(), h_v_list_ptrs.size() * sizeof(__nv_bfloat16*), cudaMemcpyHostToDevice);
+
+  // 调用核函数
+  CacheCopy<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+      d_src, d_src, d_k_list, d_v_list, d_input_offsets, d_prefix_offsets, d_block_offsets, block_size, bs, total_len,
+      num_heads, head_size, stride_size, k_scale, v_scale, nullptr);
+  cudaDeviceSynchronize();
+  FP8WithPrefixReverseCacheCopy<uint8_t>(d_dst, d_dst, d_k_list, d_v_list, d_input_offsets, d_block_offsets, block_size,
+                                         bs, total_len, num_heads, head_size, stride_size, sizeof(__nv_bfloat16),
+                                         nullptr);
+  cudaDeviceSynchronize();
+
+  // 将结果从设备复制回主机并验证
+  std::vector<uint8_t> h_dst(h_src.size());
+  cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+
+  // 验证结果
+  bool correct = true;
+  for (size_t i = 0; i < h_src.size(); ++i) {
+    if (h_dst[i] != 126) {
+      printf("%d: %d ", i, h_dst[i]);
+      correct = false;
+      break;
+    }
+  }
+  EXPECT_TRUE(correct);
+
+  // 释放设备内存
+  cudaFree(d_src);
+  cudaFree(d_dst);
+  cudaFree(d_k_list);
+  cudaFree(d_input_offsets);
+  cudaFree(d_prefix_offsets);
+  cudaFree(d_block_offsets);
+  for (auto ptr : h_k_list_ptrs) {
+    cudaFree(ptr);
+  }
+  for (auto ptr : h_v_list_ptrs) {
+    cudaFree(ptr);
+  }
+}
+
 }  // namespace test
 }  // namespace nvidia
 }  // namespace llm_kernels

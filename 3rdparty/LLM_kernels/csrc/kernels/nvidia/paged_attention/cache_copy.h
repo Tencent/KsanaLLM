@@ -25,6 +25,11 @@ void FlexibleReverseCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_s
                               int layer_idx, int total_len, int num_heads, int head_size, int stride_size,
                               cudaStream_t stream);
 
+template <typename CACHE_T>
+void FP8WithPrefixReverseCacheCopy(CACHE_T* k_src, CACHE_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
+                                   int* block_offsets, int block_size, int bs, int total_len, int num_heads,
+                                   int head_size, int stride_size, size_t size_of_scalar_t, cudaStream_t stream);
+
 /**
  * @brief Converts data to FP8 format and then back to its original format.
  *

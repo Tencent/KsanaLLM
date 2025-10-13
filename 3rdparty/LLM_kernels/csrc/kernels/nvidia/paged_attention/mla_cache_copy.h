@@ -44,5 +44,9 @@ void MlaGetFromCompressedCache(void* const k_rope_out, void* const latent_out, c
                                const int total_len, const size_t* const seq_len_offset, const int* const block_offsets,
                                const int block_size, const int k_rope_size, const int latent_size, cudaStream_t stream);
 
+// FA3 requires qkv scale input of [1, head_num] shape
+void InvokeFillKVScaleIntoBuffer(void* k_scale_ptr, void* v_scale_ptr, float* k_scale_host, float* v_scale_host,
+                                 int kv_head_num, const cudaStream_t& stream);
+
 }  // namespace nvidia
 }  // namespace llm_kernels

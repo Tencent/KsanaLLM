@@ -110,6 +110,44 @@ __global__ void ConvertQToCacheTypeKernel(SCALAR_T* q_src, CACHE_T* q_dst, int s
   }
 }
 
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, int kVecBytes>
+__global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ qkv_src, CACHE_T* __restrict__ qkv_dst,
+                                         int total_len, int num_heads, int head_size, int stride_size,
+                                         float qkv_scale) {
+  constexpr unsigned int kVecSize = kVecBytes / sizeof(SCALAR_T);
+
+  int batch_idx = blockIdx.z;
+  int token_idx = batch_idx * gridDim.y + blockIdx.y;
+  if (token_idx >= total_len) {
+    return;
+  }
+
+  // 该 token 的起始位置
+  const SCALAR_T* __restrict__ src = qkv_src + token_idx * stride_size;
+  CACHE_T* __restrict__ dst = qkv_dst + token_idx * stride_size;
+
+  // 每个 block 处理一个线性段
+  int block_base = blockIdx.x * blockDim.x * kVecSize;    // 该块的起始线性元素索引
+  int thread_base = block_base + threadIdx.x * kVecSize;  // 该线程的起始线性元素索引
+
+  // 在该块内的最大可处理元素上限
+  int max_elems = min(num_heads * head_size - block_base, blockDim.x * kVecSize);
+  if (max_elems <= 0) return;
+
+  // 按 VEC 处理，边界保护
+#pragma unroll
+  for (int i = 0; i < kVecSize; ++i) {
+    int idx = thread_base + i;
+    if (idx < block_base + max_elems) {
+      if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+        dst[idx] = src[idx];
+      } else {
+        dst[idx] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(src[idx], qkv_scale);
+      }
+    }
+  }
+}
+
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void CacheCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* input_offsets,
                               size_t* prefix_offsets, size_t* without_prefix_offsets, int* block_offsets,
@@ -142,6 +180,27 @@ void ConvertQToCacheType(SCALAR_T* q_src, CACHE_T* q_dst, int bs, int req_q_len,
   const dim3 block_shape(head_size);
   ConvertQToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE>
       <<<grid_shape, block_shape, 0, stream>>>(q_src, q_dst, stride_size, q_scale);
+}
+
+// For prefill qkv quantization, input [total_len, num_heads, head_size]
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void ConvertToCacheType(SCALAR_T* qkv_src, CACHE_T* qkv_dst, int total_len, int num_heads, int head_size,
+                        int stride_size, float qkv_scale, cudaStream_t stream) {
+  constexpr int kBlockThreads = 256;
+  constexpr int kVecBytes = 16;
+
+  // 每个 block 处理 kBlockThreads * kVecBytes 个字节的元素
+  assert(kVecBytes % sizeof(SCALAR_T) == 0);
+  int elems_per_block = kBlockThreads * kVecBytes / sizeof(SCALAR_T);
+  int grid_x = (num_heads * head_size + elems_per_block - 1) / elems_per_block;
+
+  int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  dim3 grid(grid_x, grid_y, grid_z);
+  dim3 block(kBlockThreads);
+
+  ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, kVecBytes>
+      <<<grid, block, 0, stream>>>(qkv_src, qkv_dst, total_len, num_heads, head_size, stride_size, qkv_scale);
 }
 
 #define CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                 \

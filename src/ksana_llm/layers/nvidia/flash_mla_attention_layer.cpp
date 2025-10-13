@@ -484,10 +484,92 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), k_tensor.size(0), k_tensor.size(1), stride_size, k_scale,
           stream));
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ConvertFP8AndBack<SCALAR_T, CACHE_T, KV_DTYPE>(
-          reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), v_tensor.size(0), v_tensor.size(1), stride_size, v_scale,
-          stream));
+          reinterpret_cast<SCALAR_T*>(v_ptr), total_tokens, num_heads, stride_size_v, v_scale, stream));
     }
   }
+
+  // FA3 handles variable dimensions natively, no padding needed
+  // Initialize torch options of input and output
+  const auto output_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<SCALAR_T>());
+  auto input_options = output_options;
+
+  // Only use FP8 inference for FA3
+  // FA3 is only applicable to Hopper architecture, so it is unnecessary to check the compute capability
+  void* k_scale_ptr = nullptr;
+  void* v_scale_ptr = nullptr;
+  c10::optional<at::Tensor> k_descale = c10::nullopt;
+  c10::optional<at::Tensor> v_descale = c10::nullopt;
+  if (IsUsingFA3()) {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+      KLLM_THROW("Flash Attention 3 not support fp8_e5m2 KV Cache. Please use fp8_e4m3.");
+    } else if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      if constexpr (!std::is_same<SCALAR_T, __nv_bfloat16>::value) {
+        KLLM_THROW("Flash Attention 3 only supports BF16 output for FP8 input.");
+      }
+
+      // Quant input tensors to FP8 for E4M3 kv cache type
+      KLLM_LOG_DEBUG << "FP8 kv cache and flash attention 3 enabled, using FP8 inference, quantizing qkv tensor.";
+
+      // output_buffer layout: [output] [k_ptr] [quant_k_ptr]
+      // mla_workspace layout: [v_ptr] [quant_v_ptr] [quant_q_ptr]
+      constexpr size_t kCacheSize = sizeof(CACHE_T);
+      const size_t quant_k_offset =
+          total_tokens * num_heads * (qk_rope_head_dim + qk_nope_head_dim + v_head_dim) * kScalarSize;
+      const size_t quant_v_offset = v_size;
+      const size_t quant_q_offset = quant_v_offset + total_tokens * num_heads * v_head_dim * kCacheSize;
+
+      void* const quant_k_ptr = output_buffer + quant_k_offset;
+      void* const quant_v_ptr = mla_workspace + quant_v_offset;
+      void* const quant_q_ptr = mla_workspace + quant_q_offset;
+
+      const float q_scale = k_scale;
+      // TODO(zhongzhicao): Quantization of K tensor can be fused into Concat
+      llm_kernels::nvidia::ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+          /*k_src*/ reinterpret_cast<SCALAR_T*>(k_ptr), /*k_dst*/ reinterpret_cast<CACHE_T*>(quant_k_ptr), total_tokens,
+          num_heads, qk_nope_head_dim + qk_rope_head_dim, num_heads * (qk_nope_head_dim + qk_rope_head_dim), k_scale,
+          stream);
+      llm_kernels::nvidia::ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+          /*v_src*/ reinterpret_cast<SCALAR_T*>(v_ptr), /*v_dst*/ reinterpret_cast<CACHE_T*>(quant_v_ptr), total_tokens,
+          num_heads, v_head_dim, num_heads * v_head_dim, v_scale, stream);
+      llm_kernels::nvidia::ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+          /*q_src*/ reinterpret_cast<SCALAR_T*>(q_nope_rope_ptr), /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_ptr),
+          total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim,
+          num_heads * (qk_nope_head_dim + qk_rope_head_dim), q_scale, stream);
+
+      // Set inpt torch options for FP8
+      input_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn);
+      k_ptr = quant_k_ptr;
+      v_ptr = quant_v_ptr;
+      q_nope_rope_ptr = quant_q_ptr;
+
+      // FA3 requires scale inputs in [batch = 1, num_heads]
+      if (k_scale != 1.0f || v_scale != 1.0f) {
+        KLLM_LOG_DEBUG << "Valid kv scale detected, preparing FA3 scale inputs.";
+        const size_t k_scale_offset =
+            quant_k_offset + total_tokens * num_heads * (qk_rope_head_dim + qk_nope_head_dim) * kCacheSize;
+        const size_t v_scale_offset = k_scale_offset + num_heads * sizeof(float);
+        k_scale_ptr = output_buffer + k_scale_offset;
+        v_scale_ptr = output_buffer + v_scale_offset;
+        llm_kernels::nvidia::InvokeFillKVScaleIntoBuffer(k_scale_ptr, v_scale_ptr, &k_scale, &v_scale, num_heads,
+                                                         stream);
+
+        const auto scale_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<float>());
+        k_descale = torch::from_blob(k_scale_ptr, {1, num_heads}, scale_options);
+        v_descale = torch::from_blob(v_scale_ptr, {1, num_heads}, scale_options);
+      }
+    }
+  }
+
+  torch::Tensor q_tensor = torch::from_blob(
+      q_nope_rope_ptr, {total_q_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, input_options);
+  torch::Tensor k_tensor =
+      torch::from_blob(k_ptr, {total_tokens, num_heads, qk_nope_head_dim + qk_rope_head_dim}, input_options);
+  torch::Tensor v_tensor = torch::from_blob(v_ptr, {total_tokens, num_heads, v_head_dim}, input_options);
+  // refer to github Dao-AILab/flash-attention csrc/flash_attn/flash_api.cpp#L374
+  // When the flag is set to True and the output is not nullptr, calling the function mha_varlen_fwd
+  // leads to a core dump.
+  c10::optional<at::Tensor> out_tensor =
+      torch::from_blob(output_buffer, {total_q_tokens, num_heads, v_head_dim}, output_options);
 
   c10::optional<at::Tensor> block_table = c10::nullopt;
   c10::optional<at::Tensor> seqused_k = c10::nullopt;

@@ -253,5 +253,19 @@ MLA_CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::
 MLA_CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #undef MLA_CACHE_COPY_FUNCTION_DECLARATION
 
+__global__ void fill_kv_scale_into_buffer_kernel(float* k_scale_buffer, float* v_scale_buffer) {
+  k_scale_buffer[threadIdx.x] = k_scale_buffer[0];
+  v_scale_buffer[threadIdx.x] = v_scale_buffer[0];
+}
+
+void InvokeFillKVScaleIntoBuffer(void* k_scale_ptr, void* v_scale_ptr, float* k_scale_host, float* v_scale_host,
+                                 int kv_head_num, const cudaStream_t& stream) {
+  cudaMemcpyAsync(k_scale_ptr, reinterpret_cast<void*>(k_scale_host), sizeof(float), cudaMemcpyHostToDevice, stream);
+  cudaMemcpyAsync(v_scale_ptr, reinterpret_cast<void*>(v_scale_host), sizeof(float), cudaMemcpyHostToDevice, stream);
+  assert(kv_head_num <= MAX_THREADS_PER_BLOCK);
+  fill_kv_scale_into_buffer_kernel<<<1, kv_head_num, 0, stream>>>(reinterpret_cast<float*>(k_scale_ptr),
+                                                                  reinterpret_cast<float*>(v_scale_ptr));
+}
+
 }  // namespace nvidia
 }  // namespace llm_kernels

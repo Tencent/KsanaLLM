@@ -87,6 +87,7 @@ struct ModelTestConfig {
   bool test_fp16 = true;
   bool test_bf16 = true;
   bool test_fp8 = false;
+  bool test_kvfp8 = false;
 
   // Flags for which device to test
   bool test_acl = false;
@@ -408,6 +409,17 @@ class FakeTinyWeightTest : public testing::Test {
       DoLayerTest<ModelType, bfloat16, WeightType>(model_test_config, prefill_hidden_state_baseline,
                                                    decode_hidden_state_baseline, thresholds);
     }
+
+    // kv fp8 forward with flash attention 3
+    if (model_test_config.test_kvfp8) {
+      const auto kv_cache_dtype = runtime_config.attn_backend_config.kv_cache_dtype;
+      runtime_config.attn_backend_config.kv_cache_dtype = TYPE_FP8_E4M3;
+      KLLM_LOG_INFO << "Test TYPE_BF16 weight_data_type with kv_dtype:fp8_e4m3 forward";
+      DoLayerTest<ModelType, bfloat16, WeightType>(model_test_config, prefill_hidden_state_baseline,
+                                                   decode_hidden_state_baseline, thresholds);
+      // reset kv_cache_dtype
+      runtime_config.attn_backend_config.kv_cache_dtype = kv_cache_dtype;
+    }
 #  endif
 #endif
   }
@@ -456,6 +468,12 @@ TEST_F(FakeSimpleModelTest, ForwardTest) {
   ModelTestConfig simple_test_config;
   simple_test_config.test_acl = true;
   simple_test_config.test_fp8 = true;
+#ifdef ENABLE_CUDA
+  // Test kv fp8 if flash attention 3 is available.
+  if (IsUsingFA3()) {
+    simple_test_config.test_kvfp8 = true;
+  }
+#endif
 
   simple_test_config.add_qkv_bias = false;
   DoForwardTest<Llama, FakeSimpleWeight>(simple_test_config, model_hidden_stat_baselines[LLAMA_MODEL_NAME][0],
