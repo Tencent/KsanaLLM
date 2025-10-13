@@ -91,6 +91,10 @@ class KsanaPlugin(object):
         if hasattr(self, "_thread_pool"):
             self._thread_pool.shutdown(wait=True)
 
+    def is_available(self) -> bool:
+        """Return True when a concrete plugin implementation has been loaded."""
+        return self._ksana_plugin is not None
+
     def load_plugin(self, plugin_path: Optional[str]):
         """
         Dynamically loads the plugin module located at the specified path.

@@ -382,10 +382,18 @@ class KsanaLLMEngine:
         if req_ctx is None:
             req_ctx = {}
 
+        # Check if plugin is required for generation input
+        if (not request_dict.get("input_tokens") and not request_dict.get("prompt")
+                and request_dict.get("messages") and not self._ksana_plugin.is_available()):
+            status = libtorch_serving.Status(
+                libtorch_serving.RetCode.RET_INVALID_ARGUMENT,
+                "messages input requires a plugin or use '/v1/chat/completions' API"
+            )
+            return status, None
+
         # Build a  transformers generation_config from the request_dict 
         # used to validate the values
         generation_config = self._build_generator_config(request_dict.get("sampling_config", {}))
-
         # Build the ksana_python_input object
         ksana_python_input = self._build_python_input(request_dict, generation_config)
         loop = asyncio.get_running_loop()

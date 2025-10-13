@@ -52,6 +52,13 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
 
   Status enqueue_status = Status(RetCode::RET_SUCCESS);
 
+  if (req->input_tokens.empty()) {
+    KLLM_LOG_ERROR << "Req id " << req->req_id << " input tokens is empty.";
+    req->finish_status = Status(
+      RET_INVALID_ARGUMENT, fmt::format("Req id {} input tokens is empty.", req->req_id));
+    return req->finish_status;
+  }
+
   if (model_instances_.find(req->model_name) == model_instances_.end()) {
     KLLM_LOG_ERROR << "req->model_name=" << req->model_name << " not found!";
     req->finish_status = Status(RET_INVALID_ARGUMENT, fmt::format("Model {} not found.", req->model_name));

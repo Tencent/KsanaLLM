@@ -36,7 +36,8 @@ from openaiapi.openai_protocol import (
     ToolCall, FunctionCall, FunctionDefinition,
     ChatCompletionRequest, 
     ChatCompletionResponseStreamChoice, 
-    ChatCompletionResponse, ChatCompletionStreamResponse
+    ChatCompletionResponse, ChatCompletionStreamResponse,
+    ChoiceLogprobs
 )
 from openaiapi.request_converter import RequestConverter
 from openaiapi.transformers_utils.chat_utils import ChatTemplateContentFormatOption
@@ -865,7 +866,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         
         request_logprobs = getattr(request, 'logprobs', False) if request else False
         top_logprobs = getattr(request, 'top_logprobs', 0) if request_logprobs else 0
-        
         try:
             for i, (status, output) in enumerate(all_outputs):
                 full_output_text = ""
@@ -903,14 +903,20 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 if output.logprobs:
                     try:
                         converter = RequestConverter(self.config, tokenizer)
-                        output_logprobs = converter._convert_ksana_logprobs_to_openai(
-                            output.logprobs,
-                            token_ids=output_tokens,
-                            num_output_top_logprobs=top_logprobs
-                        )
+                        loop = asyncio.get_running_loop()
+                        def _convert_logprobs() -> Optional[ChoiceLogprobs]:
+                            return converter._convert_ksana_logprobs_to_openai(
+                                output.logprobs,
+                                token_ids=output_tokens,
+                                num_output_top_logprobs=top_logprobs,
+                            )
+                        output_logprobs = await loop.run_in_executor(None, _convert_logprobs)
                     except (IndexError, KeyError, TypeError, ValueError) as e:
                         logger.warning(f"Failed to process logprobs: {e}")
                         output_logprobs = None
+                    except asyncio.CancelledError:
+                        logger.warning("Logprobs conversion was cancelled for req_id=%s index=%d", request_id, i)
+                        raise
                 else:
                     output_logprobs = None
 

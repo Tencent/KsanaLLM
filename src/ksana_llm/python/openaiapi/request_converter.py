@@ -509,7 +509,7 @@ class RequestConverter:
     
     def _decode_token(self, token_id: int) -> str:
         try:
-            if self.tokenizer:
+            if self.tokenizer is not None:
                 return self.tokenizer.decode([token_id])
             else:
                 return f"<token_{token_id}>"
