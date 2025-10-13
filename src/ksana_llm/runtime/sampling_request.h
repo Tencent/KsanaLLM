@@ -31,12 +31,10 @@ struct SamplingRequest {
 
   std::shared_ptr<std::vector<int>> input_tokens;
 
-  std::vector<int>* forwarding_tokens = nullptr;
+  std::shared_ptr<std::vector<int>> forwarding_tokens;
 
   // NOTE(david): should be modified later, only deepcopy infer_request
   std::vector<int>* origin_tokens = nullptr;
-
-  bool is_deepcopy = false;
 
   // Generated tokens in this sampling.
   std::vector<int>* sampling_result_tokens = nullptr;

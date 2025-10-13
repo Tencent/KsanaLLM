@@ -70,8 +70,7 @@ class SamplerTest : public testing::Test {
     sample_req.input_tokens = std::make_shared<std::vector<int>>(token_ids_);
     sample_req.sampling_token_num = sampling_token_num_;
     sample_req.sampling_result_tokens = &sampling_result_tokens_;
-    std::vector<int> forwarding_tokens = token_ids_;
-    sample_req.forwarding_tokens = &forward_token_ids_;
+    sample_req.forwarding_tokens = std::make_shared<std::vector<int>>(forward_token_ids_);
     sampling_result_tokens_.clear();
     sample_req.logits_offset = 0;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs_);

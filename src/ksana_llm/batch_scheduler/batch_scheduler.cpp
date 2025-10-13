@@ -98,19 +98,16 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
 }
 
 BatchScheduler::~BatchScheduler() {
-  Stop();
   threadpool_->Stop();
+}
+
+void BatchScheduler::Stop() {
+  terminating_ = true;
 }
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
   KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
   schedule_strategies_.at(dp_idx)->SetCacheManager(cache_manager);
-}
-
-void BatchScheduler::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) { llm_runtime_ = llm_runtime; }
-
-void BatchScheduler::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
-  multi_batch_controller_ = controller;
 }
 
 std::shared_ptr<CacheManagerInterface>& BatchScheduler::GetCacheManager(int dp_idx) {
@@ -180,97 +177,6 @@ void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
         schedule_strategies_[i]->UpdateSwapPendingRequests();
       }
       ReportTotalState();
-    }
-  }
-}
-
-std::future<ScheduleTaskPtr> BatchScheduler::SubmitSchedulingTask(size_t multi_batch_id) {
-  std::promise<ScheduleTaskPtr> promise;
-  std::future<ScheduleTaskPtr> future = promise.get_future();
-  // async get schedule_output
-  ScheTask task;
-  task.multi_batch_id = multi_batch_id;
-  task.promise = std::move(promise);
-  task_queue_.Put(std::move(task));
-  return future;
-}
-
-void BatchScheduler::SchedulingWorkerLoop() {
-  while (!terminating_) {
-    ScheTask task;
-    task = task_queue_.Get();
-    ProcessSchedulingTask(task);
-  }
-}
-
-void BatchScheduler::ProcessSchedulingTask(ScheTask& task) {
-  bool find = false;
-  const size_t multi_batch_id = task.multi_batch_id;
-  while (!find && !terminating_) {
-    std::shared_ptr<ScheduleOutputGroup> schedule_output_group = Schedule(multi_batch_id);
-
-    auto schedule_output = std::make_shared<ScheduleOutput>();
-    MergeScheduleOutputGroup(schedule_output_group, *schedule_output.get());
-
-    if (schedule_output_group->RunningSize() == 0) {
-      multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);
-      if (IsIdle(multi_batch_id) && !terminating_) {
-        WaitUntilHaveReqs(multi_batch_id);
-      } else {
-        KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id << " not idle, sleep 100ms";
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
-      continue;
-    } else {
-      find = true;
-      RecordRequestSchedEventsWithStartTime(schedule_output->running_reqs, 0, multi_batch_id, 0, "Schedule",
-                                            ProfileTimer::GetCurrentTimeInNs());
-
-      schedule_output->multi_batch_id = multi_batch_id;
-
-      // async build
-      llm_runtime_->ReorderInferRequests(schedule_output->running_reqs);
-
-      auto deep_copy_forwarding_tokens = DeepCopyForwardRequest(schedule_output->running_reqs);
-
-      auto origin_sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
-      llm_runtime_->BuildSamplingRequest(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *origin_sampling_reqs);
-      for (auto& req : *origin_sampling_reqs) {
-        DeepCopySamplingRequest(req);
-      }
-
-      size_t tokens = 0;
-      for (const auto& req : schedule_output->running_reqs) {
-        tokens += req->forwarding_tokens.size() - req->kv_cached_token_num;
-      }
-      schedule_output->hidden_token_num = tokens;
-      task.promise.set_value({schedule_output, {deep_copy_forwarding_tokens, origin_sampling_reqs}});
-    }
-  }
-  if (terminating_) {
-    task.promise.set_value({nullptr, {nullptr, nullptr}});
-  }
-}
-
-void BatchScheduler::Start() {
-  if (batch_scheduler_config_.enable_async) {
-    sched_threads_.resize(batch_scheduler_config_.max_pp_batch_num);
-    for (size_t multi_batch_id = 0; multi_batch_id < batch_scheduler_config_.max_pp_batch_num; ++multi_batch_id) {
-      sched_threads_.push_back(
-          std::unique_ptr<std::thread>(new std::thread(&BatchScheduler::SchedulingWorkerLoop, this)));
-    }
-  }
-}
-
-void BatchScheduler::Stop() {
-  terminating_ = true;
-  task_queue_.Stop();
-  if (batch_scheduler_config_.enable_async) {
-    for (auto& thread : sched_threads_) {
-      if (thread && thread->joinable()) {
-        thread->join();
-      }
     }
   }
 }
@@ -525,6 +431,14 @@ void BatchScheduler::NotifyAsyncFinishedRequests() {
     auto continuous_strategy = std::dynamic_pointer_cast<ContinuousBatchingStrategy>(schedule_strategies_[i]);
     if (continuous_strategy) {
       continuous_strategy->NotifyAsyncFinishedRequests();
+    }
+  }
+}
+
+void BatchScheduler::NotifyAsyncRecomputedRequests() {
+  for (auto &strategy : schedule_strategies_) {
+    if (auto continuous_batching_strategy = std::dynamic_pointer_cast<ContinuousBatchingStrategy>(strategy)) {
+      continuous_batching_strategy->NotifyAsyncRecomputedRequests();
     }
   }
 }

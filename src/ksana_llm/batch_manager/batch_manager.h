@@ -8,17 +8,19 @@
 #include <thread>
 #include <unordered_map>
 
+#include "ksana_llm/batch_manager/schedule_processor_interface.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler.h"
+#include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
 #include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
-
 namespace ksana_llm {
 
 class BatchManager {
@@ -39,8 +41,6 @@ class BatchManager {
 
   // Enqueue a request to waiting queue.
   Status Enqueue(std::shared_ptr<Request> &request);
-
-  Status ProcessScheduleData(const ScheduleTaskPtr &schedule_data);
 
   // Wait all requests done.
   Status WaitAllDone();
@@ -91,11 +91,11 @@ class BatchManager {
   // The runtime instance.
   std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
 
+  // The schedule processor.
+  std::unique_ptr<ScheduleProcessorInterface> schedule_processor_ = nullptr;
+
   // To guard result maintainer.
   std::mutex infer_reqs_maintainer_mutex_;
-
- private:
-  ScheduleOutput MergeScheduleOutputGroup(std::shared_ptr<ScheduleOutputGroup> &schedule_output_group);
 };
 
 }  // namespace ksana_llm

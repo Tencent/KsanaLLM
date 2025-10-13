@@ -311,20 +311,10 @@ Status SetHiddenUnitMeta(const size_t multi_batch_id, const std::vector<size_t>&
   return Status();
 }
 
-Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
-                         std::shared_ptr<ModelInstance> model_instance) {
-  ModelConfig model_config = model_instance->GetModelConfig();
-  size_t tokens = 0;
-  for (size_t i = 0; i < running_reqs.size(); ++i) {
-    tokens += running_reqs[i]->forwarding_tokens.size() - running_reqs[i]->kv_cached_token_num;
-  }
-  return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units}, model_config.weight_data_type);
-}
-
 Status SetHiddenUnitMeta(size_t multi_batch_id, ScheduleOutput* schedule_output,
                          std::shared_ptr<ModelInstance> model_instance) {
   ModelConfig model_config = model_instance->GetModelConfig();
-  size_t tokens = schedule_output->hidden_token_num;
+  size_t tokens = schedule_output->hidden_token_num;  // 直接使用已计算的token数量
   return SetHiddenUnitMeta(multi_batch_id, {tokens, model_config.hidden_units}, model_config.weight_data_type);
 }
 

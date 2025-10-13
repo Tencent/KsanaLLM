@@ -59,8 +59,6 @@ struct ForwardRequest {
   // to facilitate the quick acquisition of the generation result information after deep copy
   std::vector<int>* origin_tokens;
 
-  bool is_deepcopy = false;
-
   // Embedding slice used to refit input embedding
   EmbeddingSlice* input_refit_embedding;
 

@@ -8,33 +8,25 @@
 #include <thread>
 
 #include "ksana_llm/batch_manager/batch_manager.h"
+#include "ksana_llm/batch_manager/schedule_processor_factory.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/request.h"
+#include "ksana_llm/utils/schedule_output_process.h"
 #include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 
-void ApplyAsyncForwardingTokens(
-    const std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>> &deep_copy_forwarding_tokens,
-    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs) {
-  for (auto &[model_inst, stage_vec_reqs] : grouped_reqs) {
-    for (auto &[stage, vec_req] : stage_vec_reqs) {
-      for (auto &req : vec_req) {
-        req->forwarding_tokens = deep_copy_forwarding_tokens.at(req->req_id);
-      }
-    }
-  }
-}
-
 BatchManager::BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context) {
   context_ = context;
   runtime_config_ = runtime_config;
+  schedule_processor_ = ScheduleProcessorFactory::CreateProcessor(runtime_config_);
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
@@ -47,7 +39,9 @@ void BatchManager::SetBatchScheduler(std::shared_ptr<BatchSchedulerInterface> ba
   batch_scheduler_ = batch_scheduler;
 }
 
-void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) { llm_runtime_ = llm_runtime; }
+void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) {
+  llm_runtime_ = llm_runtime;
+}
 
 void BatchManager::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
   multi_batch_controller_ = controller;
@@ -112,34 +106,6 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   return enqueue_status;
 }
 
-Status BatchManager::ProcessScheduleData(const ScheduleTaskPtr &schedule_data) {
-  auto schedule_output = schedule_data.first;
-  auto deep_copy_forwarding_tokens = schedule_data.second.first;
-  auto sampling_reqs = schedule_data.second.second;
-  for (auto &req : schedule_output->running_reqs) {
-    // In the current assumption, asynchronous scheduling will change the content of req in advance,
-    // so overwriting is required. However, the first round did not form an asynchronous process, so it was skipped.
-    if (req->step == 0) {
-      continue;
-    }
-    req->forwarding_tokens.back() = req->generated_token;
-    (*deep_copy_forwarding_tokens)[req->req_id]->back() = req->generated_token;
-    req->output_mutex.lock();
-    req->output_tokens.insert(req->output_tokens.end(),
-                              req->forwarding_tokens.end() - req->accepted_tokens.size() - kStepGenerateTokenNum,
-                              req->forwarding_tokens.end());
-    req->output_mutex.unlock();
-  }
-
-  for (const auto &req : *sampling_reqs) {
-    if (req.step == 0) {
-      continue;
-    }
-    req.forwarding_tokens->back() = req.origin_tokens->back();
-  }
-  return Status();
-}
-
 Status BatchManager::WaitAllDone() { return Status(); }
 
 Status BatchManager::MainProcess(size_t multi_batch_id) {
@@ -147,13 +113,6 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   // All devices have the same number of blocks.
   SetDevice(0);
   static time_t last_end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  std::future<ScheduleTaskPtr> sche_output;
-  auto schedule_output = std::make_shared<ScheduleOutput>();
-  using GroupedMap = std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>>;
-
-  if (runtime_config_.enable_async) {
-    sche_output = batch_scheduler_->SubmitSchedulingTask(multi_batch_id);
-  }
 
   std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
   auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
@@ -162,64 +121,35 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     if (terminated_) break;
     const time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
 
-    if (runtime_config_.enable_async) {
-      auto schedule_data = sche_output.get();
-      if (schedule_data.first == nullptr) continue;
-
-      ProcessScheduleData(schedule_data);
-      schedule_output = schedule_data.first;
-      sampling_reqs = schedule_data.second.second;
-
-      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs, grouped_reqs);
-      ApplyAsyncForwardingTokens(*schedule_data.second.first, grouped_reqs);
-    } else {
-      std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler_->Schedule(multi_batch_id);
-      schedule_output = std::make_shared<ScheduleOutput>(MergeScheduleOutputGroup(schedule_output_group));
-      if (schedule_output_group->RunningSize() == 0) {
-        multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);
-        if (batch_scheduler_->IsIdle(multi_batch_id) && !terminated_) {
-          batch_scheduler_->WaitUntilHaveReqs(multi_batch_id);
-        } else {
-          KLLM_LOG_DEBUG << "multi_batch_id=" << multi_batch_id << " not idle, sleep 100ms";
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        continue;
-      }
+    ScheduleResult schedule_result = schedule_processor_->GetNextScheduleResult(multi_batch_id);
+    if (!schedule_result.is_valid) {
+      continue;
     }
+
     multi_batch_controller_->NotifyCurrentBatchIsStandby(multi_batch_id);
-    RecordRequestSchedEventsWithStartTime(schedule_output->running_reqs, 0, multi_batch_id, 0, "Schedule",
-                                          sched_start_time_ns);
+    RecordRequestSchedEventsWithStartTime(schedule_result.schedule_output->running_reqs, 0, multi_batch_id, 0,
+                                          "Schedule", sched_start_time_ns);
 
     size_t forwarding_token_num = 0, total_seq_len = 0;
-    for (auto &req : schedule_output->running_reqs) {
+    for (auto &req : schedule_result.schedule_output->running_reqs) {
       forwarding_token_num += req->forwarding_tokens.size() - req->kv_cached_token_num;
       total_seq_len += req->forwarding_tokens.size();
     }
 
-    if (!runtime_config_.enable_async) {
-      schedule_output->multi_batch_id = multi_batch_id;
-      llm_runtime_->ReorderInferRequests(schedule_output->running_reqs);
-      llm_runtime_->BuildForwardRequests(schedule_output->multi_batch_id, schedule_output->running_reqs, grouped_reqs);
-      llm_runtime_->BuildSamplingRequest(schedule_output->multi_batch_id, schedule_output->running_reqs,
-                                         *sampling_reqs);
-    }
     time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
       KLLM_LOG_MAIN << "wait to run multi_batch_id=" << multi_batch_id << ", epilogue=false";
       multi_batch_controller_->WaitUntilCurrentBatchCanRun(multi_batch_id);
-      BroadcastScheduleOutput(schedule_output.get());
-      InitHiddenUnits(schedule_output->multi_batch_id);
+      BroadcastScheduleOutput(schedule_result.schedule_output.get());
+      InitHiddenUnits(schedule_result.schedule_output->multi_batch_id);
     }
-    RecordRequestSchedEvents(schedule_output->running_reqs, 0, schedule_output->multi_batch_id, 0, "PrepareForwarding",
+    RecordRequestSchedEvents(schedule_result.schedule_output->running_reqs, 0,
+                             schedule_result.schedule_output->multi_batch_id, 0, "PrepareForwarding",
                              RequestEventPhase::Begin);
-
-    // TODO(david): to avoid more deepcopy, could be modified later by deepcopy infer_request.
-    if (runtime_config_.enable_async) {
-      sche_output = batch_scheduler_->SubmitSchedulingTask(schedule_output->multi_batch_id);
-    }
-    Status status = llm_runtime_->Step(schedule_output.get(), grouped_reqs, *sampling_reqs, false);
+    Status status = llm_runtime_->Step(schedule_result.schedule_output.get(), *schedule_result.grouped_reqs.get(),
+                                       *schedule_result.sampling_reqs.get(), false);
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
     }
@@ -233,20 +163,22 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     // Wait until last worker done.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(SendAndStepOnChief_,
-                          fmt::format("SendAndStepOnChief_{}_true", schedule_output->multi_batch_id));
-      multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(schedule_output->multi_batch_id);
-      SendHiddenUnits(schedule_output->multi_batch_id);
+                          fmt::format("SendAndStepOnChief_{}_true", schedule_result.schedule_output->multi_batch_id));
+      multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(schedule_result.schedule_output->multi_batch_id);
+      SendHiddenUnits(schedule_result.schedule_output->multi_batch_id);
 
       // lm head & sampling
-      RecordRequestSchedEvents(schedule_output->running_reqs, 0, schedule_output->multi_batch_id, 0,
-                               "PrepareForwarding", RequestEventPhase::Begin);
+      RecordRequestSchedEvents(schedule_result.schedule_output->running_reqs, 0,
+                               schedule_result.schedule_output->multi_batch_id, 0, "PrepareForwarding",
+                               RequestEventPhase::Begin);
 
-      status = llm_runtime_->Step(schedule_output.get(), grouped_reqs, *sampling_reqs, true);
+      status = llm_runtime_->Step(schedule_result.schedule_output.get(), *schedule_result.grouped_reqs.get(),
+                                  *schedule_result.sampling_reqs.get(), true);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
       // free again.
-      FreeHiddenUnits(schedule_output->multi_batch_id);
+      FreeHiddenUnits(schedule_result.schedule_output->multi_batch_id);
     }
 
     time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
@@ -255,7 +187,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     int local_token_throuphput =
         (end_time_ms - start_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - start_time_ms) : -1;
     KLLM_LOG_MAIN << "multi_batch_id=" << multi_batch_id
-                  << ", running_reqs.size=" << schedule_output->running_reqs.size()
+                  << ", running_reqs.size=" << schedule_result.schedule_output->running_reqs.size()
                   << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
                   << ", 1st step " << (middle_time_ms - start_time_ms) << "ms, 2nd step "
                   << (end_time_ms - middle_time_ms) << "ms, total " << (end_time_ms - start_time_ms)
@@ -320,9 +252,9 @@ Status BatchManager::WorkerProcess() {
 Status BatchManager::Start() {
   // Start main threads for standalone or master node of distributed mode.
   if (context_->IsChief()) {
-    if (batch_scheduler_) {
-      batch_scheduler_->Start();
-    }
+    schedule_processor_->Initialize(batch_scheduler_, llm_runtime_, multi_batch_controller_);
+    schedule_processor_->Start();
+
     main_threads_.reserve(runtime_config_.max_pp_batch_num);
     for (size_t multi_batch_id = 0; multi_batch_id < runtime_config_.max_pp_batch_num; ++multi_batch_id) {
       main_threads_.push_back(
@@ -340,6 +272,12 @@ Status BatchManager::Stop() {
   KLLM_LOG_INFO << "Stop batch manager.";
 
   terminated_ = true;
+
+  // 停止调度处理器
+  if (schedule_processor_) {
+    schedule_processor_->Stop();
+  }
+
   if (batch_scheduler_) {
     batch_scheduler_->Stop();
   }
@@ -370,82 +308,6 @@ Status BatchManager::Stop() {
 
   KLLM_LOG_INFO << "batch manager stopped.";
   return Status();
-}
-
-ScheduleOutput BatchManager::MergeScheduleOutputGroup(std::shared_ptr<ScheduleOutputGroup> &schedule_output_group) {
-  ScheduleOutput merged_schedule_output;
-  if (schedule_output_group->outputs.size() == 1) {
-    merged_schedule_output = *(schedule_output_group->outputs.at(0));
-    merged_schedule_output.multi_batch_id = schedule_output_group->schedule_id;
-  } else if (schedule_output_group->outputs.size() == 0) {
-    return merged_schedule_output;
-  } else {
-    // NOTE(karlluo): merge all schedule group outputs into one schedule output instance
-    merged_schedule_output.multi_batch_id = schedule_output_group->schedule_id;
-
-    // schedule_output_group->outputs.size() equal to the number of attention data parallelism size
-    merged_schedule_output.finish_req_ids.resize(schedule_output_group->outputs.size());
-    merged_schedule_output.merged_swapout_req_ids.resize(schedule_output_group->outputs.size());
-    merged_schedule_output.merged_swapin_req_ids.resize(schedule_output_group->outputs.size());
-    merged_schedule_output.swapout_req_block_ids.resize(schedule_output_group->outputs.size());
-    merged_schedule_output.swapin_req_block_ids.resize(schedule_output_group->outputs.size());
-
-    // NOTE(karlluo): calculate reserve vector space
-    size_t running_reqs_reserve_size = 0;
-    size_t worker_running_reqs_reserve_size = 0;
-    for (size_t attn_dp_idx = 0; attn_dp_idx < schedule_output_group->outputs.size(); ++attn_dp_idx) {
-      ScheduleOutput *schedule_output = schedule_output_group->outputs.at(attn_dp_idx);
-      if (schedule_output == nullptr) {
-        continue;
-      }
-
-      if (schedule_output->finish_req_ids.size() >= 1) {
-        merged_schedule_output.finish_req_ids[attn_dp_idx] = schedule_output->finish_req_ids[0];
-      }
-      if (schedule_output->merged_swapout_req_ids.size() >= 1) {
-        merged_schedule_output.merged_swapout_req_ids[attn_dp_idx] = schedule_output->merged_swapout_req_ids[0];
-      }
-      if (schedule_output->merged_swapin_req_ids.size() >= 1) {
-        merged_schedule_output.merged_swapin_req_ids[attn_dp_idx] = schedule_output->merged_swapin_req_ids[0];
-      }
-      if (schedule_output->swapout_req_block_ids.size() >= 1) {
-        merged_schedule_output.swapout_req_block_ids[attn_dp_idx] = schedule_output->swapout_req_block_ids[0];
-      }
-      if (schedule_output->swapin_req_block_ids.size() >= 1) {
-        merged_schedule_output.swapin_req_block_ids[attn_dp_idx] = schedule_output->swapin_req_block_ids[0];
-      }
-
-      running_reqs_reserve_size += schedule_output->running_reqs.size();
-      worker_running_reqs_reserve_size += schedule_output->worker_running_reqs.size();
-    }
-
-    merged_schedule_output.running_reqs.reserve(running_reqs_reserve_size);
-    merged_schedule_output.worker_running_reqs.reserve(worker_running_reqs_reserve_size);
-
-    for (size_t attn_dp_idx = 0; attn_dp_idx < schedule_output_group->outputs.size(); ++attn_dp_idx) {
-      ScheduleOutput *schedule_output = schedule_output_group->outputs.at(attn_dp_idx);
-      if (schedule_output == nullptr) {
-        continue;
-      }
-
-      for (auto req = schedule_output->running_reqs.begin(); req != schedule_output->running_reqs.end(); ++req) {
-        (*req)->attn_dp_group_id = attn_dp_idx;
-      }
-      for (auto req = schedule_output->worker_running_reqs.begin(); req != schedule_output->worker_running_reqs.end();
-           ++req) {
-        (*req)->attn_dp_group_id = attn_dp_idx;
-      }
-
-      merged_schedule_output.running_reqs.insert(merged_schedule_output.running_reqs.end(),
-                                                 schedule_output->running_reqs.begin(),
-                                                 schedule_output->running_reqs.end());
-      merged_schedule_output.worker_running_reqs.insert(merged_schedule_output.worker_running_reqs.end(),
-                                                        schedule_output->worker_running_reqs.begin(),
-                                                        schedule_output->worker_running_reqs.end());
-    }
-  }
-
-  return merged_schedule_output;
 }
 
 }  // namespace ksana_llm

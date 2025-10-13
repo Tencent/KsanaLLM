@@ -180,28 +180,6 @@ TEST_F(BatchSchedulerTest, CreateMockRequest) {
   EXPECT_EQ(schedule_output_group->RunningSize(), 1);
 }
 
-TEST_F(BatchSchedulerTest, AsyncBuild) {
-  int dp_num = 1;
-  int tp_num = 1;
-  int ep_world_size = 2;
-  CommonSetUp(dp_num, tp_num, ep_world_size);
-  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, 2);
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context);
-  std::shared_ptr<MultiBatchController> multi_batch_controller = std::make_shared<MultiBatchController>(2);
-
-  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
-  batch_scheduler->SetLlmRuntime(llm_runtime);
-  batch_scheduler->SetMultiBatchController(multi_batch_controller);
-
-  batch_scheduler->batch_scheduler_config_.enable_async = true;
-  EXPECT_EQ(batch_scheduler->GetMockRequest().size(), 1);
-  batch_scheduler->Start();
-  std::future<ScheduleTaskPtr> sche_output = batch_scheduler->SubmitSchedulingTask(0);
-  auto schedule_data = sche_output.get();
-  auto schedule_output = schedule_data.first;
-  EXPECT_EQ(schedule_output->running_reqs.size(), 1);
-  batch_scheduler->Stop();
-}
 
 TEST_F(BatchSchedulerTest, ProcessGrammarCompilationTest) {
   KLLM_LOG_INFO << "BatchSchedulerTest: ProcessGrammarCompilationTest";

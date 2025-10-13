@@ -48,12 +48,12 @@ Status InitHiddenUnits(size_t multi_batch_id);
 
 // Status SetHiddenUnitMeta(ScheduleOutput* schedule_output);
 
-Status SetHiddenUnitMeta(size_t multi_batch_id, const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
+// 统一的SetHiddenUnitMeta接口，使用已计算的hidden_token_num
+Status SetHiddenUnitMeta(size_t multi_batch_id, ScheduleOutput* schedule_output,
                          std::shared_ptr<ModelInstance> model_instance);
+
 Status SetHiddenUnitMeta(size_t multi_batch_id,
                          const std::vector<std::shared_ptr<WorkerInferRequest>>& worker_running_reqs,
-                         std::shared_ptr<ModelInstance> model_instance);
-Status SetHiddenUnitMeta(size_t multi_batch_id, ScheduleOutput* schedule_output,
                          std::shared_ptr<ModelInstance> model_instance);
 
 // Send hidden_units to downstream.

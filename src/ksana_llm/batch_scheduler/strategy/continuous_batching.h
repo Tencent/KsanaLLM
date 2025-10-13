@@ -26,6 +26,10 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Process delayed request completion notifications
   void NotifyAsyncFinishedRequests();
 
+  // This is to avoid simultaneous scheduling and Step operations on InferRequest after enabling asynchronous
+  // scheduling.
+  void NotifyAsyncRecomputedRequests();
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
@@ -47,10 +51,15 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req, bool is_swap_req);
 
+  void HandleRecomputeRequest(std::shared_ptr<InferRequest> req, bool is_swap_req);
+
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
 
   void AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
+
+  std::vector<std::shared_ptr<InferRequest>>::iterator AsyncRecomputeRequest(
+      std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req = false);
 
   // Check the running queue to determine whether it exceeds the max_step_token_num.
   // return [step_token_with_kv_cache, step_token_without_kv_cache]
@@ -137,6 +146,7 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   size_t active_dp_group_id_ = 0;
 
   std::vector<std::shared_ptr<InferRequest>> async_destroyed_reqs_;
+  std::vector<std::pair<std::shared_ptr<InferRequest>, bool>> async_recomputed_reqs_;
 };
 
 }  // namespace ksana_llm

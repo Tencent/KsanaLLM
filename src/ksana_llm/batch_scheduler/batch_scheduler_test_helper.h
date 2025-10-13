@@ -39,6 +39,16 @@ struct FakedState {
 };
 static FakedState g_faked_state;
 
+inline void ResetFakedState() {
+  std::lock_guard<std::recursive_mutex> guard(g_faked_state.mux_);
+  g_faked_state.host_free_block_.clear();
+  g_faked_state.device_free_block_.clear();
+  g_faked_state.host_alloc_block_.clear();
+  g_faked_state.device_alloc_block_.clear();
+  g_faked_state.device_kv_cache_contents_.clear();
+  g_faked_state.host_kv_cache_contents_.clear();
+}
+
 class FakedMemoryAllocator : public MemoryAllocatorInterface {
  public:
   virtual ~FakedMemoryAllocator() {}
@@ -479,11 +489,10 @@ inline void GenerateFakeTokens(std::vector<int>& input_tokens, int output_token_
   }
 }
 
-inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(int req_id, int input_token_num,
-                                                                  int expected_output_token_num,
-                                                                  std::shared_ptr<Request>& req,
-                                                                  const std::vector<std::pair<int, int>>& seeds,
-                                                                  size_t tp_num) {
+inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
+    int req_id, int input_token_num, int expected_output_token_num, std::shared_ptr<Request>& req,
+    const std::vector<std::pair<int, int>>& seeds, size_t tp_num,
+    std::shared_ptr<KsanaPythonInput>* python_input_out = nullptr) {
   KLLM_LOG_DEBUG << "Init req " << req_id << ", input_token_num=" << input_token_num
                  << ", expect_output_token_num=" << expected_output_token_num;
   std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
@@ -498,6 +507,11 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(int req_id, in
   std::vector<int> dummy_tokens;
   GenerateFakeTokens(dummy_tokens, input_token_num, req->input_tokens, false, seeds);
   req->output_tokens = req->input_tokens;
+
+  // 如果调用方需要，将 ksana_python_input 返回
+  if (python_input_out) {
+    *python_input_out = ksana_python_input;
+  }
 
   std::vector<std::shared_ptr<InferRequest>> infer_req_list;
   for (size_t i = 0; i < req->output_group.size(); i++) {

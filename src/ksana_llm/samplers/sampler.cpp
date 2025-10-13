@@ -399,15 +399,15 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     // NOTE(winminkong): When MTP is enabled, the NoRepeatNgram sampling is applied only to the first token generated.
     if (sampling_config->no_repeat_ngram_size > 0) {
       NoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
-                             sampling_req.forwarding_tokens, sampling_req.ngram_dict, vocab_size,
+                             sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict, vocab_size,
                              sampling_req.last_step_token_num, stream);
     } else if (sampling_config->encoder_no_repeat_ngram_size > 0) {
       EncoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
-                                    input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
+                                    input_tokens_size, sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict,
                                     vocab_size, stream);
     } else if (sampling_config->decoder_no_repeat_ngram_size > 0) {
       DecoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->decoder_no_repeat_ngram_size,
-                                    input_tokens_size, sampling_req.forwarding_tokens, sampling_req.ngram_dict,
+                                    input_tokens_size, sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict,
                                     vocab_size, sampling_req.last_step_token_num, stream);
     }
   }

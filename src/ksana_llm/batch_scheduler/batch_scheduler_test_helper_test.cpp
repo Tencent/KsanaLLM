@@ -317,22 +317,11 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) override {}
 
-  virtual void Stop() override {}
-
-  virtual void SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) override {}
-
-  virtual void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) override {}
-
-  virtual void Start() override {}
-
-  std::future<ScheduleTaskPtr> SubmitSchedulingTask(size_t multi_batch_id) override {
-    std::promise<ScheduleTaskPtr> sche_promise;
-    auto sche_future = sche_promise.get_future();
-    sche_promise.set_value(ScheduleTaskPtr{});
-    return sche_future;
-  }
+  virtual void NotifyAsyncRecomputedRequests() override {}
 
   virtual void NotifyAsyncFinishedRequests() override {}
+
+  void Stop() override {}
 
  private:
   Status AddAnInferRequest(std::shared_ptr<InferRequest>& infer_req) {

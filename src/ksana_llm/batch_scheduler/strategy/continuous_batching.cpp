@@ -134,7 +134,13 @@ void ContinuousBatchingStrategy::DetermineDraftNum(std::shared_ptr<InferRequest>
 std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy::RecomputeRequest(
     std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req) {
   auto req = *it;
-  KLLM_LOG_DEBUG << "RecomputeRequest " << req;
+  HandleRecomputeRequest(req, is_swap_req);
+  return batch_state_->schedule_output->running_reqs.erase(it);
+}
+
+void ContinuousBatchingStrategy::HandleRecomputeRequest(std::shared_ptr<InferRequest> req, bool is_swap_req) {
+  KLLM_LOG_DEBUG << "HandleRecomputeRequest req id is: " << req->req_id
+                 << " kv_comm_request_id: " << req->kv_comm_request_id;
 
   // Add request to the begining of waiting queue.
   req->kv_cache_blocks.clear();
@@ -150,14 +156,13 @@ std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy:
                   << " is recomputed due to exceeding max_step_token_num or max_batch_size in decode group.";
     Status status(RET_PREDICTOR_DISCARD, "Disaggregation of prefill and decoding could not be recomputed.");
     ResetRequest(req, status, is_swap_req, true);
-    return batch_state_->schedule_output->running_reqs.erase(it);
+    return;
   }
 
   static constexpr bool terminate = false;
   ResetRequest(req, Status(RET_SUCCESS, "RecomputeRequest"), is_swap_req, terminate);
 
   batch_state_->waiting_queue.emplace_front(req);
-  return batch_state_->schedule_output->running_reqs.erase(it);
 }
 
 void ContinuousBatchingStrategy::StopRequest(std::shared_ptr<InferRequest> req, Status ret_status,
@@ -197,6 +202,15 @@ void ContinuousBatchingStrategy::AsyncStopRequest(std::shared_ptr<InferRequest> 
   batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
 }
 
+std::vector<std::shared_ptr<InferRequest>>::iterator ContinuousBatchingStrategy::AsyncRecomputeRequest(
+    std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req) {
+  auto req = *it;
+  KLLM_LOG_DEBUG << "AsyncRecomputeRequest " << *req << ", is_swapped_req:" << is_swap_req << ", delay recompute";
+
+  async_recomputed_reqs_.push_back({req, is_swap_req});
+  return batch_state_->schedule_output->running_reqs.erase(it);
+}
+
 void ContinuousBatchingStrategy::NotifyAsyncFinishedRequests() {
   // 处理延迟的请求完成通知
   for (auto &req : async_destroyed_reqs_) {
@@ -208,7 +222,15 @@ void ContinuousBatchingStrategy::NotifyAsyncFinishedRequests() {
   async_destroyed_reqs_.clear();
 }
 
-void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req,
+void ContinuousBatchingStrategy::NotifyAsyncRecomputedRequests() {
+  for (auto [req, is_swap_req] : async_recomputed_reqs_) {
+    KLLM_LOG_DEBUG << "Async recompute request " << req->req_id << " notification sent";
+    HandleRecomputeRequest(req, is_swap_req);
+  }
+  async_recomputed_reqs_.clear();
+}
+
+void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req, Status ret_status, bool is_swap_req,
                                               bool terminate) {
   KLLM_LOG_DEBUG << "ResetRequest " << *req << ", req_status:" << req_status.ToString()
                  << ", is_swap_req:" << is_swap_req << ", terminate:" << terminate;
@@ -269,7 +291,11 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     if (step_token_num + req_token_num > dp_max_step_token_num_ ||
         total_sampling_token_num + req->sampling_token_num > dp_max_logits_num_ || req_num >= dp_max_batch_size_) {
       scheduler_ticktok_->Unlock();
-      it = RecomputeRequest(it);
+      if (batch_scheduler_config_.enable_async) {
+        it = AsyncRecomputeRequest(it, false);
+      } else {
+        it = RecomputeRequest(it, false);
+      }
       continue;
     }
     step_not_kv_cached_token_num += not_kv_cached_token_num;
@@ -300,8 +326,10 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
     // remove rejected draft token
     // TODO(david): for mtp, it should consider step. The accepted token num equal mtp times.
-    req->forwarding_tokens.resize(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num +
-                                  req->accepted_tokens.size());
+    if (!batch_scheduler_config_.enable_async) {
+      req->forwarding_tokens.resize(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num +
+                                    req->accepted_tokens.size());
+    }
     // current token has kv_cache
     req->kv_cached_token_num = req->forwarding_tokens.size();
     req->prefix_cache_len = req->kv_cached_token_num;
@@ -313,7 +341,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
                                                         req->kv_cache_blocks);
 
     //  if it is async, req->output_tokens.size() should minus 1
-    const int real_output_num = req->output_tokens.size() - (batch_scheduler_config_.enable_async ? 1 : 0);
+    // TODO(qiannan) 需要check为什么需要-1
+    int real_output_num = req->output_tokens.size();
+    if (batch_scheduler_config_.enable_async) {
+      real_output_num -= 1;
+    }
     if (req->forwarding_tokens.size() - req->accepted_tokens.size() < real_output_num) {
       // When the request actually needs to calculate Multi-Token, insert the request into the waiting queue.
       // This is primarily used for the split-fuse feature.
@@ -352,7 +384,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       KLLM_LOG_ERROR << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
       req->draft_tokens.clear();
       req->forwarding_tokens_draft_num = req->draft_tokens.size();
-      it = RecomputeRequest(it);
+      if (batch_scheduler_config_.enable_async) {
+        it = AsyncRecomputeRequest(it, false);
+      } else {
+        it = RecomputeRequest(it, false);
+      }
       continue;
     }
 
@@ -444,7 +480,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
     // append draft tokens
     // TODO(david): for mtp, the draft token should modify in step 0 to avoid exceeding max_seq_len
-    std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
+    const std::vector<int> &draft_tokens = req->draft_tokens.GetDraftTokens();
+    // TODO(qiannan) 这里需要插入正确数量的draft fake token
     req->forwarding_tokens.insert(req->forwarding_tokens.end(), draft_tokens.begin(), draft_tokens.end());
     req->forwarding_tokens_draft_num = req->draft_tokens.size();
     req->sampling_token_num =
@@ -637,7 +674,11 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
       size_t freeable_block_num = 0;
       cache_manager_->GetRequestFreeableBlockNum(req->req_id, freeable_block_num);
       // Add recomputed request to the begining of waiting queue.
-      RecomputeRequest(it);
+      if (batch_scheduler_config_.enable_async) {
+        it = AsyncRecomputeRequest(it, false);
+      } else {
+        it = RecomputeRequest(it, false);
+      }
       total_needed_block_num -= step_block_num;
       continue;
     }

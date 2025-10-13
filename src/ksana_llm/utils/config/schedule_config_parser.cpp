@@ -284,6 +284,26 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   batch_scheduler_config_.enable_async =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_async", false);
 
+  if (batch_scheduler_config_.enable_async) {
+    KLLM_CHECK_WITH_INFO(batch_scheduler_config_.split_fuse_token_num == 0,
+                         "Async scheduling does not support split fuse.");
+  }
+  // Parse ADP Balance Strategy configuration
+  batch_scheduler_config_.attention_dp_lb_config.enable_balance = yaml_reader.GetScalar<bool>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.attention_dp_lb_config.enable_balance", false);
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_steps = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.attention_dp_lb_config.max_waiting_steps", 50);
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_time_in_ms = yaml_reader.GetScalar<size_t>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.attention_dp_lb_config.max_waiting_time_in_ms", 1000);
+  batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting = yaml_reader.GetScalar<double>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.attention_dp_lb_config.min_qps_for_waiting", -1.0);
+
+  KLLM_LOG_INFO << "ADP Balance Strategy - enable_balance: "
+                << batch_scheduler_config_.attention_dp_lb_config.enable_balance
+                << ", max_waiting_steps: " << batch_scheduler_config_.attention_dp_lb_config.max_waiting_steps
+                << ", max_waiting_time_in_ms: " << batch_scheduler_config_.attention_dp_lb_config.max_waiting_time_in_ms
+                << ", min_qps_for_waiting: " << batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting;
+
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
   // When MTP is enabled, each request requires calculating 2 tokens while decoding.

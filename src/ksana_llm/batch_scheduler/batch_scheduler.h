@@ -42,10 +42,6 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Set the cache manager instance of batch scheduler.
   void SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int attn_dp_idx) override;
 
-  void SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) override;
-
-  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) override;
-
   std::shared_ptr<CacheManagerInterface> &GetCacheManager(int attn_dp_idx) override;
 
   // Whether the scheduler is idle, that is, waiting buffer and swapped queue is both empty.
@@ -53,26 +49,18 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void WaitUntilHaveReqs(size_t multi_batch_id) override;
 
-  // Start the batch_scheduler.
-  void Start() override;
-
-  // Stop the batch_scheduler.
-  void Stop() override;
-
-  // submit the shceduler task
-  std::future<ScheduleTaskPtr> SubmitSchedulingTask(size_t multi_batch_id) override;
-
-  // scheduler worker thread
-  void SchedulingWorkerLoop();
-
-  void ProcessSchedulingTask(ScheTask &task);
-
   void RegisterStructuredGeneratorFactory(std::shared_ptr<StructuredGeneratorFactory> generator_factory);
 
   // Process async finished requests for all strategies
   void NotifyAsyncFinishedRequests();
 
+  // This is to avoid simultaneous scheduling and Step operations on InferRequest after enabling asynchronous
+  // scheduling.
+  void NotifyAsyncRecomputedRequests();
+
   std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
+
+  void Stop() override;
 
  private:
   // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
@@ -149,14 +137,16 @@ class BatchScheduler : public BatchSchedulerInterface {
   std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
   std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;
 
-  // The scheduler threads.
-  std::vector<std::unique_ptr<std::thread>> sched_threads_;
+  // ADP Balance related members
+  size_t adp_balance_waiting_iters_ = 0;
+  size_t adp_balance_context_batches_ = 0;
+  std::chrono::steady_clock::time_point adp_balance_start_time_;
 
-  BlockingQueue<ScheTask> task_queue_;
-
-  std::shared_ptr<LlmRuntime> llm_runtime_ = nullptr;
-
-  std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
+  // QPS tracking members
+  std::chrono::steady_clock::time_point last_qps_update_time_;
+  size_t request_count_window_ = 0;
+  double current_qps_ = 0.0;
+  static constexpr size_t QPS_UPDATE_INTERVAL_SECONDS = 10;
 };
 
 }  // namespace ksana_llm

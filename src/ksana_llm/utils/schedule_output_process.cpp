@@ -15,6 +15,9 @@ void DeepCopySamplingRequest(SamplingRequest& original) {
   if (original.input_tokens) {
     original.input_tokens = std::make_shared<std::vector<int>>(*original.input_tokens);
   }
+  if (original.forwarding_tokens) {
+    original.forwarding_tokens = std::make_shared<std::vector<int>>(*original.forwarding_tokens);
+  }
 }
 
 std::shared_ptr<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>> DeepCopyForwardRequest(

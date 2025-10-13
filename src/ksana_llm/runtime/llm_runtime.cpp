@@ -88,7 +88,43 @@ void LlmRuntime::BuildForwardRequests(
     group_reqs.emplace_back(req->GetForwardRequest());
   }
 }
-#endif
+
+void LlmRuntime::DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
+                                                 std::vector<SamplingRequest>& sampling_reqs) {
+  // Create a map of InferRequests for quick lookup
+  std::unordered_map<size_t, std::shared_ptr<InferRequest>> req_map;
+  for (auto& req : running_reqs) {
+    req_map[req->req_id] = req;
+  }
+
+  size_t logits_offset = 0;
+  // Deep copy and synchronize data for each SamplingRequest
+  for (auto& sampling_req : sampling_reqs) {
+    // Find the corresponding InferRequest
+    auto it = req_map.find(sampling_req.req_id);
+    if (it == req_map.end()) {
+      continue;
+    }
+    auto& infer_req = it->second;
+
+    // Synchronize data from InferRequest to SamplingRequest
+    sampling_req.step = infer_req->step;
+    sampling_req.logits_custom_length = infer_req->logits_custom_length;
+    sampling_req.sampling_token_num = infer_req->sampling_token_num;
+    sampling_req.last_step_token_num = infer_req->last_step_token_num;
+    sampling_req.logits_offset = logits_offset;
+    logits_offset += infer_req->sampling_token_num;
+
+    // Deep copy forwarding_tokens - this is the most critical part
+    if (sampling_req.forwarding_tokens && sampling_req.origin_tokens) {
+      // Create a new copy of forwarding_tokens from origin_tokens (the real token data)
+      sampling_req.forwarding_tokens = std::make_shared<std::vector<int>>(*sampling_req.origin_tokens);
+    }
+
+    // Synchronize other related fields
+    sampling_req.sampling_config = &(infer_req->sampling_config);
+  }
+}
 
 Status LlmRuntime::RunSerially(
     size_t multi_batch_id,
@@ -159,17 +195,19 @@ Status LlmRuntime::AuxForward(
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                                       std::vector<SamplingRequest>& sampling_reqs, bool apply_grammar_constraint) {
   PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
-  for (std::shared_ptr<InferRequest> req_ptr : reqs) {
-    SamplingRequest sampling_req;
-    sampling_req.req_id = req_ptr->req_id;
-    sampling_req.step = req_ptr->step;
-    sampling_req.logits_custom_length = req_ptr->logits_custom_length;
-    sampling_req.input_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->input_tokens);
-    sampling_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
-    sampling_req.origin_tokens = &(req_ptr->forwarding_tokens);
-    sampling_req.sampling_token_num = req_ptr->sampling_token_num;
-    sampling_req.last_step_token_num = req_ptr->last_step_token_num;
-    sampling_req.sampling_result_tokens = &(req_ptr->sampling_result_tokens);
+  sampling_reqs.resize(reqs.size());
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    auto& req = reqs[i];
+    SamplingRequest& sampling_req = sampling_reqs[i];
+    sampling_req.req_id = req->req_id;
+    sampling_req.step = req->step;
+    sampling_req.logits_custom_length = req->logits_custom_length;
+    sampling_req.input_tokens = std::shared_ptr<std::vector<int>>(req, &req->input_tokens);
+    sampling_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req, &req->forwarding_tokens);
+    sampling_req.origin_tokens = &(req->forwarding_tokens);
+    sampling_req.sampling_token_num = req->sampling_token_num;
+    sampling_req.last_step_token_num = req->last_step_token_num;
+    sampling_req.sampling_result_tokens = &(req->sampling_result_tokens);
     sampling_req.sampling_result_tokens->clear();
     sampling_req.response = &(req_ptr->response);
     sampling_req.request_target =
@@ -405,11 +443,7 @@ Status LlmRuntime::StepOnChief(
     multi_batch_controller_->NotifyAnotherBatchCanRun(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "wait to recv cur_multi_batch_id=" << schedule_output->multi_batch_id;
     multi_batch_controller_->WaitUtilCanRecvCurrentHiddenUnits(schedule_output->multi_batch_id);
-    if (enable_async_) {
-      SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output, model_instance);
-    } else {
-      SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output->running_reqs, model_instance);
-    }
+    SetHiddenUnitMeta(schedule_output->multi_batch_id, schedule_output, model_instance);
 
     RecvHiddenUnits(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "try to run multi_batch_id=" << schedule_output->multi_batch_id << " again, epilogue=true";
