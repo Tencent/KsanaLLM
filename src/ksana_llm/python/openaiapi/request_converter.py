@@ -201,7 +201,7 @@ class RequestConverter:
             config["logprobs"] = logprobs
         else:
             config["logprobs"] = self.config.default_logprobs
-                
+
         ignore_eos = getattr(request, 'ignore_eos', None)
         config["ignore_eos"] = ignore_eos if ignore_eos is not None else self.config.default_ignore_eos
         
@@ -427,7 +427,7 @@ class RequestConverter:
             if not isinstance(ksana_logprobs, list) or len(ksana_logprobs) == 0:
                 return None
                 
-            batch_logprobs = ksana_logprobs[0]
+            batch_logprobs = ksana_logprobs[0][-len(token_ids):]
             if not isinstance(batch_logprobs, list):
                 return None
             
@@ -671,7 +671,9 @@ class RequestConverter:
         finish_reason: Optional[str] = None,
         logprobs: Optional[Any] = None,
         usage: Optional[UsageInfo] = None,
-        choice_index: int = 0
+        choice_index: int = 0,
+        current_output_token: Optional[List[int]] = None,
+        num_output_top_logprobs: Optional[int] = None,
     ) -> str:
         """格式化Chat Completion流式响应块"""
         
@@ -685,7 +687,10 @@ class RequestConverter:
             
             formatted_logprobs = None
             if logprobs is not None:
-                formatted_logprobs = self._convert_ksana_logprobs_to_openai(logprobs)
+                formatted_logprobs = self._convert_ksana_logprobs_to_openai(
+                    logprobs, 
+                    current_output_token, 
+                    num_output_top_logprobs)
             
             # 构建choice
             choice = ChatCompletionResponseStreamChoice(

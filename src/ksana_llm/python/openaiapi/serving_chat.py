@@ -145,13 +145,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         logprobs: Optional[Dict[str, Any]] = None,
         usage: Optional[Any] = None,
         choice_index: int = 0,
-        delta_message: Optional[DeltaMessage] = None
+        delta_message: Optional[DeltaMessage] = None,
+        current_output_token: Optional[List[int]] = None,
+        num_output_top_logprobs: Optional[int] = None,
     ) -> str:
         
         if content is None and finish_reason is None and role is None and delta_message is None:
             return "data: [DONE]\n"
         
-        if delta_message is not None:
+        if delta_message is not None and logprobs is None:
             # filter out empty strings from delta_message
             delta_dict = delta_message.model_dump(exclude_unset=True, exclude_none=True)
             delta_dict = {k: v for k, v in delta_dict.items() if v != ""}
@@ -184,7 +186,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             finish_reason=finish_reason,
             logprobs=logprobs,
             usage=usage,
-            choice_index=choice_index
+            choice_index=choice_index,
+            current_output_token=current_output_token,
+            num_output_top_logprobs=num_output_top_logprobs
         )
     
     async def _chat_completion_stream_generator(
@@ -243,6 +247,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         elif request.tool_choice == "required":
             previous_texts = [""] * num_choices
             all_previous_token_ids = None
+        elif request_logprobs:
+            previous_texts = None
+            all_previous_token_ids = [[]] * num_choices
         else:
             previous_texts, all_previous_token_ids = None, None
 
@@ -611,7 +618,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             continue
                         
                         logprobs = getattr(ksana_python_output, 'logprobs', None) if request_logprobs else None
-                        
+
                         processed_delta = delta_text
                         if processed_delta or (delta_message and delta_message != DeltaMessage(content="")):
                             chunk = await self._generate_stream_chunk(
@@ -619,7 +626,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 content=processed_delta,
                                 logprobs=logprobs,
                                 delta_message=delta_message,
-                                choice_index=i
+                                choice_index=i,
+                                current_output_token=output_tokenids,
+                                num_output_top_logprobs=getattr(request, 'top_logprobs', 0) if request_logprobs else 0,
                             )
                             if chunk:
                                 yield chunk
@@ -677,7 +686,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             "completion_tokens": completion_tokens,
                             "total_tokens": num_prompt_tokens + completion_tokens
                         }
-                    
+
                     chunk = await self._generate_stream_chunk(
                         request_id, model_name, tokenizer,
                         finish_reason=finish_reason,
@@ -813,7 +822,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         if request.stream:
             request_logprobs = getattr(request, 'logprobs', False)
-            
+
             async def stream_generator():
                 valid_outputs = [
                     (idx, output)
@@ -835,7 +844,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             yield (idx, item)
                     
                     yield None
-                
+
                 async for chunk in self._chat_completion_stream_generator(
                     merged_outputs(), request_id, model_name, tokenizer,
                     request_logprobs, request, conversation, prompt_tokens_per_request
