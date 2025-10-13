@@ -13,8 +13,9 @@ from pydantic import BaseModel
 import orjson
 from openaiapi.openai_protocol import (
     ChatCompletionRequest, CompletionRequest, EmbeddingRequest,
-    ChatMessage, ChatCompletionResponse, ChatCompletionResponseChoice,
-    ChatCompletionStreamResponse, ChatCompletionResponseStreamChoice, DeltaMessage,
+    ChatMessage, ChatCompletionResponse,
+    ChatCompletionResponseChoice, ChatCompletionStreamResponse,
+    ChatCompletionResponseStreamChoice, DeltaMessage,
     CompletionResponse, CompletionResponseChoice, CompletionLogProbs,
     CompletionStreamResponse, CompletionResponseStreamChoice,
     EmbeddingResponse, EmbeddingResponseData,
@@ -59,13 +60,11 @@ class RequestConverter:
     
     def convert_chat_completion(
         self,
-        request: ChatCompletionRequest,
-        messages_to_prompt_func: Optional[Callable[[List[ChatMessage]], str]] = None
+        request: ChatCompletionRequest
     ) -> Dict[str, Any]:
         return self._convert_base_request(
             request,
-            api_type="chat",
-            messages_to_prompt_func=messages_to_prompt_func
+            api_type="chat"
         )
     
     def convert_completion(
@@ -101,8 +100,7 @@ class RequestConverter:
     def convert_to_ksana_format(
         self,
         request_dict: Dict[str, Any],
-        api_type: str,
-        messages_to_prompt_func: Optional[Callable] = None
+        api_type: str
     ) -> Dict[str, Any]:
         """
         通用转换方法 - 兼容旧接口
@@ -110,12 +108,11 @@ class RequestConverter:
         Args:
             request_dict: 请求字典
             api_type: API类型 ("chat", "completion", "embedding")
-            messages_to_prompt_func: 消息转换函数
         """
         # Create Temporary Request Object
         if api_type == "chat":
             request = ChatCompletionRequest(**request_dict)
-            return self.convert_chat_completion(request, messages_to_prompt_func)
+            return self.convert_chat_completion(request)
         elif api_type == "completion":
             request = CompletionRequest(**request_dict)
             return self.convert_completion(request)
@@ -128,8 +125,7 @@ class RequestConverter:
     def _convert_base_request(
         self,
         request: Union[ChatCompletionRequest, CompletionRequest, EmbeddingRequest],
-        api_type: str,
-        messages_to_prompt_func: Optional[Callable] = None
+        api_type: str
     ) -> Dict[str, Any]:
         """
         基础请求转换逻辑
@@ -137,7 +133,6 @@ class RequestConverter:
         Args:
             request: OpenAI格式的请求对象
             api_type: API类型
-            messages_to_prompt_func: 消息转换函数（仅用于chat API）
         """
 
         ksana_request = {
@@ -146,7 +141,7 @@ class RequestConverter:
         }
 
         if api_type == "chat":
-            self._handle_chat_input(request, ksana_request, messages_to_prompt_func)
+            self._handle_chat_input(request, ksana_request)
         elif api_type == "completion":
             self._handle_completion_input(request, ksana_request)
         elif api_type == "embedding":
@@ -247,34 +242,12 @@ class RequestConverter:
     def _handle_chat_input(
         self,
         request: ChatCompletionRequest,
-        ksana_request: Dict[str, Any],
-        messages_to_prompt_func: Optional[Callable]
+        ksana_request: Dict[str, Any]
     ):
         # Use input_tokens as the primary input if available
         if hasattr(request, 'input_tokens') and request.input_tokens:
             ksana_request["input_tokens"] = request.input_tokens
-        elif messages_to_prompt_func and request.messages:
-            prompt = messages_to_prompt_func(request.messages)
-            ksana_request["prompt"] = prompt
-        else:
-            messages_text = []
-            for msg in request.messages:
-                role_text = f"{msg.role.capitalize()}: {msg.content or ''}"
-                messages_text.append(role_text)
-            messages_text.append("Assistant:")
-            ksana_request["prompt"] = "\n".join(messages_text)
-        
-        if hasattr(request, 'tools') and request.tools:
-            ksana_request["tools"] = [tool.model_dump() for tool in request.tools]
-            
-            if hasattr(request, 'tool_choice') and request.tool_choice is not None:
-                ksana_request["tool_choice"] = request.tool_choice
-            elif hasattr(self.config, 'enable_auto_tool_choice') and self.config.enable_auto_tool_choice:
-                # 如果启用了auto_tool_choice，默认为"auto"
-                ksana_request["tool_choice"] = "auto"
-            else:
-                # 否则默认为"auto"（当有工具时，应该默认为auto而不是none）
-                ksana_request["tool_choice"] = "auto"
+
         
     def _handle_completion_input(
         self,

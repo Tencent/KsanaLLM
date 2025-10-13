@@ -43,8 +43,8 @@ from openaiapi.request_converter import RequestConverter
 from openaiapi.transformers_utils.chat_utils import ChatTemplateContentFormatOption
 from openaiapi.tool_parsers import ToolParser, ToolParserManager
 from openaiapi.reasoning import ReasoningParser, ReasoningParserManager
-from openaiapi.transformers_utils.chat_utils import (AnyTokenizer, 
-                                                     random_tool_call_id)
+from openaiapi.transformers_utils.chat_utils import (
+    AnyTokenizer, make_tool_call_id, get_history_tool_calls_cnt)
 from utilize.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +69,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         self.chat_template = chat_template
         self.chat_template_content_format = chat_template_content_format
         self.tokenizer = getattr(self.llm_server, 'tokenizer', None)
+        self.tool_call_id_type = 'random'
         
         self._init_parsers()
     
@@ -86,6 +87,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         self.tool_parser: Optional[Callable[[AnyTokenizer], ToolParser]] = None
         if self.config.enable_auto_tool_choice:
             try:
+                if(self.config.tool_call_parser == 'kimi_k2'):
+                    self.tool_call_id_type = 'kimi_k2'
                 self.tool_parser = ToolParserManager.get_tool_parser(self.config.tool_call_parser)
                 logger.info(f"Tool parser '{self.config.tool_call_parser}' initialized successfully")
             except TypeError as e:
@@ -111,18 +114,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         if hasattr(request, '__pydantic_extra__') and request.__pydantic_extra__:
             request_dict.update(request.__pydantic_extra__)
         
-        def messages_to_prompt_wrapper(messages_data):
-            # iif messages is dict, transform it to ChatMessage objects
-            if messages_data and isinstance(messages_data[0], dict):
-                message_objects = [ChatMessage(**msg) for msg in messages_data]
-                return self._messages_to_prompt(message_objects)
-            else:
-                return self._messages_to_prompt(messages_data)
-        
         ksana_request = converter.convert_to_ksana_format(
             request_dict,
             api_type="chat",
-            messages_to_prompt_func=messages_to_prompt_wrapper
         )
         
         return ksana_request
@@ -235,7 +229,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         all_previous_token_ids: Optional[list[list[int]]]   
         function_name_returned = [False] * num_choices
-        
+        if self.tool_call_id_type == 'kimi_k2':
+            history_tool_call_cnt = get_history_tool_calls_cnt(conversation)
+        else:
+            history_tool_call_cnt = 0
         if tool_choice_auto or self.reasoning_parser:
             # These are only required in "auto" tool choice case
             previous_texts = [""] * num_choices
@@ -432,7 +429,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                         index=i)
                                 else:
                                     delta_tool_call = DeltaToolCall(
-                                        id=random_tool_call_id(),
+                                        id=make_tool_call_id(),
                                         type="function",
                                         function=DeltaFunctionCall(
                                             name=tool_choice_function_name,
@@ -460,7 +457,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 previous_text=previous_text,
                                 current_text=content,
                                 delta_text=delta_text,
-                                function_name_returned=fn_name_returned
+                                function_name_returned=fn_name_returned,
+                                tool_call_idx=history_tool_call_cnt
                             )
                             
                             if delta_message:
@@ -477,6 +475,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 }
                                 yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n"
                                 continue  # 对于 required 模式，工具调用是唯一输出
+                            if (delta_message and delta_message.tool_calls and
+                                    delta_message.tool_calls[0].id is not None):
+                                history_tool_call_cnt += 1
+                                tools_streamed[i] = True
                         # auto tool choice and reasoning parser enabled, extract reasoning content
                         elif tool_choice_auto and self.reasoning_parser:
                             assert reasoning_parser is not None
@@ -714,13 +716,19 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             return error_check_ret
         
         try:
-            request_id = f"chatcmpl-{uuid.uuid4().hex}"
             model_name = self._get_model_name(request.model)
+            tool_parser = self.tool_parser
             
+            if (request.tool_choice == "auto" and
+                    not (self.config.enable_auto_tool_choice and tool_parser is not None)):
+                return self.create_error_response(
+                    "\"auto\" tool choice requires "
+                    "--enable-auto-tool-choice and --tool-call-parser to be set"
+                )
+
             tool_dicts = None if request.tools is None else [
                 tool.model_dump() for tool in request.tools
             ]
-            tool_parser = self.tool_parser
             
             # preprocess chat messages, add hf chat template, etc.
             (
@@ -750,6 +758,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 ErrorType.VALIDATION_ERROR,
                 HTTPStatus.BAD_REQUEST
             )
+
+        request_id = f"chatcmpl-{uuid.uuid4().hex}"
 
         req_ctx = self._get_trace_context(raw_request) if raw_request else None
 
@@ -860,6 +870,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
     ) -> ChatCompletionResponse:
 
         choices = []
+        if self.tool_call_id_type == 'kimi_k2':
+            history_tool_call_cnt = get_history_tool_calls_cnt(conversation)
+        else:
+            history_tool_call_cnt = 0
         total_prompt_tokens = 0
         total_completion_tokens = 0
         role = self.get_chat_request_role(request) if request else "assistant"
@@ -969,14 +983,24 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     assert content is not None
                     tool_calls = TypeAdapter(
                         list[FunctionDefinition]).validate_json(content)
+                    tool_call_ids = []
+                    for tool_call in tool_calls:
+                        tool_call_ids.append(
+                            make_tool_call_id(id_type=self.tool_call_id_type,
+                                              func_name=tool_call.name,
+                                              idx=history_tool_call_cnt))
+                    history_tool_call_cnt += 1
                     message = ChatMessage(
                         role=role,
+                        reasoning_content=reasoning_content,
+                        content="",
                         tool_calls=[
-                            tool_call_class(function=FunctionCall(
+                            tool_call_class(id=tool_call_ids[i],
+                                function=FunctionCall(
                                 name=tool_call.name,
                                 arguments=json.dumps(tool_call.parameters,
                                                         ensure_ascii=False)))
-                            for tool_call in tool_calls
+                            for i, tool_call in enumerate(tool_calls)
                         ])
                     finish_reason = "tool_calls"
                 
@@ -1155,6 +1179,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         current_text: Optional[str],
         delta_text: str,
         function_name_returned: bool,
+        tool_call_idx: Optional[int] = None
     ) -> tuple[Optional[DeltaMessage], bool]:
         if current_text is None or current_text == "":
             # if the current text is empty, we cannot parse it
@@ -1200,8 +1225,12 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         current_tool_call = obj[-2]
 
                     function_name_returned = True
+                    tool_call_id = make_tool_call_id(
+                        id_type=self.tool_call_id_type,
+                        func_name=current_tool_call["name"],
+                        idx=tool_call_idx)
                     delta_message = DeltaMessage(tool_calls=[
-                        DeltaToolCall(id=random_tool_call_id(),
+                        DeltaToolCall(id=tool_call_id,
                                       function=DeltaFunctionCall(
                                           name=current_tool_call["name"],
                                           arguments=arguments),

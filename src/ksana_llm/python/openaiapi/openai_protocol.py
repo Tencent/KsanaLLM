@@ -18,31 +18,9 @@ from typing import Annotated, Any, ClassVar, Literal, Optional, Union, List, Dic
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from utilize.utils import random_uuid
+from openaiapi.transformers_utils.chat_utils import ChatCompletionMessageParam
 
 _LONG_INFO = torch.iinfo(torch.long)
-
-# 采样参数范围常量
-TEMPERATURE_MIN = 0.0
-TEMPERATURE_MAX = 2.0
-TOP_P_MIN = 0.0
-TOP_P_MAX = 1.0
-TOP_K_MIN = 0
-FREQUENCY_PENALTY_MIN = -2.0
-FREQUENCY_PENALTY_MAX = 2.0
-PRESENCE_PENALTY_MIN = -2.0
-PRESENCE_PENALTY_MAX = 2.0
-REPETITION_PENALTY_MIN = 0.0
-MIN_P_MIN = 0.0
-MIN_P_MAX = 1.0
-
-# 默认采样参数
-DEFAULT_SAMPLING_PARAMS = {
-    "repetition_penalty": 1.0,
-    "temperature": 1.0,
-    "top_p": 1.0,
-    "top_k": 0,
-    "min_p": 0.0,
-}
 
 
 class OpenAIBaseModel(BaseModel):
@@ -242,33 +220,29 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(OpenAIRequestModel):
     # 按照官方OpenAI API文档排序
-    messages: List[ChatMessage]
+    messages: List[ChatCompletionMessageParam]
     model: Optional[str] = None
-    frequency_penalty: Optional[float] = Field(0.0, ge=FREQUENCY_PENALTY_MIN, le=FREQUENCY_PENALTY_MAX)
+    frequency_penalty: Optional[float] = 0.0
     logit_bias: Optional[Dict[str, float]] = None
     logprobs: Optional[bool] = False
-    top_logprobs: Optional[int] = Field(0, ge=0)
+    top_logprobs: Optional[int] = 0
     max_tokens: Optional[int] = Field(
         default=None,
         deprecated="max_tokens is deprecated in favor of the max_completion_tokens field",
         description="The maximum number of tokens that can be generated in the chat completion. ",
     )
-    max_completion_tokens: Optional[int] = Field(
-        default=None,
-        description="The maximum number of completion tokens for a chat completion request, "
-        "including visible output tokens and reasoning tokens. Input tokens are not included. ",
-    )
-    n: Optional[int] = Field(1, ge=1, le=128)
-    presence_penalty: Optional[float] = Field(0.0, ge=PRESENCE_PENALTY_MIN, le=PRESENCE_PENALTY_MAX)
+    max_completion_tokens: Optional[int] = None
+    n: Optional[int] = 1
+    presence_penalty: Optional[float] = 0.0
     response_format: Optional[ResponseFormat] = None
     # This is a KsanaLLM specific extension, used to control structured output option
     enable_structured_output: bool = False 
     seed: Optional[int] = Field(None, ge=_LONG_INFO.min, le=_LONG_INFO.max)
-    stop: Optional[Union[str, List[str]]] = Field(default_factory=list)
+    stop: Optional[Union[str, List[str]]] = []
     stream: Optional[bool] = False
     stream_options: Optional[StreamOptions] = None
-    temperature: Optional[float] = Field(None, ge=TEMPERATURE_MIN, le=TEMPERATURE_MAX)
-    top_p: Optional[float] = Field(None, ge=TOP_P_MIN, le=TOP_P_MAX)
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
     user: Optional[str] = None
     tools: Optional[List[ChatCompletionToolsParam]] = None
     tool_choice: Optional[Union[
@@ -280,12 +254,12 @@ class ChatCompletionRequest(OpenAIRequestModel):
     return_hidden_states: bool = False
 
 
-    top_k: Optional[int] = Field(None, ge=TOP_K_MIN)
-    min_p: Optional[float] = Field(None, ge=MIN_P_MIN, le=MIN_P_MAX)
-    min_tokens: int = Field(0, ge=0)
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    min_tokens: int = 0
 
-    repetition_penalty: Optional[float] = Field(None, gt=REPETITION_PENALTY_MIN)
-    stop_token_ids: Optional[List[int]] = Field(default_factory=list)
+    repetition_penalty: Optional[float] = None
+    stop_token_ids: Optional[List[int]] = []
     no_stop_trim: bool = False
     length_penalty: float = 1.0
     include_stop_str_in_output: bool = False
@@ -464,35 +438,35 @@ class CompletionRequest(OpenAIRequestModel):
     prompt: Optional[Union[List[int], List[List[int]], str, List[str]]] = None
     best_of: Optional[int] = None
     echo: Optional[bool] = False
-    frequency_penalty: Optional[float] = Field(0.0, ge=FREQUENCY_PENALTY_MIN, le=FREQUENCY_PENALTY_MAX)
+    frequency_penalty: Optional[float] = 0.0
     logit_bias: Optional[Dict[str, float]] = None
-    logprobs: Optional[int] = Field(None, ge=0, le=5)
-    max_tokens: Optional[int] = Field(16, ge=1)
-    n: int = Field(1, ge=1, le=128)
-    presence_penalty: Optional[float] = Field(0.0, ge=PRESENCE_PENALTY_MIN, le=PRESENCE_PENALTY_MAX)
+    logprobs: Optional[int] = None
+    max_tokens: Optional[int] = 16
+    n: int = 1
+    presence_penalty: Optional[float] = 0.0
     seed: Optional[int] = Field(None, ge=_LONG_INFO.min, le=_LONG_INFO.max)
-    stop: Optional[Union[str, List[str]]] = Field(default_factory=list)
+    stop: Optional[Union[str, List[str]]] = []
     stream: Optional[bool] = False
     stream_options: Optional[StreamOptions] = None
     suffix: Optional[str] = None
-    temperature: Optional[float] = Field(None, ge=TEMPERATURE_MIN, le=TEMPERATURE_MAX)
-    top_p: Optional[float] = Field(None, ge=TOP_P_MIN, le=TOP_P_MAX)
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
     user: Optional[str] = None
 
     # KsanaLLM
     use_beam_search: bool = False
-    top_k: Optional[int] = Field(None, ge=TOP_K_MIN)
-    min_p: Optional[float] = Field(None, ge=MIN_P_MIN, le=MIN_P_MAX)
-    repetition_penalty: Optional[float] = Field(None, gt=REPETITION_PENALTY_MIN)
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    repetition_penalty: Optional[float] = None
     length_penalty: float = 1.0
-    stop_token_ids: Optional[List[int]] = Field(default_factory=list)
+    stop_token_ids: Optional[List[int]] = []
     include_stop_str_in_output: bool = False
     ignore_eos: bool = False
-    min_tokens: int = Field(0, ge=0)
+    min_tokens: int = 0
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     truncate_prompt_tokens: Optional[Annotated[int, Field(ge=1)]] = None
-    prompt_logprobs: Optional[int] = Field(None, ge=0)
+    prompt_logprobs: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -633,7 +607,5 @@ class DetokenizeRequest(BaseModel):
 class DetokenizeResponse(BaseModel):
     prompt: str
 
-
-ChatCompletionMessageParam = ChatMessage
 
 AnyResponseFormat = ResponseFormat

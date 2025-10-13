@@ -3,44 +3,40 @@
 # Adapted From vLLM
 # Ref:
 # https://github.com/vllm-project/vllm/blob/v0.9.1/vllm/entrypoints/chat_utils.py 
-import json
 from collections import  deque
 from collections.abc import Awaitable, Iterable
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import (Any, Callable, Literal, Optional, TypeVar, Union,
-                    cast)
-
+from typing import Any, Callable, Literal, Optional, TypeVar, Union, cast
+import json
 import jinja2.nodes
-from transformers import (PreTrainedTokenizer,
-                          PreTrainedTokenizerFast)
 import transformers.utils.chat_template_utils as hf_chat_utils
-# yapf conflicts with isort for this block
-# yapf: disable
-from openai.types.chat import (ChatCompletionAssistantMessageParam,
-                               ChatCompletionContentPartImageParam,
-                               ChatCompletionContentPartInputAudioParam)
-from openai.types.chat import (
-    ChatCompletionContentPartParam as OpenAIChatCompletionContentPartParam)
-from openai.types.chat import (ChatCompletionContentPartRefusalParam,
-                               ChatCompletionContentPartTextParam)
-from openai.types.chat import (
-    ChatCompletionMessageParam as OpenAIChatCompletionMessageParam)
-from openai.types.chat import (ChatCompletionMessageToolCallParam,
-                               ChatCompletionToolMessageParam)
-
-from typing_extensions import Required, TypeAlias, TypedDict
-
-from openaiapi.transformers_utils.tokenizer_base import TokenizerBase
-from openaiapi.transformers_utils.tokenizers import MistralTokenizer
-
-from transformers import (PreTrainedTokenizer, PreTrainedTokenizerFast,
-                          ProcessorMixin)
-
-from openaiapi.transformers_utils.processor import cached_get_processor
 from pydantic import TypeAdapter
 from utilize.utils import random_uuid
 from utilize.logger import get_logger
+
+from transformers import (PreTrainedTokenizer,
+                          PreTrainedTokenizerFast)
+
+from openai.types.chat import (ChatCompletionAssistantMessageParam,
+                               ChatCompletionContentPartTextParam,
+                               ChatCompletionContentPartRefusalParam,
+                               ChatCompletionContentPartImageParam,
+                               ChatCompletionContentPartInputAudioParam,
+                               ChatCompletionMessageToolCallParam,
+                               ChatCompletionToolMessageParam)
+
+from openai.types.chat import (
+    ChatCompletionMessageParam as OpenAIChatCompletionMessageParam,
+    ChatCompletionContentPartParam as OpenAIChatCompletionContentPartParam)
+
+from typing_extensions import Required, TypeAlias, TypedDict
+from transformers import (PreTrainedTokenizer, PreTrainedTokenizerFast,
+                          ProcessorMixin)
+
+from openaiapi.transformers_utils.tokenizer_base import TokenizerBase
+from openaiapi.transformers_utils.tokenizers import MistralTokenizer
+from openaiapi.transformers_utils.processor import cached_get_processor
 
 logger = get_logger(__name__)
 
@@ -621,15 +617,8 @@ def _parse_chat_message_content(
     message: ChatCompletionMessageParam,
     content_format: _ChatTemplateContentFormat,
 ) -> list[ConversationMessage]:
-    # Handle both dict and ChatMessage object
-    if hasattr(message, 'model_dump'):
-        # Convert Pydantic model to dict
-        message_dict = message.model_dump(exclude_none=True)
-    else:
-        message_dict = message
-    
-    role = message_dict["role"]
-    content = message_dict.get("content")
+    role = message["role"]
+    content = message.get("content")
 
     if content is None:
         content = []
@@ -646,21 +635,21 @@ def _parse_chat_message_content(
 
     for result_msg in result:
         if role == 'assistant':
-            parsed_msg = _AssistantParser(message_dict)
+            parsed_msg = _AssistantParser(message)
 
             # The 'tool_calls' is not None check ensures compatibility.
             # It's needed only if downstream code doesn't strictly
             # follow the OpenAI spec.
-            if ("tool_calls" in parsed_msg \
+            if ("tool_calls" in parsed_msg
                     and parsed_msg["tool_calls"] is not None):
                 result_msg["tool_calls"] = list(parsed_msg["tool_calls"])
         elif role == "tool":
-            parsed_msg = _ToolParser(message_dict)
+            parsed_msg = _ToolParser(message)
             if "tool_call_id" in parsed_msg:
                 result_msg["tool_call_id"] = parsed_msg["tool_call_id"]
 
-        if "name" in message_dict and isinstance(message_dict["name"], str):
-            result_msg["name"] = message_dict["name"]
+        if "name" in message and isinstance(message["name"], str):
+            result_msg["name"] = message["name"]
 
     return result
 
@@ -791,5 +780,18 @@ def apply_mistral_chat_template(
         raise ValueError from e
 
 
-def random_tool_call_id() -> str:
-    return f"chatcmpl-tool-{random_uuid()}"
+def get_history_tool_calls_cnt(conversation: list[ConversationMessage]):
+    idx = 0
+    for msg in conversation:
+        if msg['role'] == 'assistant':
+            tool_calls = msg.get('tool_calls')
+            idx += len(list(tool_calls)) if tool_calls is not None else 0
+    return idx
+
+
+def make_tool_call_id(id_type: str='random', func_name=None, idx=None):
+    if id_type == 'kimi_k2':
+        return f'functions.{func_name}:{idx}'
+    else:
+        # default return random
+        return f"chatcmpl-tool-{random_uuid()}"
