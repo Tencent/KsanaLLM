@@ -361,15 +361,23 @@ Status LlmRuntime::MTPForward(
   BuildForwardRequests(multi_batch_id, mtp_reqs, grouped_req);
   BuildSamplingRequest(multi_batch_id, mtp_reqs, sampling_req);
 
-  Forward(multi_batch_id, mtp_reqs, epilogue, grouped_req, RunMode::kNextN);
-  Sampling(multi_batch_id, mtp_reqs, sampling_reqs, false);
+    context_->SetIsLastLayer(mtp_step + 1 == mtp_step_num_);
+    Forward(multi_batch_id, mtp_reqs, epilogue, sync_grouped_req, RunMode::kNextN);
 
-  for (size_t i = 0; i < mtp_reqs.size(); ++i) {
-    auto& req = mtp_reqs[i];
-    req->forwarding_tokens.resize(req->forwarding_tokens.size() - kStepGenerateTokenNum);
-    req->forwarding_tokens.insert(req->forwarding_tokens.begin(), first_tokens[i]);
-    req->draft_tokens.mtp = std::move(req->sampling_result_tokens);
+    build_sampling_future.get();
+    Sampling(multi_batch_id, mtp_reqs, sync_sampling_req, false);
 
+    for (const auto& req : mtp_reqs) {
+      req->draft_tokens.mtp.insert(req->draft_tokens.mtp.end(), req->sampling_result_tokens.begin(),
+                                   req->sampling_result_tokens.end());
+    }
+  }
+
+  // reset requests
+  for (const auto& req : mtp_reqs) {
+    req->forwarding_tokens.resize(req->forwarding_tokens.size() - mtp_step_num_);
+    req->forwarding_tokens.insert(req->forwarding_tokens.begin(), first_tokens[req->req_id].begin(),
+                                  first_tokens[req->req_id].end());
     req->mtp_kv_cached_token_num = req->forwarding_tokens.size();
   }
   return Status();
@@ -434,7 +442,7 @@ Status LlmRuntime::StepOnChief(
   PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
 
   std::shared_ptr<ModelInstance> model_instance = schedule_output->running_reqs[0]->model_instance;
-
+  context_->SetIsLastLayer(mtp_step_num_ == 0);
   if (!epilogue) {
     // Alloc resources before forwarding
     model_instance->AllocResources(schedule_output->multi_batch_id);

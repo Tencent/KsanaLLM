@@ -198,7 +198,9 @@ class ForwardRequestBuilderForTest {
     // alloc kv cache
     infer_req->kv_cache_blocks.resize(tensor_para_size_);
     int use_block_num = (input_ids.size() + block_token_num_ - 1) / block_token_num_;
-    for (int rank = 0; rank < tensor_para_size_; ++rank) {
+    // 分配至少4个block支持更长的输入输出
+    use_block_num = std::max(use_block_num, 4);
+    for (size_t rank = 0; rank < tensor_para_size_; ++rank) {
       // Alloc block without sharing
       // TODO(robertyuan): support prefix caching
       KLLM_CHECK_WITH_INFO(cache_manager_->GetBlockAllocatorGroup()

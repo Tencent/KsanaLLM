@@ -79,6 +79,12 @@ struct ForwardRequest {
   // The kv cache addresses, for every device.
   std::vector<std::vector<void*>> kv_cache_ptrs;
 
+  // Checksum for every block on every rank, this points to the corresponding member in infer_request.
+  std::vector<std::vector<size_t>>* block_checksums = nullptr;
+
+  // The number of blocks that have been checksummed, this points to the corresponding member in infer_request.
+  std::vector<size_t>* checksummed_block_num = nullptr;
+
   // The length of the flexible cache, indicating the number of elements stored in the flexible cache for potential
   // reuse in subsequent computations.
   int flexible_cache_len = 0;

@@ -165,7 +165,7 @@ class Request {
   explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                    const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
 
-  ~Request() { KLLM_LOG_DEBUG << "Request " << req_id << " destroyed"; }
+  ~Request();
 
   // The unique id of a request.(Deprecated)
   int64_t req_id;

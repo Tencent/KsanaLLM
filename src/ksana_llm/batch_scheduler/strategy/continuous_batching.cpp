@@ -143,9 +143,9 @@ void ContinuousBatchingStrategy::HandleRecomputeRequest(std::shared_ptr<InferReq
                  << " kv_comm_request_id: " << req->kv_comm_request_id;
 
   // Add request to the begining of waiting queue.
-  req->kv_cache_blocks.clear();
-  req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
-  req->infer_stage = InferStage::STAGE_CONTEXT;
+  req->kv_cache_blocks.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, {});
+  req->checksummed_block_num.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, 0);
+  req->infer_stage = InferStage::kContext;
   req->step = 0;
   req->kv_cached_token_num = 0;
   req->suggested_draft_num = 0;
@@ -392,21 +392,27 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       continue;
     }
 
+    // TODO(zakwang): PD support StructuredOutput
+    if (connector_config_.group_role == GroupRole::PREFILL && !req->is_mock_req) {
+      req->NotifyStep();
+      KLLM_LOG_DEBUG << "Prefill enter transfer queue for tranfer task to Decode, req id:" << req->kv_comm_request_id;
+      batch_state_->transfer_queue.emplace_back(req);
+      it = batch_state_->schedule_output->running_reqs.erase(it);
+      continue;
+    }
+
     // Check if finished.
+    // ProcessPrefillTransferQueue also checks if the request is finished.
     if (CheckRequestFinish(req)) {
       const auto end_time = ProfileTimer::GetCurrentTimeInMs();
       const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
       const uint64_t duration = end_time - req->timestamp_in_ms;
-      if (req->finish_status.GetCode() == RET_SUCCESS) {
+      if (req->finish_status.GetCode() == RET_SUCCESS && output_token_num > 0) {
         REPORT_METRIC("total_latency_ms", duration);
         REPORT_METRIC("output_token_len", output_token_num);
         REPORT_METRIC("input_token_len", req->input_tokens.size());
       } else {
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
-      }
-
-      if (output_token_num != 0) {
-        REPORT_METRIC("time_per_output_token_ms", duration  / output_token_num);
       }
 
       // Record finish req_id
@@ -421,11 +427,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
       if (batch_scheduler_config_.enable_async) {
         AsyncStopRequest(req, Status(RET_SUCCESS), false);
       } else {
-        StopRequest(req, Status(RET_SUCCESS), false);
-      }
-      if (connector_config_.group_role == GroupRole::PREFILL) {
-        KLLM_LOG_DEBUG << "Prefill enter transfer queue for tranfer task to Decode, req id:" << req->kv_comm_request_id;
-        batch_state_->transfer_queue.emplace_back(req);
+        StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
       }
 
       // Put mock request back to mock_queue.
@@ -458,7 +460,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 
     // Check abort.
     if (req->aborted) {
-      KLLM_LOG_WARNING << "req aborted in running: " << req;
+      KLLM_LOG_WARNING << "req aborted in running: " << req->req_id;
 
       StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in running."), false);
       it = batch_state_->schedule_output->running_reqs.erase(it);

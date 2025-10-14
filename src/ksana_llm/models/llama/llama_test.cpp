@@ -44,8 +44,11 @@ class LlamaTest : public testing::Test {
     BlockManagerConfig block_manager_config;
     env->InitializeBlockManagerConfig();
     env->GetBlockManagerConfig(block_manager_config);
+    block_manager_config.enable_block_checksum = true;
+    context_->SetIsLastLayer(false);
+    env->SetBlockManagerConfig(block_manager_config);
     KLLM_LOG_DEBUG << fmt::format("block_size {}", block_manager_config.device_allocator_config.block_size);
-    block_manager_config.device_allocator_config.blocks_num = 10;  // This test just need a few blocks;
+    block_manager_config.device_allocator_config.blocks_num = 20;  // This test just need a few blocks;
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
 
     env->GetRuntimeConfig(runtime_config);
@@ -270,6 +273,22 @@ class LlamaTest : public testing::Test {
       EXPECT_EQ(result[i], dst[i]);
     }
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, prompt_probs_forward_reqs, false).OK());
+    // 模拟多次请求，计算checksum
+    context_->SetIsLastLayer(true);
+    auto forward_checksum = request_builder.CreateForwardRequest(2, input_ids);
+    forward_checksum->logits_buf.resize(1);
+    forward_checksum->logits_buf[0] = llama->GetLogitsPtr(schedule_id);
+    forward_checksum->sampling_config = &sampling_config;
+    forward_checksum->block_checksums->resize(1);
+    forward_checksum->checksummed_block_num->resize(1, 0);
+    std::vector<ForwardRequest *> forward_reqs_checksum = {forward_checksum};
+    for (int i = 0; i < 3; i++) {
+      forward_checksum->forwarding_tokens->insert(forward_checksum->forwarding_tokens->end(), 16, 1);
+      forward_checksum->infer_stage = InferStage::kDecode;
+      forward_checksum->kv_cached_token_num = forward_checksum->forwarding_tokens->size() - 1;
+      model_input.ParseFromRequests(forward_reqs_checksum);
+      EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs_checksum, false).OK());
+    }
 #else
     // NOTE(karlluo): ACL inference is slower than CUDA
     EXPECT_TRUE((milliseconds / rounds) < 300) << "milliseconds / " << rounds << " is: " << milliseconds / rounds;
@@ -282,6 +301,7 @@ class LlamaTest : public testing::Test {
     EventDestroy(stop);
     EventDestroy(start);
     DeviceSynchronize();
+    context_->SetIsLastLayer(false);
   }
 };
 

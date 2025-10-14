@@ -151,6 +151,10 @@ void TransferEngine::AddTransferMeta(const std::string& kv_comm_group_key, int r
  * @return std::pair<int, int> 如果完成则返回first_tokens值，否则返回{-1, -1}
  */
 std::vector<int> TransferEngine::IsRecvDone(int request_id) {
+  // 预热请求直接完成
+  if (request_id == -1) {
+    return std::vector<int>(MAX_TRANSFER_TOKENS, 0);
+  }
   std::shared_ptr<TransferMeta> meta = GetTransferMeta(request_id);
   if (!meta) {
     KLLM_LOG_DEBUG << "TransferTask not found, request id:" << request_id;

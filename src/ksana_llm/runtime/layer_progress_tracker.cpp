@@ -193,9 +193,11 @@ void LayerProgressTracker::ResetState() {
   }
 
   while (true) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (pending_events_.empty()) {
-      break;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (pending_events_.empty()) {
+        break;
+      }
     }
     std::this_thread::sleep_for(std::chrono::nanoseconds(1));
   }

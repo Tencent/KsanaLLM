@@ -68,6 +68,10 @@ class ContextT {
   // Rank value of the current node in multi-machine Expert-Parallel scenario
   size_t GetExpertParallelExpertNodeRank() { return expert_parallel_config_.expert_node_rank; }
 
+  bool IsLastLayer() { return is_last_layer_; }
+
+  void SetIsLastLayer(bool is_last_layer) { is_last_layer_ = is_last_layer; }
+
  public:
   friend class ExtensionTypeTraits<T>::value_type;
   typename ExtensionTypeTraits<T>::value_type* ext = nullptr;
@@ -77,6 +81,7 @@ class ContextT {
   void InitStreams(const int worker_id);
 
  private:
+  bool is_last_layer_ = false;
   const size_t tensor_parallel_size_{0};
   const size_t attn_data_parallel_size_{0};
   static constexpr int defalt_device_id_{0};

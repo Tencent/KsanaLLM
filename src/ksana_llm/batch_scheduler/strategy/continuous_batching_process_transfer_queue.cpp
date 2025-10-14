@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "ksana_llm/batch_scheduler/strategy/continuous_batching.h"
+#include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
@@ -125,10 +126,29 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
 void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
   auto transfer_engine = TransferEngine::GetInstance();
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
+    // TODO(zakwang): 检查是否有超时和abort，目前强制要求传输完成再释放req
     // 检查请求是否发送完成
-    if (transfer_engine->IsSendDone((*it)->kv_comm_request_id)) {
+    auto req = *it;
+    if (transfer_engine->IsSendDone(req->kv_comm_request_id)) {
       // 发送完成，从传输队列中移除该请求
-      KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << (*it)->kv_comm_request_id;
+      KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << req->kv_comm_request_id;
+      const auto end_time = ProfileTimer::GetCurrentTimeInMs();
+      const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
+      const uint64_t duration = end_time - req->timestamp_in_ms;
+      if (req->finish_status.GetCode() == RET_SUCCESS && output_token_num > 0) {
+        REPORT_METRIC("total_latency_ms", duration);
+        REPORT_METRIC("output_token_len", output_token_num);
+        REPORT_METRIC("input_token_len", req->input_tokens.size());
+      } else {
+        REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
+      }
+
+      // for async, the kvblock should be destroyed later to avoid the trash token forward error.
+      if (batch_scheduler_config_.enable_async) {
+        AsyncStopRequest(req, Status(RET_SUCCESS), false);
+      } else {
+        StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
+      }
       it = batch_state_->transfer_queue.erase(it);
     } else {
       // 发送未完成，继续检查下一个请求

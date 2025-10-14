@@ -190,6 +190,8 @@ ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logi
   forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;
+  forward_request_->block_checksums = &block_checksums;
+  forward_request_->checksummed_block_num = &checksummed_block_num;
 
   UpdateBlockPtrs(forward_request_->kv_cache_ptrs);
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)

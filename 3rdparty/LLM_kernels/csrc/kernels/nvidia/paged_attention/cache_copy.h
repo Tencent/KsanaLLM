@@ -54,5 +54,7 @@ void ConvertFP8AndBack(SCALAR_T* data, size_t dim0, size_t dim1, int stride_size
 
 void ProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t block_size, cudaStream_t stream);
 
+void CalculateChecksum(void** d_ptrs, size_t* d_results, int num_ptrs, size_t data_size_in_bytes, cudaStream_t stream);
+
 }  // namespace nvidia
 }  // namespace llm_kernels

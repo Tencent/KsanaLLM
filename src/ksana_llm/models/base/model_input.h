@@ -23,6 +23,9 @@ class ModelInput {
   // Parse forward request.
   void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
+  // 在 forward 计算之后验证校验和。
+  void VerifyChecksumAfterForward(const std::vector<ForwardRequest*>& forward_reqs);
+
  private:
   // Get the offser of k & v in one layer of the cache block.
   int GetKoffsetInBlockLayer();
@@ -44,6 +47,9 @@ class ModelInput {
 
   void PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs);
 #endif
+
+  // 执行校验和验证，可以在 forward 计算之前或之后使用。
+  void ExecuteChecksumVerification(const std::vector<ForwardRequest*>& forward_reqs, bool is_after_forward);
 
 #ifdef ENABLE_ACL
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
@@ -150,6 +156,13 @@ class ModelInput {
   Event kvcache_offset_event;
   Event rotary_embedding_event;
   Event input_ids_event;
+
+  // For checksum calculation.
+  Tensor checksum_ptrs_tensor_;
+  Tensor checksum_results_tensor_;
+
+  // Used to filter checksum error logs to avoid repeated printing.
+  std::unordered_set<int64_t> logged_checksum_error_req_ids_;
 
 #ifdef ENABLE_ACL
   // record all reqs token number on host, shape: [batch_size]

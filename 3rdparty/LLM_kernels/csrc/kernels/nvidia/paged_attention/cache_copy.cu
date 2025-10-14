@@ -404,5 +404,64 @@ void ProcessKvList(void** kv_list, size_t layer_num, size_t block_num, size_t bl
   ProcessKvListKernel<<<grid_shape, block_shape, 0, stream>>>(kv_list, layer_num, block_num, block_size);
 }
 
+__global__ void CalculateChecksumKernel(void** d_ptrs, size_t* d_results, int num_ptrs, size_t data_size_in_bytes) {
+  // 每个块处理一个指针，块内线程并行求和并做规约，提升计算与访存并行度
+  int ptr_idx = blockIdx.x;
+  if (ptr_idx >= num_ptrs) {
+    return;
+  }
+
+  const size_t* data_ptr = reinterpret_cast<const size_t*>(d_ptrs[ptr_idx]);
+  const size_t num_elements = data_size_in_bytes / sizeof(size_t);
+
+  // 线程内分片累加：threadIdx.x 负责 i=threadIdx.x, i+=blockDim.x 的元素
+  size_t thread_sum = 0;
+  for (size_t i = threadIdx.x; i < num_elements; i += blockDim.x) {
+    thread_sum += data_ptr[i];
+  }
+
+  // 先进行warp内规约（使用shuffle），再进行跨warp规约（使用共享内存）
+  unsigned long long val = static_cast<unsigned long long>(thread_sum);
+
+  // warp内规约
+  for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+    val += __shfl_down_sync(0xffffffff, val, offset);
+  }
+
+  const int warp_id = threadIdx.x / warpSize;
+  const int lane = threadIdx.x % warpSize;
+  const int warp_count = (blockDim.x + warpSize - 1) / warpSize;
+
+  extern __shared__ unsigned long long smem[];
+  if (lane == 0) {
+    smem[warp_id] = val;
+  }
+  __syncthreads();
+
+  if (warp_id == 0) {
+    // 仅第一个warp参与跨warp规约
+    unsigned long long warp_val = (lane < warp_count) ? smem[lane] : 0ULL;
+    for (int offset = warpSize / 2; offset > 0; offset /= 2) {
+      warp_val += __shfl_down_sync(0xffffffff, warp_val, offset);
+    }
+    if (lane == 0) {
+      d_results[ptr_idx] = static_cast<size_t>(warp_val);
+    }
+  }
+}
+
+void CalculateChecksum(void** d_ptrs, size_t* d_results, int num_ptrs, size_t data_size_in_bytes, cudaStream_t stream) {
+  if (num_ptrs <= 0) {
+    return;
+  }
+  // 每个指针一个block，block内并行规约
+  const int threads_per_block = MAX_THREADS_PER_BLOCK;
+  const dim3 grid_shape(num_ptrs);
+  // 动态共享内存大小：每个warp写入一个unsigned long long
+  const size_t shmem_bytes = ((threads_per_block + 31) / 32) * sizeof(unsigned long long);
+  CalculateChecksumKernel<<<grid_shape, threads_per_block, shmem_bytes, stream>>>(d_ptrs, d_results, num_ptrs,
+                                                                                  data_size_in_bytes);
+}
+
 }  // namespace nvidia
 }  // namespace llm_kernels

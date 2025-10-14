@@ -320,7 +320,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
-
+  block_manager_config_.enable_block_checksum =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.block_manager.enable_block_checksum", false);
   // If DeepSeek model, automatically enable Flash MLA and set block_token_num to 64.
   if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
     block_manager_config_.host_allocator_config.block_token_num = 64;
@@ -817,6 +818,8 @@ size_t ScheduleConfigParser::GetTotalDeviceBlockNum() {
 }
 
 size_t ScheduleConfigParser::GetTotalHostBlockNum() { return block_manager_config_.host_allocator_config.blocks_num; }
+
+bool ScheduleConfigParser::IsEnableBlockChecksum() { return block_manager_config_.enable_block_checksum; }
 
 std::vector<int> ScheduleConfigParser::GetDataParaGroupDevices(int dp_id) {
   size_t device_count = runtime_config_.parallel_basic_config.tensor_parallel_size;

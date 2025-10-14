@@ -5,6 +5,7 @@
 #include <random>
 
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
+#include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
 namespace llm_kernels {
@@ -606,6 +607,65 @@ TEST_F(MlaPagedAttentionTestSuit, MlaFillKVScaleIntoBufferTest) {
   cudaFree(dev_v_scale_buffer);
 }
 
+// 使用 CPU 校验 CalculateChecksumKernel 的计算结果
+TEST_F(MlaPagedAttentionTestSuit, CalculateChecksumKernelCpuVerify) {
+  // 测试指针数量与每个缓冲区的数据大小（字节）
+  const int num_ptrs = 3;
+  const size_t data_size_in_bytes = 1024;  // 必须是 sizeof(size_t) 的整数倍
+  const size_t num_elements = data_size_in_bytes / sizeof(size_t);
+
+  // 准备主机侧数据与设备缓冲区
+  std::vector<std::vector<size_t>> host_datas(num_ptrs);
+  std::vector<void*> d_buffers(num_ptrs, nullptr);
+  std::vector<size_t> host_cpu_checksums(num_ptrs, 0);
+
+  for (int p = 0; p < num_ptrs; ++p) {
+    host_datas[p].resize(num_elements);
+    // 填充可预测数据，避免溢出
+    size_t base = static_cast<size_t>((p + 1) * 1000);
+    size_t sum = 0;
+    for (size_t i = 0; i < num_elements; ++i) {
+      host_datas[p][i] = base + i;
+      sum += host_datas[p][i];
+    }
+    host_cpu_checksums[p] = sum;
+
+    // 为每个指针分配设备缓冲区并拷贝数据
+    cudaMallocAsync(&d_buffers[p], data_size_in_bytes, stream);
+    cudaMemcpyAsync(d_buffers[p], host_datas[p].data(), data_size_in_bytes, cudaMemcpyHostToDevice, stream);
+  }
+  cudaStreamSynchronize(stream);
+
+  // 将设备缓冲区指针数组拷贝至设备
+  void** d_ptrs = nullptr;
+  cudaMallocAsync(&d_ptrs, num_ptrs * sizeof(void*), stream);
+  cudaMemcpyAsync(d_ptrs, d_buffers.data(), num_ptrs * sizeof(void*), cudaMemcpyHostToDevice, stream);
+
+  // 结果缓冲区
+  size_t* d_results = nullptr;
+  cudaMallocAsync(&d_results, num_ptrs * sizeof(size_t), stream);
+
+  // 启动 kernel 计算校验和
+  llm_kernels::nvidia::CalculateChecksum(d_ptrs, d_results, num_ptrs, data_size_in_bytes, stream);
+  cudaStreamSynchronize(stream);
+
+  // 拷回结果并与 CPU 结果比对
+  std::vector<size_t> host_results(num_ptrs, 0);
+  cudaMemcpy(host_results.data(), d_results, num_ptrs * sizeof(size_t), cudaMemcpyDeviceToHost);
+
+  for (int p = 0; p < num_ptrs; ++p) {
+    EXPECT_EQ(host_results[p], host_cpu_checksums[p]) << "Checksum mismatch at index " << p;
+  }
+
+  // 释放资源
+  cudaFreeAsync(d_results, stream);
+  cudaFreeAsync(d_ptrs, stream);
+  for (int p = 0; p < num_ptrs; ++p) {
+    cudaFreeAsync(d_buffers[p], stream);
+  }
+  cudaStreamSynchronize(stream);
+}
+ 
 }  // namespace test
 }  // namespace nvidia
 }  // namespace llm_kernels

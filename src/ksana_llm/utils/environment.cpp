@@ -159,6 +159,8 @@ Status Environment::GetBlockManagerConfig(BlockManagerConfig &block_manager_conf
   return schedule_config_parser_.GetBlockManagerConfig(block_manager_config);
 }
 
+bool Environment::IsEnableBlockChecksum() { return schedule_config_parser_.IsEnableBlockChecksum(); }
+
 Status Environment::GetRuntimeConfig(RuntimeConfig &runtime_config) {
   return schedule_config_parser_.GetRuntimeConfig(runtime_config);
 }

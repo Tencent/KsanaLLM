@@ -85,6 +85,8 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
   }
 }
 
+Request::~Request() { KLLM_LOG_DEBUG << "Request " << req_id << " destroyed"; }
+
 KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
   finish_status = req->finish_status;
   input_tokens = req->input_tokens;

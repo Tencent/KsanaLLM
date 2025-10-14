@@ -12,6 +12,7 @@ decode nodes.
 import logging
 from contextlib import asynccontextmanager
 
+import argparse
 import uvicorn
 from fastapi import FastAPI
 
@@ -90,13 +91,17 @@ def main():
     This function initializes and starts the Uvicorn server with the
     specified configuration.
     """
+    parser = argparse.ArgumentParser(description="KsanaLLM Router Service")
+    parser.add_argument("--port", type=int, default=9080, help="Port to run the service on")
+    args = parser.parse_args()
+
     logger.info("Starting NCCL Coordination Service...")
 
     # Start Uvicorn server
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=9080,
+        port=args.port,
         workers=1,
         reload=True,
         log_level="debug",

@@ -120,6 +120,7 @@ struct BlockManagerConfig {
   // The config of allocator for cpu/gpu/npu.
   AllocatorConfig host_allocator_config;
   AllocatorConfig device_allocator_config;
+  bool enable_block_checksum = false;
 
   // The ratio of reserved device memory.
   float reserved_device_memory_ratio = 0.05;
@@ -378,6 +379,7 @@ class ScheduleConfigParser {
   Status ResetPipelineBlockNumber();
   size_t GetTotalDeviceBlockNum();
   size_t GetTotalHostBlockNum();
+  bool IsEnableBlockChecksum();
   std::vector<int> GetDataParaGroupDevices(int dp_id);
 
   void SetTensorParallelSize(size_t tensor_parallel_size) {

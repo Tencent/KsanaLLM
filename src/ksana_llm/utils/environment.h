@@ -104,6 +104,8 @@ class Environment {
 
   bool IsReportVersion() { return is_version_report_; }
 
+  bool IsEnableBlockChecksum();
+
   size_t GetMaxBatchSize() const { return schedule_config_parser_.GetMaxBatchSize(); }
 
   Status GetPipelineConfig(PipelineConfig &pipeline_config) const {

@@ -605,6 +605,7 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
       {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
 
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
+  forwarding_context.GetModelInput()->VerifyChecksumAfterForward(forward_reqs);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::End);
   input_refit_layer_->Clear();
   return Status();

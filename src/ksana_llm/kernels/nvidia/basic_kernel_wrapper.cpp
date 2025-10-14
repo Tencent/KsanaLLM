@@ -1191,4 +1191,9 @@ INVOKE_APPLY_TOKEN_BITMASK_INPLACE(half);
 INVOKE_APPLY_TOKEN_BITMASK_INPLACE(__nv_bfloat16);
 #undef INVOKE_APPLY_TOKEN_BITMASK_INPLACE
 
+void InvokeCalculateChecksum(void** d_ptrs, size_t* d_results, int num_ptrs, size_t data_size_in_bytes,
+                             cudaStream_t stream) {
+  llm_kernels::nvidia::CalculateChecksum(d_ptrs, d_results, num_ptrs, data_size_in_bytes, stream);
+}
+
 }  // namespace ksana_llm

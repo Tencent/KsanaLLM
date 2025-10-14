@@ -207,6 +207,12 @@ class InferRequest {
   // The max token number of one block.
   size_t block_token_num;
 
+  // Checksum for every block on every rank.
+  std::vector<std::vector<size_t>> block_checksums;
+
+  // The number of blocks that have been checksummed on each rank.
+  std::vector<size_t> checksummed_block_num;
+
   // The offset for model forward's logits output.
   size_t logits_offset = 0;
 

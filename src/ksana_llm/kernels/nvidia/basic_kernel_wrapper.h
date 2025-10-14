@@ -305,4 +305,19 @@ void InvokeApplyTokenBitmaskInplace(void* logits, const void* bitmask, const voi
                                     int32_t logits_stride, int32_t bitmask_stride, int32_t num_rows,
                                     cudaStream_t stream);
 
+/**
+ * @brief Calculates the checksum of multiple data blocks on the GPU.
+ *
+ * This function launches a CUDA kernel to calculate the checksum for a batch of data blocks.
+ * The checksum is computed by summing up the data in each block as if it were an array of size_t.
+ *
+ * @param d_ptrs A device pointer to an array of device pointers, where each pointer points to the start of a data
+ * block.
+ * @param d_results A device pointer to an array where the calculated checksum for each block will be stored.
+ * @param num_ptrs The number of data blocks (and pointers) to process.
+ * @param data_size_in_bytes The size of each data block in bytes. This must be a multiple of sizeof(size_t).
+ * @param stream The CUDA stream on which to execute the kernel.
+ */
+void InvokeCalculateChecksum(void** d_ptrs, size_t* d_results, int num_ptrs, size_t data_size_in_bytes,
+                             cudaStream_t stream);
 }  // namespace ksana_llm

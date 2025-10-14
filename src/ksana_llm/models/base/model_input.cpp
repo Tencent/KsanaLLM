@@ -189,6 +189,12 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   kv_cache_ptrs_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER,
                                 {static_cast<uint64_t>(max_batch_size * max_block_num)}, rank_);
 #endif
+  if (Singleton<Environment>::GetInstance()->IsEnableBlockChecksum()) {
+    checksum_ptrs_tensor_ =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_batch_size * max_block_num_}, rank_);
+    checksum_results_tensor_ =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size * max_block_num_}, rank_);
+  }
 }
 
 ModelInput::~ModelInput() {
@@ -274,15 +280,12 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
     total_sampling_token_num_ += req.sampling_token_num;
   }
 
-  KLLM_LOG_DEBUG << "run mode: " << (run_mode == RunMode::kMain ? "main" : "next")
-                 << ", multi_token_request_num: " << multi_token_request_num
-                 << ", dp_multi_token_request_num: " << dp_multi_token_request_num
-                 << ", flash_input: " << flash_input.reqs.size()
-                 << ", page_single_input: " << page_single_input.reqs.size()
-                 << ", page_dual_input: " << page_dual_input.reqs.size()
-                 << ", flash_dp_input: " << flash_input.dp_reqs.size()
-                 << ", page_dp_single_input: " << page_single_input.dp_reqs.size()
-                 << ", page_dp_dual_input: " << page_dual_input.dp_reqs.size();
+  KLLM_LOG_DEBUG << fmt::format(
+      "run_mode: {}, dp_multi_token_request_num: {}, dp_context_tokens: {}, dp_single_token_request_num: {}, "
+      "dp_decode_tokens: {}, dp_total_prefix_len: {}, page_inputs.size(): {}",
+      (run_mode == RunMode::kMain ? "main" : "next"), dp_multi_token_request_num, dp_context_tokens,
+      dp_single_token_request_num, dp_decode_tokens, dp_total_prefix_len, page_inputs.size());
+  ExecuteChecksumVerification(forward_reqs, false);
 
   PrepareInputIds(forward_reqs);
 
@@ -305,6 +308,118 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, multi_token_request_num > 0);
 #endif
+}
+
+void ModelInput::VerifyChecksumAfterForward(const std::vector<ForwardRequest*>& forward_reqs) {
+  // 在 forward 计算之后执行校验和验证
+  ExecuteChecksumVerification(forward_reqs, true);
+}
+
+void ModelInput::ExecuteChecksumVerification(const std::vector<ForwardRequest*>& forward_reqs, bool is_after_forward) {
+  // 仅在开启校验且是最后一层时执行
+  if (!(Singleton<Environment>::GetInstance()->IsEnableBlockChecksum() && context_->IsLastLayer())) {
+    return;
+  }
+  if (forward_reqs.empty()) {
+    return;
+  }
+  if (forward_reqs.front()->block_checksums == nullptr || forward_reqs.front()->checksummed_block_num == nullptr) {
+    return;
+  }
+
+  // 需要计算校验和的块指针
+  std::vector<void*> calc_ptrs;
+  // <req_id, block_idx, checksum_ptr>
+  std::vector<std::tuple<size_t, int, size_t*>> calc_map;
+  // 需要验证校验和的块指针
+  std::vector<void*> verify_ptrs;
+  std::vector<std::tuple<size_t, int, size_t>> verify_map;
+
+  for (auto& req : forward_reqs) {
+    // 根据是 forward 之前还是之后，确定要处理的 token 数量
+    size_t tokens_to_process = is_after_forward ? req->forwarding_tokens->size() : req->kv_cached_token_num;
+    if (tokens_to_process > 0) {
+      // 获取当前 rank 的校验和信息
+      auto& checksums_on_rank = (*(req->block_checksums))[attn_dp_rank_id_];
+      size_t& checksummed_num = (*(req->checksummed_block_num))[attn_dp_rank_id_];
+      const auto& kv_cache_ptrs_on_rank = req->kv_cache_ptrs[attn_dp_rank_id_];
+
+      // 计算需要处理的块数量
+      int num_blocks_to_process = tokens_to_process / runtime_config_.attn_backend_config.block_token_num;
+
+      if (checksums_on_rank.size() < static_cast<size_t>(num_blocks_to_process)) {
+        checksums_on_rank.resize(num_blocks_to_process << 1);
+      }
+
+      for (int i = 0; i < num_blocks_to_process; ++i) {
+        if (static_cast<size_t>(i) < checksummed_num) {
+          // 如果块已经有校验和，则加入验证列表
+          verify_ptrs.push_back(kv_cache_ptrs_on_rank[i]);
+          verify_map.emplace_back(req->req_id, i, checksums_on_rank[i]);
+        } else {
+          // 如果块没有校验和，则加入计算列表
+          calc_ptrs.push_back(kv_cache_ptrs_on_rank[i]);
+          calc_map.emplace_back(req->req_id, i, &checksums_on_rank[i]);
+        }
+      }
+      checksummed_num = num_blocks_to_process;
+    }
+  }
+
+  // 合并需要计算和验证的块指针
+  std::vector<void*> all_ptrs = verify_ptrs;
+  all_ptrs.insert(all_ptrs.end(), calc_ptrs.begin(), calc_ptrs.end());
+
+  if (!all_ptrs.empty()) {
+    const size_t data_size = block_size_;
+    void** d_ptrs = checksum_ptrs_tensor_.GetPtr<void*>();
+    size_t* d_results = checksum_results_tensor_.GetPtr<size_t>();
+    std::vector<size_t> h_results(all_ptrs.size());
+
+#ifdef ENABLE_CUDA
+    MemcpyAsync(d_ptrs, all_ptrs.data(), all_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE,
+                context_->GetComputeStreams()[rank_]);
+    InvokeCalculateChecksum(d_ptrs, d_results, all_ptrs.size(), data_size, context_->GetComputeStreams()[rank_].Get());
+    MemcpyAsync(h_results.data(), d_results, h_results.size() * sizeof(size_t), MEMCPY_DEVICE_TO_HOST,
+                context_->GetComputeStreams()[rank_]);
+    StreamSynchronize(context_->GetComputeStreams()[rank_]);
+#endif
+    // 验证校验和
+    for (size_t i = 0; i < verify_ptrs.size(); ++i) {
+      if (h_results[i] != std::get<2>(verify_map[i])) {
+        KLLM_LOG_ERROR << "Checksum error, attn_dp_rank_id_: " << attn_dp_rank_id_
+                       << ", req_id: " << std::get<0>(verify_map[i]) << ", block_idx: " << std::get<1>(verify_map[i])
+                       << ", expect: " << std::get<2>(verify_map[i]) << ", actual: " << h_results[i]
+                       << (is_after_forward ? " (after forward)" : "");
+      }
+    }
+
+    // 保存新计算的校验和
+    for (size_t i = 0; i < calc_ptrs.size(); ++i) {
+      *(std::get<2>(calc_map[i])) = h_results[verify_ptrs.size() + i];
+    }
+  }
+  if (is_after_forward) {
+    for (auto& req : forward_reqs) {
+      // 如果该请求的校验和错误信息尚未记录
+      if (logged_checksum_error_req_ids_.find(req->req_id) == logged_checksum_error_req_ids_.end()) {
+        logged_checksum_error_req_ids_.insert(req->req_id);
+        // 将一个 attn_dp_rank_id_ 下的 block_checksums 求和
+        size_t checksum_sum = 0;
+        int checksummed_num = (*(req->checksummed_block_num))[attn_dp_rank_id_];
+        if (checksummed_num == 0) {
+          continue;
+        }
+        for (int i = 0; i < checksummed_num; ++i) {
+          checksum_sum += (*(req->block_checksums))[attn_dp_rank_id_][i];
+        }
+        // 在首次计算完成后会打印一次 checksum_sum，方便 PD 分离校验传输的正确性
+        KLLM_LOG_INFO << "req_id: " << req->req_id << ", attn_dp_rank_id_: " << attn_dp_rank_id_
+                      << ", checksummed_num: " << (*(req->checksummed_block_num))[attn_dp_rank_id_]
+                      << ", checksum_sum: " << checksum_sum;
+      }
+    }
+  }
 }
 
 // TODO(ttsybyweng): VL_Model :Prepare moved into each Model Class
