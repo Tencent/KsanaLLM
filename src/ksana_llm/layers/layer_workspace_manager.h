@@ -42,9 +42,8 @@ class LayerWorkspaceManager {
       if (workspace_buffer_->GetTotalBytes() < workspace_size) {
         KLLM_LOG_DEBUG << fmt::format("Rank[{}] Increase WorkSpace Buffer from: {} to: {}", rank_,
                                       workspace_buffer_->GetTotalBytes(), workspace_size);
-        workspace_buffer_.reset();
-        workspace_buffer_ = std::shared_ptr<Tensor>(
-            new Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT8, {workspace_size}, rank_));
+        workspace_buffer_->ReallocateMemory(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT8, {workspace_size},
+                                            rank_);
       } else {
         KLLM_LOG_DEBUG << fmt::format("Rank[{}] WorkSpace Buffer {} is big enough", rank_,
                                       workspace_buffer_->GetTotalBytes());

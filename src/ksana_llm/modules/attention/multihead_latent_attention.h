@@ -49,9 +49,9 @@ class MultiHeadLatentAttention {
   Status ReleaseBuffers();
 
  private:
-  Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& workspace_buffer,
-                               std::vector<Tensor>& output_tensors, Tensor& q_nope_rope_tensor,
-                               Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+  Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& k_buffer,
+                               std::vector<Tensor>& v_buffer, std::vector<Tensor>& output_tensors,
+                               Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                ForwardingContext& forwarding_context);
 
   Status PagedAttentionForward(std::vector<Tensor>& output_tensor, std::vector<Tensor>& hidden_buffer_tensors_1,

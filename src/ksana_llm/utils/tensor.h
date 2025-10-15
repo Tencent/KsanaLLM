@@ -53,6 +53,9 @@ class Tensor {
   void Acquire();
   void Release();
 
+  // Release and reallocate buffer memory.
+  void ReallocateMemory(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id);
+
   // Whether two tensor is equal.
   bool Equal(const Tensor& other) const;
 

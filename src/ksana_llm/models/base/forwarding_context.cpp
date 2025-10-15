@@ -14,7 +14,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
   const size_t tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
   const size_t head_num = model_config.head_num;
   const size_t size_per_head = model_config.size_per_head;
-  const size_t hidden_units = size_per_head * head_num;
+  const size_t hidden_units = model_config.hidden_units;
   const size_t head_num_per_tp = head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
   const size_t num_kv_heads_per_tp =
       model_config.num_key_value_heads / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
@@ -44,6 +44,8 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
   size_t max_dim = std::max(std::max(qkv_head_num * size_per_head, hidden_units), inter_size_per_tp * 2);
   size_t shared_buffer_unit_size = std::max(inter_size_per_tp, hidden_units * 2);
 
+  DataType kv_cache_dtype;
+  env->GetKvCacheType(kv_cache_dtype);
   size_t mla_hidden_buffer_size = 0;
   if (model_config.use_mla) {
     size_t mla_max_dim = max_dim;
@@ -55,9 +57,10 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
     mla_max_dim = std::max(std::max(mla_max_dim, head_num_per_tp * v_head_dim), head_num_per_tp * qk_nope_head_dim);
 
     // For buffer reuse of MlaFlashAtten, see MlaAttenVarlen for details.
-    // TODO(rockcao, lijiajieli, qiannanzhou): mla_flash_attn_size is too large, need to be optimized.
-    size_t mla_flash_attn_size = std::max((qk_nope_head_dim * 2 + qk_rope_head_dim * 1),
-                                          (v_head_dim + qk_nope_head_dim + qk_rope_head_dim * 3));
+    // max (q, k, v)
+    size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), (v_head_dim));
+    // shared_buffer is also used to store one of q,k,v
+    shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * mla_flash_attn_size);
     mla_max_dim = std::max(mla_max_dim, head_num_per_tp * mla_flash_attn_size);
 
     // For buffer reuse of MlaPageAtten, see MlaPagedAttention for details.
@@ -67,12 +70,9 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
     if (runtime_config.enable_o_proj_out_of_dp) {
       shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
     }
+
     const size_t token_num_per_dp = max_token_num;
     mla_hidden_buffer_size = token_num_per_dp * mla_max_dim;
-    // TODO(rockcao): remove this extra buffer by removing unnecessary offset when using dp
-    if (runtime_config.parallel_basic_config.attn_data_parallel_size > 1) {  //
-      mla_hidden_buffer_size += max_token_num * model_config.hidden_units;
-    }
 
     KLLM_LOG_INFO << fmt::format(
         "head_num_per_tp = {}, qk_nope_head_dim = {}, qk_rope_head_dim = {}, v_head_dim = {}, kv_lora_rank = {}, "
@@ -149,7 +149,7 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   int size_per_head = model_config.size_per_head;
   int hidden_units = size_per_head * head_num;
   size_t max_token_num = runtime_config.max_step_token_num;
-  const size_t residual_buffer_size = max_token_num * hidden_units;
+  const size_t residual_buffer_size = max_token_num * model_config.hidden_units;
   const DataType weight_type = model_config.weight_data_type;
   // For distributed mode, the device buffer is used directly.
   if (context->IsStandalone()) {

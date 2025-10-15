@@ -498,13 +498,8 @@ TEST_F(LayerTest, MacheteMatMulLayerTest) {
       runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
-  size_t workspace_size = machete_matmul_layer.GetWorkSpaceSize();
-  std::shared_ptr<Tensor> workspace_buffer = std::make_shared<Tensor>();
-  {
-    workspace_buffer =
-        std::shared_ptr<Tensor>(new Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank));
-    machete_matmul_layer.SetWorkSpaceBuffer(workspace_buffer);
-  }
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+  machete_matmul_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(machete_matmul_layer.GetWorkspaceSize()));
 
   // 准备输入张量
   const size_t m = 96;  // 实际使用的m值，小于max_m
@@ -655,13 +650,8 @@ TEST_F(LayerTest, CutlassMatMulLayerTest) {
       runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
-  size_t workspace_size = cutlass_matmul_layer.GetWorkSpaceSize();
-  std::shared_ptr<Tensor> workspace_buffer = std::make_shared<Tensor>();
-  {
-    workspace_buffer =
-        std::shared_ptr<Tensor>(new Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank));
-    cutlass_matmul_layer.SetWorkSpaceBuffer(workspace_buffer);
-  }
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+  cutlass_matmul_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(cutlass_matmul_layer.GetWorkspaceSize()));
 
   // 准备输入张量
   const size_t m = 96;  // 实际使用的m值，小于max_m
@@ -753,13 +743,9 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
       runtime_config, context_, kDeviceRank);
 
   // 获取工作空间大小并分配
-  size_t workspace_size = marlin_matmul_layer.GetWorkSpaceSize();
-  std::shared_ptr<Tensor> workspace_buffer = std::make_shared<Tensor>();
-  {
-    workspace_buffer =
-        std::shared_ptr<Tensor>(new Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank));
-    marlin_matmul_layer.SetWorkSpaceBuffer(workspace_buffer);
-  }
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+  marlin_matmul_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(marlin_matmul_layer.GetWorkspaceSize()));
+
 
   // 准备输入张量
   const size_t m = 96;  // 实际使用的m值，小于max_m
@@ -1198,12 +1184,10 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
 
   // run moe_layer
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   Fp8MoeLayer moe_layer = Fp8MoeLayer();
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-  size_t workspace_size = moe_layer.GetWorkSpaceSize();
-  Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3, {workspace_size}, kDeviceRank);
-  std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-  moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+  moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
   moe_layer.Preprocess(model_config, runtime_config);
   EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
 
@@ -1314,12 +1298,10 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
 
   // run moe_layer
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   MarlinMoeLayer moe_layer = MarlinMoeLayer();
   moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-  size_t workspace_size = moe_layer.GetWorkSpaceSize();
-  Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
-  std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-  moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+  moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
   moe_layer.Preprocess(model_config, runtime_config);
   EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
 
@@ -1731,13 +1713,12 @@ TEST_F(LayerTest, MoeLayerTest) {
         {w1_w3_s_shape[0], w1_w3_s_shape[2] / interleave[0], w1_w3_s_shape[1] * interleave[0]});
     fc13_weight_scale.copy_(w1_w3_scales_interleaved.contiguous());
     // 创建 cutlass moe layer
+    std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
     CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
     cutlass_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
     size_t workspace_size = cutlass_moe_layer.GetWorkSpaceSize();
     KLLM_LOG_INFO << fmt::format("CutlassMoeLayer WorkSpaceSize: {}", workspace_size);
-    Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
-    std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-    cutlass_moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+    cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
     cutlass_moe_layer.Preprocess(new_model_config, new_runtime_config);
     // 构建输入 input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     std::vector<Tensor> inputs(5);
@@ -1829,13 +1810,14 @@ TEST_F(LayerTest, MoeLayerTest) {
     }
     // 创建 triton moe layer
     setenv("EXPERIMENTAL_INT4_FP8_MOE", "0", 1);
+    std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
     MoeLayer moe_layer = MoeLayer();
     moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
     size_t workspace_size = moe_layer.GetWorkSpaceSize();
     KLLM_LOG_INFO << fmt::format("MoeLayer WorkSpaceSize: {}", workspace_size);
     Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
     std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-    moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+    moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
     moe_layer.Preprocess(new_model_config, new_runtime_config);
     // 构建输入 input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     std::vector<Tensor> inputs(5);
@@ -2015,10 +1997,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   {
     CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
     cutlass_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-    size_t workspace_size = cutlass_moe_layer.GetWorkSpaceSize();
-    Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
-    std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-    cutlass_moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+    cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(cutlass_moe_layer.GetWorkspaceSize()));
     cutlass_moe_layer.Preprocess(model_config, runtime_config);
   }
 
@@ -2029,10 +2008,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
       for (size_t layer_idx = 0; layer_idx < model_config.num_layer; layer_idx++) {
         CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
         cutlass_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-        size_t workspace_size = cutlass_moe_layer.GetWorkSpaceSize();
-        Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
-        std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);
-        cutlass_moe_layer.SetWorkSpaceBuffer(workspace_buffer_ptr);
+        cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(cutlass_moe_layer.GetWorkspaceSize()));
         cutlass_moe_layer.Preprocess(model_config, runtime_config);
       }
     };

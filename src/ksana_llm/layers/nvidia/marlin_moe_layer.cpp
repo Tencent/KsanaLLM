@@ -48,11 +48,6 @@ size_t MarlinMoeLayer::GetWorkSpaceSizeT() {
   return max_ws_bytes_;
 }
 
-Status MarlinMoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
-  workspace_buffer_ = workspace_buffer;
-  return Status();
-}
-
 Status MarlinMoeLayer::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
   return Status();
 }

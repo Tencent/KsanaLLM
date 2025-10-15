@@ -17,4 +17,6 @@ Status FlashMlaAttentionLayer::Forward(const std::vector<Tensor>& input_tensors,
   return Status();
 }
 
+size_t FlashMlaAttentionLayer::GetWorkspaceSize() { return 0; }
+
 }  // namespace ksana_llm

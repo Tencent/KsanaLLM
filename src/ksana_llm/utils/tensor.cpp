@@ -125,6 +125,16 @@ void Tensor::Acquire() {
   }
 }
 
+void Tensor::ReallocateMemory(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape,
+                              int device_id) {
+  ReleaseImpl();
+  this->location = location;
+  this->dtype = dtype;
+  this->shape = shape;
+  this->device_id = device_id;
+  AcquireImpl();
+}
+
 void Tensor::ReleaseImpl() {
   if (data_ptr != nullptr && !is_shared_buffer_) {
     if (location == MemoryLocation::LOCATION_DEVICE) {

@@ -13,9 +13,14 @@ class FlashMlaAttentionLayer : public AttentionLayer {
                       std::shared_ptr<Context> context, int rank) override;
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
+  virtual size_t GetWorkspaceSize() override;
+
  private:
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
   Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+
+ private:
+  size_t max_token_num_ = 0;
 };
 
 }  // namespace ksana_llm

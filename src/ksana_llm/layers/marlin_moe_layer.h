@@ -14,9 +14,7 @@ class MarlinMoeLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual size_t GetWorkSpaceSize() override;
-
-  virtual Status SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) override;
+  virtual size_t GetWorkspaceSize() override;
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 

@@ -17,8 +17,8 @@ class FlashMlaAttention {
 
   ~FlashMlaAttention() = default;
 
-  Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::shared_ptr<ModelInput>& model_input,
-                 std::vector<Tensor>& workspace_buffer, const AttentionForwardContext& attn_ctx,
+  Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, const std::shared_ptr<ModelInput>& model_input,
+                 std::vector<Tensor>& k_buffer, std::vector<Tensor>& v_buffer, const AttentionForwardContext& attn_ctx,
                  Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                  Tensor& prefix_kv_buffer_tensor, std::vector<Tensor>& output_tensors);
 

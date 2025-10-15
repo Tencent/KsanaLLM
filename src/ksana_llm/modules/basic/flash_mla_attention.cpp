@@ -65,7 +65,8 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
 
   flash_mla_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
 
-  flash_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
+  flash_mla_attention_layer_->SetWorkspaceBuffer(
+      creation_context.workspace_mgr->GetWorkspace(flash_mla_attention_layer_->GetWorkspaceSize()));
 
   kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));
@@ -76,9 +77,9 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
 }
 
 Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                  std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& workspace_buffer,
-                                  const AttentionForwardContext& attn_ctx, Tensor& q_nope_rope_tensor,
-                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+                                  const std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& k_buffer,
+                                  std::vector<Tensor>& v_buffer, const AttentionForwardContext& attn_ctx,
+                                  Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                   Tensor& prefix_kv_buffer_tensor, std::vector<Tensor>& output_tensors) {
   STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({hidden_buffer_tensors_0[0],
                                                            model_input->dp_input_offset_uint64_tensor,
@@ -107,7 +108,8 @@ Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                                            v_head_proj_weight_,
                                                            attn_o_proj_weight_,
                                                            prefix_kv_buffer_tensor,
-                                                           workspace_buffer[0]},
+                                                           k_buffer[0],
+                                                           v_buffer[0]},
                                                           output_tensors));
   return Status();
 }

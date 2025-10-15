@@ -283,8 +283,8 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   if (dp_context_tokens > 0) {
     Tensor context_q_nope_rope = q_nope_rope_buffer_tensors[0].GetView(
         {dp_context_tokens, head_num_per_atp_ * (qk_rope_head_dim_ + qk_nope_head_dim_)});
-    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, attn_output_tensor, context_q_nope_rope,
-                          kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
+    FlashAttentionForward(hidden_buffer_tensors_0, hidden_buffer_tensors_1, reduce_buffer_tensors, attn_output_tensor,
+                          context_q_nope_rope, kv_buffer_tensors[0], k_rope_buffer_tensors[0], forwarding_context);
   }
 
   if (dp_decode_tokens > 0) {
@@ -383,7 +383,8 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 }
 
 Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                       std::vector<Tensor>& workspace_buffer,
+                                                       std::vector<Tensor>& k_buffer,
+                                                       std::vector<Tensor>& v_buffer,
                                                        std::vector<Tensor>& output_tensors, Tensor& q_nope_rope_tensor,
                                                        Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                        ForwardingContext& forwarding_context) {
@@ -391,7 +392,7 @@ Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidd
   {
     CREATE_BUFFER_SCOPE(prefix_kv_buffer_tensors, mla_buffers_.shared_prefix_kv_buffer);
     STATUS_CHECK_RETURN(flash_mla_attention_layers_->Forward(
-        hidden_buffer_tensors_0, forwarding_context.GetModelInput(), workspace_buffer,
+        hidden_buffer_tensors_0, forwarding_context.GetModelInput(), k_buffer, v_buffer,
         forwarding_context.GetAttentionForwardContext(), q_nope_rope_tensor, kv_buffer_tensor, k_rope_buffer_tensor,
         prefix_kv_buffer_tensors[0], output_tensors));
   }
