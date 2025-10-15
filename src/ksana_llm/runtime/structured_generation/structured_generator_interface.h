@@ -32,9 +32,7 @@ struct StructuredGeneratorConfig {
     }
   }
 
-  bool HaveConstraint() const {
-    return (constraint_type != StructuredConstraintType::NONE) && !constraint_spec.empty();
-  }
+  bool HasConstraint() const { return (constraint_type != StructuredConstraintType::NONE) && !constraint_spec.empty(); }
 };
 
 /*!
@@ -42,14 +40,21 @@ struct StructuredGeneratorConfig {
  *
  * auto generator = CreateStructuredGenerator(config);
  *
- * generator->AcceptToken(67);
- *
  * std::vector<int32_t> next_token_bitmask;
  * generator->FillNextTokenBitmask(next_token_bitmask.data());
+ * 
+ * int generated_token = 56;
+ * generated_tokens.push_back(generated_token);
+ * generator->AcceptToken(generated_token);
  *
- * int rollback_token_num = -1;
  * std::vector<int> jump_tokens;
- * generator->FindJumpForwardTokens(rollback_token_num, jump_tokens);
+ * bool have_jump_tokens = generator->FindJumpForwardTokens(jump_tokens);
+ * if (have_jump_tokens) {
+ *   for(auto token : jump_tokens) {
+ *     ASSERT_TRUE(generator->AcceptToken(token));
+ *     generated_tokens.push_back(token);
+ *   }
+ * }
  *
  * \\endcode
  */
@@ -72,13 +77,17 @@ class StructuredGeneratorInterface {
   virtual bool FillNextTokenBitmask(void* next_token_bitmask) = 0;
 
   /*!
-   * \\brief Try to find the jump-forward tokens for jump-forward decoding.
+   * \\brief Rollback the generator state by a certain number of tokens.
    * \\param rollback_token_num The number of tokens to rollback.
-   * \\param jump_tokens The vector to store the jump-forward tokens.
-   * \\return Whether jump-forward tokens are found, if true, internal states are changed according to jump operations
-   * \\note The invoker must handle rollback and jump operations to keep the states consistent.
    */
-  virtual bool FindJumpForwardTokens(int& rollback_token_num, std::vector<int>& jump_tokens) = 0;
+  virtual void Rollback(int rollback_token_num) = 0;
+
+  /*!
+   * \\brief Try to find the jump-forward tokens for jump-forward decoding.
+   * \\param jump_tokens The vector to store the jump-forward tokens.
+   * \\return Whether jump-forward tokens are found
+   */
+  virtual bool FindJumpForwardTokens(std::vector<int>& jump_tokens) = 0;
 
   /*!
    * \\brief Check if the generator has reached a termination state.

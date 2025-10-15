@@ -11,11 +11,11 @@
 #include <sstream>
 #include <vector>
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
-#include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_factory.h"
+#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -370,7 +370,10 @@ class DeepSeekV3Test : public testing::Test {
     Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_path);
     auto tokenizer = Singleton<Tokenizer>::GetInstance();
     tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
-    structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>(vocab, vocab_size, stop_token_ids);
+    structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>();
+    structured_generator_factory_->RegisterCreator(
+            StructuredConstraintType::JSON,
+            std::make_unique<GrammarGeneratorCreator>(vocab, vocab_size, stop_token_ids));
 
     std::string json_schema = R"({
       "type": "object"

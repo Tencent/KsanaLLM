@@ -3,8 +3,8 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
-#include "ksana_llm/batch_scheduler/structured_generation/xgrammar/xgrammar_structured_generator.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_factory.h"
+#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator.h"
 #include "ksana_llm/utils/grammar_backend.h"
 
 namespace ksana_llm {

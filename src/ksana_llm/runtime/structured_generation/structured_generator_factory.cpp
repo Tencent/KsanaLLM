@@ -8,18 +8,9 @@
 #include <mutex>
 #include <stdexcept>
 
-#include "ksana_llm/batch_scheduler/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
+#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 
 namespace ksana_llm {
-
-StructuredGeneratorFactory::StructuredGeneratorFactory(std::vector<std::string>& vocab, int vocab_size,
-                                                       std::vector<int>& stop_token_ids) {
-  std::lock_guard<std::mutex> lock(registry_mutex_);
-
-  // Register default workers
-  creator_registry_[StructuredConstraintType::JSON] =
-      std::make_unique<GrammarGeneratorCreator>(vocab, vocab_size, stop_token_ids);
-}
 
 std::shared_ptr<StructuredGeneratorInterface> StructuredGeneratorFactory::CreateGenerator(
     const StructuredGeneratorConfig& config) {

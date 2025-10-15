@@ -13,7 +13,6 @@
 #include "ksana_llm/batch_scheduler/state/scheduler_shared_counter.h"
 #include "ksana_llm/batch_scheduler/state/scheduler_tick_tok.h"
 #include "ksana_llm/batch_scheduler/strategy/strategy_factory.h"
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/batch_scheduler/workload_balance/pp_multibatch_balancer.h"
 #include "ksana_llm/runtime/infer_request.h"
 
@@ -49,8 +48,6 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void WaitUntilHaveReqs(size_t multi_batch_id) override;
 
-  void RegisterStructuredGeneratorFactory(std::shared_ptr<StructuredGeneratorFactory> generator_factory);
-
   // Process async finished requests for all strategies
   void NotifyAsyncFinishedRequests();
 
@@ -83,8 +80,16 @@ class BatchScheduler : public BatchSchedulerInterface {
   // report the state of all instance
   void ReportTotalState();
 
-  // structured generator compilation
-  void ProcessGrammarCompilation(std::shared_ptr<InferRequest> req);
+
+  // ADP Balance related methods
+  void BalanceADPRequests(size_t multi_batch_id);
+  void CalculatePrefillWorkload(std::vector<float> &workload);
+  void DistributeRequestsByToken(
+      const std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> &requests_with_tokens);
+  bool IsADPBalanceTimeout();
+  void UpdateQPS(size_t request_count);
+  size_t GetCurrentPrefillAccumulationMaxSteps();
+  size_t GetCurrentPrefillAccumulationMaxTimeMs();
 
  private:
   // The config of batch scheduler.
@@ -131,8 +136,6 @@ class BatchScheduler : public BatchSchedulerInterface {
   // To avoid variables destruction， while mock req will reference KsanaPythonInput and Request.
   std::shared_ptr<Request> alias_mock_request_;
   std::shared_ptr<KsanaPythonInput> alias_python_input_;
-
-  std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;
 
   std::shared_ptr<SchedulerSharedCounter> scheduler_shared_counter_ = nullptr;
   std::shared_ptr<SchedulerTickTok> scheduler_ticktok_ = nullptr;

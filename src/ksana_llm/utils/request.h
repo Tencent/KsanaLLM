@@ -7,8 +7,8 @@
 #include <map>
 #include <vector>
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/profiler/profiler.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/utils/id_generator.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"

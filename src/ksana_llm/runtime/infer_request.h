@@ -9,12 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/draft_generator/draft_tokens.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
+#include "ksana_llm/runtime/sampling_request.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/status.h"

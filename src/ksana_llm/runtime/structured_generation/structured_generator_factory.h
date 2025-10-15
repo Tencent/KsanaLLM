@@ -3,7 +3,7 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_interface.h"
 
 #include <functional>
 #include <memory>
@@ -36,7 +36,7 @@ class GeneratorCreator {
  */
 class StructuredGeneratorFactory {
  public:
-  StructuredGeneratorFactory(std::vector<std::string>& vocab, int vocab_size, std::vector<int>& stop_token_ids);
+  StructuredGeneratorFactory() {}
   std::shared_ptr<StructuredGeneratorInterface> CreateGenerator(const StructuredGeneratorConfig& config);
 
   bool IsConstraintTypeSupported(StructuredConstraintType constraint_type);
@@ -46,8 +46,6 @@ class StructuredGeneratorFactory {
   void RegisterCreator(StructuredConstraintType constraint_type, std::unique_ptr<GeneratorCreator> creator);
 
  private:
-  StructuredGeneratorFactory();
-
   void InitializeRegistry();
 
   std::unordered_map<StructuredConstraintType, std::unique_ptr<GeneratorCreator>> creator_registry_;

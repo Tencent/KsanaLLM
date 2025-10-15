@@ -8,7 +8,7 @@ include(FetchContent)
 set(XGRAMMAR_SOURCE_DIR ${THIRD_PARTY_PATH}/xgrammar)
 FetchContent_Declare(xgrammar
     GIT_REPOSITORY https://github.com/mlc-ai/xgrammar.git
-    GIT_TAG v0.1.21
+    GIT_TAG v0.1.25
     SOURCE_DIR ${XGRAMMAR_SOURCE_DIR}
 )
 FetchContent_Populate(xgrammar)

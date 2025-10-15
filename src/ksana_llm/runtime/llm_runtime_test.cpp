@@ -180,47 +180,6 @@ TEST_F(LlmRuntimeTest, ReorderInferRequestsTest) {
   }
 }
 
-TEST_F(LlmRuntimeTest, DraftTokenFilterTest) {
-  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
-  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
-
-  // Test for 3-step MTP
-  std::vector<std::shared_ptr<InferRequest>> reqs;
-  auto& req_1 = reqs.emplace_back(std::make_shared<InferRequest>(request, 0));
-  req_1->draft_tokens.mtp = {1, 2, 3};
-  req_1->sampling_result_tokens = {1, 2, 5, 6};
-
-  auto& req_2 = reqs.emplace_back(std::make_shared<InferRequest>(request, 1));
-  req_2->draft_tokens.mtp = {7, 8};
-  req_2->sampling_result_tokens = {7, 8, 9};
-
-  llm_runtime_->DraftTokenFilter(reqs);
-
-  EXPECT_EQ(reqs[0]->accepted_tokens.size(), 2);
-  EXPECT_EQ(reqs[0]->accepted_tokens, std::vector<int>({1, 2}));
-  EXPECT_EQ(reqs[0]->generated_token, 5);
-
-  EXPECT_EQ(reqs[1]->accepted_tokens.size(), 2);
-  EXPECT_EQ(reqs[1]->accepted_tokens, std::vector<int>({7, 8}));
-  EXPECT_EQ(reqs[1]->generated_token, 9);
-
-  // Test for normal case
-  reqs[0]->draft_tokens.mtp = {};
-  reqs[0]->sampling_result_tokens = {2};
-
-  reqs[1]->draft_tokens.mtp = {};
-  reqs[1]->sampling_result_tokens = {3};
-
-  llm_runtime_->DraftTokenFilter(reqs);
-
-  EXPECT_EQ(reqs[0]->accepted_tokens.size(), 0);
-  EXPECT_EQ(reqs[0]->generated_token, 2);
-
-  EXPECT_EQ(reqs[1]->accepted_tokens.size(), 0);
-  EXPECT_EQ(reqs[1]->generated_token, 3);
-}
-
 TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
   ModelConfig model_config;
   model_config.name = "test_model";

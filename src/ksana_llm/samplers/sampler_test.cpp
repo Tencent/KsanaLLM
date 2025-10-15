@@ -400,29 +400,6 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
 #endif
 }
 
-TEST_F(SamplerTest, UpdateGrammarStateTest) {
-#ifdef ENABLE_CUDA
-  SamplingRequest sample_req = GetSamlingRequest();
-
-  // Test with no grammar matcher (should handle gracefully)
-  sample_req.structured_generator = nullptr;
-  std::vector<int> result_tokens = {42};
-  sample_req.sampling_result_tokens = &result_tokens;
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
-
-  sampler_->UpdateGrammarState(sample_reqs);
-
-  // Test with empty tokens (should handle gracefully)
-  std::vector<int> empty_tokens;
-  sample_reqs[0].sampling_result_tokens = &empty_tokens;
-  sampler_->UpdateGrammarState(sample_reqs);
-
-  EXPECT_TRUE(true);  // Test passes if no exception is thrown
-#else
-  GTEST_SKIP_("Grammar state test requires CUDA support.");
-#endif
-}
-
 TEST_F(SamplerTest, ApplyTokenBitmaskTest) {
 #ifdef ENABLE_CUDA
   std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);

@@ -12,7 +12,7 @@ class GrammarGeneratorCreatorTest : public testing::Test {
   void SetUp() override {
     // 创建一个简单的词汇表
     vocab_ = {"hello", "type", "test", "json", "name", "age",  "value", "\"",   ":",   ",",   "{",   "}",
-              "[",     "]",     " ",    "\n",   "\t",   "true", "false", "null", "123", "456", "abc", "def"};
+              "[",     "]",    " ",    "\n",   "\t",   "true", "false", "null", "123", "456", "abc", "def"};
     vocab_size_ = vocab_.size();
 
     // 设置停止token ID
@@ -91,6 +91,20 @@ TEST_F(GrammarGeneratorCreatorTest, GeneratorTokenAcceptanceTest) {
   EXPECT_FALSE(generator->AcceptToken(8));  // ":"
   EXPECT_TRUE(generator->AcceptToken(7));  // "\""
   EXPECT_TRUE(generator->AcceptToken(8));  // ":"
+  EXPECT_TRUE(generator->AcceptToken(7));  // "\""
+
+  // 测试Rollback
+  generator->Rollback(2);  // Drop ":" and "\""
+  // must be :
+  EXPECT_FALSE(generator->AcceptToken(4));  // "name"
+  EXPECT_TRUE(generator->AcceptToken(8));   // ":"
+  // 开始生成string
+  EXPECT_FALSE(generator->AcceptToken(3));   // "json"
+  EXPECT_TRUE(generator->AcceptToken(7));   // "\""
+  EXPECT_TRUE(generator->AcceptToken(3));   // "json"
+  EXPECT_TRUE(generator->AcceptToken(14));  // " "
+  EXPECT_TRUE(generator->AcceptToken(5));   // "age"
+  EXPECT_TRUE(generator->AcceptToken(7));   // "\""
 
   // 检查是否终止
   EXPECT_FALSE(generator->IsTerminated());
@@ -276,40 +290,25 @@ TEST_F(GrammarGeneratorCreatorTest, FindJumpForwardTokensTest) {
   ASSERT_TRUE(generator->IsValid());
 
   // Test FindJumpForwardTokens method
-  int rollback_token_num = -1;                         // Initialize with invalid value
   std::vector<int> jump_tokens = {100, 200, 300};      // Initialize with some tokens
 
   // Call FindJumpForwardTokens - should return false for grammar constraints
-  bool result = generator->FindJumpForwardTokens(rollback_token_num, jump_tokens);
+  bool result = generator->FindJumpForwardTokens(jump_tokens);
 
   // Verify the method returns false (not supported for grammar constraints)
   EXPECT_FALSE(result);
 
-  // Verify rollback_token_num is set to 0
-  EXPECT_EQ(rollback_token_num, 0);
-
   // Verify jump_tokens is cleared
-  EXPECT_TRUE(jump_tokens.empty());
-
-  // Test with different initial values to ensure consistent behavior
-  rollback_token_num = 5;
-  jump_tokens = {400, 500};
-
-  result = generator->FindJumpForwardTokens(rollback_token_num, jump_tokens);
-  EXPECT_FALSE(result);
-  EXPECT_EQ(rollback_token_num, 0);
   EXPECT_TRUE(jump_tokens.empty());
 
   // Test after accepting some tokens to ensure behavior is consistent
   generator->AcceptToken(10);  // Accept '{' token
   generator->AcceptToken(4);   // Accept 'name' token
 
-  rollback_token_num = 10;
   jump_tokens = {600, 700, 800};
 
-  result = generator->FindJumpForwardTokens(rollback_token_num, jump_tokens);
+  result = generator->FindJumpForwardTokens(jump_tokens);
   EXPECT_FALSE(result);
-  EXPECT_EQ(rollback_token_num, 0);
   EXPECT_TRUE(jump_tokens.empty());
 }
 

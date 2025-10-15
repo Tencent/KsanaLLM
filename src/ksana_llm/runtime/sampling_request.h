@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/request.h"
 

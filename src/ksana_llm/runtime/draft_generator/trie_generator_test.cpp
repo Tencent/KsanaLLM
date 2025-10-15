@@ -9,7 +9,6 @@
 #include <memory>
 #include <sstream>
 #include <vector>
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_interface.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/utils/environment.h"
@@ -264,108 +263,5 @@ TEST_F(TrieGeneratorTest, HitRateTest) {
   }
 }
 
-// Tests for LlmRuntime::DraftTokenFilter
-// Mock StructuredGeneratorInterface for testing
-class MockStructuredGenerator : public StructuredGeneratorInterface {
- public:
-  explicit MockStructuredGenerator(const std::vector<int>& accepted_tokens) : accepted_tokens_(accepted_tokens) {}
 
-  bool AcceptToken(int token_id) override {
-    // 只接受在 accepted_tokens_ 列表中的 token
-    return std::find(accepted_tokens_.begin(), accepted_tokens_.end(), token_id) != accepted_tokens_.end();
-  }
-
-  bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
-
-  bool FindJumpForwardTokens(int& rollback_token_num, std::vector<int>& jump_tokens) override { return false; }
-
-  bool IsTerminated() const override { return false; }
-
-  bool IsValid() const override { return true; }
-
-  StructuredConstraintType GetConstraintType() const override { return StructuredConstraintType::NONE; }
-
- private:
-  std::vector<int> accepted_tokens_;
-};
-
-class DraftTokenFilterTest : public testing::Test {
- protected:
-  void SetUp() override {
-    runtime_config_ = RuntimeConfig();
-    batch_scheduler_config_ = BatchSchedulerConfig();
-    context_ = std::make_shared<Context>(1, 1, 1);  // tp_size=1, attn_dp_size=1, max_multi_batch=1
-    llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
-  }
-
-  std::shared_ptr<InferRequest> CreateMockInferRequest(
-      const std::vector<int>& draft_tokens_mtp, const std::vector<int>& draft_tokens_trie,
-      const std::vector<int>& sampling_result_tokens, const std::vector<int>& stop_token_ids = {},
-      std::shared_ptr<StructuredGeneratorInterface> structured_generator = nullptr) {
-    auto python_input = std::make_shared<KsanaPythonInput>();
-    python_input->model_name = "test_model";
-    python_input->input_tokens = {1, 2, 3};
-    python_input->sampling_config.stop_token_ids = stop_token_ids;
-
-    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-    auto request = std::make_shared<Request>(python_input, req_ctx);
-
-    request->req_id = 1;
-    request->model_name = "test_model";
-    request->input_tokens = {1, 2, 3};
-    request->output_tokens = {};
-    request->logprobs = {};
-    request->sampling_config.stop_token_ids = stop_token_ids;
-    request->finished = false;
-    request->aborted = false;
-
-    auto infer_req = std::make_shared<InferRequest>(request, 0);
-    infer_req->draft_tokens.mtp = draft_tokens_mtp;
-    infer_req->draft_tokens.trie = draft_tokens_trie;
-    infer_req->sampling_result_tokens = sampling_result_tokens;
-    infer_req->structured_generator = structured_generator;
-
-    return infer_req;
-  }
-
-  RuntimeConfig runtime_config_;
-  BatchSchedulerConfig batch_scheduler_config_;
-  std::shared_ptr<Context> context_;
-  std::shared_ptr<LlmRuntime> llm_runtime_;
-};
-
-TEST_F(DraftTokenFilterTest, StructuredGeneratorRejectsNewToken) {
-  // 测试 structured_generator 拒绝新生成 token 的情况
-  std::vector<int> draft_mtp = {10};
-  std::vector<int> draft_trie = {20, 30};
-  std::vector<int> sampling_result = {10, 20, 30, 40};
-
-  auto structured_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{20});
-  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, structured_generator);
-  std::vector<std::shared_ptr<InferRequest>> reqs = {req};
-
-  llm_runtime_->DraftTokenFilter(reqs);
-
-  EXPECT_EQ(req->accepted_tokens.size(), 1);  // draft_hit_num
-  EXPECT_EQ(req->accepted_tokens[0], 10);
-  EXPECT_EQ(req->generated_token, 20);
-}
-
-TEST_F(DraftTokenFilterTest, StructuredGeneratorAcceptsAllTokens) {
-  // 测试 structured_generator 接受所有 tokens 的情况
-  std::vector<int> draft_mtp = {10};
-  std::vector<int> draft_trie = {20, 30};
-  std::vector<int> sampling_result = {10, 20, 30, 40};
-
-  auto structured_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{20, 30, 40});
-  auto req = CreateMockInferRequest(draft_mtp, draft_trie, sampling_result, {}, structured_generator);
-  std::vector<std::shared_ptr<InferRequest>> reqs = {req};
-
-  llm_runtime_->DraftTokenFilter(reqs);
-
-  EXPECT_EQ(req->accepted_tokens.size(), 3);
-  EXPECT_EQ(req->accepted_tokens[1], 20);
-  EXPECT_EQ(req->accepted_tokens[2], 30);
-  EXPECT_EQ(req->generated_token, 40);
-}
 }  // namespace ksana_llm

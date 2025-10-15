@@ -22,6 +22,7 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 namespace ksana_llm {
+class GenerationController;
 
 class BatchManager {
  public:
@@ -38,6 +39,11 @@ class BatchManager {
 
   // Set the multi_batch contorller instance to batch manager.
   void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller);
+
+  // Set the generation controller to batch manager.
+  void SetGenerationController(std::shared_ptr<GenerationController> controller) {
+    generation_controller_ = controller;
+  }
 
   // Enqueue a request to waiting queue.
   Status Enqueue(std::shared_ptr<Request> &request);
@@ -77,6 +83,9 @@ class BatchManager {
 
   // The multi batch controllor.
   std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
+
+  // The generation controller.
+  std::shared_ptr<GenerationController> generation_controller_ = nullptr;
 
   // The master and worker threads.
   std::vector<std::unique_ptr<std::thread>> main_threads_;

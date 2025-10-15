@@ -60,9 +60,6 @@ class Sampler {
   void ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
                         const SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
-  // Update grammar state after token selection for grammar-enabled requests
-  void UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs);
-
   // Apply token bitmask selectively to grammar-enabled requests only
   void ApplyTokenBitmaskSelective(float* logits, void* bitmask_data, int vocab_size,
                                   const std::vector<size_t>& logits_offsets, Stream& stream);

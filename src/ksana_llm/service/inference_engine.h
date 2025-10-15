@@ -5,11 +5,11 @@
 
 #include <memory>
 #include "ksana_llm/batch_manager/batch_manager.h"
-#include "ksana_llm/batch_scheduler/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/distributed/distributed_coordinator.h"
 #include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/structured_generation/structured_generator_factory.h"
 #include "ksana_llm/runtime/weight_instance_inferface.h"
 #include "ksana_llm/utils/channel.h"
 #include "ksana_llm/utils/status.h"
@@ -73,6 +73,9 @@ class InferenceEngine {
   // The multibatch controllor for inference engine.
   std::shared_ptr<MultiBatchController> multi_batch_controller_ = nullptr;
 
+  // The generation controller for inference engine.
+  std::shared_ptr<GenerationController> generation_controller_ = nullptr;
+
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;
 
@@ -80,9 +83,6 @@ class InferenceEngine {
   std::vector<std::shared_ptr<ModelInstance>> model_instances_;
 
   std::vector<std::shared_ptr<WeightInstanceInterface>> weight_instances_;
-
-  // Structured generator factory for structured output
-  std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;
 
   // Whether the handle loop terminated.
   std::atomic<bool> terminated_ = false;

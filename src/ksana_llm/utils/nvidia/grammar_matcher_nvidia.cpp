@@ -11,8 +11,7 @@ GrammarMatcherWrapperNvidia::GrammarMatcherWrapperNvidia(std::shared_ptr<Compile
     : GrammarMatcherWrapper(compiled_grammar) {
   matcher_ = std::make_unique<xgrammar::GrammarMatcher>(*compiled_grammar_,  // compiled_grammar
                                                         std::nullopt,        // override_stop_tokens
-                                                        false,               // terminate_without_stop_token
-                                                        0);                  // max_rollback_tokens
+                                                        false);               // terminate_without_stop_token
 
   int vocab_size_ = compiled_grammar_->GetTokenizerInfo().GetVocabSize();
   bitmask_size_ = xgrammar::GetBitmaskSize(vocab_size_);
@@ -56,6 +55,14 @@ bool GrammarMatcherWrapperNvidia::AcceptToken(int token_id) {
                                         false);                          // debug_print
   KLLM_LOG_DEBUG << "AcceptToken(" << token_id << ") = " << accepted;
   return accepted;
+}
+
+void GrammarMatcherWrapperNvidia::Rollback(int token_num) {
+  if (matcher_ == nullptr) {
+    KLLM_LOG_ERROR << "Grammar matcher is null, cannot rollback " << token_num << " tokens";
+    return;
+  }
+  matcher_->Rollback(token_num);
 }
 
 bool GrammarMatcherWrapperNvidia::IsTerminated() const {

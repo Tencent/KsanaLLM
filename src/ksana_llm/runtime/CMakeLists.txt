@@ -61,3 +61,10 @@ if(WITH_CUDA AND DEFINED SM AND "${SM}" STREQUAL "90a")
 endif()
 message(STATUS "runtime_test_SRCS: ${runtime_test_SRCS}")
 cpp_test(runtime_test SRCS ${runtime_test_SRCS} DEPS runtime)
+
+if (WITH_CUDA)
+  cpp_test(xgrammar_generator_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+endif()
+
+cpp_test(generation_controller_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/generation_controller_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+

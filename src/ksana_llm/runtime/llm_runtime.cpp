@@ -15,6 +15,7 @@
 #include "ksana_llm/profiler/profile_event.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/forward_request.h"
+#include "ksana_llm/runtime/generation_controller.h"
 #include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/runtime/sampling_request.h"
@@ -274,51 +275,11 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
   return result_status;
 }
 
-void LlmRuntime::DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  for (auto& req : reqs) {
-    if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size()) {
-      KLLM_LOG_ERROR << fmt::format(
-          "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, trie_draft_tokens.size = {}",
-          req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.trie.size());
-      continue;
-    }
-    // Check which tokens are predicted correctly.
-    size_t draft_hit_num = 0;
-    req->accepted_tokens.clear();
-    std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
-    for (size_t i = 0; i < draft_tokens.size(); ++i) {
-      if (req->sampling_result_tokens[i] != draft_tokens[i]) {
-        break;
-      }
-
-      // Structured constraint check for the new generated token
-      if (req->structured_generator != nullptr) {
-        const int new_token = req->sampling_result_tokens[i + 1];
-        if (!req->structured_generator->AcceptToken(new_token)) {
-          // Structured constraint rejects the new_token
-          KLLM_LOG_DEBUG << "Structured constraint rejected new_token " << new_token << " for request " << req->req_id
-                         << ", will not use it as generated_token";
-          break;
-        }
-      }
-      ++draft_hit_num;
-    }
-
-    KLLM_LOG_DEBUG << "draft accepted: " << draft_hit_num << " / " << req->draft_tokens.size()
-                   << ". samp: " << req->sampling_result_tokens << ", draft: " << draft_tokens;
-    req->accepted_tokens.swap(draft_tokens);
-    req->accepted_tokens.resize(draft_hit_num);
-    req->generated_token = req->sampling_result_tokens[draft_hit_num];  // only kStepGenerateTokenNum(1) token now
-    req->sampling_result_tokens.clear();
-    req->draft_tokens.clear();
-  }
-}
-
-Status LlmRuntime::MTPForward(
-    size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs, const bool epilogue,
-    std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_reqs,
-    std::vector<SamplingRequest>& sampling_reqs) {
-  if (!mtp_forward_ || !context_->IsChief()) {
+Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                              const bool epilogue,
+                              std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>> grouped_reqs,
+                              std::vector<SamplingRequest>& sampling_reqs) {
+  if (mtp_step_num_ == 0 || !context_->IsChief()) {
     return Status();
   }
 
@@ -468,7 +429,7 @@ Status LlmRuntime::StepOnChief(
   if (context_->IsStandalone() || epilogue) {
     PROFILE_EVENT_SCOPE(SamplingAndMTP_, fmt::format("SamplingAndMTP_{}", schedule_output->multi_batch_id));
     Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs, sampling_reqs);
-    DraftTokenFilter(schedule_output->running_reqs);
+    generation_controller_->UpdateGenerationState(schedule_output->running_reqs);
     MTPForward(schedule_output->multi_batch_id, schedule_output->running_reqs, epilogue, grouped_reqs, sampling_reqs);
     GenerateDraftToken(schedule_output->running_reqs);
     TransferGeneratedToken(schedule_output->running_reqs);

@@ -21,6 +21,7 @@ class GrammarMatcherWrapperNvidia : public GrammarMatcherWrapper {
   // Implement pure virtual methods from base class
   bool FillNextTokenBitmask(void* bitmask_data, int batch_index = 0) override;
   bool AcceptToken(int token_id) override;
+  void Rollback(int token_num) override;
   bool IsTerminated() const override;
   bool IsInitialized() const override { return matcher_ != nullptr; }
 

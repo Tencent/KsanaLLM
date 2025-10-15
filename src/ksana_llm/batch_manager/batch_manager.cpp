@@ -12,6 +12,7 @@
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
+#include "ksana_llm/runtime/generation_controller.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/logger.h"
@@ -20,7 +21,6 @@
 #include "ksana_llm/utils/string_utils.h"
 #include "ksana_llm/utils/tensor.h"
 #include "ksana_llm/utils/waiter.h"
-
 namespace ksana_llm {
 
 BatchManager::BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context) {
@@ -96,6 +96,9 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   for (auto &infer_req : infer_request_group) {
     infer_req->SetReqGroup(infer_request_group);
   }
+
+  // Init generation state
+  generation_controller_->InitGenerationState(infer_request_group);
 
   enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
   if (enqueue_status.OK()) {

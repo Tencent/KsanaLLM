@@ -14,6 +14,8 @@
 #include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/draft_generator/trie_generator.h"
+#include "ksana_llm/runtime/generation_controller.h"
+#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
 #include "ksana_llm/runtime/weight_instance.h"
@@ -284,6 +286,7 @@ Status InferenceEngine::Initialize() {
   // Initialize tokenzier
   Singleton<Tokenizer>::GetInstance()->InitTokenizer(model_instances_[0]->GetModelConfig().path);
 
+  std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory;
   // Initialize structured generator factory for structured output
   if (batch_scheduler_config.enable_xgrammar) {
     std::vector<std::string> vocab;
@@ -294,27 +297,29 @@ Status InferenceEngine::Initialize() {
     status = tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
     if (status.OK()) {
       try {
-        structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>(vocab, vocab_size, stop_token_ids);
-        KLLM_LOG_INFO << "Structured generator factory initialized with final vocab_size: " << vocab_size;
+        structured_generator_factory = std::make_shared<StructuredGeneratorFactory>();
+        structured_generator_factory->RegisterCreator(
+            StructuredConstraintType::JSON,
+            std::make_unique<GrammarGeneratorCreator>(vocab, vocab_size, stop_token_ids));
+        KLLM_LOG_INFO << "Structured generator factory initialized with final "
+                         "vocab_size: "
+                      << vocab_size;
       } catch (const std::exception &e) {
         return Status(RET_RUNTIME_FAILED,
                       "Structured generator factory initialization failed: " + std::string(e.what()));
       }
     } else {
       KLLM_LOG_WARNING << "Failed to get vocab info: " << status.GetMessage() << ". Structured output disabled.";
-      structured_generator_factory_ = nullptr;
+      structured_generator_factory = nullptr;
     }
   }
 
+  // Create generation controller
+  generation_controller_ = std::make_shared<GenerationController>(structured_generator_factory);
+
   // Create batch scheduler.
   batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
-
-  // Register structured generator factory if enabled
-  if (structured_generator_factory_) {
-    batch_scheduler_->RegisterStructuredGeneratorFactory(structured_generator_factory_);
-  }
-
-  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
+  for (size_t dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }
 
@@ -327,6 +332,8 @@ Status InferenceEngine::Initialize() {
   llm_runtime_->SetMultiBatchController(multi_batch_controller_);
   llm_runtime_->SetMtpForward(runtime_config.enable_mtp_module && model_config.num_nextn_predict_layers > 0);
   llm_runtime_->SetAsync(batch_scheduler_config.enable_async);
+  llm_runtime_->SetGenerationController(generation_controller_);
+
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
   if (batch_scheduler_config.enable_speculative_decoding) {
@@ -337,6 +344,7 @@ Status InferenceEngine::Initialize() {
 
   batch_manager_->SetBatchScheduler(batch_scheduler_);
   batch_manager_->SetMultiBatchController(multi_batch_controller_);
+  batch_manager_->SetGenerationController(generation_controller_);
   batch_manager_->SetLlmRuntime(llm_runtime_);
 
   if (Singleton<Environment>::GetInstance()->IsReportVersion()) {

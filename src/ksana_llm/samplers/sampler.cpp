@@ -458,9 +458,6 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
 
-  // Update grammar state after sampling
-  UpdateGrammarState(sampling_reqs);
-
   return Status();
 }
 
@@ -527,30 +524,6 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
     // Apply bitmask only to structured-enabled requests
     ApplyTokenBitmaskSelective(device_logits, device_vocab_mask_, sampling_device_parameter.vocab_size_padded,
                                structured_req_offsets, stream);
-  }
-}
-
-void Sampler::UpdateGrammarState(std::vector<SamplingRequest>& sampling_reqs) {
-  for (auto& req : sampling_reqs) {
-    if (!req.structured_generator || !req.apply_structured_constraint || !req.sampling_result_tokens ||
-        req.sampling_result_tokens->empty()) {
-      continue;
-    }
-
-    if (req.structured_generator->IsTerminated()) {
-      // Note: The request termination should be handled by the caller
-      KLLM_LOG_DEBUG << "Structured generation completed for request " << req.req_id;
-    }
-
-    // In MTP mode, only update structured state for the first token (verify_token)
-    // The second token (new_token) will be handled in DraftTokenFilter if needed
-    int token_id = req.sampling_result_tokens->front();
-    bool accepted = req.structured_generator->AcceptToken(token_id);
-
-    if (!accepted) {
-      // In production, this should rarely happen if the mask was applied correctly
-      KLLM_LOG_WARNING << "Structured constraint rejected token " << token_id << " for request " << req.req_id;
-    }
   }
 }
 

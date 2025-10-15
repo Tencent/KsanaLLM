@@ -21,6 +21,7 @@
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
+class GenerationController;
 
 class LlmRuntime {
  public:
@@ -41,7 +42,10 @@ class LlmRuntime {
   // Set draft generator
   void SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator);
 
-  void SetMtpForward(const bool is_enable) { mtp_forward_ = is_enable; }
+  // Set generation controller
+  void SetGenerationController(std::shared_ptr<GenerationController> controller) {
+    generation_controller_ = controller;
+  }
 
   void SetAsync(const bool is_enable) { enable_async_ = is_enable; }
 
@@ -139,8 +143,6 @@ class LlmRuntime {
                     std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
                     bool epilogue, RunMode run_mode = RunMode::kMain);
 
-  void DraftTokenFilter(std::vector<std::shared_ptr<InferRequest>> &reqs);
-
   Status MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue,
                     std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs,
                     std::vector<SamplingRequest> &sampling_reqs);
@@ -179,8 +181,9 @@ class LlmRuntime {
 
   std::shared_ptr<DraftGeneratorInterface> draft_generator_ = nullptr;
 
-  // Threadpool used to metrics report.
-  std::shared_ptr<ThreadPool> threadpool_ = nullptr;
+  std::shared_ptr<GenerationController> generation_controller_ = nullptr;
+
+  ThreadPool threadpool_;
 };
 
 }  // namespace ksana_llm
