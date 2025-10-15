@@ -12,8 +12,6 @@ Linear::Linear(const std::string& weight_name, const LayerCreationContext& creat
       creation_context.base_weight, weight_name, creation_context.weight_type, creation_context.input_type,
       creation_context.output_type, linear_compute_backend, {});
   proj_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspace(proj_layer_->GetWorkspaceSize()));
-
-  // TODO(robertyuan): Merge Proprocess and Init
   proj_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);
 
 #ifdef ENABLE_ACL

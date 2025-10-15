@@ -164,6 +164,8 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
       fp8_blockwise_matmul_params.push_back(size_t(base_weight->GetModelWeights(weight_name).shape[1]));  // k
       // block_k size
       fp8_blockwise_matmul_params.push_back(model_config_.quant_config.weight_block_size[1]);
+      // weight
+      fp8_blockwise_matmul_params.push_back(base_weight->GetModelWeights(weight_name));
       return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_blockwise_matmul_params, QUANT_BLOCK_FP8_E4M3,
                          DEFAULT_LINEAR_BACKEND);
     } else {

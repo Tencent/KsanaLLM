@@ -123,4 +123,50 @@ class CutlassMoeSearchStatus {
   std::unordered_map<std::string, std::vector<std::vector<int64_t>>> cutlass_moe_schedule_cache;
 };
 
+class BlockwiseMatmulSearchStatus {
+ public:
+  bool IsCutlassBufferSizeContain(DataType dtype, size_t m, size_t k, size_t n) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    auto it = cutlass_buffer_size_cache_.find(key);
+    return it != cutlass_buffer_size_cache_.end();
+  }
+
+  void AddCutlassBufferSize(DataType dtype, size_t m, size_t k, size_t n, size_t buffer_size) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    cutlass_buffer_size_cache_[key] = buffer_size;
+  }
+
+  size_t GetCutlassBufferSize(DataType dtype, size_t m, size_t k, size_t n) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    auto it = cutlass_buffer_size_cache_.find(key);
+    return it->second;
+  }
+
+  bool IsGemmSelectionThresholdContain(DataType dtype, size_t m, size_t k, size_t n) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    auto it = gemm_selection_threshold_cache_.find(key);
+    return it != gemm_selection_threshold_cache_.end();
+  }
+
+  void AddGemmSelectionThreshold(DataType dtype, size_t m, size_t k, size_t n, size_t deepgemm_threshold,
+                                 size_t swap_ab_threshold) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    gemm_selection_threshold_cache_[key] = {deepgemm_threshold, swap_ab_threshold};
+  }
+
+  std::pair<size_t, size_t> GetGemmSelectionThreshold(DataType dtype, size_t m, size_t k, size_t n) {
+    std::string key = fmt::format("{}_{}_{}_{}", static_cast<int>(dtype), m, k, n);
+    auto it = gemm_selection_threshold_cache_.find(key);
+    return it->second;
+  }
+
+  void ClearCutlassBufferSize() { cutlass_buffer_size_cache_.clear(); }
+
+  void ClearGemmSelectionThreshold() { gemm_selection_threshold_cache_.clear(); }
+
+ private:
+  std::unordered_map<std::string, size_t> cutlass_buffer_size_cache_;
+  std::unordered_map<std::string, std::pair<size_t, size_t>> gemm_selection_threshold_cache_;
+};
+
 }  // namespace ksana_llm
