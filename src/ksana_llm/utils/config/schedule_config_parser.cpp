@@ -187,7 +187,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
     runtime_config_.enable_dump_eplb_data = true;
   }
   const char *enable_load_eplb_weight = std::getenv("EPLB_WEIGHT");
-  if (enable_load_eplb_weight) {
+  if (enable_load_eplb_weight && (runtime_config_.parallel_basic_config.expert_world_size > 1 ||
+                                  runtime_config_.parallel_basic_config.expert_parallel_size > 1)) {
     runtime_config_.enable_load_eplb_weight = true;
   }
 

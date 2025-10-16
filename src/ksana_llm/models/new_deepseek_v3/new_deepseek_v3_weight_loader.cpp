@@ -640,7 +640,7 @@ Status NewDeepSeekV3WeightLoader::InitExpertMap(const size_t& num_experts, const
   // Load EPLB mapping configuration from JSON file
   const char* eplb_weight = std::getenv("EPLB_WEIGHT");
   std::unordered_map<int, std::vector<int>> eplb_map;
-  if (eplb_weight) {
+  if (eplb_weight && expert_start_id + num_experts > expert_end_id) {
     std::string eplb_config = eplb_weight;
     std::ifstream config_file(eplb_config);
     if (config_file.is_open()) {
