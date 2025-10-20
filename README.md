@@ -330,7 +330,7 @@ export ENABLE_COMPRESSED_KV=2
 export SELECT_ALL_REDUCE_BY_SIZE=1
 export PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync
 # (Optional) Further Performance Enhancement with Slight Accuracy Degradation
-export EXPERIMENTAL_INT4_FP8_MOE=1
+export W4AFP8_MOE_BACKEND=1
 # Service Startup
 python serving_server.py \
 --config_file ${GIT_PROJECT_REPO_ROOT}/examples/deepseek_int4_perf.yaml \

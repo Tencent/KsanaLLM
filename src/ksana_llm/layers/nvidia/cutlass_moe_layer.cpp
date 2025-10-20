@@ -106,6 +106,8 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
     expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(global_expert_para_size_,
                                                                         global_expert_para_rank_, total_expert_num);
   }
+
+  KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassMoeLayer Init", rank_);
   return Status();
 }
 

@@ -103,5 +103,4 @@ Status MarlinMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::ve
   return Status();
 }
 
-
 }  // namespace ksana_llm

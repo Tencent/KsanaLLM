@@ -122,7 +122,9 @@ enum DataType {
   TYPE_BLOCK_FP8_E4M3,
   TYPE_FP8_E5M2,
   TYPE_VOID,
-  TYPE_POINTER
+  TYPE_POINTER,
+  TYPE_UINT4x2,
+  TYPE_INT4x2,
 #elif defined(ENABLE_ACL)
   TYPE_INVALID = aclDataType::ACL_DT_UNDEFINED,
   TYPE_BOOL = aclDataType::ACL_BOOL,
@@ -144,7 +146,9 @@ enum DataType {
   TYPE_I4_GROUP = aclDataType::ACL_DT_UNDEFINED - 3,
   TYPE_BLOCK_FP8_E4M3 = aclDataType::ACL_DT_UNDEFINED - 4,
   TYPE_VOID = aclDataType::ACL_DT_UNDEFINED - 5,
-  TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED - 6
+  TYPE_POINTER = aclDataType::ACL_DT_UNDEFINED - 6,
+  TYPE_UINT4x2 = aclDataType::ACL_DT_UNDEFINED - 7,
+  TYPE_INT4x2 = aclDataType::ACL_DT_UNDEFINED - 8,
 #elif defined(ENABLE_TOPS)
   TYPE_INVALID,
   TYPE_FP32,
@@ -172,6 +176,8 @@ enum DataType {
   TYPE_POINTER,
   TYPE_I4_GROUP,
   TYPE_BLOCK_FP8_E4M3,
+  TYPE_UINT4x2,
+  TYPE_INT4x2,
 #endif
 };
 

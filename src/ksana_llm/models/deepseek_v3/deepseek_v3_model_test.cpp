@@ -35,6 +35,7 @@ using namespace ksana_llm;
 class DeepSeekV3Test : public testing::Test {
  protected:
   void SetUp() override {
+    setenv("W4AFP8_MOE_BACKEND", "0", 1);
     InitLoguru();
     DeviceMemoryPool::Disable();
     const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
@@ -113,7 +114,7 @@ class DeepSeekV3Test : public testing::Test {
   }
 
   void TearDown() override {
-    SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
+    unsetenv("W4AFP8_MOE_BACKEND");
     std::cout << "TearDown" << std::endl;
   }
 
@@ -372,8 +373,7 @@ class DeepSeekV3Test : public testing::Test {
     tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
     structured_generator_factory_ = std::make_shared<StructuredGeneratorFactory>();
     structured_generator_factory_->RegisterCreator(
-            StructuredConstraintType::JSON,
-            std::make_unique<GrammarGeneratorCreator>(vocab, vocab_size, stop_token_ids));
+        StructuredConstraintType::JSON, std::make_unique<GrammarGeneratorCreator>(vocab, vocab_size, stop_token_ids));
 
     std::string json_schema = R"({
       "type": "object"

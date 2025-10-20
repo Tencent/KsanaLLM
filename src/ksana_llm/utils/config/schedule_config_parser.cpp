@@ -192,6 +192,41 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
     runtime_config_.enable_load_eplb_weight = true;
   }
 
+  // Parsing w4afp8_moe_backend from env
+  const char *w4afp8_moe_backend = std::getenv("W4AFP8_MOE_BACKEND");
+  if (w4afp8_moe_backend) {
+    std::string backend_str(w4afp8_moe_backend);
+    if (backend_str == "0" || backend_str == "default") {
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+    } else if (backend_str == "1" || backend_str == "group_triton") {
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::GroupTriton;
+    } else if (backend_str == "2" || backend_str == "tensor_triton") {
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::TensorTriton;
+    } else {
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+      KLLM_LOG_WARNING << fmt::format("Unknown W4AFP8_MOE_BACKEND value: {}, and set to Default", backend_str);
+    }
+  } else {
+    // 添加默认值
+    runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+    if (model_config.quant_config.method == QUANT_GPTQ) {
+      // 主量化类型是GPTQ说明是纯int4模型
+      runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+      KLLM_LOG_INFO << "Detected pure int4 model, setting W4AFP8_MOE_BACKEND == Default";
+    } else if (!model_config.sub_quant_configs.empty() && model_config.sub_quant_configs[0].method == QUANT_GPTQ) {
+      // 混合量化类型
+      if (model_config.sub_quant_configs[0].input_scale) {
+        // 有input scale说明是w4af8模型
+        runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
+        KLLM_LOG_INFO << "Detected w4afp8 model, setting W4AFP8_MOE_BACKEND == Default";
+      } else {
+        // 没有input scale说明是moe-int4模型
+        runtime_config_.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::GroupTriton;
+        KLLM_LOG_INFO << "Detected moe-int4 model, setting W4AFP8_MOE_BACKEND == GroupTriton";
+      }
+    }
+  }
+
   KLLM_CHECK_WITH_INFO(
       runtime_config_.parallel_basic_config.tensor_parallel_size >=
           runtime_config_.parallel_basic_config.attn_data_parallel_size,

@@ -1,7 +1,7 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
 if (SM STREQUAL "90" OR SM STREQUAL "90a")
-  add_definitions(-DENABLE_COMMON_INT4_FP8_DEQUANT=ON)
+  add_definitions(-DENABLE_FUSED_MOE_GPTQ_INT4_FP8=ON)
 
   file(GLOB_RECURSE FUSED_MOE_GPTQ_INT4_FP8_ALL_FILES
     fused_moe_gptq_int4_fp8_kernel_creator.sh
@@ -52,16 +52,30 @@ if (SM STREQUAL "90" OR SM STREQUAL "90a")
 
 endif()
 
-# set kernels target
-file(GLOB_RECURSE DEQUANT_SRCS *.cu)
-list(FILTER DEQUANT_SRCS EXCLUDE REGEX ".*test.cu")
+# set kernels target for dequant
+file(GLOB_RECURSE DEQUANT_SRCS dequant.cu)
 add_library(llm_kernels_nvidia_kernel_dequant STATIC ${DEQUANT_SRCS})
 set_property(TARGET llm_kernels_nvidia_kernel_dequant PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_dequant PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(llm_kernels_nvidia_kernel_dequant PUBLIC -lcublas -lcudart -lcublasLt llm_kernels_nvidia_utils)
 
+# set kernels target for per_tensor_quant_by_scale
+file(GLOB_RECURSE PER_TENSOR_QUANT_BY_SCALE_SRCS per_tensor_quant_by_scale.cu)
+add_library(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale STATIC ${PER_TENSOR_QUANT_BY_SCALE_SRCS})
+set_property(TARGET llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PUBLIC -lcublas -lcudart -lcublasLt
+    llm_kernels_nvidia_utils)
+target_link_libraries(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale PRIVATE cutlass_c4x)
+
 # for test
 file(GLOB_RECURSE DEQUANT_TEST_SRCS dequant_test.cu)
-cc_test(llm_kernels_nvidia_kernel_dequant_test SRCS ${DEQUANT_TEST_SRCS} DEPS 
+cc_test(llm_kernels_nvidia_kernel_dequant_test SRCS ${DEQUANT_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils
-    llm_kernels_nvidia_kernel_dequant)
+    llm_kernels_nvidia_kernel_dequant
+    torch c10)
+
+file(GLOB_RECURSE PER_TENSOR_QUANT_BY_SCALE_TEST_SRCS per_tensor_quant_by_scale_test.cu)
+cc_test(llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale_test SRCS ${PER_TENSOR_QUANT_BY_SCALE_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale
+    torch c10)

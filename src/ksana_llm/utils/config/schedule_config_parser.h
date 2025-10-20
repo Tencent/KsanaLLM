@@ -295,6 +295,8 @@ struct ParallelismBasicConfig {
   size_t moe_tensor_para_size{1};
 };
 
+enum W4AFP8_MOE_BACKEND { Default = 0, GroupTriton = 1, TensorTriton = 2 };
+
 // Config info used during runtime
 // Some configs are determined by ModelConfig and BatchSchedulerConfig
 struct RuntimeConfig {
@@ -313,6 +315,9 @@ struct RuntimeConfig {
   // Whether to dump eplb data.
   bool enable_dump_eplb_data = false;
   bool enable_load_eplb_weight = false;
+
+  // Backend type of w4afp8 moe
+  W4AFP8_MOE_BACKEND w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
 
   // Whether to normalize q and k before rotary position embedding in attention.
   // bool enable_qk_pre_norm_before_rotary_pos = false;

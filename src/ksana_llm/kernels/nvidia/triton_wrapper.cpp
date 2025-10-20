@@ -61,13 +61,13 @@ TritonWrapper::TritonWrapper() {
   // 初始化,声明kernel关键key的组合顺序
   kernel_key_map_["fused_moe_kernel"] = {"group_n",      "group_k",      "BLOCK_SIZE_M",      "BLOCK_SIZE_N",
                                          "BLOCK_SIZE_K", "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
-                                         "compute_type", "use_fp8_w8a8", "use_int8_w8a16", "even_Ks"};
+                                         "compute_type", "use_fp8_w8a8", "use_int8_w8a16",    "even_Ks"};
   kernel_key_map_["fused_moe_gptq_awq_kernel"] = {"BLOCK_SIZE_M",      "BLOCK_SIZE_N", "BLOCK_SIZE_K", "GROUP_SIZE_M",
                                                   "MUL_ROUTED_WEIGHT", "top_k",        "compute_type", "has_zp",
                                                   "weight_bits",       "group_size"};
   kernel_key_map_["fused_moe_gptq_int4_fp8_kernel"] = {"BLOCK_SIZE_M", "BLOCK_SIZE_N",      "BLOCK_SIZE_K",
                                                        "GROUP_SIZE_M", "MUL_ROUTED_WEIGHT", "top_k",
-                                                       "compute_type", "group_size"};
+                                                       "compute_type", "group_size",        "quant_a_per_tensor"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -301,7 +301,7 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
                                                     void* topk_weights, void* sorted_token_ids, void* expert_ids,
                                                     void* num_tokens_post_padded, int n, int k,
                                                     int max_num_tokens_padded, int numel, bool mul_routed_weight,
-                                                    int top_k, int group_size,
+                                                    int top_k, int group_size, bool quant_a_per_tensor,
                                                     std::unordered_map<std::string, int> config, cudaStream_t stream) {
   std::string kernel_name = "fused_moe_gptq_int4_fp8_kernel";
 
@@ -327,7 +327,8 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
                                                       {"MUL_ROUTED_WEIGHT", ConvertToString(mul_routed_weight)},
                                                       {"top_k", ConvertToString(top_k)},
                                                       {"compute_type", GetComputeType<T>()},
-                                                      {"group_size", ConvertToString(group_size)}};
+                                                      {"group_size", ConvertToString(group_size)},
+                                                      {"quant_a_per_tensor", ConvertToString(quant_a_per_tensor)}};
   size_t grid_x = CeilDiv(max_num_tokens_padded, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
   InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
 }
@@ -335,8 +336,8 @@ void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, v
   template void TritonWrapper::InvokeFusedMoeGptqInt4Fp8Kernel<T>(                                         \
       void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights, void* sorted_token_ids, \
       void* expert_ids, void* num_tokens_post_padded, int n, int k, int max_num_tokens_padded, int numel,  \
-      bool mul_routed_weight, int top_k, int group_size, std::unordered_map<std::string, int> config,      \
-      cudaStream_t stream)
+      bool mul_routed_weight, int top_k, int group_size, bool quant_a_per_tensor,                          \
+      std::unordered_map<std::string, int> config, cudaStream_t stream)
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(float);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(half);
 INVOKE_FUSED_MOE_GPTQ_INT4_FP8_KERNEL(__nv_bfloat16);

@@ -577,8 +577,8 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
           (w3_w1.to(torch::kFloat) * s3_s1.repeat_interleave(128, 0).to(torch::kFloat)).to(GetTorchDataType<dtype>());
       torch::Tensor fc1_gate = torch::matmul(act, w3_w1) * p3_p1;
       auto chunks = fc1_gate.chunk(2, -1);
-      torch::Tensor fc1 = chunks[0];
-      torch::Tensor gate = chunks[1];
+      torch::Tensor gate = chunks[0];
+      torch::Tensor fc1 = chunks[1];
       fc1 = fc1 * torch::nn::functional::silu(gate);
 
       act = torch::clamp((fc1 / p2), -448.0, 448.0).to(torch::kFloat8_e4m3fn).to(GetTorchDataType<dtype>());

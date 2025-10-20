@@ -67,14 +67,15 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
                        void* e_bias, float routed_scaling_factor, int rank, cudaStream_t stream);
 
 template <typename T, bool UseExpertParallel>
-void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype,
-                    DataType compute_dtype, bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale,
-                    void* w1_zp, void* w2_zp, void* a1_q, void* a2_q, void* a1_scale, void* a2_scale,
-                    std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,
-                    float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1,
-                    void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,
-                    int num_experts_per_node, int hidden_size, int inter_size, size_t world_expert_para_size,
-                    void* dequant_workspace, int rank, cudaStream_t stream);
+void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,
+                    bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp,
+                    void* a1_q, void* a2_q, void* w1_input_scale, void* w2_input_scale, void* a1_scale, void* a2_scale,
+                    void* w1_input_alpha, void* w2_input_alpha, std::vector<int> block_shape, void* topk_weights_ptr,
+                    void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,
+                    void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
+                    void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size, int inter_size,
+                    size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
+                    int rank, cudaStream_t stream);
 
 size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int hidden_size, int num_experts, int topk,
                                             size_t data_type_size);

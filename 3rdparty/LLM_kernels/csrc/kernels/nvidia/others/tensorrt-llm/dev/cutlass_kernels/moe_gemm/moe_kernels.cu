@@ -1976,20 +1976,22 @@ __global__ void doActivationKernel(T* output, GemmOutputType const* gemm_result,
 
     ActFn<ComputeElem> fn{};
     for (int64_t elem_index = start_offset; elem_index < num_elems_in_col; elem_index += stride) {
-      auto fc1_value = arrayConvert<GemmResultElem, ComputeElem>(gemm_result_vec[elem_index + gated_off_vec]);
+      auto fc1_value = arrayConvert<GemmResultElem, ComputeElem>(gemm_result_vec[elem_index]);
       if (bias_ptr) {
-        fc1_value = fc1_value + arrayConvert<BiasElem, ComputeElem>(bias_ptr_vec[elem_index + gated_off_vec]);
+        fc1_value = fc1_value + arrayConvert<BiasElem, ComputeElem>(bias_ptr_vec[elem_index]);
       }
 
-      auto gate_act = fn(fc1_value);
-
-      if (gated) {
-        auto gate_mul = arrayConvert<GemmResultElem, ComputeElem>(gemm_result_vec[elem_index]);
-        if (bias_ptr_vec) {
-          gate_mul = gate_mul + arrayConvert<BiasElem, ComputeElem>(bias_ptr_vec[elem_index]);
+      auto gate_act = [&]() {
+        if constexpr (IsGated) {
+          auto linear_value = arrayConvert<GemmResultElem, ComputeElem>(gemm_result_vec[elem_index + gated_off_vec]);
+          if (bias_ptr_vec) {
+            linear_value = linear_value + arrayConvert<BiasElem, ComputeElem>(bias_ptr_vec[elem_index + gated_off_vec]);
+          }
+          return fn(fc1_value, linear_value);
+        } else {
+          return fn(fc1_value);
         }
-        gate_act = gate_act * gate_mul;
-      }
+      }();
 
       auto post_act_val = gate_act * quant_scale;
 

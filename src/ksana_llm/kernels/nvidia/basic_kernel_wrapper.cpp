@@ -29,12 +29,10 @@
 #include "csrc/kernels/nvidia/expand/expand.h"
 #include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #include "csrc/kernels/nvidia/fused_add_norm/fused_add_norm.h"
-#include "csrc/kernels/nvidia/fused_moe_gptq_int4_fp8_kernel/dequant.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
-#include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
@@ -55,10 +53,6 @@
 #include "ksana_llm/utils/search_status.h"
 
 namespace ksana_llm {
-
-void DequantInt4Fp8(cudaStream_t stream, void* output, const void* input, const size_t datasize) {
-  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::dequant::dequant_int4_fp8(stream, output, input, datasize));
-}
 
 #define GET_MACHETE_DATA_TYPE(T, MACHETE_TYPE)                          \
   template <>                                                           \
@@ -710,6 +704,36 @@ RUN_TRT_ALLREDUCE(__nv_bfloat16);
 #undef RUN_TRT_ALLREDUCE
 
 template <typename T>
+void RunTrtFusedAllReduceResidualNorm(void* input, const int rank, const int token_num, const int hidden_dim,
+                                      const std::vector<void*>& workspace_d_ptrs, void* d_rms_gamma_ptr, float rms_eps,
+                                      void* residual_in_ptr, void* residual_out_ptr, void* norm_out_ptr,
+                                      cudaStream_t stream) {
+  llm_kernels::nvidia::AllReduceFusionParams<T> params;
+  params.nranks = static_cast<int>(workspace_d_ptrs.size());
+  params.rank = rank;
+  params.size = token_num * hidden_dim;
+  params.hidden_dim = hidden_dim;
+  params.workspace = reinterpret_cast<void**>(workspace_d_ptrs[rank]);
+  params.allreduce_in = input;
+  params.rms_gamma = d_rms_gamma_ptr;
+  params.rms_eps = rms_eps;
+  params.use_oneshot = true;
+  params.residual_in = residual_in_ptr;
+  params.residual_out = residual_out_ptr;  // inplace
+  params.norm_out = norm_out_ptr;
+  params.stream = stream;
+  params.pattern = llm_kernels::nvidia::AllReduceFusionPattern::kARResidualRMSNorm;
+  llm_kernels::nvidia::allreduce_fusion_op(params);
+}
+#define RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(T)                                                                       \
+  template void RunTrtFusedAllReduceResidualNorm<T>(void*, const int, const int, const int, const std::vector<void*>&, \
+                                                    void*, float, void*, void*, void*, cudaStream_t)
+RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(float);
+RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(half);
+RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(__nv_bfloat16);
+#undef RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM
+
+template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream) {
   CUDA_CHECK_LAST_ERROR(
       llm_kernels::nvidia::InvokeSigmoid<T>(reinterpret_cast<T*>(input), static_cast<int32_t>(size), scale, stream));
@@ -958,6 +982,17 @@ cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank) {
   c10::cuda::setCurrentCUDAStream(new_stream);
   return old_stream;
 }
+
+template <typename T>
+size_t InvokeGetBlockGemmWorkspaceSize(int m, int k, int n) {
+  return llm_kernels::nvidia::GetBlockwiseGemmWorkspaceSize<T>(m, k, n);
+}
+
+#define GET_BLOCKWISE_GEMM_WORKSPACE_SIZE(T) template size_t InvokeGetBlockGemmWorkspaceSize<T>(int m, int k, int n)
+GET_BLOCKWISE_GEMM_WORKSPACE_SIZE(float);
+GET_BLOCKWISE_GEMM_WORKSPACE_SIZE(half);
+GET_BLOCKWISE_GEMM_WORKSPACE_SIZE(__nv_bfloat16);
+#undef GET_BLOCKWISE_GEMM_WORKSPACE_SIZE
 
 template <typename T>
 void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* output, int m, int k, int n,

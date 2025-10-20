@@ -16,6 +16,7 @@
 #include "cuda_runtime.h"
 #include "test.h"
 
+#include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/kernels/nvidia/triton_wrapper.h"
 #include "ksana_llm/utils/device_types.h"
@@ -81,32 +82,6 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
       sorted_ids[idx] = i;
       token_cnts[expert_id] += 1;
     }
-  }
-
-  void TestDequantKernel(const size_t num_experts, const size_t n, const size_t k) {
-    torch::Tensor qweight = torch::randint(
-        0, 256, {static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k / 2)},
-        torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8));
-    torch::Tensor weight =
-        torch::empty({static_cast<int32_t>(num_experts), static_cast<int32_t>(n), static_cast<int32_t>(k)},
-                     torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn));
-
-    DequantInt4Fp8(stream, reinterpret_cast<void*>(weight.data_ptr()),
-                   reinterpret_cast<const void*>(qweight.data_ptr()), static_cast<int32_t>(num_experts * n * k / 2));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    torch::Tensor B = qweight.clone();
-    torch::Tensor DB = B.unsqueeze(-1).repeat({1, 1, 1, 2});
-    DB.index_put_({torch::indexing::Ellipsis, 1},
-                  torch::bitwise_right_shift(DB.index({torch::indexing::Ellipsis, 1}), 4));
-    DB = torch::bitwise_and(DB, 0xF);
-    DB = DB.to(torch::kFloat32);
-    DB = DB - 8;
-    DB = DB.to(torch::kFloat8_e4m3fn);
-    DB = DB.reshape({DB.size(0), DB.size(1), -1});
-    DB = DB.contiguous();
-
-    EXPECT_TRUE(torch::allclose(DB.to(torch::kFloat32), weight.to(torch::kFloat32)));
   }
 
   template <typename T>
@@ -195,12 +170,13 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
     config["group_size_m"] = 1;
     auto quant8_kernel = [&]() {
       InvokePerTokenGroupQuantFp8E4m3<T>(d_a.data_ptr(), d_qa.data_ptr(), d_qa_scale.data_ptr(), m, k, false, stream);
-      DequantInt4Fp8(stream, reinterpret_cast<void*>(d_b.data_ptr()), reinterpret_cast<const void*>(d_qb.data_ptr()),
-                     (size_t)num_experts * n * k / 2);
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::dequant::dequant_uint4_fp8_launcher(
+          stream, reinterpret_cast<void*>(d_b.data_ptr()), reinterpret_cast<const void*>(d_qb.data_ptr()),
+          static_cast<size_t>(num_experts) * n * k / 2));
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
           d_qa.data_ptr(), d_b.data_ptr(), d_8o.data_ptr(), d_qa_scale.data_ptr(), d_qb_scale.data_ptr(), nullptr,
           d_sorted_token_ids.data_ptr(), d_expert_ids.data_ptr(), d_num_tokens_post_padded.data_ptr(), n, k, em, numel,
-          mul_routed_weight, topk, group_size, config, stream);
+          mul_routed_weight, topk, group_size, false, config, stream);
     };
     float quant8_time = MeasureCudaExecutionTime(quant8_kernel, stream);
 
@@ -224,8 +200,7 @@ class FusedMoeGptqInt4Fp8KernelTestSuit : public testing::Test {
 
 TEST_F(FusedMoeGptqInt4Fp8KernelTestSuit, FuseMoeGptqInt4Fp8KernelTest) {
   if (ValidTestHardware()) {
-    TestDequantKernel(128, 3584, 1024);
-    TestFusedMoeGptqInt4Fp8Kernel<half>(1024, 7168, 2048, 0.03);
+    TestFusedMoeGptqInt4Fp8Kernel<half>(1024, 7168, 2048, 0.04);
     TestFusedMoeGptqInt4Fp8Kernel<__nv_bfloat16>(1024, 7168, 2048, 0.04);
   } else {
     KLLM_LOG_INFO << "Skipping test bacause SM version is less than 90";

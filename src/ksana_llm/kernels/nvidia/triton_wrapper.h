@@ -78,8 +78,8 @@ class TritonWrapper {
   void InvokeFusedMoeGptqInt4Fp8Kernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,
                                        void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded, int n,
                                        int k, int max_num_tokens_padded, int numel, bool mul_routed_weight, int top_k,
-                                       int group_size, std::unordered_map<std::string, int> config,
-                                       cudaStream_t stream);
+                                       int group_size, bool quant_a_per_tensor,
+                                       std::unordered_map<std::string, int> config, cudaStream_t stream);
 
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,

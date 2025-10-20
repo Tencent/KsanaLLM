@@ -94,6 +94,8 @@ class MoeLayer : public BaseLayer {
 
   bool apply_weight_ = false;
 
+  W4AFP8_MOE_BACKEND w4afp8_moe_backend_;
+
   void* topk_weights_ptr_;
   size_t topk_weights_ptr_size;
   void* topk_ids_ptr_;

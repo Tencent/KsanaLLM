@@ -63,6 +63,13 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
       &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
   builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
+
+  // for deepseek w4afp8 triton
+  // NOTE(jinxcwu) fast than CUTLASS_MOE_BACKEND when prefill
+  builder_map_[{TYPE_INT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MoeLayer>;
+  builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MoeLayer>;
 #  endif
 #endif
 }
@@ -148,7 +155,13 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
     moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype
   }
   if (enable_moe_int4) {
-    moe_matmul_param.push_back(DataType::TYPE_I4_GROUP);                                  // int_weight_dtype
+    if (weight_type == TYPE_UINT8) {
+      moe_matmul_param.push_back(TYPE_UINT4x2);  // int_weight_dtype
+    } else if (weight_type == TYPE_INT8) {
+      moe_matmul_param.push_back(TYPE_INT4x2);  // int_weight_dtype
+    } else {
+      moe_matmul_param.push_back(TYPE_I4_GROUP);  // int_weight_dtype
+    }
     moe_matmul_param.push_back(static_cast<int>(model_config_.quant_config.group_size));  // group_size
   } else {
     moe_matmul_param.push_back(DataType::TYPE_INVALID);  // int_weight_dtype
@@ -164,11 +177,12 @@ std::shared_ptr<BaseLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<B
   }
   // int4 moe创建
   if (enable_moe_int4) {
+    if (weight_type == TYPE_UINT8 || runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::GroupTriton ||
+        runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::TensorTriton) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);
+    }
     if (weight_type == TYPE_INT8) {
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND);
-    }
-    if (weight_type == TYPE_UINT8) {
-      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);
     }
     if (!use_vllm_moe) {
       return CreateLayer(TYPE_I4_GROUP, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND);

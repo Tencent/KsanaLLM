@@ -28,12 +28,13 @@
 #include "csrc/kernels/nvidia/expand/expand.h"
 #include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #include "csrc/kernels/nvidia/fused_add_norm/fused_add_norm.h"
-#include "csrc/kernels/nvidia/fused_moe_gptq_int4_fp8_kernel/dequant.h"
 #include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
+#include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/dequant.h"
+#include "csrc/kernels/nvidia/moe/fused_moe_gptq_int4_fp8_kernel/per_tensor_quant_by_scale.h"
+#include "csrc/kernels/nvidia/moe/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
-#include "csrc/kernels/nvidia/moe_wna16/moe_wna16.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
@@ -359,19 +360,21 @@ INVOKE_GROUPED_TOPK(__nv_bfloat16);
 // [vLLM Project]
 // https://github.com/Chen-XiaoBing/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L624
 template <typename T>
-void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scale, void* b_scale, void* b_zp,
-                              void* topk_weights, void* topk_ids, void* sorted_token_ids, void* expert_ids,
-                              void* num_tokens_post_padded, bool mul_routed_weight, int topk, int chunk_num_tokens,
-                              int numel, int m, int k, int n, int max_num_tokens_padded,
-                              const std::unordered_map<std::string, int>& config, DataType weight_dtype,
-                              DataType compute_dtype, bool use_moe_wna16_cuda, void* dequant_workspace,
-                              std::vector<int>& block_shape, int num_experts_per_node, bool fuse_silu_mul,
-                              bool skip_quantization, const cudaStream_t& stream) {
+void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scale, void* a_input_scale,
+                              void* a_input_alpha, void* b_scale, void* b_zp, void* topk_weights, void* topk_ids,
+                              void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded,
+                              bool mul_routed_weight, int topk, int chunk_num_tokens, int numel, int m, int k, int n,
+                              int max_num_tokens_padded, const std::unordered_map<std::string, int>& config,
+                              DataType weight_dtype, DataType compute_dtype, bool use_moe_wna16_cuda,
+                              void* dequant_workspace, std::vector<int>& block_shape, int num_experts_per_node,
+                              bool fuse_silu_mul, bool skip_quantization, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
+                              const cudaStream_t& stream) {
   if (chunk_num_tokens < config.at("block_size_m")) {
     max_num_tokens_padded = std::min(max_num_tokens_padded, chunk_num_tokens * topk * config.at("block_size_m"));
   }
 
-  if (weight_dtype == DataType::TYPE_I4_GROUP && block_shape.size() > 1 && block_shape[1] > 0) {
+  if ((weight_dtype == DataType::TYPE_UINT4x2 || weight_dtype == DataType::TYPE_INT4x2) && block_shape.size() > 1 &&
+      block_shape[1] > 0) {
     int group_size = block_shape[1];
     bool has_zp = !(b_zp == nullptr);
     int weight_bits = 4;
@@ -392,16 +395,38 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
     } else if (compute_dtype == DataType::TYPE_BLOCK_FP8_E4M3 && !has_zp) {  // TODO(jinxcwu) 目前只支持无zp的gptq
       // https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/fused_moe/fused_moe.py#L688
       // TODO(zakwang) :这里有个假定,即 block_shape 不为 None
-      if (!skip_quantization) {
-        InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+      if (weight_dtype == DataType::TYPE_UINT4x2) {
+        CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::dequant::dequant_uint4_fp8_launcher(
+            stream, dequant_workspace, b, static_cast<size_t>(num_experts_per_node * n * k / 2)));
+      } else if (weight_dtype == DataType::TYPE_INT4x2) {
+        CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::dequant::dequant_int4_fp8_launcher(
+            stream, dequant_workspace, b, static_cast<size_t>(num_experts_per_node * n * k / 2)));
+      } else {
+        KLLM_THROW(fmt::format("Unsupport weight_dtype: {}", weight_dtype));
       }
-      DequantInt4Fp8(stream, dequant_workspace, b, (size_t)num_experts_per_node * n * k / 2);
-      Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
-          a_q, dequant_workspace, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids,
-          num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size,
-          moe_wna16_config, stream);
+      if (w4afp8_moe_backend == W4AFP8_MOE_BACKEND::TensorTriton) {
+        if (!skip_quantization) {
+          CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::per_tensor_quant_by_scale_launcher<T, __nv_fp8_e4m3>(
+              a_q, a, a_input_scale, chunk_num_tokens * k, stream));
+        }
+        Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
+            a_q, dequant_workspace, c, a_input_alpha, b_scale, topk_weights, sorted_token_ids, expert_ids,
+            num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size, true,
+            moe_wna16_config, stream);
+      } else if (w4afp8_moe_backend == W4AFP8_MOE_BACKEND::GroupTriton) {
+        if (!skip_quantization) {
+          InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_scale, chunk_num_tokens, k, /*is_column_major*/ false, stream);
+        }
+        Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqInt4Fp8Kernel<T>(
+            a_q, dequant_workspace, c, a_scale, b_scale, topk_weights, sorted_token_ids, expert_ids,
+            num_tokens_post_padded, n, k, max_num_tokens_padded, numel, mul_routed_weight, topk, group_size, false,
+            moe_wna16_config, stream);
+      } else {
+        KLLM_THROW(fmt::format("Unsupport w4afp8_moe_backend: {}", w4afp8_moe_backend));
+      }
     } else {
-      int pack_factor = 8 / weight_bits;
+      constexpr size_t kBitsPerByte = 8;
+      int pack_factor = kBitsPerByte / weight_bits;
       Singleton<TritonWrapper>::GetInstance()->InvokeFusedMoeGptqAwqKernel<T>(
           a, b, c, b_scale, b_zp, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, n, k,
           max_num_tokens_padded, numel, k, 1, n * k / pack_factor, 1, k / pack_factor, n, 1, n * k / group_size, 1,
@@ -438,11 +463,13 @@ void InvokeFusedMoeKernelFunc(void* a, void* b, void* c, void* a_q, void* a_scal
 template <typename T, bool UseExpertParallel>
 void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,
                     bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp,
-                    void* a1_q, void* a2_q, void* a1_scale, void* a2_scale, std::vector<int> block_shape,
-                    void* topk_weights_ptr, void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,
+                    void* a1_q, void* a2_q, void* w1_input_scale, void* w2_input_scale, void* a1_scale, void* a2_scale,
+                    void* w1_input_alpha, void* w2_input_alpha, std::vector<int> block_shape, void* topk_weights_ptr,
+                    void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states,
                     void* intermediate_cache1, void* intermediate_cache2, void* intermediate_cache3,
                     void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size, int inter_size,
-                    size_t world_expert_para_size, void* dequant_workspace, int rank, cudaStream_t stream) {
+                    size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend,
+                    int rank, cudaStream_t stream) {
   // hidden_states [num_tokens, hidden_size] dtype = T
   // w1 [num_experts_per_node, inter_size * 2, hidden_size]
   // w2 [num_experts_per_node, hidden_size, inter_size]
@@ -494,9 +521,11 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
                 {"num_warps", 4},
                 {"num_stages", 3}};
     }
-  } else if (weight_dtype == DataType::TYPE_I4_GROUP && (!block_shape.empty())) {
+  } else if ((weight_dtype == DataType::TYPE_UINT4x2 || weight_dtype == DataType::TYPE_INT4x2) &&
+             (!block_shape.empty())) {
     use_moe_wna16_cuda =
         ShouldMoeWna16UseCuda(M * topk, block_shape[1], num_experts_per_node, 4) && hidden_states != nullptr;
+    use_moe_wna16_cuda = use_moe_wna16_cuda && weight_dtype == DataType::TYPE_UINT4x2;
     if (use_moe_wna16_cuda) {
       config = {{"block_size_m", std::min(16, M)}};
     } else if (M <= 20) {
@@ -586,12 +615,12 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
 
     // invoke_fused_moe_kernel
     InvokeFusedMoeKernelFunc<T>(
-        curr_hidden_states, w1, curr_intermediate_cache1, a1_q, a1_scale, w1_scale, w1_zp, curr_topk_weights,
-        curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr), reinterpret_cast<int32_t*>(expert_ids_ptr),
-        reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk, tokens_in_chunk, numel, tokens_in_chunk,
-        hidden_size, inter_size * 2, max_num_tokens_padded, config, weight_dtype, compute_dtype, use_moe_wna16_cuda,
-        dequant_workspace, block_shape, num_experts_per_node, /*fuse_silu_mul*/ false, hidden_states == nullptr,
-        stream);
+        curr_hidden_states, w1, curr_intermediate_cache1, a1_q, a1_scale, w1_input_scale, w1_input_alpha, w1_scale,
+        w1_zp, curr_topk_weights, curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr),
+        reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), false, topk,
+        tokens_in_chunk, numel, tokens_in_chunk, hidden_size, inter_size * 2, max_num_tokens_padded, config,
+        weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts_per_node,
+        /*fuse_silu_mul*/ false, hidden_states == nullptr, w4afp8_moe_backend, stream);
 
     // When T is __nv_fp8e4m3, we fuse silu_mul into group quant
     bool fuse_silu_mul =
@@ -603,13 +632,14 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
           reinterpret_cast<const int*>(curr_topk_ids), elements_num, inter_size, stream);
     }
 
-    InvokeFusedMoeKernelFunc<T>(
-        fuse_silu_mul ? curr_intermediate_cache1 : curr_intermediate_cache2, w2, curr_intermediate_cache3, a2_q,
-        a2_scale, w2_scale, w2_zp, curr_topk_weights, curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr),
-        reinterpret_cast<int32_t*>(expert_ids_ptr), reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1,
-        tokens_in_chunk * topk, numel, tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config,
-        weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape, num_experts_per_node,
-        fuse_silu_mul, false, stream);
+    InvokeFusedMoeKernelFunc<T>(fuse_silu_mul ? curr_intermediate_cache1 : curr_intermediate_cache2, w2,
+                                curr_intermediate_cache3, a2_q, a2_scale, w2_input_scale, w2_input_alpha, w2_scale,
+                                w2_zp, curr_topk_weights, curr_topk_ids, reinterpret_cast<int32_t*>(sorted_ids_ptr),
+                                reinterpret_cast<int32_t*>(expert_ids_ptr),
+                                reinterpret_cast<int32_t*>(num_tokens_post_pad_ptr), true, 1, tokens_in_chunk * topk,
+                                numel, tokens_in_chunk * topk, inter_size, hidden_size, max_num_tokens_padded, config,
+                                weight_dtype, compute_dtype, use_moe_wna16_cuda, dequant_workspace, block_shape,
+                                num_experts_per_node, fuse_silu_mul, false, w4afp8_moe_backend, stream);
 
     // 使用fp8并且使用deepep，需要在这里更新a1_q和a2_q
     if (hidden_states == nullptr) {
@@ -624,23 +654,25 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
   }
 }
 
-#define FUSEDMOE(T)                                                                                           \
-  template void InvokeFusedMoe<T, true>(                                                                      \
-      void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,       \
-      bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q,  \
-      void* a2_q, void* a1_scale, void* a2_scale, std::vector<int> block_shape, void* topk_weights_ptr,       \
-      void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, \
-      void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,            \
-      int num_experts_per_node, int hidden_size, int inter_size, size_t world_expert_para_size,               \
-      void* dequant_workspace, int rank, cudaStream_t stream);                                                \
-  template void InvokeFusedMoe<T, false>(                                                                     \
-      void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,       \
-      bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q,  \
-      void* a2_q, void* a1_scale, void* a2_scale, std::vector<int> block_shape, void* topk_weights_ptr,       \
-      void* topk_ids_ptr, float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, \
-      void* intermediate_cache2, void* intermediate_cache3, void* fused_id_buffer, int num_tokens,            \
-      int num_experts_per_node, int hidden_size, int inter_size, size_t world_expert_para_size,               \
-      void* dequant_workspace, int rank, cudaStream_t stream)
+#define FUSEDMOE(T)                                                                                                  \
+  template void InvokeFusedMoe<T, true>(                                                                             \
+      void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,              \
+      bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q,         \
+      void* a2_q, void* w1_input_scale, void* w2_input_scale, void* a1_scale, void* a2_scale, void* w1_input_alpha,  \
+      void* w2_input_alpha, std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,                \
+      float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, \
+      void* intermediate_cache3, void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size,   \
+      int inter_size, size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend, \
+      int rank, cudaStream_t stream);                                                                                \
+  template void InvokeFusedMoe<T, false>(                                                                            \
+      void* hidden_states, void* w1, void* w2, int topk, DataType weight_dtype, DataType compute_dtype,              \
+      bool is_marlin, bool use_triton, void* w1_scale, void* w2_scale, void* w1_zp, void* w2_zp, void* a1_q,         \
+      void* a2_q, void* w1_input_scale, void* w2_input_scale, void* a1_scale, void* a2_scale, void* w1_input_alpha,  \
+      void* w2_input_alpha, std::vector<int> block_shape, void* topk_weights_ptr, void* topk_ids_ptr,                \
+      float routed_scaling_factor, void* output_hidden_states, void* intermediate_cache1, void* intermediate_cache2, \
+      void* intermediate_cache3, void* fused_id_buffer, int num_tokens, int num_experts_per_node, int hidden_size,   \
+      int inter_size, size_t world_expert_para_size, void* dequant_workspace, W4AFP8_MOE_BACKEND w4afp8_moe_backend, \
+      int rank, cudaStream_t stream)
 FUSEDMOE(float);
 FUSEDMOE(half);
 FUSEDMOE(__nv_bfloat16);

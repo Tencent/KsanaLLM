@@ -39,6 +39,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import triton
 import triton.language as tl
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+common_dir = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.insert(0, current_dir)
+sys.path.insert(0, common_dir)
+from common import dump_kernel, str_to_bool, set_global_seed, moe_align_block_cpu, performance_kernel
 
 @triton.jit
 def fused_moe_kernel(
@@ -223,7 +228,7 @@ def fused_moe(
     expert_ids: torch.Tensor,
     num_tokens_post_padded: torch.Tensor,
     mul_routed_weight: bool,
-    top_k: int,
+    topk: int,
     config: Dict[str, Any],
     compute_type: tl.dtype,
     use_fp8_w8a8: bool,
@@ -233,7 +238,7 @@ def fused_moe(
     EM = sorted_token_ids.shape[0]
     if A.shape[0] < config["BLOCK_SIZE_M"]:
         EM = min(sorted_token_ids.shape[0],
-                 A.shape[0] * top_k * config['BLOCK_SIZE_M'])
+                 A.shape[0] * topk * config['BLOCK_SIZE_M'])
 
     K = B.shape[2]
     if K % config["BLOCK_SIZE_K"] != 0 and args.even_Ks:
@@ -258,7 +263,7 @@ def fused_moe(
         0 if block_shape is None else block_shape[0],
         0 if block_shape is None else block_shape[1],
         MUL_ROUTED_WEIGHT=mul_routed_weight,
-        top_k=top_k,
+        top_k=topk,
         compute_type=compute_type,
         use_fp8_w8a8=use_fp8_w8a8,
         use_int8_w8a16=use_int8_w8a16,
@@ -273,7 +278,7 @@ def two_step_fused_moe(
     down_proj_dict: Dict[str, torch.Tensor],
     gate_dict: Dict[str, torch.Tensor],
     mul_routed_weight: bool,
-    top_k: int,
+    topk: int,
     config: Dict[str, Any],
     compute_type: tl.dtype,
     use_fp8_w8a8: bool,
@@ -282,29 +287,18 @@ def two_step_fused_moe(
 ):
     fused_moe(**up_gate_proj_dict, **gate_dict,
               mul_routed_weight=False,
-              top_k=top_k, config=config,
+              topk=topk, config=config,
               compute_type=compute_type,
               use_fp8_w8a8=use_fp8_w8a8,
               use_int8_w8a16=use_int8_w8a16,
               block_shape=block_shape)
     fused_moe(**down_proj_dict, **gate_dict,
               mul_routed_weight=True,
-              top_k=1, config=config,
+              topk=1, config=config,
               compute_type=compute_type,
               use_fp8_w8a8=use_fp8_w8a8,
               use_int8_w8a16=use_int8_w8a16,
               block_shape=block_shape)
-
-
-def str_to_bool(value):
-    if value.lower() in ('true', 't', 'yes', 'y', '1'):
-        return True
-    elif value.lower() in ('false', 'f', 'no', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError(
-            'Invalid boolean value: {}'.format(value))
-
 
 def args_config():
     parser = argparse.ArgumentParser()
@@ -358,65 +352,6 @@ def args_config():
         args.triton_compute_type = tl.bfloat16
     return args
 
-
-def performance_fused_moe(
-    A: torch.Tensor,
-    B: torch.Tensor,
-    C: torch.Tensor,
-    A_scale: torch.Tensor,
-    B_scale: torch.Tensor,
-    topk_weights: torch.Tensor,
-    topk_ids: torch.Tensor,
-    sorted_token_ids: torch.Tensor,
-    expert_ids: torch.Tensor,
-    num_tokens_post_padded: torch.Tensor,
-    mul_routed_weight: bool,
-    topk: int,
-    config: Dict[str, Any],
-    compute_type: tl.dtype,
-    use_fp8_w8a8: bool,
-    use_int8_w8a16: bool,
-    block_shape: List[int],
-):
-    # for generate the jit code
-    output_tensor, kernel = fused_moe(A, B, C, A_scale, B_scale, topk_weights,
-                                      topk_ids, sorted_token_ids, expert_ids,
-                                      num_tokens_post_padded,
-                                      mul_routed_weight, topk, config,
-                                      compute_type, use_fp8_w8a8,
-                                      use_int8_w8a16, block_shape)
-    torch.cuda.synchronize()
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        for _ in range(10):
-            fused_moe(A, B, C, A_scale, B_scale, topk_weights, topk_ids,
-                      sorted_token_ids, expert_ids, num_tokens_post_padded,
-                      mul_routed_weight, topk, config, compute_type,
-                      use_fp8_w8a8, use_int8_w8a16, block_shape)
-    torch.cuda.synchronize()
-    # Warmup
-    for _ in range(5):
-        graph.replay()
-    torch.cuda.synchronize()
-
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-    latencies: List[float] = []
-
-    for i in range(num_iters):
-        torch.cuda.synchronize()
-
-        start_event.record()
-        graph.replay()
-        end_event.record()
-        end_event.synchronize()
-        latencies.append(start_event.elapsed_time(end_event))
-    kernel_time = sum(latencies) / (num_iters) * 1000  # us
-    graph.reset()
-
-    return kernel, kernel_time, output_tensor
-
-
 def performance_two_step_fused_moe(
     up_gate_proj_dict: Dict[str, torch.Tensor],
     down_proj_dict: Dict[str, torch.Tensor],
@@ -462,33 +397,6 @@ def performance_two_step_fused_moe(
 
     return kernel_time
 
-
-def dump_kernel(kernel, output_dir, kernel_name, config):
-    with open(f"{output_dir}/{kernel_name}.cubin", "wb") as _f:
-        _f.write(kernel.asm['cubin'])
-    with open(f"{output_dir}/{kernel_name}.json", "w") as _f:
-        json_dict = {"shm_size": kernel.metadata.shared}
-        if config.get("config", {}).get("num_warps", None) is not None and config.get("config", {}).get(
-                "num_stages", None) is not None:
-            json_dict["num_warps"] = config.get("config").get("num_warps")
-            json_dict["num_stages"] = config.get("config").get("num_stages")
-        _f.write(json.dumps(json_dict))
-    with open(f"{output_dir}/{kernel_name}.ptx", "w") as _f:
-        SHM_SIZE = 0
-        try:
-            SHM_SIZE = kernel.metadata["shared"]
-        except TypeError:
-            SHM_SIZE = kernel.metadata.shared
-        KERNEL_NAME = "default"
-        try:
-            KERNEL_NAME = kernel.metadata["name"]
-        except TypeError:
-            KERNEL_NAME = kernel.metadata.name
-        print("//shared_memory:", SHM_SIZE, end=", ", file=_f)
-        print("kernel_name:", KERNEL_NAME, file=_f)
-        print(kernel.asm['ptx'], file=_f)
-
-
 def get_weight_block_size_safety(config, default_value=None):
     quantization_config = getattr(config, 'quantization_config', {})
     if isinstance(quantization_config, dict):
@@ -533,40 +441,8 @@ def if_skip_config(M, N, config):
 
     return False
 
-# get expert_ids, sorted_ids, token_post_pad according to block_size_m, token_post_pad will influence the MOE execution latency
-def moe_align_block_cpu(topk_ids, expert_ids, sorted_ids, token_post_pad, token_num, topk, expert_num, block_size):
-    cumsum = [0] * (expert_num + 1)
-    token_cnts = [0] * (expert_num + 1)
-    numel = token_num * topk
-    sorted_ids.fill_(numel)
-    expert_ids.fill_(-1)
-
-    for i in range(numel):
-        expert_id = topk_ids[i]
-        if expert_id >= expert_num:
-            continue
-        token_cnts[expert_id] += 1
-
-    for i in range(expert_num):
-        cumsum[i + 1] = cumsum[i] + \
-            (token_cnts[i] + block_size - 1) // block_size
-        token_cnts[i] = 0
-        for j in range(cumsum[i], cumsum[i + 1]):
-            expert_ids[j] = i
-
-    token_post_pad[0] = cumsum[expert_num] * block_size
-
-    for i in range(numel):
-        expert_id = topk_ids[i]
-        if expert_id >= expert_num:
-            continue
-        idx = cumsum[expert_id] * block_size + token_cnts[expert_id]
-        sorted_ids[idx] = i
-        token_cnts[expert_id] += 1
-
-
 if __name__ == "__main__":
-    torch.manual_seed(42)
+    set_global_seed(42)
     args = args_config()
     if not args.tune and args.deep_tune:
         logging.error("can not set deep_tune=true when tune=false")
@@ -659,7 +535,6 @@ if __name__ == "__main__":
                                                dtype=torch.float32)
 
     topk_weights = torch.rand([m, topk], device='cuda', dtype=torch.float32)
-    torch.manual_seed(42)
     topk_ids = torch.randint(size=[m, topk],
                              low=0,
                              high=num_experts,
@@ -716,9 +591,12 @@ if __name__ == "__main__":
         candidate_configs["default"]["kernel_time"] = kernel_time
         candidate_configs["default"]["kernel"] = None
     else:
-        default_kernel, kernel_time, output_tensor = performance_fused_moe(
-            **up_gate_proj_dict, **gate_dict, mul_routed_weight=mul_routed_weight, topk=topk, config=config,
-            compute_type=compute_type, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, block_shape=block_shape)
+        def fn():
+            return fused_moe(**up_gate_proj_dict, **gate_dict,
+                             mul_routed_weight=mul_routed_weight, topk=topk, config=config,
+                             compute_type=compute_type, use_fp8_w8a8=use_fp8_w8a8,
+                             use_int8_w8a16=use_int8_w8a16, block_shape=block_shape)
+        default_kernel, kernel_time, output_tensor = performance_kernel(fn)
         candidate_configs["default"]["kernel_time"] = kernel_time
         candidate_configs["default"]["kernel"] = default_kernel
 
@@ -798,15 +676,16 @@ if __name__ == "__main__":
                                             kernel = None
                                             output_tensor = None
                                         else:
-                                            kernel, kernel_time, output_tensor = performance_fused_moe(
-                                                **up_gate_proj_dict, **gate_dict,
-                                                mul_routed_weight=mul_routed_weight,
-                                                topk=topk,
-                                                config=opt_config,
-                                                compute_type=compute_type,
-                                                use_fp8_w8a8=use_fp8_w8a8,
-                                                use_int8_w8a16=use_int8_w8a16,
-                                                block_shape=block_shape)
+                                            def fn():
+                                                return fused_moe(**up_gate_proj_dict, **gate_dict,
+                                                                  mul_routed_weight=mul_routed_weight,
+                                                                  topk=topk,
+                                                                  config=opt_config,
+                                                                  compute_type=compute_type,
+                                                                  use_fp8_w8a8=use_fp8_w8a8,
+                                                                  use_int8_w8a16=use_int8_w8a16,
+                                                                  block_shape=block_shape)
+                                            kernel, kernel_time, output_tensor = performance_kernel(fn)
                                         candidate_configs["configs"].append({
                                             "config": opt_config,
                                             "kernel_time": kernel_time,

@@ -4,16 +4,15 @@
 
 #pragma once
 
-#include <cuda.h>
-#include <cuda_bf16.h>
-#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 namespace llm_kernels {
 namespace nvidia {
 namespace dequant {
 
-void dequant_int4_fp8(cudaStream_t stream, void* output, const void* input, size_t datasize);
+void dequant_uint4_fp8_launcher(cudaStream_t stream, void* output, const void* input, size_t datasize);
+
+void dequant_int4_fp8_launcher(cudaStream_t stream, void* output, const void* input, size_t datasize);
 
 }  // namespace dequant
 }  // namespace nvidia

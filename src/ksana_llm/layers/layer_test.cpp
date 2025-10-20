@@ -84,6 +84,7 @@ class LayerTest : public testing::Test {
     runtime_config.attn_backend_config.block_token_num = block_manager_config.device_allocator_config.block_token_num;
     runtime_config.attn_backend_config.block_size = block_manager_config.device_allocator_config.block_size;
     runtime_config.inter_data_type = model_config.weight_data_type;
+    runtime_config.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
 
     Singleton<Environment>::GetInstance()->SetBlockManagerConfig(block_manager_config);
     context_ = std::make_shared<Context>(1, 1, 1);
@@ -745,7 +746,6 @@ TEST_F(LayerTest, MarlinMatMulLayerTest) {
   // 获取工作空间大小并分配
   std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   marlin_matmul_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(marlin_matmul_layer.GetWorkspaceSize()));
-
 
   // 准备输入张量
   const size_t m = 96;  // 实际使用的m值，小于max_m
@@ -1493,7 +1493,7 @@ TEST_F(LayerTest, MoeLayerTest) {
   bool use_e_score_correction_bias = false;  // 关闭方便测试
   bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
-  DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
+  DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
   int layer_idx = 0;
@@ -1798,18 +1798,17 @@ TEST_F(LayerTest, MoeLayerTest) {
     // 步骤2 处理weight
     for (size_t expert_id = 0; expert_id < expert_num; expert_id++) {
       up_gate_weight[expert_id].copy_(torch::cat(
-          {weights[fmt::format("{}.w3.weight", expert_id)], weights[fmt::format("{}.w1.weight", expert_id)]}, 0));
+          {weights[fmt::format("{}.w1.weight", expert_id)], weights[fmt::format("{}.w3.weight", expert_id)]}, 0));
       down_weight[expert_id].copy_(weights[fmt::format("{}.w2.weight", expert_id)]);
     }
     // 步骤3 处理scale
     for (size_t expert_id = 0; expert_id < expert_num; expert_id++) {
-      up_gate_weight_scale[expert_id].copy_(torch::cat({weights[fmt::format("{}.w3.weight_scale_inv", expert_id)],
-                                                        weights[fmt::format("{}.w1.weight_scale_inv", expert_id)]},
+      up_gate_weight_scale[expert_id].copy_(torch::cat({weights[fmt::format("{}.w1.weight_scale_inv", expert_id)],
+                                                        weights[fmt::format("{}.w3.weight_scale_inv", expert_id)]},
                                                        0));
       down_weight_scale[expert_id].copy_(weights[fmt::format("{}.w2.weight_scale_inv", expert_id)]);
     }
     // 创建 triton moe layer
-    setenv("EXPERIMENTAL_INT4_FP8_MOE", "0", 1);
     std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
     MoeLayer moe_layer = MoeLayer();
     moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
@@ -1856,7 +1855,6 @@ TEST_F(LayerTest, MoeLayerTest) {
     // 推理
     EXPECT_TRUE(moe_layer.Forward(inputs, outputs).OK());
     StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
-    unsetenv("EXPERIMENTAL_INT4_FP8_MOE");
   }
 
   torch::Tensor torch_output = torch::zeros_like(hidden_states);
@@ -1925,8 +1923,8 @@ TEST_F(LayerTest, MoeLayerTest) {
           (w1_w3.to(torch::kFloat) * s1_s3.repeat_interleave(128, 0).to(torch::kFloat)).to(GetTorchDataType<dtype>());
       torch::Tensor fc1_gate = torch::matmul(act, w1_w3) * p1_p3;
       auto chunks = fc1_gate.chunk(2, -1);
-      torch::Tensor fc1 = chunks[0];
-      torch::Tensor gate = chunks[1];
+      torch::Tensor gate = chunks[0];
+      torch::Tensor fc1 = chunks[1];
       fc1 = fc1 * torch::nn::functional::silu(gate);
 
       act = torch::clamp((fc1 / p2), -448.0, 448.0).to(torch::kFloat8_e4m3fn).to(GetTorchDataType<dtype>());
@@ -1963,7 +1961,7 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   bool use_e_score_correction_bias = false;  // 关闭方便测试
   bool enable_full_shared_expert = false;
   DataType fp8_weight_dtype = DataType::TYPE_INVALID;
-  DataType int_weight_dtype = DataType::TYPE_I4_GROUP;
+  DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
   int layer_idx = 0;

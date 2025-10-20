@@ -28,7 +28,6 @@
 
 namespace ksana_llm {
 
-void DequantInt4Fp8(cudaStream_t stream, void* output, const void* input, const size_t datasize);
 template <typename T>
 llm_kernels::nvidia::vllm_dtype::ScalarType GetMacheteDataType();
 

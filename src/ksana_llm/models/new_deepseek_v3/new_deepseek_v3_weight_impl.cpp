@@ -6,6 +6,7 @@
 #include <numeric>
 #include "ksana_llm/model_loader/model_loader_utils.h"
 #include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/utils.h"
 
 namespace ksana_llm {
 template <typename T>
@@ -703,18 +704,13 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
                      &(context_->GetMemoryManageStreams()[dev_rank]));
         }
         Tensor& up_gate_experts_tensor = device_model_weights.at(up_gate_experts_name);
-        // NOTE(jinxcwu) up_gate权重名字有问题，实际是up在后，gate在前。当使用cutlass moe时up在前，gate在后
-        size_t up_offset = expert_pitch;
-        size_t gate_offset = 0;
-        if (new_deepseek_v3_config->GetGptqQuantConfig().input_scale) {
-          std::swap(up_offset, gate_offset);
-        }
+        // TODO(jinxcwu) up_gate权重名字有问题，实际是up在后，gate在前
         if (host_weight_name.find(".up_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + up_offset,
+          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + expert_pitch,
                       dev_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_DEVICE_TO_DEVICE,
                       context_->GetMemoryManageStreams()[dev_rank]);
         } else if (host_weight_name.find(".gate_proj.") != std::string::npos) {
-          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + gate_offset,
+          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch,
                       dev_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_DEVICE_TO_DEVICE,
                       context_->GetMemoryManageStreams()[dev_rank]);
         }
@@ -890,22 +886,33 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
           KLLM_THROW("Currently, W4AFP8 strictly enforces TP=EP.");
         }
         // cutlass moe int4 算子对权重的特殊处理
-        // scale转换
-        std::vector<size_t> interleaves = GetCutlassMoeInterleave(new_deepseek_v3_config->hidden_units,
-                                                                  new_deepseek_v3_config->moe_config.moe_inter_size);
-        size_t interleave = interleaves[0];  // fc31也就是up_gate用0
-        if (experts_weight_name.find(".down_proj.") != std::string::npos) {
-          interleave = interleaves[1];  // fc2也就是down用1
+        if (runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::Default) {
+          // scale转换
+          std::vector<size_t> interleaves = GetCutlassMoeInterleave(new_deepseek_v3_config->hidden_units,
+                                                                    new_deepseek_v3_config->moe_config.moe_inter_size);
+          size_t interleave = interleaves[0];  // fc31也就是up_gate用0
+          if (experts_weight_name.find(".down_proj.") != std::string::npos) {
+            interleave = interleaves[1];  // fc2也就是down用1
+          }
+          std::vector<size_t> origin_shape = scale.shape;
+          scale.shape = {origin_shape[0], origin_shape[1], origin_shape[2] / interleave, interleave};
+          PermuteWeight(scale, {0, 2, 1, 3}, dev_rank);
+          scale.shape = {origin_shape[0], origin_shape[2] / interleave, origin_shape[1] * interleave};
         }
-        std::vector<size_t> origin_shape = scale.shape;
-        scale.shape = {origin_shape[0], origin_shape[1], origin_shape[2] / interleave, interleave};
-        PermuteWeight(scale, {0, 2, 1, 3}, dev_rank);
-        scale.shape = {origin_shape[0], origin_shape[2] / interleave, origin_shape[1] * interleave};
         // 计算input_scale的最大值
         Tensor& input_scale = device_model_weights.at(input_scale_name);
         torch::Tensor input_scale_torch = GetTorchTensorFromTensor(input_scale, dev_rank);
         float input_scale_max = torch::max(input_scale_torch).item<float>();
         auto float_option = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, dev_rank);
+        // 生成act_scale
+        torch::Tensor act_scale_tensor = torch::full({1}, 1 / input_scale_max, float_option).to(GetTorchDataType<T>());
+        const std::string act_scale_name = GetReplacedName(experts_weight_name, "weight", "act_scale");
+        device_model_weights[act_scale_name] = Tensor(MemoryLocation::LOCATION_DEVICE, GetDataType<T>(), {1}, dev_rank,
+                                                      nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+        MemcpyAsync(device_model_weights[act_scale_name].GetPtr<void>(), act_scale_tensor.data_ptr(),
+                    act_scale_tensor.numel() * act_scale_tensor.element_size(), MEMCPY_DEVICE_TO_DEVICE,
+                    context_->GetMemoryManageStreams()[dev_rank]);
+        device_model_weights.at(experts_weight_name).input_scales = &(device_model_weights[act_scale_name]);
         // 生成alpha
         torch::Tensor alpha_tensor = torch::full({input_scale_torch.size(0), 1}, input_scale_max, float_option);
         const std::string alpha_name = GetReplacedName(experts_weight_name, "weight", "alpha");
@@ -916,18 +923,6 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
                     alpha_tensor.numel() * alpha_tensor.element_size(), MEMCPY_DEVICE_TO_DEVICE,
                     context_->GetMemoryManageStreams()[dev_rank]);
         device_model_weights.at(experts_weight_name).input_alpha = &(device_model_weights[alpha_name]);
-        // 生成act_scale
-        torch::Tensor act_scale_tensor =
-            torch::full({1, new_deepseek_v3_config->hidden_units}, 1 / input_scale_max, float_option)
-                .to(GetTorchDataType<T>());
-        const std::string act_scale_name = GetReplacedName(experts_weight_name, "weight", "act_scale");
-        device_model_weights[act_scale_name] =
-            Tensor(MemoryLocation::LOCATION_DEVICE, GetDataType<T>(), {1, new_deepseek_v3_config->hidden_units},
-                   dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
-        MemcpyAsync(device_model_weights[act_scale_name].GetPtr<void>(), act_scale_tensor.data_ptr(),
-                    act_scale_tensor.numel() * act_scale_tensor.element_size(), MEMCPY_DEVICE_TO_DEVICE,
-                    context_->GetMemoryManageStreams()[dev_rank]);
-        device_model_weights.at(experts_weight_name).input_scales = &(device_model_weights[act_scale_name]);
       }
 #endif
       device_model_weights.at(experts_weight_name).scales = &scale;
