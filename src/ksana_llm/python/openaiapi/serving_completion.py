@@ -63,8 +63,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
             if model_check_result is not None:
                 return model_check_result
             
-            tokenizer = getattr(self.llm_server, 'tokenizer', None)
-            if tokenizer is None:
+            if self.tokenizer is None:
                 return self.create_error_response(
                     "Tokenizer not available",
                     ErrorType.INTERNAL_SERVER_ERROR,
@@ -74,7 +73,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
             try:
                 if isinstance(prompt, str):
                     prompt_inputs = [await self._tokenize_prompt_input_async(
-                        completion_request, tokenizer, prompt
+                        completion_request, self.tokenizer, prompt
                     )]
                 elif isinstance(prompt, list):
                     if len(prompt) == 0:
@@ -85,7 +84,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                         )
                     
                     prompt_inputs = await self._tokenize_prompt_input_or_inputs_async(
-                        completion_request, tokenizer, prompt
+                        completion_request, self.tokenizer, prompt
                     )
                 else:
                     return self.create_error_response(
@@ -193,7 +192,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
     ):
         """生成流式 completion 响应"""
         try:
-            converter = RequestConverter(self.config, tokenizer=getattr(self.llm_server, 'tokenizer', None))
+            converter = RequestConverter(self.config, tokenizer=self.tokenizer)
             sent_length = 0
             
             async for ksana_python_output in ksana_output_iterator:

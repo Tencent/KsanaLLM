@@ -94,7 +94,7 @@ class KsanaOpenAIServingEmbedding(KsanaOpenAIServing):
                 embeddings.append(embedding_vector)
             
             # 使用标准化格式化器
-            converter = RequestConverter(self.config, tokenizer=getattr(self.llm_server, 'tokenizer', None))
+            converter = RequestConverter(self.config, tokenizer=self.tokenizer)
             
             request_id = f"embd-{uuid.uuid4().hex}"
             model_name = self._get_model_name(embedding_request.model)

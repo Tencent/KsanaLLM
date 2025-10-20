@@ -68,7 +68,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         self.response_role = "assistant"
         self.chat_template = chat_template
         self.chat_template_content_format = chat_template_content_format
-        self.tokenizer = getattr(self.llm_server, 'tokenizer', None)
         self.tool_call_id_type = 'random'
         
         self._init_parsers()

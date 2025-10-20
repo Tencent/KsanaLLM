@@ -49,6 +49,7 @@ from openaiapi.transformers_utils.chat_utils import (AnyTokenizer, MistralTokeni
                                                      resolve_chat_template_content_format)
 from utilize.logger import get_logger
 logger = get_logger(__name__)
+DEFAULT_MAX_MODEL_LEN = 32768
 
 
 def make_async(func, executor=None):
@@ -133,14 +134,13 @@ class KsanaOpenAIServing:
         self.llm_server = llm_server
         self.config = config or OpenAIConfig()
         
-        self.max_model_len = self._get_max_model_len()
-        
         self._models = None
         self._models_initialized = False
         
         self.request_logger = request_logger
         self.return_tokens_as_token_ids = return_tokens_as_token_ids
         
+        self.tokenizer = self._initialize_tokenizer()
         self._tokenizer_executor = ThreadPoolExecutor(max_workers=1)
         
         # 异步 tokenization 方法
@@ -151,6 +151,18 @@ class KsanaOpenAIServing:
             executor=self._tokenizer_executor)
         
         self._model_info = self._extract_model_info()
+    
+    def _initialize_tokenizer(self) -> Any:
+        """Initialize tokenizer, avoid repeat getting tokenizer"""
+        tokenizer = getattr(self.llm_server, 'tokenizer', None)
+        if tokenizer is None:
+            raise ValueError(
+                "Tokenizer not found in llm_server. "
+                "The tokenizer is required for OpenAI API compatibility. "
+                "Please ensure llm_server has a valid tokenizer attribute."
+            )
+            
+        return tokenizer
     
     @property
     def models(self):
@@ -170,9 +182,20 @@ class KsanaOpenAIServing:
         if not hasattr(engine_args, 'max_token_len'):
             raise ValueError("engine_args.max_token_len attribute is not available")
         
+        # If max_token_len is None or invalid, try to get from tokenizer
         if engine_args.max_token_len is None or engine_args.max_token_len <= 0:
-            raise ValueError(f"engine_args.max_token_len is invalid: {engine_args.max_token_len}")
-        
+            if self.tokenizer is not None:
+                model_max_length = getattr(self.tokenizer, 'model_max_length', None)
+                if model_max_length is not None and model_max_length > 0:
+                    # If max_token_len in config_file is invalid, Use model_max_length from tokenizer_config.json
+                    logger.info(f"Using model_max_length from tokenizer: {model_max_length}")
+                    return model_max_length
+
+            # If both engine_args.max_token_len and tokenizer are unavailable, use default value
+            logger.warning(f"Both engine_args.max_token_len and tokenizer.model_max_length are unavailable, "
+                          f"using default max_token_len: {DEFAULT_MAX_MODEL_LEN}")
+            return DEFAULT_MAX_MODEL_LEN
+
         return engine_args.max_token_len
     
     def _extract_model_info(self) -> Dict[str, Any]:
@@ -308,6 +331,7 @@ class KsanaOpenAIServing:
         input_ids: list[int],
         input_text: str
     ) -> TextTokensPrompt:
+        self.max_model_len = self._get_max_model_len()
         token_num = len(input_ids)
         
         if hasattr(request, '__class__') and 'Embedding' in request.__class__.__name__:
