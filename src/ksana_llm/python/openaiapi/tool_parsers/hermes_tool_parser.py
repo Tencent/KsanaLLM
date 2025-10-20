@@ -10,7 +10,6 @@ import partial_json_parser
 import regex as re
 from partial_json_parser.core.options import Allow
 
-from utilize.utils import random_tool_call_id
 from openaiapi.openai_protocol import (ChatCompletionRequest,
                                               DeltaFunctionCall, DeltaMessage,
                                               DeltaToolCall,
@@ -19,7 +18,8 @@ from openaiapi.openai_protocol import (ChatCompletionRequest,
 from openaiapi.tool_parsers.abstract_tool_parser import (
     ToolParser, ToolParserManager)
 from utilize.logger import get_logger
-from openaiapi.transformers_utils.chat_utils  import AnyTokenizer, MistralTokenizer
+from openaiapi.transformers_utils.chat_utils  import (AnyTokenizer, MistralTokenizer,
+                                                      make_tool_call_id)
 
 logger = get_logger(__name__)
 
@@ -276,7 +276,7 @@ class Hermes2ProToolParser(ToolParser):
                     return DeltaMessage(tool_calls=[
                         DeltaToolCall(index=self.current_tool_id,
                                       type="function",
-                                      id=random_tool_call_id(),
+                                      id=make_tool_call_id(),
                                       function=DeltaFunctionCall(
                                           name=function_name).model_dump(
                                               exclude_none=True))

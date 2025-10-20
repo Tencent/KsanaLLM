@@ -233,24 +233,20 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         all_previous_token_ids: Optional[list[list[int]]]   
         function_name_returned = [False] * num_choices
         if self.tool_call_id_type == 'kimi_k2':
+            # Due to Kimi K2 tool call ID using functions.{func_name}:{idx} for its ID
+            # Get History tool call count from Prompt to avoid duplicated tool call IDs
             history_tool_call_cnt = get_history_tool_calls_cnt(conversation)
         else:
             history_tool_call_cnt = 0
+        
+        previous_texts = [""] * num_choices
+        all_previous_token_ids = [[]] * num_choices
         if tool_choice_auto or self.reasoning_parser:
-            # These are only required in "auto" tool choice case
-            previous_texts = [""] * num_choices
-            all_previous_token_ids = [[]] * num_choices
             # For reasoning parser and tool call all enabled
             added_content_delta_arr = [False] * num_choices
             reasoning_end_arr = [False] * num_choices
         elif request.tool_choice == "required":
-            previous_texts = [""] * num_choices
             all_previous_token_ids = None
-        elif request_logprobs:
-            previous_texts = None
-            all_previous_token_ids = [[]] * num_choices
-        else:
-            previous_texts, all_previous_token_ids = None, None
 
         if self.reasoning_parser:
             reasoning_parser = self.reasoning_parser(tokenizer)
@@ -337,9 +333,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 data = chunk.model_dump_json(
                                     exclude_unset=True)
                                 yield f"data: {data}\n\n"
-
-                if previous_texts is None:
-                    previous_texts = [""] * num_choices
+                    
                 is_finished = False
                 if hasattr(ksana_python_output, 'finish_status') and ksana_python_output.finish_status:
                     if hasattr(ksana_python_output.finish_status, 'OK') and not ksana_python_output.finish_status.OK():
@@ -574,6 +568,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                             if len(delta_message.content) > len(recalculated_delta_text):
                                                 delta_text = recalculated_delta_text
                                                 delta_message.content = recalculated_delta_text
+                                    
+                                    # Post-process tool calls for streaming (DeltaToolCall)
+                                    if delta_message and delta_message.tool_calls:
+                                        self.post_process_tool_calls(delta_message.tool_calls, history_tool_call_cnt)
+                                    
                                 else:
                                     delta_message = DeltaMessage(content=delta_text)
 
@@ -597,6 +596,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     if len(delta_message.content) > len(recalculated_delta_text):
                                         delta_text = recalculated_delta_text
                                         delta_message.content = recalculated_delta_text
+                            
+                            # Post-process tool calls for streaming (DeltaToolCall)
+                            if delta_message and delta_message.tool_calls:
+                                self.post_process_tool_calls(delta_message.tool_calls, history_tool_call_cnt)
                         elif self.reasoning_parser:
                             delta_message = (reasoning_parser.
                                              extract_reasoning_content_streaming(
@@ -968,13 +971,14 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                 elif request.tool_choice and type (
                     request.tool_choice) is ChatCompletionNamedToolChoiceParam:
-                    tool_call_class = ToolCall
                     message = ChatMessage(
                         role=role,
                         reasoning_content=reasoning_content,
                         tool_calls=[
-                            tool_call_class(
-                                id=f"call_{uuid.uuid4().hex[:8]}",
+                            ToolCall(
+                                id=make_tool_call_id(id_type=self.tool_call_id_type,
+                                                     func_name=request.tool_choice.function.name,
+                                                     idx=history_tool_call_cnt),
                                 function=FunctionCall(
                                     name=request.tool_choice.function.name,
                                     arguments=content
@@ -982,12 +986,12 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 type="function"
                             )
                         ])
+                    history_tool_call_cnt += 1
                     finish_reason = "tool_calls"
 
                 elif request.tool_choice and request.tool_choice == "required":
                     # temporary tool call class
                     # TODO(ethanyczeng): support Mistral tool call class 
-                    tool_call_class = ToolCall
                     assert content is not None
                     tool_calls = TypeAdapter(
                         list[FunctionDefinition]).validate_json(content)
@@ -997,13 +1001,13 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             make_tool_call_id(id_type=self.tool_call_id_type,
                                               func_name=tool_call.name,
                                               idx=history_tool_call_cnt))
-                    history_tool_call_cnt += 1
+                        history_tool_call_cnt += 1
                     message = ChatMessage(
                         role=role,
                         reasoning_content=reasoning_content,
                         content="",
                         tool_calls=[
-                            tool_call_class(id=tool_call_ids[i],
+                            ToolCall(id=tool_call_ids[i],
                                 function=FunctionCall(
                                 name=tool_call.name,
                                 arguments=json.dumps(tool_call.parameters,
@@ -1037,12 +1041,14 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         content if content is not None else "", request=request)
                     
                     if tool_call_info.tools_called:
+                        self.post_process_tool_calls(tool_call_info.tool_calls, history_tool_call_cnt)
                         message = ChatMessage(
                             role=role,
                             reasoning_content=reasoning_content,
                             content=tool_call_info.content,
                             tool_calls=tool_call_info.tool_calls
                         )
+                        history_tool_call_cnt += len(tool_call_info.tool_calls)
                         finish_reason = "tool_calls"
                     else:
                         message = ChatMessage(
@@ -1129,6 +1135,39 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 ErrorType.INTERNAL_SERVER_ERROR,
                 HTTPStatus.INTERNAL_SERVER_ERROR
             )
+    def post_process_tool_calls(self,
+        tool_calls: Union[List[ToolCall], List[DeltaToolCall]],
+        history_tool_call_cnt: int = 0
+    ):
+        """
+        Post-process tool calls to ensure proper formatting.
+        
+        This function handles both full-text ToolCall and streaming DeltaToolCall scenarios.
+        For kimi_k2 mode, it regenerates tool_call_id based on function name and history count.
+        
+        Args:
+            tool_calls: List of ToolCall (full-text) or DeltaToolCall (streaming)
+            history_tool_call_cnt: Historical tool call count for ID generation
+        """
+        if self.tool_call_id_type != 'kimi_k2':
+            return
+        
+        for i, tool_call in enumerate(tool_calls):
+            # Check if this is a DeltaToolCall (streaming) or ToolCall (full-text)
+            is_delta = isinstance(tool_call, DeltaToolCall)
+            id_type = self.tool_call_id_type
+            func_name = tool_call.function.name
+            
+            if is_delta:
+                if tool_call.function and func_name:
+                    idx = i + tool_call.index + history_tool_call_cnt
+                    tool_call.id = make_tool_call_id(id_type=id_type, func_name=func_name, idx=idx)
+            else:
+                if hasattr(tool_call.function, 'id'):
+                    idx = i + tool_call.function.id + history_tool_call_cnt
+                else:
+                    idx = i + history_tool_call_cnt
+                tool_call.id = make_tool_call_id(id_type=id_type, func_name=func_name, idx=idx)
 
     def _should_stream_with_auto_tool_parsing(self,
                                               request: ChatCompletionRequest):

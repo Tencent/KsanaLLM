@@ -18,7 +18,8 @@ from typing import Annotated, Any, ClassVar, Literal, Optional, Union, List, Dic
 import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from utilize.utils import random_uuid
-from openaiapi.transformers_utils.chat_utils import ChatCompletionMessageParam
+from openaiapi.transformers_utils.chat_utils import (ChatCompletionMessageParam,
+                                                     make_tool_call_id)
 
 _LONG_INFO = torch.iinfo(torch.long)
 
@@ -175,7 +176,7 @@ class FunctionCall(BaseModel):
 
 
 class ToolCall(BaseModel):
-    id: str = Field(default_factory=lambda: f"call_{random_uuid()}")
+    id: str = Field(default_factory=make_tool_call_id)
     type: Literal["function"] = "function"
     function: FunctionCall
 
@@ -359,7 +360,7 @@ class DeltaFunctionCall(BaseModel):
 
 
 class DeltaToolCall(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-tool-{random_uuid()}")
+    id: str = Field(default_factory=make_tool_call_id)
     type: Literal["function"] = "function"
     index: int
     function: Optional[DeltaFunctionCall] = None

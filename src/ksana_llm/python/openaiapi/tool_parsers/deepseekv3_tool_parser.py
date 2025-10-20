@@ -14,8 +14,8 @@ from openaiapi.openai_protocol import (ChatCompletionRequest,
 from openaiapi.tool_parsers.abstract_tool_parser import (
     ToolParser, ToolParserManager)
 
-from openaiapi.transformers_utils.chat_utils import AnyTokenizer
-from utilize.utils import random_uuid
+from openaiapi.transformers_utils.chat_utils import (AnyTokenizer,
+                                                     make_tool_call_id)
 
 from utilize.logger import get_logger
 
@@ -273,7 +273,7 @@ class DeepSeekV3ToolParser(ToolParser):
                         DeltaToolCall(
                             index=self.current_tool_id,
                             type="function",
-                            id=f"chatcmpl-tool-{random_uuid()}",
+                            id=make_tool_call_id(),
                             function=DeltaFunctionCall(
                                 name=function_name).model_dump(
                                     exclude_none=True),
