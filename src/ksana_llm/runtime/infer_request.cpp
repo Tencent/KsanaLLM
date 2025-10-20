@@ -67,13 +67,12 @@ std::string InferRequest::PrintKVBlockIds(bool print_details) const {
 std::string InferRequest::ToString(bool print_details) const {
   std::ostringstream oss;
   oss << " req(req_id:" << req_id << ", step:" << step << ", sampling_token_num:" << sampling_token_num
-      << ", kv_cached_token_num:" << kv_cached_token_num << ", mtp_kv_cached_token_num:" << mtp_kv_cached_token_num
-      << ", prefix_cache_len:" << prefix_cache_len << ", input_tokens_size:" << input_tokens.size()
-      << ", output_tokens_size:" << output_tokens.size() << ", forwarding_tokens_size:" << forwarding_tokens.size()
-      << ", draft_tokens_size:" << draft_tokens.size() << ", accepted_tokens_size:" << accepted_tokens.size()
-      << ", generated_token:" << generated_token << PrintKVBlockIds(print_details) << ", swap_pending:" << swap_pending
-      << ", finished:" << finished << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString()
-      << " ) ";
+      << ", kv_cached_token_num:" << kv_cached_token_num << ", prefix_cache_len:" << prefix_cache_len
+      << ", input_tokens_size:" << input_tokens.size() << ", output_tokens_size:" << output_tokens.size()
+      << ", forwarding_tokens_size:" << forwarding_tokens.size() << ", draft_tokens_size:" << draft_tokens.size()
+      << ", accepted_tokens_size:" << accepted_tokens.size() << ", generated_token:" << generated_token
+      << PrintKVBlockIds(print_details) << ", swap_pending:" << swap_pending << ", finished:" << finished
+      << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString() << " ) ";
   return oss.str();
 }
 

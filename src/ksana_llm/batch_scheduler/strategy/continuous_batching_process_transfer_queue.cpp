@@ -95,7 +95,6 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       // TODO(winminkong): PD disaggregation supports mutil draft token and speculative decoding.
       if (first_tokens[1] != -1 && runtime_config_.enable_mtp_module) {
         req->draft_tokens.mtp.push_back(first_tokens[1]);
-        req->mtp_kv_cached_token_num = req->kv_cached_token_num;
         req->forwarding_tokens.push_back(first_tokens[1]);
       }
       req->forwarding_tokens_draft_num = req->draft_tokens.size();

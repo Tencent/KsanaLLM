@@ -194,8 +194,7 @@ Status LlmRuntime::AuxForward(
 }
 
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                                      std::vector<SamplingRequest>& sampling_reqs,
-                                      bool enable_main_layers_sampler) {
+                                      std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
   sampling_reqs.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); ++i) {
@@ -286,33 +285,15 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
   // select mtp req
   constexpr size_t kCompressKvMaxMtpLen = 1024;
 
-  std::vector<std::shared_ptr<InferRequest>> mtp_reqs;
-  mtp_reqs.reserve(reqs.size());
-  for (const auto& req : reqs) {
-    if (req->mtp_kv_cached_token_num != req->kv_cached_token_num) {
-      continue;
-    }
-    mtp_reqs.emplace_back(req);
-  }
+  // TODO(lijiajieli): remove copy and do not modify InferRequest
+  std::vector<std::shared_ptr<InferRequest>> mtp_reqs = reqs;
 
-  if (mtp_reqs.empty()) {
-    KLLM_LOG_DEBUG << "skip mtp forward";
-    return Status();
-  }
-
-  std::vector<int> first_tokens(mtp_reqs.size());  // store req first token
-  for (size_t i = 0; i < mtp_reqs.size(); ++i) {
-    auto& req = mtp_reqs[i];
-    auto mtp_forward_token = req->GetVerifiedTokens();
-    first_tokens[i] = mtp_forward_token.front();
-    mtp_forward_token.erase(mtp_forward_token.begin());
-
-    req->forwarding_tokens = std::move(mtp_forward_token);
+  for (const auto& req : mtp_reqs) {
+    req->draft_tokens.mtp.clear();
+    req->forwarding_tokens = req->GetVerifiedTokens();
     req->forwarding_tokens_draft_num = req->accepted_tokens.size();  // already removed wrong token
     req->sampling_token_num = kStepGenerateTokenNum;
     req->last_step_token_num = kStepGenerateTokenNum;
-    req->kv_cached_token_num = req->mtp_kv_cached_token_num;
-    req->prefix_cache_len = req->kv_cached_token_num;
   }
 
   ReorderInferRequests(mtp_reqs);
@@ -339,7 +320,6 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
     req->forwarding_tokens.resize(req->forwarding_tokens.size() - mtp_step_num_);
     req->forwarding_tokens.insert(req->forwarding_tokens.begin(), first_tokens[req->req_id].begin(),
                                   first_tokens[req->req_id].end());
-    req->mtp_kv_cached_token_num = req->forwarding_tokens.size();
   }
   return Status();
 }

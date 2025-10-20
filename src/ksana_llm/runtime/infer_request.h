@@ -199,8 +199,6 @@ class InferRequest {
   // The number of tokens for which kv caches have been generated.
   size_t kv_cached_token_num = 0;
 
-  size_t mtp_kv_cached_token_num = 0;
-
   // The kv cache blocks this request used, the index is used as device_id.
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;

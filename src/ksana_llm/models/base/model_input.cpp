@@ -1260,7 +1260,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     const size_t input_ids_len = input_length - skip_token_num;
     KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num " << input_length
                    << ", skip_token_num " << skip_token_num << ",kv_cached_token_num " << req.kv_cached_token_num
-                   << ", prefix_cache_len" << req.prefix_cache_len;
+                   << ", prefix_cache_len " << req.prefix_cache_len;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);

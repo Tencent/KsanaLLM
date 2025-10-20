@@ -1034,7 +1034,6 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         } else {
           KLLM_LOG_DEBUG << "shared token not equal forwaing size, " << *req;
           req->kv_cached_token_num = shared_token_num;
-          req->mtp_kv_cached_token_num = req->kv_cached_token_num;
           if (connector_config_.group_role == GroupRole::DECODE) {
             batch_state_->transfer_queue.emplace_back(req);
             it = batch_state_->waiting_queue.erase(it);
