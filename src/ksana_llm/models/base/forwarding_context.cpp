@@ -256,10 +256,8 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward
       model_input_->flash_input.kv_cache_block_num,   // total kv cache block num that use flash_attention kernel
       model_input_->single_token_request_num,         // request num use page_attention kernel
       model_input_->single_token_request_max_tokens,  // max request tokens of request that use page_attention kernel
-      model_input_->page_single_input.kv_cache_block_num +
-          model_input_->page_dual_input.kv_cache_block_num,  // total kv cache block num that use page_attention kernel
-      model_input_->dp_max_forwarding_tokens,                // used for blocked_prefill
-      model_input_->total_prefix_len,
+      model_input_->decode_kv_cache_block_num,        // total kv cache block num that use page_attention kernel
+      model_input_->dp_max_forwarding_tokens,         // used for blocked_prefill
       model_input_->dp_multi_token_request_num,
       model_input_->dp_multi_token_request_max_tokens,
       model_input_->dp_single_token_request_num,

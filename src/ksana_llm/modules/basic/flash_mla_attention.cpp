@@ -3,14 +3,13 @@
 ==============================================================================*/
 
 #include "ksana_llm/modules/basic/flash_mla_attention.h"
+
 #include "ksana_llm/layers/flash_mla_attention_layer.h"
-#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
 FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
-                                     const AttentionCreationConfig& attn_config)
-    : context_(creation_context.context), rank_(creation_context.rank) {
+                                     const AttentionCreationConfig& attn_config) {
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
@@ -63,17 +62,25 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
   flash_attention_param.push_back(attn_config.mrope_section_ptr);
   flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
 
-  flash_mla_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
+  flash_mla_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, creation_context.context,
+                                   creation_context.rank);
 
   flash_mla_attention_layer_->SetWorkspaceBuffer(
       creation_context.workspace_mgr->GetWorkspace(flash_mla_attention_layer_->GetWorkspaceSize()));
+
+  // Initialize proj module
+  kv_b_nope_proj_ = std::make_shared<Linear>(fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx),
+                                             creation_context, attn_config.model_config.quant_config.backend);
+  // `kv_b_nope_proj_` and `v_head_proj_` have the same input and share the quantization results
+  // We skip the quantization in `v_head_proj_`
+  v_head_proj_ = std::make_shared<Linear>(fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx),
+                                          creation_context, attn_config.model_config.quant_config.backend,
+                                          /*skip_quant*/ true);
 
   kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));
   v_head_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
-  attn_o_proj_weight_ =
-      creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
 }
 
 Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
@@ -81,8 +88,15 @@ Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                   std::vector<Tensor>& v_buffer, const AttentionForwardContext& attn_ctx,
                                   Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                   Tensor& prefix_kv_buffer_tensor, std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({hidden_buffer_tensors_0[0],
-                                                           model_input->dp_input_offset_uint64_tensor,
+  // When prefix cache hits, the following proj must be applied after fetching the prefix from kv cache
+  if (/*dp_total_prefix_tokens*/ attn_ctx.forward_shape.shape[11] == 0) {
+    // The quantized result of kv_buffer is stored in the workspace_buffer shared across layers,
+    // and immediately required by v_head_proj, so no layer operations can be inserted between them
+    STATUS_CHECK_RETURN(kv_b_nope_proj_->Forward(kv_buffer_tensor, output_tensors));
+    STATUS_CHECK_RETURN(v_head_proj_->Forward(kv_buffer_tensor, v_buffer));
+  }
+
+  STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({model_input->dp_input_offset_uint64_tensor,
                                                            model_input->dp_input_offset_int32_tensor,
                                                            model_input->flash_input.kv_list,
                                                            model_input->dp_input_prefix_uint64_tensor,
@@ -106,11 +120,11 @@ Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
                                                            k_rope_buffer_tensor,
                                                            kv_b_nope_proj_weight_,
                                                            v_head_proj_weight_,
-                                                           attn_o_proj_weight_,
                                                            prefix_kv_buffer_tensor,
                                                            k_buffer[0],
                                                            v_buffer[0]},
                                                           output_tensors));
+
   return Status();
 }
 }  // namespace ksana_llm

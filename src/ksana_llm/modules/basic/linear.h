@@ -3,7 +3,9 @@
 ==============================================================================*/
 #pragma once
 
+#include <any>
 #include <memory>
+#include <vector>
 
 #include "ksana_llm/models/base/layer_creation_context.h"
 
@@ -13,7 +15,7 @@ class Linear {
  public:
   // Disable a default constructor
   Linear(const std::string& weight_name, const LayerCreationContext& creation_context,
-         const LinearComputeBackend& linear_compute_backend);
+         const LinearComputeBackend& linear_compute_backend, const bool skip_quant = false);
 
   ~Linear();
   Status Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors);
@@ -25,4 +27,5 @@ class Linear {
   std::shared_ptr<BaseLayer> proj_layer_;
   Tensor weight_;
 };
+
 }  // namespace ksana_llm

@@ -62,6 +62,9 @@ class BlockwiseMatMulLayer : public BaseLayer {
 
   static constexpr size_t kAlignSize_ = 4;
 
+  // When true, it indicates that quantization has already been performed elsewhere and stored in the workspace buffer
+  bool skip_quant_ = false;
+
 #  ifdef ENABLE_CUDA
   std::shared_ptr<llm_kernels::nvidia::DeepGEMMWrapper> deepgemm_wrapper_;
 #  endif

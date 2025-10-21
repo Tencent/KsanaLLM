@@ -8,16 +8,10 @@
 #include "csrc/kernels/nvidia/concat/concat.h"
 #include "csrc/kernels/nvidia/expand/expand.h"
 #include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
-#include "csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
-#include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
-#include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
-#include "csrc/kernels/nvidia/paged_attention/paged_attention.h"
-#include "csrc/kernels/nvidia/permute/permute.h"
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
 #include "ksana_llm//utils/memory_utils.h"
-#include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
@@ -282,41 +276,30 @@ RUN_MLA_PAGED_ATTENTION(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType:
 // [DeepSeek-V3 Project]
 // https://github.com/vllm-project/vllm/blob/ed6e9075d31e32c8548b480a47d1ffb77da1f54c/vllm/attention/backends/triton_mla.py#L698
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void InvokeAbsorbMlaPagedAttention(
-    void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr, void* k_pe_ptr,
-    void* w_uv_weight, size_t w_uv_o_dim, cublasHandle_t& cublas_handles, cublasLtHandle_t& cublaslt_handles,
-    void** key_cache_ptrs, void* context_lens_ptr, cudaStream_t stream, void* cache_offsets_ptr, int num_heads,
-    int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank, int v_head_dim, int num_kv_heads, int block_size,
-    float k_scale, float v_scale, int batch, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,
-    float attn_scale, std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
-    void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,
-    void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len) {
+void InvokeAbsorbMlaPagedAttention(void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr,
+                                   void* compressed_kv_ptr, void* k_pe_ptr, void** key_cache_ptrs,
+                                   void* context_lens_ptr, cudaStream_t stream, void* cache_offsets_ptr, int num_heads,
+                                   int qk_rope_head_dim, int kv_lora_rank, int block_size, float k_scale, float v_scale,
+                                   int batch_size, void* rotary_embedding_pos, void* rotary_embedding_mask,
+                                   int total_tokens, float attn_scale,
+                                   std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
+                                   void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank,
+                                   void* qkv_workspace, void* k_cache_ptr, int32_t* block_table_ptr,
+                                   int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len) {
   if (rotary_embedding_cuda.has_value()) {
     rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(rotary_embedding_pos),
                                     reinterpret_cast<int64_t*>(rotary_embedding_mask), q_pe_ptr, k_pe_ptr, total_tokens,
                                     stream);
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
-  /*
-  Input Parameters:
-  v_tensor : compressed_kv_ptr  [total_tokens, kv_lora_rank]
-  q_nope   : q_nope_ptr         [total_tokens, num_heads, kv_lora_rank]
-  q_pe     : q_pe_ptr           [total_tokens, num_heads, qk_rope_head_dim]
-  k_pe     : k_pe_ptr           [total_tokens, qk_rope_head_dim]
 
-  Intermediate Tensors:
-  q_tensor        : q_tensor_ptr  [total_tokens, num_heads, kv_lora_rank + qk_rope_head_dim]
-  o_states        : output_ptr    [total_tokens, num_heads, kv_lora_rank]
-
-  Output Parameters:
-  output_ptr : [o_states][q_tensor]
-  */
-  constexpr size_t kAlignSize = 1024;
-  const size_t output_head_size = kv_lora_rank;
-  const size_t o_tensor_size = total_tokens * num_heads * output_head_size * sizeof(SCALAR_T);
-  const size_t q_tensor_offset = RoundUp(o_tensor_size, kAlignSize);
-  void* q_tensor_ptr = output_ptr + q_tensor_offset;
-
+  // cat(q_nope, q_pe), write to output temporarily
+  // output layout:
+  //   [attn_out: total_tokens x num_heads x kv_lora_rank]
+  //   [q_concat: total_tokens x num_heads x (kv_lora_rank + qk_rope_head_dim)]
+  const size_t output_size = total_tokens * num_heads * kv_lora_rank * sizeof(SCALAR_T);
+  void* q_concat_ptr = output_ptr + output_size;
+  constexpr size_t kInnerDimSize = 1;
   const size_t outer_q_dim_size = total_tokens * num_heads;
   const size_t outer_k_dim_size = total_tokens;
   constexpr size_t kInnerDimSize = 1;
@@ -328,65 +311,41 @@ void InvokeAbsorbMlaPagedAttention(
 
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaPagedKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
       reinterpret_cast<SCALAR_T*>(compressed_kv_ptr), reinterpret_cast<SCALAR_T*>(k_pe_ptr), key_cache_ptrs,
-      reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch, q_seq_len,
-      kv_lora_rank, qk_rope_head_dim, kv_lora_rank, qk_rope_head_dim, k_scale, stream));
+      reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr), block_size, batch_size,
+      q_seq_len, kv_lora_rank, qk_rope_head_dim, kv_lora_rank, qk_rope_head_dim, k_scale, stream));
 
   if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
     KLLM_THROW("Flash MLA not support fp8_e5m2 KV Cache. Please use fp8_e4m3.");
   } else if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
     KLLM_LOG_DEBUG << "FP8 kv cache and flash mla enabled, using FP8 inference, quantizing q tensor.";
     const float q_scale = k_scale;
-    void* const quant_q_tensor_ptr = hidden_buffer_1 + q_tensor_offset;
+    // Quant q_concat and store into hidden_buffer_1 (cannot be done in-place)
+    void* const quant_q_tensor_ptr = hidden_buffer_1;
     llm_kernels::nvidia::ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
-        /*q_src*/ reinterpret_cast<SCALAR_T*>(q_tensor_ptr), /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_tensor_ptr),
-        batch, q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim, num_heads * (kv_lora_rank + qk_rope_head_dim),
-        q_scale, stream);
-    q_tensor_ptr = quant_q_tensor_ptr;
+        /*q_src*/ reinterpret_cast<SCALAR_T*>(q_concat_ptr), /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_tensor_ptr),
+        batch_size, q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim,
+        num_heads * (kv_lora_rank + qk_rope_head_dim), q_scale, stream);
+    q_concat_ptr = quant_q_tensor_ptr;
   }
 
-  // Absorb has two versions
-  if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
-    // Flash mla accepts CACHE_T type input. If KV_DTYPE is auto, SCALAR_T equals CACHE_T.
-    // If KV_DTYPE is e4m3, flash mla calculates at fp8 precision and outputs at bf16 precision.
-    llm_kernels::nvidia::InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(
-        static_cast<CACHE_T*>(q_tensor_ptr), static_cast<CACHE_T*>(k_cache_ptr), q_seq_len, attn_scale, block_table_ptr,
-        context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/,
-        /*attn_out*/ hidden_buffer_1, batch, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, k_scale, v_scale,
-        max_blocks_per_seq, rank, kv_cache_block_num, stream);
-    // tp8: num_heads:16, total_tokens:256,kv_lora_rank:512,qk_rope_head_dim:64,w_uv_o_dim:7168,v_head_dim:128
-    // [256, 16, 512] => [16, 256, 512]
-    InvokePermute<SCALAR_T>(
-        hidden_buffer_1, qkv_workspace,
-        {static_cast<size_t>(total_tokens), static_cast<size_t>(num_heads), static_cast<size_t>(kv_lora_rank)},
-        {1, 0, 2}, stream);
-    // [16, 256, 512] * [16, 512, 128] => [16, 256, 128]
-    InvokeBatchedMatMul<SCALAR_T>(cublas_handles, cublaslt_handles, num_heads, total_tokens, v_head_dim, kv_lora_rank,
-                                  qkv_workspace, w_uv_weight, hidden_buffer_1, stream, nullptr, 0, nullptr);
-    // [16, 256, 128] => [256, 16, 128];
-    InvokePermute<SCALAR_T>(
-        hidden_buffer_1, output_ptr,
-        {static_cast<size_t>(num_heads), static_cast<size_t>(total_tokens), static_cast<size_t>(v_head_dim)}, {1, 0, 2},
-        stream);
-  } else {
-    llm_kernels::nvidia::InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(
-        static_cast<CACHE_T*>(q_tensor_ptr), static_cast<CACHE_T*>(k_cache_ptr), q_seq_len, attn_scale, block_table_ptr,
-        context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/, output_ptr, batch,
-        num_heads, kv_lora_rank, qk_rope_head_dim, block_size, k_scale, v_scale, max_blocks_per_seq, rank,
-        kv_cache_block_num, stream);
-  }
+  // Flash mla accepts CACHE_T type input. If KV_DTYPE is auto, SCALAR_T equals CACHE_T.
+  // If KV_DTYPE is e4m3, flash mla calculates at fp8 precision and outputs at bf16 precision.
+  llm_kernels::nvidia::InvokeFlashMla<SCALAR_T, CACHE_T, KV_DTYPE>(
+      static_cast<CACHE_T*>(q_concat_ptr), static_cast<CACHE_T*>(k_cache_ptr), q_seq_len, attn_scale, block_table_ptr,
+      context_lens_ptr, tile_scheduler_metadata_ptr, num_splits_ptr, qkv_workspace /*workspace*/,
+      /*attn_out*/ output_ptr, batch_size, num_heads, kv_lora_rank, qk_rope_head_dim, block_size, k_scale, v_scale,
+      max_blocks_per_seq, rank, kv_cache_block_num, stream);
 }
 
-#define RUN_ABSORB_MLA_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                              \
-  template void InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                      \
-      void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr,        \
-      void* k_pe_ptr, void* w_uv_weight, size_t w_uv_o_dim, cublasHandle_t& cublas_handles,                      \
-      cublasLtHandle_t& cublaslt_handles, void** key_cache_ptrs, void* context_lens_ptr, cudaStream_t stream,    \
-      void* cache_offsets_ptr, int num_heads, int qk_rope_head_dim, int qk_nope_head_dim, int kv_lora_rank,      \
-      int v_head_dim, int num_kv_heads, int block_size, float k_scale, float v_scale, int batch,                 \
-      void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale,               \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                            \
-      void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr, \
-      void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len)
+#define RUN_ABSORB_MLA_PAGED_ATTENTION(SCALAR_T, CACHE_T, KV_DTYPE)                                                \
+  template void InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(                                        \
+      void* hidden_buffer_1, void* output_ptr, void* q_nope_ptr, void* q_pe_ptr, void* compressed_kv_ptr,          \
+      void* k_pe_ptr, void** key_cache_ptrs, void* context_lens_ptr, cudaStream_t stream, void* cache_offsets_ptr, \
+      int num_heads, int qk_rope_head_dim, int kv_lora_rank, int block_size, float k_scale, float v_scale,         \
+      int batch_size, void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens, float attn_scale, \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                              \
+      void* tile_scheduler_metadata_ptr, void* num_splits_ptr, int rank, void* qkv_workspace, void* k_cache_ptr,   \
+      int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq, int q_seq_len)
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_ABSORB_MLA_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -439,20 +398,14 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const Tensor& workspace = *input_iter++;
   const Tensor& forward_shape = *input_iter++;
   const Tensor& qkv_workspace = *input_iter++;
-  const Tensor& query_norm_weight = *input_iter++;  // not supported, just an empty tensor
-  const Tensor& key_norm_weight = *input_iter++;    // not supported, just an empty tensor
   const Tensor& layer_kv_cache = *input_iter++;
   const Tensor& block_table = *input_iter++;
   const Tensor& q_nope_tensor = *input_iter++;
   const Tensor& q_pe_tensor = *input_iter++;
   const Tensor& compressed_kv_tensor = *input_iter++;
   const Tensor& k_pe_tensor = *input_iter++;
-  const Tensor& kv_b_nope_proj_weight = *input_iter++;
-  const Tensor& v_head_proj_weight = *input_iter++;
-  const Tensor& o_proj_weight = *input_iter++;
   const Tensor& tile_scheduler_metadata_tensor = *input_iter++;
   const Tensor& num_splits_tensor = *input_iter++;
-  const Tensor& w_uv_weight = *input_iter++;
 
   Tensor& output = output_tensors[0];
 
@@ -460,64 +413,24 @@ Status PagedMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const size_t total_tokens = k_pe_tensor.shape[0];
   const size_t q_seq_len = total_tokens / batch_size;
 
-  const size_t layer_block_num = kv_list.shape[1] / 2;  // shape: [layer_num_on_node, total_block_num * 2]
-  void** const k_list = kv_list.GetPtr<void*>() + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);
-  void** const v_list = k_list + layer_block_num;
+  void** const k_list = kv_list.GetPtr<void*>() + this->layer_index_ * kv_list.shape[1];
   const int64_t kv_cache_block_num = *(layer_kv_cache.GetPtr<int64_t>());
-  void** const layer_kv_cache_ptr = layer_kv_cache.GetPtr<void*>() + 1;
-  void* const k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];  // block中每层layer的起始地址
-  void* const v_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2 + 1];
-  int32_t* const block_table_ptr =
-      block_table.GetPtr<int32_t>();  // block id，加上layer_kv_cache_ptr后就是对应的cache block
-  const int max_blocks_per_seq = block_table.shape[1];  // shape: [bs, max_num_blocks_per_query]
+  void* const k_cache_ptr = layer_kv_cache.GetPtr<void*>()[1 + this->layer_index_ * 2];  // block中每层layer的起始地址
+  int32_t* const block_table_ptr = block_table.GetPtr<int32_t>();  // block id，加上k_cache_ptr后就是对应的cache block
+  const int max_blocks_per_seq = block_table.shape[1];             // shape: [bs, max_num_blocks_per_query]
 
-  void* kv_b_nope_weight_scale = nullptr;
-  void* v_head_weight_scale = nullptr;
-  if (this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3) {
-    kv_b_nope_weight_scale = kv_b_nope_proj_weight.weight_scales->GetPtr<void>();
-    v_head_weight_scale = v_head_proj_weight.weight_scales->GetPtr<void>();
-  } else if (this->mm_quant_mode_ == QUANT_GPTQ) {
-    kv_b_nope_weight_scale = kv_b_nope_proj_weight.scales->GetPtr<void>();
-    v_head_weight_scale = v_head_proj_weight.scales->GetPtr<void>();
-  }
-
-  const size_t o_proj_dim =
-      this->mm_quant_mode_ == QUANT_BLOCK_FP8_E4M3 ? o_proj_weight.shape[0] : o_proj_weight.shape[1];
-
-  void* const w_uv_weight_ptr = w_uv_weight.GetPtr<void>();
-
-  if (w_uv_weight_ptr) {  // Absorb
-    InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
-        hidden_buffer_1.GetPtr<void>(), output.GetPtr<void>(), q_nope_tensor.GetPtr<void>(), q_pe_tensor.GetPtr<void>(),
-        compressed_kv_tensor.GetPtr<void>(), k_pe_tensor.GetPtr<void>(), w_uv_weight_ptr, o_proj_dim,
-        this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
-        k_list, kv_seq_len.GetPtr<void>(), this->context_->GetComputeStreams()[this->rank_].Get(),
-        cache_offset.GetPtr<void>(), this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_,
-        this->kv_lora_rank_, this->v_head_dim_, this->num_kv_heads_, this->block_token_num_, this->k_scale_,
-        this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(),
-        total_tokens, this->attn_scale_, this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(),
-        num_splits_tensor.GetPtr<void>(), this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr,
-        block_table_ptr, kv_cache_block_num, max_blocks_per_seq, q_seq_len);
-    return Status();
-  }
-
-  void* fp8_work_buffer = this->workspace_buffer_ == nullptr ? nullptr : this->workspace_buffer_->GetPtr<void>();
-  const size_t max_tokens = forward_shape.shape[11];  // dp_single_token_request_max_tokens
-  InvokeMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
+  InvokeAbsorbMlaPagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
       hidden_buffer_1.GetPtr<void>(), output.GetPtr<void>(), q_nope_tensor.GetPtr<void>(), q_pe_tensor.GetPtr<void>(),
-      compressed_kv_tensor.GetPtr<void>(), k_pe_tensor.GetPtr<void>(), kv_b_nope_proj_weight.GetPtr<void>(),
-      v_head_proj_weight.GetPtr<void>(), kv_b_nope_weight_scale, v_head_weight_scale, o_proj_dim, fp8_work_buffer,
-      this->context_->ext->GetCublasHandles()[this->rank_], this->context_->ext->GetCublasLtHandles()[this->rank_],
-      k_list, v_list, kv_seq_len.GetPtr<void>(), max_tokens, this->context_->GetComputeStreams()[this->rank_].Get(),
-      cache_offset.GetPtr<void>(), batch_size, this->num_heads_, this->qk_rope_head_dim_, this->qk_nope_head_dim_,
-      this->kv_lora_rank_, this->v_head_dim_, this->head_size_, this->num_kv_heads_, this->stride_size_,
-      this->block_token_num_, this->k_scale_, this->v_scale_, batch_size, rotary_embedding_pos.GetPtr<void>(),
-      rotary_embedding_mask.GetPtr<void>(), total_tokens, this->attn_scale_, this->rotary_embedding_cuda_,
-      workspace.GetPtr<void>(), this->layernorm_eps_, this->use_qk_norm_, query_norm_weight.GetPtr<void>(),
-      key_norm_weight.GetPtr<void>(), workspace.GetTotalBytes(), this->rank_, this->alibi_slopes_,
-      qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
-      this->mm_quant_mode_, q_seq_len);
+      compressed_kv_tensor.GetPtr<void>(), k_pe_tensor.GetPtr<void>(), k_list, kv_seq_len.GetPtr<void>(),
+      this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), this->num_heads_,
+      this->qk_rope_head_dim_, this->kv_lora_rank_, this->block_token_num_, this->k_scale_, this->v_scale_, batch_size,
+      rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens, this->attn_scale_,
+      this->rotary_embedding_cuda_, tile_scheduler_metadata_tensor.GetPtr<void>(), num_splits_tensor.GetPtr<void>(),
+      this->rank_, qkv_workspace.GetPtr<void>(), k_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
+      q_seq_len);
 
+  // Correctly set the shape for the following bmm
+  output.shape = {total_tokens, static_cast<size_t>(num_heads_), static_cast<size_t>(kv_lora_rank_)};
   return Status();
 }
 

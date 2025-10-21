@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "ksana_llm/models/base/layer_creation_context.h"
+#include "ksana_llm/modules/basic/linear.h"
 
 namespace ksana_llm {
 
@@ -23,12 +24,11 @@ class FlashMlaAttention {
                  Tensor& prefix_kv_buffer_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
+  std::shared_ptr<Linear> kv_b_nope_proj_;
+  std::shared_ptr<Linear> v_head_proj_;
   std::shared_ptr<BaseLayer> flash_mla_attention_layer_;
-  std::shared_ptr<Context> context_;
-  int rank_;
 
   Tensor kv_b_nope_proj_weight_;
   Tensor v_head_proj_weight_;
-  Tensor attn_o_proj_weight_;
 };
 }  // namespace ksana_llm

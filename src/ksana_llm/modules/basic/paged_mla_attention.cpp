@@ -3,8 +3,8 @@
 ==============================================================================*/
 
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
+
 #include "ksana_llm/layers/paged_mla_attention_layer.h"
-#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -57,57 +57,36 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, Absor
   attention_param.push_back(attn_config.model_config.floor_scale);
   // end for applying temperature tuning
   std::vector<std::any> paged_attention_param = attention_param;
-
+  // bool for is_multi_token_forward
   paged_attention_param.push_back(false);
   // aligned with flash attention
   paged_attention_param.push_back(nullptr);
   paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
+
   paged_mla_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
                                    creation_context.rank);
   paged_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
 
-  kv_b_nope_proj_weight_ = creation_context.base_weight->GetModelWeights(
-      fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));
-  v_head_proj_weight_ = creation_context.base_weight->GetModelWeights(
-      fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
-  attn_o_proj_weight_ =
-      creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.o_proj.weight", layer_idx));
-  if (absorb_type == AbsorbWeightsType::kAbsorbTypeBMM) {
-    attn_w_uv_weight_ =
-        creation_context.base_weight->GetModelWeights(fmt::format("model.layers.{}.self_attn.w_uv.weight", layer_idx));
-  }
+  // Initialize bmm module
+  attn_w_uv_bmm_ = std::make_shared<Bmm>(fmt::format("model.layers.{}.self_attn.w_uv.weight", layer_idx),
+                                         creation_context, attn_config.model_config.quant_config.backend);
 }
 
-Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensor, const ModelInput::input_info& page_input,
-                                  std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
-                                  const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer,
-                                  Tensor& decode_q_buffer_tensor, Tensor& q_rope_buffer_tensor,
-                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor) {
-  Tensor query_layernorm_weight, key_layernorm_weight;  // qk_norm not supported, use dummy tensor
-  STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward({hidden_buffer_tensors_1[0],
-                                                           page_input.input_length,
-                                                           page_input.kv_list,
-                                                           page_input.kv_cache_offset,
-                                                           page_input.rotary_embedding_pos,
-                                                           page_input.rotary_embedding_mask,
-                                                           kv_cache_buffer_tensor,
-                                                           attn_ctx.forward_shape,
-                                                           workspace_buffer,       /* workspace */
-                                                           query_layernorm_weight, /* for use_qk_norm */
-                                                           key_layernorm_weight,   /* for use_qk_norm */
-                                                           page_input.layer_kv_cache_ptr,
-                                                           page_input.block_table,
-                                                           decode_q_buffer_tensor,
-                                                           q_rope_buffer_tensor,
-                                                           kv_buffer_tensor,
-                                                           k_rope_buffer_tensor,
-                                                           kv_b_nope_proj_weight_,
-                                                           v_head_proj_weight_,
-                                                           attn_o_proj_weight_,
-                                                           page_input.tile_scheduler_metadata,
-                                                           page_input.num_splits,
-                                                           attn_w_uv_weight_},
-                                                          output_tensor));
+Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensors, const std::shared_ptr<ModelInput>& model_input,
+                                  const ModelInput::input_info& page_input,
+                                  std::vector<Tensor>& hidden_buffer_tensors_1, const AttentionForwardContext& attn_ctx,
+                                  Tensor& workspace_buffer, Tensor& decode_q_buffer_tensor,
+                                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
+                                  Tensor& k_rope_buffer_tensor) {
+  STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward(
+      {hidden_buffer_tensors_1[0], page_input.input_length, page_input.kv_list, page_input.kv_cache_offset,
+       page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, workspace_buffer,
+       model_input->layer_kv_cache_ptr, page_input.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor,
+       kv_buffer_tensor, k_rope_buffer_tensor, page_input.tile_scheduler_metadata, page_input.num_splits},
+      output_tensors));
+
+  STATUS_CHECK_RETURN(
+      attn_w_uv_bmm_->Forward({output_tensors[0], workspace_buffer, hidden_buffer_tensors_1[0]}, output_tensors));
 
   return Status();
 }

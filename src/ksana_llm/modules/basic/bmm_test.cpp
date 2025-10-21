@@ -1,11 +1,6 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include <stdlib.h>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/models/common/common_weight.h"
 #include "ksana_llm/modules/basic/bmm.h"
@@ -18,10 +13,8 @@
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/tensor.h"
 #include "tests/test.h"
-// #include <cuda_runtime.h>
 
 using namespace ksana_llm;
-using namespace std;
 
 template <typename T>
 DataType GetKsanaDataType();
@@ -71,8 +64,7 @@ void RandomizeInputData(std::vector<float>& input_data1, size_t tokens, size_t h
 template <typename T>
 void BatchedMatmul(const std::vector<T>& input_data, const std::vector<T>& weight, std::vector<T>& output,
                    size_t tokens, size_t heads, size_t qk_nope_dim, size_t kv_lora_rank) {
-  size_t output_size = heads * tokens * kv_lora_rank;
-  assert(output.size() == output_size);
+  assert(output.size() == heads * tokens * kv_lora_rank);
 
   for (size_t h = 0; h < heads; ++h) {             // heads
     for (size_t t = 0; t < tokens; ++t) {          // tokens
@@ -122,7 +114,6 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
 
   RuntimeConfig runtime_config;
   runtime_config.inter_data_type = GetKsanaDataType<T>();
-  runtime_config.inter_data_type = GetKsanaDataType<T>();
 
   int rank = 0;
   auto ctx = std::make_shared<Context>(1, 1, 1);
@@ -150,7 +141,7 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   Tensor new_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, qk_nope_dim, kv_lora_rank}, 0,
                     new_buf);
 
-  vector<float> input_data(new_tensor.GetElementNumber());
+  std::vector<float> input_data(new_tensor.GetElementNumber());
   RandomizeInputData(input_data, heads, qk_nope_dim, kv_lora_rank);
   AssignFromVector(new_tensor, input_data);
 

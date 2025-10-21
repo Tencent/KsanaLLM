@@ -127,6 +127,7 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
     kn_pairs["q_b_rope_proj"] = std::make_tuple(q_lora_rank, head_num / attn_tp * qk_rope_head_dim, true);
     kn_pairs["q_b_nope_rope_proj"] =
         std::make_tuple(q_lora_rank, head_num / attn_tp * (qk_nope_head_dim + qk_rope_head_dim), true);
+    kn_pairs["kv_b_nope_proj"] = std::make_tuple(kv_lora_rank, head_num / attn_tp * qk_nope_head_dim, true);
     kn_pairs["v_head_proj"] = std::make_tuple(kv_lora_rank, head_num / attn_tp * v_head_dim, true);
     if (v_head_dim > 0) {  // mla
       kn_pairs["o_proj"] = std::make_tuple(head_num / attn_tp * v_head_dim, hidden_size, false);
@@ -166,6 +167,10 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
       fp8_blockwise_matmul_params.push_back(model_config_.quant_config.weight_block_size[1]);
       // weight
       fp8_blockwise_matmul_params.push_back(base_weight->GetModelWeights(weight_name));
+      // append init params
+      for (const auto& param : init_params) {
+        fp8_blockwise_matmul_params.push_back(param);
+      }
       return CreateLayer(TYPE_FP8_E4M3, input_type, output_type, fp8_blockwise_matmul_params, QUANT_BLOCK_FP8_E4M3,
                          DEFAULT_LINEAR_BACKEND);
     } else {

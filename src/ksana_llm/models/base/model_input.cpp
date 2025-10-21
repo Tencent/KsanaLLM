@@ -67,6 +67,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   if (runtime_config.enable_prefix_caching) {
     max_block_num = (max_token_num * max_batch_size) / runtime_config_.attn_backend_config.block_token_num;
   }
+  KLLM_LOG_INFO << "max_block_num: " << max_block_num;
 
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
   input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
@@ -87,24 +88,25 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num}, rank_);
 
-  auto allocate_input_info = [&](input_info& info, const size_t q_len) {
-    const size_t head_num_per_tp =
-        model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
-
-    info.input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
-    info.kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                          {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
-    info.kv_cache_offset = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
-    info.rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-    info.rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-    info.layer_kv_cache_ptr =
-        Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
-    info.block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num}, rank);
-
+  input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
+  kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
+                   {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
+  kv_cache_offset =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
+  rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
+  rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
+  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num}, rank);
 #ifdef ENABLE_CUDA
-    if (model_config_.mla_config.kv_lora_rank > 0 && q_len > 0) {
+  // Only for flashmla
+  if (model_config_.use_mla) {
+    num_splits =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
+    for (size_t i = 0; i < GetDecodeTokenNumThreshold(); i++) {
       llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-      GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, 1, rank_, 0);
+      const size_t q_len = i + 1;
+      const size_t head_num_per_tp =
+          model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+      GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, /*num_heads_k*/ 1, rank_);
       const size_t tile_scheduler_metadata_tensor_num =
           flash_mla_workspace_map.num_sm_parts * llm_kernels::nvidia::TileSchedulerMetaDataSize;
       info.tile_scheduler_metadata =
@@ -191,9 +193,9 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 #endif
   if (Singleton<Environment>::GetInstance()->IsEnableBlockChecksum()) {
     checksum_ptrs_tensor_ =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_batch_size * max_block_num_}, rank_);
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_batch_size * max_block_num}, rank_);
     checksum_results_tensor_ =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size * max_block_num_}, rank_);
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size * max_block_num}, rank_);
   }
 }
 
@@ -257,24 +259,22 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 
   PrepareInputInfo(forward_reqs);
 
-  multi_token_request_num = flash_input.reqs.size();
-  dp_multi_token_request_num = flash_input.dp_reqs.size();
-  single_token_request_num = page_single_input.reqs.size() + page_dual_input.reqs.size();
-  dp_single_token_request_num = page_single_input.dp_reqs.size() + page_dual_input.dp_reqs.size();
-  dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
-
-  total_prefix_len = 0;
-  multi_token_request_total_seq_len = 0;
+  dp_context_tokens = 0;
+  dp_decode_tokens = 0;
   dp_total_prefix_len = 0;
   dp_multi_token_request_total_seq_len = 0;
   total_sampling_token_num_ = 0;
   for (const auto& req : forward_reqs) {
-    if (req.GetType() == ForwardRequestType::kFlash) {
-      total_prefix_len += req.prefix_cache_len;
-      multi_token_request_total_seq_len += req.forwarding_tokens->size();
-      if (req.attn_dp_group_id == attn_dp_group_id_) {
-        dp_total_prefix_len += req.prefix_cache_len;
-        dp_multi_token_request_total_seq_len += req.forwarding_tokens->size();
+    if (req->GetType() == ForwardRequestType::kFlash) {
+      if (req->attn_dp_group_id == attn_dp_group_id_) {
+        dp_context_tokens += req->GetInputIdsLength();
+        dp_total_prefix_len += req->prefix_cache_len;
+        context_kv_cache_block_num += req->kv_cache_ptrs[attn_dp_rank_id_].size();
+      }
+    } else {  // req->GetType() == ForwardRequestType::kPage
+      if (req->attn_dp_group_id == attn_dp_group_id_) {
+        dp_decode_tokens += req->GetInputIdsLength();
+        decode_kv_cache_block_num += req->kv_cache_ptrs[attn_dp_rank_id_].size();
       }
     }
     total_sampling_token_num_ += req.sampling_token_num;

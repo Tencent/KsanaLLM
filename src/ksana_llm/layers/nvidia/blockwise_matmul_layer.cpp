@@ -17,12 +17,15 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
                                   std::shared_ptr<Context> context, int rank) {
   STATUS_CHECK_FAILURE(BaseLayer::Init(parameters, runtime_config, context, rank));
 
-  int parameter_index = 0;
+  size_t parameter_index = 0;
   max_m_ = std::any_cast<size_t>(parameters[parameter_index++]);
   n_ = std::any_cast<size_t>(parameters[parameter_index++]);
   k_ = std::any_cast<size_t>(parameters[parameter_index++]);
   block_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   weight_ = std::any_cast<Tensor>(parameters[parameter_index++]);
+  if (parameter_index < parameters.size()) {
+    skip_quant_ = std::any_cast<const bool>(parameters[parameter_index++]);
+  }
 
   // currently, DeepGEMM only support bfloat16
   deepgemm_enabled_ = ((inter_data_type_ == DataType::TYPE_BF16) && std::getenv("DISABLE_DEEPGEMM") == nullptr);
@@ -37,17 +40,15 @@ Status BlockwiseMatMulLayer::Init(const std::vector<std::any>& parameters, const
   return Status();
 }
 
-size_t BlockwiseMatMulLayer::GetWorkspaceSize() {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT);
-}
+size_t BlockwiseMatMulLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 template <typename T>
 size_t BlockwiseMatMulLayer::GetCachedCutlassBufferSize() {
   // Check if buffer size is already cached
-  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsCutlassBufferSizeContain(
-          inter_data_type_, max_m_, k_, n_)) {
-    size_t cached_size = Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetCutlassBufferSize(
-        inter_data_type_, max_m_, k_, n_);
+  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsCutlassBufferSizeContain(inter_data_type_, max_m_, k_,
+                                                                                        n_)) {
+    size_t cached_size =
+        Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetCutlassBufferSize(inter_data_type_, max_m_, k_, n_);
     KLLM_LOG_DEBUG << fmt::format("Rank[{}] Using cached cutlass buffer size: {}", rank_, cached_size);
     return cached_size;
   }
@@ -60,8 +61,8 @@ size_t BlockwiseMatMulLayer::GetCachedCutlassBufferSize() {
   }
 
   // Cache the computed buffer size
-  Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddCutlassBufferSize(
-      inter_data_type_, max_m_, k_, n_, cutlass_buffer_size);
+  Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddCutlassBufferSize(inter_data_type_, max_m_, k_, n_,
+                                                                              cutlass_buffer_size);
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Cached cutlass buffer size: {}", rank_, cutlass_buffer_size);
 
   return cutlass_buffer_size;
@@ -78,15 +79,15 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
   std::lock_guard<std::mutex> guard(g_mtx);
 
   // Check if GEMM selection thresholds are already cached
-  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsGemmSelectionThresholdContain(
-          inter_data_type_, max_m_, k_, n_)) {
+  if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsGemmSelectionThresholdContain(inter_data_type_, max_m_,
+                                                                                             k_, n_)) {
     auto [deepgemm_threshold, swap_ab_threshold] =
-        Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetGemmSelectionThreshold(
-            inter_data_type_, max_m_, k_, n_);
+        Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetGemmSelectionThreshold(inter_data_type_, max_m_, k_,
+                                                                                         n_);
     deepgemm_max_m_threshold_ = deepgemm_threshold;
     swap_ab_max_m_threshold_ = swap_ab_threshold;
     KLLM_LOG_DEBUG << fmt::format("Reusing Profile BlockwiseMatMulLayer in rank:{}, ({},{},{},{})", rank_,
-                                 inter_data_type_, max_m_, k_, n_);
+                                  inter_data_type_, max_m_, k_, n_);
   } else {
     const size_t kPerfIters = GetEnvAsPositiveInt("QUANT_PROFILE", 20);
     if (kPerfIters == 0) {
@@ -158,9 +159,10 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
     // Cache the computed thresholds
     Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddGemmSelectionThreshold(
         inter_data_type_, max_m_, k_, n_, deepgemm_max_m_threshold_, swap_ab_max_m_threshold_);
-    KLLM_LOG_INFO << fmt::format("Set deepgemm_max_m_threshold_ to {} and swap_ab_max_m_threshold_ to {} "
-                                 "for max_m={}, k={}, n={}",
-                                 deepgemm_max_m_threshold_, swap_ab_max_m_threshold_, max_m_, k_, n_);
+    KLLM_LOG_INFO << fmt::format(
+        "Set deepgemm_max_m_threshold_ to {} and swap_ab_max_m_threshold_ to {} "
+        "for max_m={}, k={}, n={}",
+        deepgemm_max_m_threshold_, swap_ab_max_m_threshold_, max_m_, k_, n_);
   }
 
   BuildDeepGemmKernels();
@@ -227,7 +229,6 @@ size_t BlockwiseMatMulLayer::GetWorkspaceSizeT() {
   return workspace_size_;
 }
 
-
 Status BlockwiseMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
 }
@@ -251,9 +252,11 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
   void* a_q = workspace_buffer_->GetPtr<void>();
   void* a_s = a_q + GetTypeSize(TYPE_FP8_E4M3) * cur_m * k_;
 
-  InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, cur_m, k_, /*is_column_major*/ true,
-                                     context_->GetComputeStreams()[rank_].Get(), block_size_,
-                                     PerTokenGroupQuantFusionParams{.fuse_silu_mul = (k == 2 * k_)});
+  if (!skip_quant_) {
+    InvokePerTokenGroupQuantFp8E4m3<T>(a, a_q, a_s, cur_m, k_, /*is_column_major*/ true,
+                                       context_->GetComputeStreams()[rank_].Get(), block_size_,
+                                       PerTokenGroupQuantFusionParams{.fuse_silu_mul = (k == 2 * k_)});
+  }
 
   void* b = input_tensors[1].GetPtr<void>();
   void* b_s = input_tensors[1].weight_scales->GetPtr<void>();

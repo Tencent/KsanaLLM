@@ -99,7 +99,6 @@ Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_ra
 }
 
 void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector, std::shared_ptr<Context>& context) {
-  DeviceSynchronize();
   int device_rank;
   GetDevice(&device_rank);
 
@@ -114,6 +113,7 @@ void AssignFromVector(Tensor& tensor, const std::vector<float>& f_vector, std::s
   CastDeviceTensorType(fp32_cast, tensor.dtype, device_rank, context);
   MemcpyAsync(tensor.GetPtr<void>(), fp32_cast.GetPtr<void>(), tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
               context->GetMemoryManageStreams()[device_rank]);
+  DeviceSynchronize();
 }
 
 template <typename T>
@@ -175,7 +175,6 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
         forwarding_context_->model_input_->page_single_input.kv_cache_block_num +
             forwarding_context_->model_input_->page_dual_input.kv_cache_block_num,
         forwarding_context_->model_input_->dp_max_forwarding_tokens,
-        forwarding_context_->model_input_->total_prefix_len,
         forwarding_context_->model_input_->dp_multi_token_request_num,
         forwarding_context_->model_input_->dp_multi_token_request_max_tokens,
         forwarding_context_->model_input_->dp_single_token_request_num,
@@ -187,26 +186,51 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
     forwarding_context_->GetAttentionForwardContext().flag_tensor.template GetPtr<bool>()[0] =
         forwarding_context_->model_input_->use_cache;
-    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0], 2048};
-    std::vector<float> input_data(hidden_buffer_tensors_0[0].GetElementNumber());
-    for (size_t i = 0; i < input_data.size(); i++) {
-      input_data[i] = 1.0f / (i % 97 * 0.1f + 1.0f) * pow(-1, (i % 7));
+    hidden_buffer_tensors_0[0].shape = {forwarding_context_->model_input_->input_ids.shape[0],
+                                        model_config_.hidden_units};
+    hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
+    std::vector<float> input_data;
+    input_data.reserve(hidden_buffer_tensors_0[0].GetElementNumber());
+    size_t count = 0;
+    for (const auto& req : forward_reqs) {
+      // Skip cached prefix
+      count += req->prefix_cache_len * model_config_.hidden_units;
+      for (size_t i = 0; i < req->GetInputIdsLength(); i++) {
+        for (size_t j = 0; j < model_config_.hidden_units; j++) {
+          input_data.push_back(1.0f / (count % 97 * 0.1f + 1.0f) * pow(-1, (count % 7)));
+          ++count;
+        }
+      }
     }
     AssignFromVector(hidden_buffer_tensors_0[0], input_data, context_);
-    Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, nullptr, true, *forwarding_context_);
+    Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, nullptr, is_multi_token_forward,
+                                  *forwarding_context_);
+    hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);
-      hidden_buffer_tensors_1[0].Fill(0);
       STATUS_CHECK_RETURN(cast_layer_->Forward(
           {hidden_buffer_tensors_0[0], forwarding_context_->GetAttentionForwardContext().forward_shape},
           hidden_buffer_tensors_1));
+      StreamSynchronize(context_->GetComputeStreams()[rank_]);
       Memcpy(input_data.data(), hidden_buffer_tensors_1[0].template GetPtr<void>(),
              sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
     }
     std::vector<float> output;
     if (is_multi_token_forward) {
-      output = {-1977, 2088, -3386, 772.5, 125.75, -575.5};
+      if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
+        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+          output = {-1984, 2096, -3392, 784, 117.5, -564};
+        } else {
+          output = {346, 588, -1008, 764, -648, 936};
+        }
+      } else {
+        if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
+          output = {-1977, 2088, -3386, 772.5, 125.75, -575.5};
+        } else {
+          output = {349, 585, -1004, 759, -643.5, 928};
+        }
+      }
     } else {
       if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
         if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
@@ -343,6 +367,7 @@ class MlaTest : public testing::Test {
     runtime_config.max_batch_size = 5;
     runtime_config.max_seq_len = 20;
     runtime_config.max_step_token_num = 40;
+    runtime_config.enable_prefix_caching = true;
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};
@@ -424,10 +449,22 @@ class MlaTest : public testing::Test {
     LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward.atb_kv_cache_base_blk_ids,
                                        cache_manager);
 #endif
-    test_mla_model->CommonAttention(0, bs1, true, {forward});
-    forward.forwarding_tokens->push_back(321);
-    forward.kv_cached_token_num = 2;
-    test_mla_model->CommonAttention(0, bs1, false, {forward});
+    test_mla_model->CommonAttention(0, bs1, true, {forward.get()});
+
+    if (test_name.find("FlashMlaKvFP8Test") == std::string::npos) {
+      // Test Prefix caching
+      forward->forwarding_tokens->push_back(321);
+      forward->prefix_cache_len = 1;
+      forward->kv_cached_token_num = 1;
+      test_mla_model->CommonAttention(0, bs1, true, {forward.get()});
+      forward->forwarding_tokens->pop_back();
+    }
+
+    // Decode
+    forward->forwarding_tokens->push_back(321);
+    forward->prefix_cache_len = 0;
+    forward->kv_cached_token_num = 2;
+    test_mla_model->CommonAttention(0, bs1, false, {forward.get()});
   }
 };
 

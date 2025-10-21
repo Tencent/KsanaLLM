@@ -407,9 +407,8 @@ Status MultiHeadLatentAttention::PagedAttentionForward(std::vector<Tensor>& outp
                                                        ForwardingContext& forwarding_context) {
   PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
   {
-    CREATE_BUFFER_SCOPE(kv_cache_buffer_tensors, forwarding_context.GetForwardingBuffers()->kv_cache_buffer);
-    // Process page_dual and page_single sequentially
-    // Page_dual is placed before page_single, since requests are sorted by token_num in descending order
+    // Process each page_input sequentially
+    // Page_inputs are ordered by token_num in descending order, align with the order of forward requests
     size_t skip_tokens = 0;
     for (const auto page_input : {&forwarding_context.GetModelInput()->page_dual_input,
                                   &forwarding_context.GetModelInput()->page_single_input}) {

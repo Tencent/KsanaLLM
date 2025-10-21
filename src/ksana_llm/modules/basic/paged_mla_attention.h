@@ -6,7 +6,7 @@
 #include <memory>
 
 #include "ksana_llm/models/base/layer_creation_context.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
+#include "ksana_llm/modules/basic/bmm.h"
 
 namespace ksana_llm {
 class PagedMlaAttention {
@@ -18,18 +18,13 @@ class PagedMlaAttention {
   ~PagedMlaAttention() = default;
 
   // TODO(robertyuan): param after output tensor should be removed
-  Status Forward(std::vector<Tensor>& output_tensor, const ModelInput::input_info& page_input,
-                 std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& kv_cache_buffer_tensor,
+  Status Forward(std::vector<Tensor>& output_tensors, const std::shared_ptr<ModelInput>& model_input,
+                 const ModelInput::input_info& page_input, std::vector<Tensor>& hidden_buffer_tensors_1,
                  const AttentionForwardContext& attn_ctx, Tensor& workspace_buffer, Tensor& decode_q_buffer_tensor,
                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor);
 
  protected:
   std::shared_ptr<BaseLayer> paged_mla_attention_layer_;
-
-  Tensor kv_b_nope_proj_weight_;
-  Tensor v_head_proj_weight_;
-  Tensor attn_o_proj_weight_;
-
-  Tensor attn_w_uv_weight_;
+  std::shared_ptr<Bmm> attn_w_uv_bmm_;
 };
 }  // namespace ksana_llm

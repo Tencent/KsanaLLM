@@ -78,8 +78,7 @@ class ModelInput {
   size_t dp_multi_token_request_max_tokens = 0;
   size_t dp_single_token_request_max_tokens = 0;
 
-  // The total prefix length.
-  size_t total_prefix_len = 0;
+  // The total dp prefix length.
   size_t dp_total_prefix_len = 0;
 
   // current request batchsize matches cudagraph catpure range
@@ -263,8 +262,8 @@ class ModelInput {
   input_info page_single_input;  // input_ids length is 1, use page attention
   input_info page_dual_input;    // input_ids length is 2, use page attention
 
-  // Divide the forward requests into three categories: flash, page_single, page_dual
-  void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);
+  // Divide the forward requests into two categories: flash, page (with different lengths)
+  void PrepareInputInfo(const std::vector<ForwardRequest*>& forward_reqs);
   // Prepare information related to tokens of the current batch of requests
   void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
 

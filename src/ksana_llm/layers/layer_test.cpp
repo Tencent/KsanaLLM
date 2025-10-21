@@ -195,7 +195,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
   CreateHalfDataTypeTensor(src_flexible_kv_cache_tensor, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(dst_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
   CreateHalfDataTypeTensor(src_flexible_token_idx_tensor, {0}, GetDataType<int>(), sizeof(int));
-  forward_shape.shape = {1, 2, 1, 0, 0, 0, 2, 0, 1, 2, 0, 0, 0};
+  forward_shape.shape = {1, 2, 1, 0, 0, 0, 2, 1, 2, 0, 0, 0};
   void* pos_ptr = pos.GetPtr<void>();
   std::vector<uint64_t> pos_cpu({0, 1});
   Memcpy(pos_ptr, pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);

@@ -31,7 +31,6 @@ Status Llama4Weight<T>::PermuteExpertsWeight() {
   // src[num_experts, moe_inter_size_per_rank, hidden_units]
   // dst[num_experts, hidden_units, moe_inter_size_per_rank]
   std::vector<std::string> names = {"experts.up_gate_proj", "experts.down_proj"};
-  int num_layers = model_config_.num_layer;
   for (std::string& name : names) {
     std::string swap_tensor_name = "empty_" + name + "_tensor";
     tensor_manager_->CreateTensorWithSameShape(
