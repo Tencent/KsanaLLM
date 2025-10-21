@@ -264,6 +264,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     // 融合Wuk到Qnope, 最后一维从qk_nope_dim变为kv_lora_rank
     STATUS_CHECK_RETURN(attn_w_uk_t_bmm_->Forward(
         {decode_q_nope, hidden_buffer_tensors_1[0], hidden_buffer_tensors_0[0]}, decode_q_absorb_wuk));
+    decode_q_nope.shape = {dp_decode_tokens, head_num_per_atp_ * kv_lora_rank_};
   }
 
   // TODO(robertyuan): swap with reduce_buffer_tensors needs optimize.
@@ -383,8 +384,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 }
 
 Status MultiHeadLatentAttention::FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                                       std::vector<Tensor>& k_buffer,
-                                                       std::vector<Tensor>& v_buffer,
+                                                       std::vector<Tensor>& k_buffer, std::vector<Tensor>& v_buffer,
                                                        std::vector<Tensor>& output_tensors, Tensor& q_nope_rope_tensor,
                                                        Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
                                                        ForwardingContext& forwarding_context) {
