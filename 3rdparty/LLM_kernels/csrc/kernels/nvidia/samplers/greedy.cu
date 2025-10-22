@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include <stdlib.h>
 #include <cub/cub.cuh>
+#include <math_constants.h>
 
 #include "csrc/utils/nvidia/cuda_utils.h"
 
@@ -46,6 +47,83 @@ __device__ void InvokeWrapArgMax(volatile T* s_max_values, volatile uint32_t* s_
       static_cast<T>(s_max_values[threadIdx.x + DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE])) {
     s_max_values[threadIdx.x] = s_max_values[threadIdx.x + DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE];
     s_argmax[threadIdx.x] = s_argmax[threadIdx.x + DEFAULT_CUDA_ONE_THIRTY_TWO_WARP_SIZE];
+  }
+}
+
+template <typename T>
+__global__ void InvokeNewArgMaxReduceKernel(const T* input, const int32_t batch_size, const int32_t vocab_size,
+                                            uint32_t* result) {
+  // NOTE(karlluo): shm consist with DEFAULT_CUDA_BLOCK_THREADS_NUM (float + uint32_t) as following:
+  // |-- blockDim.x float --|-- blockDim.x uin32_t --|
+  // |     for max value    |    for max index     --|
+  // prevent from bank conflict, each thread handle one element `for max value` and `for max index`
+  extern __shared__ unsigned char smem[];
+  T* s_max_values = reinterpret_cast<T*>(smem);
+  uint32_t* s_argmax = reinterpret_cast<uint32_t*>(smem + sizeof(T) * blockDim.x);
+
+  const uint32_t row = blockIdx.x;
+  const T* __restrict__ d_value = input + row * vocab_size;
+  uint32_t* __restrict__ d_index = &(result[row]);
+
+  // Initialize per-thread best
+  uint32_t max_id = 0u;
+  T max_value = NegativeInfinity<T>();
+
+  // Coalesced vocab chunk scan with software unrolling (4x)
+  const uint32_t threads = blockDim.x;
+  constexpr uint32_t kTileSize = 4;
+  for (uint32_t vocab_chunk_offset = 0u; vocab_chunk_offset < static_cast<uint32_t>(vocab_size);
+       vocab_chunk_offset += threads * kTileSize) {
+    uint32_t idx_0 = vocab_chunk_offset + threadIdx.x;
+    if (idx_0 < static_cast<uint32_t>(vocab_size)) {
+      T v0 = d_value[idx_0];
+      if (max_value < v0) {
+        max_value = v0; max_id = idx_0;
+      }
+    }
+    uint32_t idx_1 = idx_0 + threads;
+    if (idx_1 < static_cast<uint32_t>(vocab_size)) {
+      T v1 = d_value[idx_1];
+      if (max_value < v1) { max_value = v1; max_id = idx_1; }
+    }
+    uint32_t idx_2 = idx_1 + threads;
+    if (idx_2 < static_cast<uint32_t>(vocab_size)) {
+      T v2 = d_value[idx_2];
+      if (max_value < v2) { max_value = v2; max_id = idx_2; }
+    }
+    uint32_t idx_3 = idx_2 + threads;
+    if (idx_3 < static_cast<uint32_t>(vocab_size)) {
+      T v3 = d_value[idx_3];
+      if (max_value < v3) { max_value = v3; max_id = idx_3; }
+    }
+  }
+
+  s_max_values[threadIdx.x] = max_value;
+  s_argmax[threadIdx.x] = max_id;
+
+  __syncthreads();
+
+  for (uint32_t border = blockDim.x >> 1; border > DEFAULT_CUDA_WARP_SIZE; border >>= 1) {
+    if (threadIdx.x < border) {
+      const uint32_t compare_idx = threadIdx.x + border;
+      if (compare_idx < blockDim.x) {
+        const T v = s_max_values[compare_idx];
+        if (s_max_values[threadIdx.x] < v) {
+          s_max_values[threadIdx.x] = v;
+          s_argmax[threadIdx.x] = s_argmax[compare_idx];
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  // Final warp-level reduction using stable tie-break helper
+  if (threadIdx.x < DEFAULT_CUDA_WARP_SIZE) {
+    InvokeWrapArgMax(s_max_values, s_argmax);
+  }
+
+  if (threadIdx.x == 0) {
+    *d_index = s_argmax[0];
   }
 }
 
@@ -154,11 +232,12 @@ void InvokeArgMaxReduce(const T* input, const int32_t batch_size, const int32_t 
 
   // By default, the old version of argmax is used, which has issues with multiple maxima.
   // We will transition to the correct new version later.
-  if (std::getenv("ENABLE_NEW_ARGMAX") == nullptr) {
+  if (std::getenv("USE_OLD_ARGMAX") != nullptr) {
     const uint32_t s_mem_size = DEFAULT_CUDA_BLOCK_THREADS_NUM * (sizeof(float) + sizeof(uint32_t));
     InvokeOldArgMaxReduceKernel<<<grid, block, s_mem_size, stream>>>(input, batch_size, vocab_size, result);
   } else {
-    InvokeArgMaxReduceKernel<<<grid, block, 0, stream>>>(input, batch_size, vocab_size, result);
+    const uint32_t s_mem_size = block.x * (sizeof(T) + sizeof(uint32_t));
+    InvokeNewArgMaxReduceKernel<<<grid, block, s_mem_size, stream>>>(input, batch_size, vocab_size, result);
   }
 }
 

@@ -452,5 +452,20 @@ inline bool EnableGpuP2PAccess(int device_count) {
   return true;
 }
 
+template <typename T>
+inline __device__ T NegativeInfinity() {
+  return -INFINITY;
+}
+
+template <>
+inline __device__ __half NegativeInfinity<__half>() {
+  return -CUDART_INF_FP16;
+}
+
+template <>
+inline __device__ __nv_bfloat16 NegativeInfinity<__nv_bfloat16>() {
+  return -CUDART_INF_BF16;
+}
+
 }  // namespace utils
 }  // namespace llm_kernels

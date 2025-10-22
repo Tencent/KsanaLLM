@@ -169,6 +169,50 @@ TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyLargeVocabSizeTest) {
   DeleteBuffer(input_data);
 }
 
+TEST_F(LlamaNvidiaSamplersTestSuit, LlamaGreedyMultipleShapesTest) {
+  using DataType = float;
+  std::vector<std::pair<int32_t, int32_t>> shapes = {
+      {1, 65536},  {2, 65536},  {4, 65536},  {8, 65536},
+      {16, 65536},  {32, 65536}, {1, 152064}, {2, 152064},
+      {4, 152064}, {8, 152064}, {2, 304128}
+  };
+
+  for (const auto& s : shapes) {
+    const int32_t batch_size = s.first;
+    const int32_t vocab_size = s.second;
+
+    // Prepare random input directly on GPU
+    BufferMeta input = CreateBuffer<DataType>(
+        MemoryType::MEMORY_GPU,
+        {static_cast<size_t>(batch_size), static_cast<size_t>(vocab_size)},
+        /*is_random_init*/ true, /*low*/ -5.0, /*high*/ 5.0);
+
+    // Output buffer on GPU
+    BufferMeta result = CreateBuffer<uint32_t>(MemoryType::MEMORY_GPU, {static_cast<size_t>(batch_size)});
+
+    // Measure kernel execution
+    auto argmax_lambda = [&]() {
+      InvokeArgMaxReduce<DataType>(static_cast<DataType*>(input.data_ptr), batch_size, vocab_size,
+                                   static_cast<uint32_t*>(result.data_ptr), stream);
+    };
+    float elapsed_time_ms = MeasureCudaExecutionTime(argmax_lambda, stream);
+    // Validate correctness vs CPU reference
+    BufferMeta cpu_result = CopyToHost<int32_t>(result);
+    int32_t* cpu_result_ptr = static_cast<int32_t*>(cpu_result.data_ptr);
+    BufferMeta cpu_input = CopyToHost<DataType>(input);
+    DataType* cpu_input_ptr = static_cast<DataType*>(cpu_input.data_ptr);
+    for (int32_t i = 0; i < batch_size; i++) {
+      EXPECT_EQ(cpu_result_ptr[i],
+                RefArgMax<DataType>(cpu_input_ptr + static_cast<size_t>(i) * vocab_size, vocab_size));
+    }
+
+    DeleteBuffer(cpu_result);
+    DeleteBuffer(result);
+    DeleteBuffer(input);
+    DeleteBuffer(cpu_input);
+  }
+}
+
 TEST_F(LlamaNvidiaSamplersTestSuit, InvokeTopKSampling) {
   using DataType = float;
   void* workspace = nullptr;
