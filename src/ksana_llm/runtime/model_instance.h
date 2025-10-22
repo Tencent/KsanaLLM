@@ -64,10 +64,8 @@ class ModelInstance {
   size_t GetMaxTokenNum() { return runtime_config_.max_seq_len; }
 
   uint32_t GetLayerNum() {
-    static bool initialized = false;
-    if (!initialized) {
+    if (pipeline_config_.upper_layer_idx < 0 || pipeline_config_.lower_layer_idx < 0) {
       Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
-      initialized = true;
     }
     uint32_t layer_num = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
     if (pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer)) {

@@ -44,6 +44,15 @@ void MlaGetFromCompressedCache(void* const k_rope_out, void* const latent_out, c
                                const int total_len, const size_t* const seq_len_offset, const int* const block_offsets,
                                const int block_size, const int k_rope_size, const int latent_size, cudaStream_t stream);
 
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlexibleTokenCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_src, int* kv_list_dst, int block_size,
+                               int layer_idx, int total_len, int stride_size, cudaStream_t stream);
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashFlexibleKCacheCopy(SCALAR_T* k_src, void** k_list, size_t* flexible_offsets, size_t* prefix_offsets,
+                                size_t* seq_len_offset, int* block_offsets, int block_size, int bs, int total_len,
+                                int k_stride_size, int v_stride_size, float k_scale, cudaStream_t stream);
+
 // FA3 requires qkv scale input of [1, head_num] shape
 void InvokeFillKVScaleIntoBuffer(void* k_scale_ptr, void* v_scale_ptr, float* k_scale_host, float* v_scale_host,
                                  int kv_head_num, const cudaStream_t& stream);

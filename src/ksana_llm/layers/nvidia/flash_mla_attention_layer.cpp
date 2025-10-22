@@ -312,9 +312,21 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
                           void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream,
                           void* k_cache_ptr, int32_t* block_table_ptr, int max_blocks_per_seq, int total_prefix_tokens,
                           void* seqlens_without_prefix_ptr, void* seqlens_without_prefix_int32_ptr,
-                          void* prefix_kv_buffer, QuantMode mm_quant_mode) {
+                          void* prefix_kv_buffer, QuantMode mm_quant_mode, int layer_index,
+                          void* src_flexible_rotary_embedding_pos_ptr, void* dst_flexible_rotary_embedding_pos_ptr,
+                          void* flexible_rotary_embedding_mask_ptr, void* dst_flexible_kv_cache_ptr,
+                          void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,
+                          void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len) {
   if (alibi_slopes.has_value()) {
     KLLM_THROW("Flash attention 3 不支持 alibi_slopes");
+  }
+
+  // Copy cache of flexible tokens from src blocks to dst blocks
+  if (total_prefix_tokens > 0 && flexible_len != 0) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFlexibleTokenCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+        reinterpret_cast<CACHE_T**>(src_flexible_kv_cache_ptr), reinterpret_cast<CACHE_T**>(dst_flexible_kv_cache_ptr),
+        reinterpret_cast<int*>(src_flexible_token_idx_ptr), reinterpret_cast<int*>(dst_flexible_token_idx_ptr),
+        block_size, layer_index, flexible_len, qk_rope_head_dim + kv_lora_rank, stream));
   }
 
   if (rotary_embedding_cuda.has_value()) {
@@ -368,6 +380,34 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
           reinterpret_cast<SCALAR_T*>(k_pe_ptr), reinterpret_cast<SCALAR_T*>(compressed_kv_ptr),
           reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_without_prefix_ptr),
           total_q_tokens, qk_rope_head_dim, kv_lora_rank, stream));
+    }
+
+    if (flexible_len != 0) {
+      // TODO(zhongzhicao): For DeepSeek model, the twice rope of flexible cached tokens can be fused by calculating the
+      // subtraction of dst_token_idx and src_token_idx. However, in subsequent development, the token_idx in src_req
+      // and dst_req may not guarantee consistency, thus there could be both positive and negative value in
+      // flexible_rotary_embedding_pos, requiring an additional tensor to mark whether to excute reverse rope.
+      if (rotary_embedding_cuda.has_value()) {
+        // reverse rope for flexible cached tokens, with is_reverse flag setting to true.
+        rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(src_flexible_rotary_embedding_pos_ptr),
+                                        reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
+                                        k_rope_buffer, total_tokens, stream, 0, 0, qk_rope_head_dim,
+                                        /* is_reverse */ true);
+        CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
+
+        // correct rope for flexible cached tokens
+        rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(dst_flexible_rotary_embedding_pos_ptr),
+                                        reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
+                                        k_rope_buffer, total_tokens, stream, 0, 0, qk_rope_head_dim);
+        CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
+      }
+
+      // copy flexible cached k to k cache block
+      CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaFlashFlexibleKCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+          reinterpret_cast<SCALAR_T*>(k_rope_buffer), k_list, reinterpret_cast<size_t*>(flexible_offset_uint64_ptr),
+          reinterpret_cast<size_t*>(prefix_offsets), reinterpret_cast<size_t*>(seqlens_with_prefix_ptr),
+          reinterpret_cast<int*>(block_offsets), block_size, batch_size, total_tokens, qk_rope_head_dim, kv_lora_rank,
+          k_scale, stream));
     }
 
     // calc k_nope by latent_buffer @ kv_b_nope_proj. k_nope: [token_num, head, qk_nope_head_dim]
@@ -575,7 +615,10 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
       void* prefix_offsets, void* block_offsets, const std::optional<void*>& alibi_slopes, cudaStream_t stream,       \
       void* k_cache_ptr, int32_t* block_table_ptr, int max_blocks_per_seq, int total_prefix_tokens,                   \
       void* seqlens_without_prefix_ptr, void* seqlens_without_prefix_int32_ptr, void* prefix_kv_buffer,               \
-      QuantMode mm_quant_mode)
+      QuantMode mm_quant_mode, int layer_index, void* src_flexible_rotary_embedding_pos_ptr,                          \
+      void* dst_flexible_rotary_embedding_pos_ptr, void* flexible_rotary_embedding_mask_ptr,                          \
+      void* dst_flexible_kv_cache_ptr, void* src_flexible_kv_cache_ptr, void* dst_flexible_token_idx_ptr,             \
+      void* src_flexible_token_idx_ptr, void* flexible_offset_uint64_ptr, int flexible_len)
 MLA_ATTEN_VARLEN_ABSORB(float, float, llm_kernels::utils::KVCacheType::kAuto);
 MLA_ATTEN_VARLEN_ABSORB(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 MLA_ATTEN_VARLEN_ABSORB(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -629,15 +672,16 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const Tensor& dp_prefill_q_offset = *input_iter++;
   const Tensor& dp_prefill_q_offset_int32 = *input_iter++;
   const Tensor& kv_cache_offset = *input_iter++;
-  const Tensor& rotary_embedding_pos = *input_iter++;
-  const Tensor& rotary_embedding_mask = *input_iter++;
-  const Tensor& dp_flexible_rotary_embedding_pos = *input_iter++;   // not supported
-  const Tensor& dp_flexible_rotary_embedding_mask = *input_iter++;  // not supported
-  const Tensor& dp_dst_flexible_kv_cache = *input_iter++;           // not supported
-  const Tensor& dp_src_flexible_kv_cache = *input_iter++;           // not supported
-  const Tensor& dp_dst_flexible_token_idx = *input_iter++;          // not supported
-  const Tensor& dp_src_flexible_token_idx = *input_iter++;          // not supported
-  const Tensor& dp_flexible_offset_uint64 = *input_iter++;          // not supported
+  const Tensor& rotary_embedding_pos = *input_iter++;   // rope for q/k [total_q_tokens, num_q_heads/1, head_size]
+  const Tensor& rotary_embedding_mask = *input_iter++;  // mask for q/k [total_q_tokens, num_q_heads/1, head_size]
+  const Tensor& dp_src_flexible_rotary_embedding_pos = *input_iter++;  // reverse rope for k [total_tokens, head_size]
+  const Tensor& dp_dst_flexible_rotary_embedding_pos = *input_iter++;  // correct rope for k [total_tokens, head_size]
+  const Tensor& dp_flexible_rotary_embedding_mask = *input_iter++;     // mask for k [total_tokens, head_size]
+  const Tensor& dp_dst_flexible_kv_cache = *input_iter++;
+  const Tensor& dp_src_flexible_kv_cache = *input_iter++;
+  const Tensor& dp_dst_flexible_token_idx = *input_iter++;
+  const Tensor& dp_src_flexible_token_idx = *input_iter++;
+  const Tensor& dp_flexible_offset_uint64 = *input_iter++;
   const Tensor& forward_shape = *input_iter++;
   const Tensor& layer_kv_cache = *input_iter++;
   const Tensor& block_table = *input_iter++;
@@ -651,9 +695,6 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
   const Tensor& v_buffer = *input_iter++;
 
   Tensor& output = output_tensors[0];
-
-  const int flexible_len = dp_dst_flexible_kv_cache.shape[0];
-  KLLM_CHECK_WITH_INFO(flexible_len == 0, "Not support flexible length cache.");
 
   const int layer_block_num = forward_shape.shape[2];
   const int batch_size = forward_shape.shape[7];
@@ -688,7 +729,12 @@ Status FlashMlaAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors
       this->rank_, this->block_token_num_, k_list, dp_input_prefix.GetPtr<void>(), kv_cache_offset.GetPtr<void>(),
       this->alibi_slopes_, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr,
       block_table.GetPtr<int32_t>(), max_blocks_per_seq, total_prefix_tokens, dp_prefill_q_offset.GetPtr<void>(),
-      dp_prefill_q_offset_int32.GetPtr<void>(), prefix_kv_buffer.GetPtr<void>(), this->mm_quant_mode_);
+      dp_prefill_q_offset_int32.GetPtr<void>(), prefix_kv_buffer.GetPtr<void>(), this->mm_quant_mode_,
+      this->layer_index_, dp_src_flexible_rotary_embedding_pos.GetPtr<void>(),
+      dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), dp_flexible_rotary_embedding_mask.GetPtr<void>(),
+      dp_dst_flexible_kv_cache.GetPtr<void>(), dp_src_flexible_kv_cache.GetPtr<void>(),
+      dp_dst_flexible_token_idx.GetPtr<void>(), dp_src_flexible_token_idx.GetPtr<void>(),
+      dp_flexible_offset_uint64.GetPtr<void>(), dp_dst_flexible_kv_cache.shape[0]);
 
   KLLM_LOG_DEBUG << "RecordLayerProgress, layer_index: " << this->layer_index_ << ", rank: " << this->rank_;
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况

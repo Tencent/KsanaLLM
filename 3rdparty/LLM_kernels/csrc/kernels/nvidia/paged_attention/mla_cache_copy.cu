@@ -19,7 +19,7 @@ namespace nvidia {
 #define MAX_BLOCKS_PER_GRID_Y 65535
 
 // Copy MLA-kv compressed kv cache to kv blocks.
-// This kernel will skip shared prefix blocks, and copy only the kv cache of tokesn that need to be calculated.
+// This kernel will skip shared prefix blocks, and copy only the kv cache of tokens that need to be calculated.
 //
 // Args:
 //   k_src:
@@ -44,7 +44,7 @@ namespace nvidia {
 //   bs:
 //     The batch size.
 //   total_len:
-//     The toeken number of all tokens, not include prefix part.
+//     The token number of all tokens, not include prefix part.
 //   k_stride_size:
 //     The stride of the k cache of one token.
 //   v_stride_size:
@@ -124,6 +124,135 @@ void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void**
   MlaFlashKVCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE><<<grid_shape, block_shape, 0, stream>>>(
       k_src, v_src, k_list, v_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, bs, total_len,
       k_stride_size, v_stride_size, k_scale, v_scale);
+}
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, int kVecBytes>
+__global__ void MlaFlashPrefixKVReverseCacheCopyKernel(
+    SCALAR_T* __restrict__ k_dst, SCALAR_T* __restrict__ v_dst, void** __restrict__ kv_list,
+    const size_t* __restrict__ prefix_offsets, const size_t* __restrict__ seq_len_offset,
+    const int* __restrict__ block_offsets, const int block_size, const int total_len, const int k_stride_size,
+    const int v_stride_size, const float k_scale, const float v_scale, const int v_thread_num) {
+  constexpr unsigned int kVecSize = kVecBytes / sizeof(SCALAR_T);
+
+  const size_t token_idx = blockIdx.z * gridDim.y + blockIdx.y;
+  if (token_idx >= total_len) {
+    return;
+  }
+
+  size_t batch_idx = 0;
+  while (token_idx >= seq_len_offset[batch_idx + 1]) {
+    ++batch_idx;
+  }
+
+  // Calculate the index of the first forwarding new token (without prefix part) of the current batch.
+  size_t prefix_limit = prefix_offsets[batch_idx + 1] - prefix_offsets[batch_idx] + seq_len_offset[batch_idx];
+  if (token_idx >= prefix_limit) {
+    return;
+  }
+
+  const size_t token_offset_in_req = token_idx - seq_len_offset[batch_idx];
+  const size_t block_offset_in_req = token_offset_in_req / block_size;
+  const size_t token_offset_in_block = token_offset_in_req % block_size;
+
+  const size_t cache_offset = block_offsets[batch_idx] + block_offset_in_req;
+  const size_t cache_head_offset = token_offset_in_block * (k_stride_size + v_stride_size) + threadIdx.x * kVecSize;
+  CACHE_T* cache_ptr = reinterpret_cast<CACHE_T*>(kv_list[cache_offset]) + cache_head_offset;
+
+  const bool is_latent = threadIdx.x < v_thread_num;
+  const size_t dst_stride_size = is_latent ? v_stride_size : k_stride_size;
+  const size_t dst_head_offset = is_latent ? threadIdx.x : threadIdx.x - v_thread_num;
+  const float scale = is_latent ? v_scale : k_scale;
+  SCALAR_T* dst_base = is_latent ? v_dst : k_dst;
+  SCALAR_T* dst_ptr = dst_base + token_idx * dst_stride_size;
+
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+    vec_t<SCALAR_T, kVecSize> cache_vec;
+    cache_vec.load(cache_ptr);
+    cache_vec.store(dst_ptr + dst_head_offset * kVecSize);
+  } else {
+#pragma unroll
+    for (unsigned int i = 0; i < kVecSize; ++i) {
+      dst_ptr[dst_head_offset * kVecSize + i] = fp8::scaled_convert<SCALAR_T, CACHE_T, KV_DTYPE>(cache_ptr[i], scale);
+    }
+  }
+}
+
+// Prefix KV CacheCopy, supports copy-only and copy with quantization, CACHE_T to SCALAR_T.
+// Only fp8 kv cache uses this now because KVCacheType::kAuto copies all cache, not only prefix part.
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashPrefixKVReverseCacheCopy(SCALAR_T* k_dst, SCALAR_T* v_dst, void** kv_list, size_t* prefix_offsets,
+                                      size_t* seq_len_offset, int* block_offsets, int block_size, int total_len,
+                                      int k_stride_size, int v_stride_size, float k_scale, float v_scale,
+                                      cudaStream_t stream) {
+  // There is only one head for MLA-kvcache.
+  const int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  const int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  const dim3 grid(1, grid_y, grid_z);
+
+  constexpr int kVecBytes = 16;
+  const int v_thread_num = v_stride_size * sizeof(SCALAR_T) / kVecBytes;
+  const int stride_size = k_stride_size + v_stride_size;
+  dim3 block(stride_size * sizeof(SCALAR_T) / kVecBytes);
+  assert(block.x <= MAX_THREADS_PER_BLOCK && stride_size * sizeof(SCALAR_T) % kVecBytes == 0);
+  MlaFlashPrefixKVReverseCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE, kVecBytes>
+      <<<grid, block, 0, stream>>>(k_dst, v_dst, kv_list, prefix_offsets, seq_len_offset, block_offsets, block_size,
+                                   total_len, k_stride_size, v_stride_size, k_scale, v_scale, v_thread_num);
+}
+
+template <typename SCALAR_T, int kVecBytes>
+__global__ void MlaFlashWithoutPrefixKVCopyKernel(SCALAR_T* __restrict__ k_dst, SCALAR_T* __restrict__ v_dst,
+                                                  const SCALAR_T* __restrict__ k_new,
+                                                  const SCALAR_T* __restrict__ v_new,
+                                                  const size_t* __restrict__ prefix_offsets,
+                                                  const size_t* __restrict__ without_prefix_offsets,
+                                                  const int total_len, const int k_stride_size, const int v_stride_size,
+                                                  const int v_thread_num) {
+  constexpr unsigned int kVecSize = kVecBytes / sizeof(SCALAR_T);
+
+  int token_idx = blockIdx.z * gridDim.y + blockIdx.y;
+  if (token_idx >= total_len) {
+    return;
+  }
+
+  size_t batch_idx = 0;
+  while (token_idx >= without_prefix_offsets[batch_idx + 1]) {
+    ++batch_idx;
+  }
+
+  const size_t src_token_idx = prefix_offsets[batch_idx + 1] + token_idx;
+
+  const bool is_latent = threadIdx.x < v_thread_num;
+  const size_t stride_size = is_latent ? v_stride_size : k_stride_size;
+  const size_t head_offset = is_latent ? threadIdx.x : threadIdx.x - v_thread_num;
+  const SCALAR_T* new_base = is_latent ? v_new : k_new;
+  const SCALAR_T* new_ptr = new_base + token_idx * stride_size;
+  SCALAR_T* dst_base = is_latent ? v_dst : k_dst;
+  SCALAR_T* dst_ptr = dst_base + /* skip prefix */ src_token_idx * stride_size;
+
+  vec_t<SCALAR_T, kVecSize> new_vec;
+  new_vec.load(new_ptr + head_offset * kVecSize);
+  new_vec.store(dst_ptr + head_offset * kVecSize);
+}
+
+// Copy KV that did not hit prefix cache, SCALAR_T to SCALAR_T.
+// Only fp8 kv cache uses this now because KVCacheType::kAuto copies all cache, including prefix part.
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashWithoutPrefixKVCopy(SCALAR_T* k_dst, SCALAR_T* v_dst, SCALAR_T* k_new, SCALAR_T* v_new,
+                                 size_t* prefix_offsets, size_t* without_prefix_offsets, int total_q_len,
+                                 int k_stride_size, int v_stride_size, cudaStream_t stream) {
+  // There is only one head for MLA-kvcache.
+  const int grid_y = std::min(total_q_len, MAX_BLOCKS_PER_GRID_Y);
+  const int grid_z = (total_q_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  const dim3 grid(1, grid_y, grid_z);
+
+  constexpr int kVecBytes = 16;
+  const int v_thread_num = v_stride_size * sizeof(SCALAR_T) / kVecBytes;
+  const int stride_size = k_stride_size + v_stride_size;
+  dim3 block(stride_size * sizeof(SCALAR_T) / kVecBytes);
+  assert(block.x <= MAX_THREADS_PER_BLOCK && stride_size * sizeof(SCALAR_T) % kVecBytes == 0);
+  MlaFlashWithoutPrefixKVCopyKernel<SCALAR_T, kVecBytes>
+      <<<grid, block, 0, stream>>>(k_dst, v_dst, k_new, v_new, prefix_offsets, without_prefix_offsets, total_q_len,
+                                   k_stride_size, v_stride_size, v_thread_num);
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
@@ -230,6 +359,138 @@ void MlaGetFromCompressedCache(void* const k_rope_out, void* const latent_out, c
       k_rope_out, latent_out, block_list, seq_len_offset, block_offsets, block_size, k_rope_size, latent_size);
 }
 
+// Copy compressed_kv and k_rope from src_flexible_kv_cache_block to dst_flexible_kv_cache_block.
+// Handles flexible cached tokens. Note that the copied k_rope has wrong ROPE information.
+//
+// Args:
+//   kv_src:
+//     A pointer array of src kv cache block (which contains the src token) ptrs, has no offset in layer_idx dim.
+//   kv_dst:
+//     A pointer array of dst kv cache block (which contains the dst token) ptrs, has no offset in layer_idx dim.
+//   kv_list_src:
+//     An int array of flexible cached tokens offset_in_src_block.
+//   kv_list_dst:
+//     An int array of flexible cached tokens offset_in_dst_block.
+//   block_size:
+//     The token number of every cache block.
+//   layer_idx:
+//     The index of the layer, helps finding the start of current layer in kv_src and kv_dst.
+//   total_len:
+//     The number of flexible cached tokens.
+//   stride_size:
+//     The size of the k&v cache of one token, equals qk_rope_head_dim + kv_lora_rank.
+template <typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, int kVecBytes>
+__global__ void MlaFlexibleTokenCacheCopyKernel(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_src, int* kv_list_dst,
+                                                int block_size, int layer_idx, int total_len, int stride_size) {
+  constexpr unsigned int kVecSize = kVecBytes / sizeof(CACHE_T);
+
+  int input_idx = blockIdx.z * gridDim.y + blockIdx.y;
+  if (input_idx >= total_len) {
+    return;
+  }
+
+  size_t layer_size = block_size * stride_size;
+  CACHE_T* src_base = kv_src[input_idx] + layer_size * layer_idx;
+  CACHE_T* dst_base = kv_dst[input_idx] + layer_size * layer_idx;
+  int src_idx = kv_list_src[input_idx] % block_size;
+  int dst_idx = kv_list_dst[input_idx] % block_size;
+  CACHE_T* src_ptr = src_base + src_idx * stride_size;
+  CACHE_T* dst_ptr = dst_base + dst_idx * stride_size;
+  size_t offset = threadIdx.x * kVecSize;
+
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+    vec_t<CACHE_T, kVecSize> src_vec;
+    src_vec.load(src_ptr + offset);
+    src_vec.store(dst_ptr + offset);
+  } else {
+#pragma unroll
+    for (unsigned int i = 0; i < kVecSize; ++i) {
+      dst_ptr[offset + i] = src_ptr[offset + i];
+    }
+  }
+}
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlexibleTokenCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_src, int* kv_list_dst, int block_size,
+                               int layer_idx, int total_len, int stride_size, cudaStream_t stream) {
+  // There is only one head for MLA-kvcache.
+  const int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  const int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  const dim3 grid(1, grid_y, grid_z);
+
+  constexpr int kVecBytes = 16;
+  dim3 block(stride_size * sizeof(CACHE_T) / kVecBytes);
+  assert(block.x <= MAX_THREADS_PER_BLOCK && stride_size * sizeof(CACHE_T) % kVecBytes == 0);
+
+  MlaFlexibleTokenCacheCopyKernel<CACHE_T, KV_DTYPE, kVecBytes><<<grid, block, 0, stream>>>(
+      kv_src, kv_dst, kv_list_src, kv_list_dst, block_size, layer_idx, total_len, stride_size);
+}
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+__global__ void MlaFlashFlexibleKCacheCopyKernel(SCALAR_T* k_src, void** k_list, size_t* flexible_offsets, size_t* prefix_offsets,
+                                      size_t* seq_len_offset, int* block_offsets, int block_size, int bs, int total_len,
+                                      int k_stride_size, int v_stride_size, float k_scale) {
+  // Each batch in the sequence structures as follow:
+  // | prefix_cached_tokens | flexible_cached_tokens | forwarding_new_tokens |
+  // |       skipped        |        copying         |        skipped        |
+
+  const size_t token_idx = blockIdx.z * gridDim.y + blockIdx.y;
+  if (token_idx >= total_len) {
+    return;
+  }
+
+  size_t batch_idx = 0;
+  while (token_idx >= seq_len_offset[batch_idx + 1]) {
+    ++batch_idx;
+  }
+
+  // Calculate the index of the first forwarding new token (without prefix part) of the current batch.
+  size_t flexible_token_limit = prefix_offsets[batch_idx + 1] - prefix_offsets[batch_idx] + seq_len_offset[batch_idx];
+  if (token_idx >= flexible_token_limit) {
+    return;
+  }
+
+  // Calculate the index of the first flexible cached token of the current batch.
+  size_t prefix_token_limit = flexible_offsets[batch_idx + 1] - flexible_offsets[batch_idx] + seq_len_offset[batch_idx];
+  if (token_idx < prefix_token_limit) {
+    return;
+  }
+
+  const size_t token_offset_in_req = token_idx - seq_len_offset[batch_idx];
+  const size_t block_offset_in_req = token_offset_in_req / block_size;
+  const size_t token_offset_in_block = token_offset_in_req % block_size;
+
+  const size_t k_cache_offset = block_offsets[batch_idx] + block_offset_in_req;
+  const size_t k_cache_head_offset = token_offset_in_block * (k_stride_size + v_stride_size) + v_stride_size;
+  CACHE_T* k_cache_ptr = reinterpret_cast<CACHE_T*>(k_list[k_cache_offset]) + k_cache_head_offset;
+
+  SCALAR_T* k_src_ptr = k_src + token_idx * k_stride_size;
+
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
+    k_cache_ptr[threadIdx.x] = k_src_ptr[threadIdx.x];
+  } else {
+    k_cache_ptr[threadIdx.x] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(k_src_ptr[threadIdx.x], k_scale);
+  }
+}
+
+// Copy k_rope with correct ROPE information from contigous buffer to cache block.
+// Only handles flexible cached tokens, ignore prefix cached tokens and forwarding new tokens.
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashFlexibleKCacheCopy(SCALAR_T* k_src, void** k_list, size_t* flexible_offsets, size_t* prefix_offsets,
+                                size_t* seq_len_offset, int* block_offsets, int block_size, int bs, int total_len,
+                                int k_stride_size, int v_stride_size, float k_scale, cudaStream_t stream) {
+  // There is only one head for MLA-kvcache.
+  const int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
+  const int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
+  const dim3 grid(1, grid_y, grid_z);
+
+  assert(k_stride_size <= MAX_THREADS_PER_BLOCK);
+  const dim3 block(k_stride_size);
+  MlaFlashFlexibleKCacheCopyKernel<SCALAR_T, CACHE_T, KV_DTYPE>
+      <<<grid, block, 0, stream>>>(k_src, k_list, flexible_offsets, prefix_offsets, seq_len_offset, block_offsets,
+                                   block_size, bs, total_len, k_stride_size, v_stride_size, k_scale);
+}
+
 #define MLA_CACHE_COPY_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                               \
   template void MlaFlashKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                      \
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, size_t* prefix_offsets,                        \
@@ -240,7 +501,14 @@ void MlaGetFromCompressedCache(void* const k_rope_out, void* const latent_out, c
   template void MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(                                                \
       void* const k_rope_out, void* const latent_out, const void* const* const block_list, const int total_len,        \
       const size_t* const seq_len_offset, const int* const block_offsets, const int block_size, const int k_rope_size, \
-      const int latent_size, cudaStream_t stream);
+      const int latent_size, cudaStream_t stream);                                                                     \
+  template void MlaFlexibleTokenCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                \
+      CACHE_T * *kv_src, CACHE_T * *kv_dst, int* kv_list_src, int* kv_list_dst, int block_size, int layer_idx,         \
+      int total_len, int stride_size, cudaStream_t stream);                                                            \
+  template void MlaFlashFlexibleKCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                               \
+      SCALAR_T * k_src, void** k_list, size_t* flexible_offsets, size_t* prefix_offsets, size_t* seq_len_offset,       \
+      int* block_offsets, int block_size, int bs, int total_len, int k_stride_size, int v_stride_size, float k_scale,  \
+      cudaStream_t stream);
 
 MLA_CACHE_COPY_FUNCTION_DECLARATION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 MLA_CACHE_COPY_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);

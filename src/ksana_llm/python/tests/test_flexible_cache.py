@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import time
+import torch
 
 import pytest
 from utils import modify_yaml_field
@@ -26,6 +27,13 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def get_sm():
+    if torch is None or not torch.cuda.is_available():
+        return 0
+    major, minor = torch.cuda.get_device_capability()
+    return major * 10 + minor
 
 
 async def run_test(model_dir, default_ksana_yaml_path):
@@ -47,18 +55,24 @@ async def run_test(model_dir, default_ksana_yaml_path):
 
         # Modify YAML configuration
         yaml_modifications = {
+            "setting.attn_backend.enable_blocked_multi_token_forwarding_kv": False,
             "setting.global.tensor_para_size": 1,
-            "setting.batch_scheduler.max_token_len": 2048,
+            "setting.batch_scheduler.max_token_len": 65536,
+            "setting.batch_scheduler.max_step_tokens": 65536,
             "setting.block_manager.block_host_memory_factor": 0.1,
             "setting.block_manager.reserved_device_memory_ratio": 0.3,
             "setting.batch_scheduler.max_batch_size": 1,
             "setting.batch_scheduler.enable_auto_prefix_cache": True,
             "setting.batch_scheduler.min_flexible_cache_num": 16,
             "setting.batch_scheduler.split_fuse_token_num": 0,
+            "setting.batch_scheduler.mtp_step_num": 0,
             "model_spec.base_model.model_dir": model_dir,
             "setting.global.is_version_report": False,
             "setting.profiler.stat_interval_second": 0,
         }
+        if "DeepSeek" in model_dir:
+            yaml_modifications["setting.attn_backend.enable_blocked_multi_token_forwarding_kv"] = True
+            yaml_modifications["setting.batch_scheduler.min_flexible_cache_num"] = 64
 
         for field_path, value in yaml_modifications.items():
             modify_yaml_field(ksana_yaml_path, field_path, value)
@@ -87,8 +101,9 @@ async def run_test(model_dir, default_ksana_yaml_path):
             print(f"output: {output}")
             return input_tokens, output.output_tokens[0]
 
-        request_dict = {}
-        numbers_text = " ".join(str(i) for i in range(1, 5000))
+        # specified maximum sequence length for deepseek v2 lite model is 16384
+        numbers = 3000 if "DeepSeek" in model_dir else 5000
+        numbers_text = " ".join(str(i) for i in range(1, numbers))
         text1 = (
             "你是一个乐于助人的小助手，现在我将提问一个问题，请你认真的回答这个问题。"
             "这是一个数学相关的问题，请问仔细观察%s，这些数字中有偶数有奇数，请你仔细考虑"
@@ -99,13 +114,27 @@ async def run_test(model_dir, default_ksana_yaml_path):
             "这是一个数学相关的问题，请问仔细观察%s，这些数字中有偶数有奇数，请你仔细考虑"
             "偶数奇数的定义，仔细思考后告诉我其中100是奇数还是偶数？先给出结果再解释原因。"
         ) % numbers_text
-        request_dict["max_new_tokens"] = 1
+        if "DeepSeek" in model_dir:
+            # Move back the position with difference to ensure hitting prefix
+            numbers_text = " ".join(str(i) for i in range(1, numbers) if i != 50)
+            text2 = (
+                "你是一个乐于助人的小助手，现在我将提问一个问题，请你认真的回答这个问题。"
+                "这是一个数学相关的问题，请问仔细观察%s，这些数字中有偶数有奇数，请你仔细考虑"
+                "偶数奇数的定义，仔细思考后告诉我其中100是奇数还是偶数？先给出结果再解释原因。"
+            ) % numbers_text
+
+        sampling_config_perf = {}
+        sampling_config_acc = {}
+        sampling_config_perf["max_new_tokens"] = 1
+        sampling_config_acc["max_new_tokens"] = 7
+        request_dict = {}
+        request_dict["sampling_config"] = sampling_config_perf
         await generate_for_prompt(text1, request_dict)
         start_time = time.time()
         output = await generate_for_prompt(text2, request_dict)
         end_time = time.time()
         flexible_cache_execution_time = end_time - start_time
-        request_dict["max_new_tokens"] = 100
+        request_dict["sampling_config"] = sampling_config_acc
         output = await generate_for_prompt(text2, request_dict)
         flexible_cache_ans = tokenizer.decode(
             output[1], skip_special_tokens=True)
@@ -122,21 +151,23 @@ async def run_test(model_dir, default_ksana_yaml_path):
         tokenizer = engine.tokenizer
 
         logger.debug("Initialized ksana_llm engine.")
-        request_dict["max_new_tokens"] = 1
+        request_dict["sampling_config"] = sampling_config_perf
         await generate_for_prompt(text1, request_dict)
         start_time = time.time()
         output = await generate_for_prompt(text2, request_dict)
         end_time = time.time()
         base_execution_time = end_time - start_time
-        request_dict["max_new_tokens"] = 100
+        request_dict["sampling_config"] = sampling_config_acc
         output = await generate_for_prompt(text2, request_dict)
         base_ans = tokenizer.decode(output[1], skip_special_tokens=True)
         print(f"flexible_cache_execution_time: {flexible_cache_execution_time}")
         print(f"base_execution_time          : {base_execution_time}")
         print(f"flexible_cache_ans: {flexible_cache_ans}")
         print(f"base_ans          : {base_ans}")
+
+        time_thread = 0.2 if "DeepSeek" in model_dir else 0.75
         assert (
-            flexible_cache_execution_time / base_execution_time < 0.75
+            flexible_cache_execution_time / base_execution_time < time_thread
         ), (
             f"Flexible cache execution time ({flexible_cache_execution_time}) "
             f"exceeds 75% of the base execution time ({base_execution_time})."
@@ -150,11 +181,13 @@ async def run_test(model_dir, default_ksana_yaml_path):
         )
     finally:
         # Clean up the temporary directory
+        del engine
         shutil.rmtree(temp_dir)
         logger.debug(f"Deleted temporary directory: {temp_dir}")
 
 
-@pytest.mark.skip(reason='flexible cache is not supported in this version')
-@pytest.mark.parametrize("model_dir", ["/model/qwen1.5-hf/0.5B-Chat"])
+@pytest.mark.parametrize("model_dir", ["/model/qwen1.5-hf/0.5B-Chat", "/model/DeepSeek-V2-Lite-Chat-17868"])
 def test_flexible_cache(model_dir, default_ksana_yaml_path):
+    if "DeepSeek" in model_dir and get_sm() < 90:
+        pytest.skip(f"DeepSeek needs SM >= 90, which is {get_sm()}, skipping")
     asyncio.run(run_test(model_dir, default_ksana_yaml_path))

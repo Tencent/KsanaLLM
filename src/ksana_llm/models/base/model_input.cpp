@@ -125,14 +125,29 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   cpu_input_refit_tensor.emb_fp32_ptr_tensor =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER, input_ids.shape, rank_);
 
-  dp_dst_flexible_kv_cache_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size}, rank_);
-  dp_src_flexible_kv_cache_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size}, rank_);
-  dp_dst_flexible_token_idx_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size}, rank_);
-  dp_src_flexible_token_idx_tensor =
-      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size}, rank_);
+  if (runtime_config_.enable_flexible_caching) {
+    dp_flexible_rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
+    dp_src_flexible_rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
+    if (model_config_.use_mla) {
+      dp_dst_flexible_rotary_embedding_pos =
+          Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
+    }
+    dp_flexible_offset_uint64_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
+
+    dp_dst_flexible_kv_cache_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size}, rank_);
+    dp_src_flexible_kv_cache_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_token_num * max_batch_size}, rank_);
+    dp_dst_flexible_token_idx_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size}, rank_);
+    dp_src_flexible_token_idx_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num * max_batch_size}, rank_);
+  } else if (!enable_blocked_multi_token_forwarding_kv_ || model_config_.use_mla) {
+    // Reserve space for configuration that supports flexible caching, even though flexible caching is disabled.
+    dp_flexible_offset_uint64_tensor =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
+  }
 
   CreateVLTensors();
 
@@ -1009,7 +1024,7 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
                 req->prefix_cache_len);
       rotary_host_idx += req->forwarding_tokens->size() - req->prefix_cache_len;
     } else {
-      // mask real prefix(exclude flexible cache), now eques kv_cached_token_num
+      // mask real prefix(exclude flexible cache), now equals kv_cached_token_num
       std::fill_n(rotary_mask_host.begin() + rotary_host_idx, req->kv_cached_token_num, 0);
       // Assign rotary positional values
       std::iota(rotary_pos_host.begin() + rotary_host_idx,
@@ -1025,9 +1040,16 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
 
+  // For DeepSeek model, rope of flexible cached tokens and forwarding new tokens cannot be fused
+  // because q&k buffers differ in total_tokens when there is prefix
+  // If q&k forwarding parts is processed together, k flexible part must be handled separately
   if (dp_dst_flexible_kv_cache_tensor.shape[0] != 0) {
+    // rotary_mask_host can be shared for rotary_pos_host and mla_dst_flexible_rotary_pos_host
     rotary_mask_host.assign(total_input_len, 0);
+    // rotary_pos_host stores reverse rope information of flexible cached tokens
     rotary_pos_host.assign(total_input_len, 0);
+    // mla_dst_flexible_rotary_pos_host stores correct rope information of flexible cached tokens
+    std::vector<int64_t> mla_dst_flexible_rotary_pos_host(total_input_len, 0);
 
     size_t flexible_rotary_idx = 0;
     for (const auto& req : input.dp_reqs) {
@@ -1035,17 +1057,28 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
         std::fill(rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len - req->flexible_cache_len,
                   rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len, 1);
         for (auto& task : *req->flexible_cached_copy_tasks) {
+          // Reverse rope information stores src_token_idx_ to clear existing rope information
           rotary_pos_host[flexible_rotary_idx + task.dst_token_idx_] = task.src_token_idx_;
+          // For DeepSeek model, prepare correct rope information of flexible part
+          if (model_config_.use_mla) {
+            // Correct rope information stores dst_token_idx_ to embed correct rope information
+            mla_dst_flexible_rotary_pos_host[flexible_rotary_idx + task.dst_token_idx_] = task.dst_token_idx_;
+          }
         }
       }
       flexible_rotary_idx += req->forwarding_tokens->size();
     }
-    MemcpyAsync(dp_flexible_rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
-                sizeof(decltype(rotary_pos_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                context_->GetD2HStreams()[rank_]);
     MemcpyAsync(dp_flexible_rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
                 sizeof(decltype(rotary_mask_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
                 context_->GetD2HStreams()[rank_]);
+    MemcpyAsync(dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
+                sizeof(decltype(rotary_pos_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
+                context_->GetD2HStreams()[rank_]);
+    if (model_config_.use_mla) {
+      MemcpyAsync(dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), mla_dst_flexible_rotary_pos_host.data(),
+                  sizeof(decltype(mla_dst_flexible_rotary_pos_host)::value_type) * flexible_rotary_idx,
+                  MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+    }
   }
   EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
 #ifdef ENABLE_ACL
@@ -1179,6 +1212,13 @@ void ModelInput::PreparePrefill() {
 }
 
 void ModelInput::PrepareFlexibleCache(input_info& input) {
+  // Flexible cache supported scope: dense model with paged attn layout, deepseek model
+  // Flexible cache not supported scope: dense model with flash attn layout
+  const bool is_dense_model_flash_layout = !model_config_.use_mla && enable_blocked_multi_token_forwarding_kv_;
+  if (!runtime_config_.enable_flexible_caching && is_dense_model_flash_layout) {
+    return;
+  }
+
   std::vector<int> dst_flexible_kv_cache_id_cpu;
   std::vector<int> src_flexible_kv_cache_id_cpu;
   std::vector<int> dst_flexible_token_idx_cpu;
@@ -1205,7 +1245,8 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
               flexible_offset_uint64_cpu.size() * sizeof(decltype(flexible_offset_uint64_cpu)::value_type),
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 
-  if (dst_flexible_kv_cache_id_cpu.empty()) {
+  if (dst_flexible_kv_cache_id_cpu.empty() ||
+      (!runtime_config_.enable_flexible_caching && !is_dense_model_flash_layout)) {
     dp_dst_flexible_kv_cache_tensor.shape = {0};
     return;
   }
@@ -1259,7 +1300,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     const size_t skip_token_num = std::max(req.kv_cached_token_num, req.prefix_cache_len);
     const size_t input_ids_len = input_length - skip_token_num;
     KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num " << input_length
-                   << ", skip_token_num " << skip_token_num << ",kv_cached_token_num " << req.kv_cached_token_num
+                   << ", skip_token_num " << skip_token_num << ", kv_cached_token_num " << req.kv_cached_token_num
                    << ", prefix_cache_len " << req.prefix_cache_len;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());

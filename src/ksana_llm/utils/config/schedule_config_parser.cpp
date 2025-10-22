@@ -362,8 +362,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
     block_manager_config_.host_allocator_config.block_token_num = 64;
     block_manager_config_.device_allocator_config.block_token_num = 64;
-    KLLM_LOG_INFO
-        << "Automatically activate Flash MLA for DeepSeek models, setting block_token_num to 64 for flash_mla";
+    KLLM_LOG_INFO << "Automatically activate Flash MLA for MLA models, setting block_token_num to 64 for flash_mla";
   }
   block_manager_config_.reserved_device_memory_ratio = yaml_reader.GetScalar<float>(
       yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.01);
@@ -405,6 +404,11 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   // Read attn backend config.
   runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.attn_backend.enable_blocked_multi_token_forwarding_kv", false);
+  if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2" || model_config.type == "kimi_k2") {
+    runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
+    KLLM_LOG_INFO
+        << "Automatically activate Flash MLA for MLA models, setting enable_blocked_multi_token_forwarding_kv to true.";
+  }
   KLLM_LOG_INFO << "enable_blocked_multi_token_forwarding_kv: "
                 << runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
 
@@ -460,17 +464,18 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
                                          std::string &kv_cache_dtype_str) {
   DataType kv_cache_dtype = model_config.weight_data_type;
 
-  bool is_deepseek_model = (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2");
-  if (!is_deepseek_model && runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
-      IsPrefixCachingEnabled() && (model_config.type != "kimi_k2")) {
+  bool is_mla_model =
+      model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2" || model_config.type == "kimi_k2";
+  if (!is_mla_model && runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
+      IsPrefixCachingEnabled()) {
     if (kv_cache_dtype_str == "fp8_e5m2" || kv_cache_dtype_str == "fp8_e4m3") {
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
   } else {
     if (kv_cache_dtype_str == "fp8_e5m2") {
 #ifdef ENABLE_CUDA
-      if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
-        KLLM_LOG_WARNING << "Flash MLA not support fp8_e5m2 KV Cache. Please use fp8_e4m3.";
+      if (is_mla_model) {
+        KLLM_LOG_WARNING << "MLA not support fp8_e5m2 kv cache. Please use fp8_e4m3.";
       }
 #endif
       kv_cache_dtype = TYPE_FP8_E5M2;

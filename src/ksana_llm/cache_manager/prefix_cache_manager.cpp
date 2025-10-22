@@ -303,6 +303,10 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
           if (!cached_block->parent->inactive_requests.empty()) {
             continue;
           }
+          // skip if the parent is root block
+          if (cached_block->parent->token_ids.empty()) {
+            continue;
+          }
           for (; start_idx < block_token_num; start_idx++) {
             if (cached_block->parent->token_ids[start_idx] != token_ids[offset - block_token_num + start_idx]) {
               break;

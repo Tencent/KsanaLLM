@@ -204,7 +204,8 @@ void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float
   params.softmax_lseaccum_ptr = workspace_param.softmax_lse_accum_ptr;
   params.oaccum_ptr = workspace_param.out_accum_ptr;
 
-  if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3 || KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3 ||
+                KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2) {
     params.h = params.h_k;
     params.h_h_k_ratio = params.h / params.h_k;
     params.ngroups = params.q_head_per_hk;
@@ -218,14 +219,14 @@ void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float
 
   assert(head_size == 576);
   if constexpr (std::is_same<SCALAR_T, half>::value) {
-    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
       run_mha_fwd_splitkv_mla<cutlass::float_e4m3_t, cutlass::half_t, 576>(params, stream);
     } else {
       run_flash_splitkv_mla_kernel<cutlass::half_t>(params, stream);
       run_flash_mla_combine_kernel<cutlass::half_t>(params, stream);
     }
   } else if constexpr (std::is_same<SCALAR_T, __nv_bfloat16>::value) {
-    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
       run_mha_fwd_splitkv_mla<cutlass::float_e4m3_t, cutlass::bfloat16_t, 576>(params, stream);
     } else {
       run_flash_splitkv_mla_kernel<cutlass::bfloat16_t>(params, stream);

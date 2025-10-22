@@ -84,7 +84,7 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
        model_input->flash_input.kv_cache_offset,
        use_mrotary_ ? model_input->dp_mrotary_embedding_pos : model_input->flash_input.rotary_embedding_pos,
        model_input->flash_input.rotary_embedding_mask,
-       model_input->dp_flexible_rotary_embedding_pos,
+       model_input->dp_src_flexible_rotary_embedding_pos,
        model_input->dp_flexible_rotary_embedding_mask,
        model_input->dp_dst_flexible_kv_cache_tensor,
        model_input->dp_src_flexible_kv_cache_tensor,

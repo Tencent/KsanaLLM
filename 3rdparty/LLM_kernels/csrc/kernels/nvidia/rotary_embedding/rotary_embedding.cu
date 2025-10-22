@@ -77,7 +77,7 @@ __global__ void InvokeRotaryEmbeddingKernel(
                             // key_head_size]
     const T* __restrict__ cos_sin_cache,  // [max_position_embeddings, 2, rotary_dim // 2]
     const int rotary_dim, const int64_t query_stride, const int64_t key_stride, const int num_heads,
-    const int num_kv_heads, const int query_head_size, const int key_head_size) {
+    const int num_kv_heads, const int query_head_size, const int key_head_size, const bool is_reverse) {
   // Each thread block is responsible for one token.
   const int token_idx = blockIdx.x;
   int64_t pos = positions[token_idx];
@@ -97,7 +97,7 @@ __global__ void InvokeRotaryEmbeddingKernel(
     const int64_t token_head = token_idx * query_stride + head_idx * query_head_size;
     const int rot_offset = i % embed_dim;
     if (query != nullptr) {
-      ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+      ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, is_reverse);
     }
   }
 
@@ -106,7 +106,7 @@ __global__ void InvokeRotaryEmbeddingKernel(
     const int head_idx = i / embed_dim;
     const int64_t token_head = token_idx * key_stride + head_idx * key_head_size;
     const int rot_offset = i % embed_dim;
-    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, query == nullptr);
+    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim, is_reverse);
   }
 }
 
@@ -188,7 +188,7 @@ void LaunchRotaryEmbedding(const RotaryEmbeddingParam& params, T* cos_sin_cache,
     DISPATCH_ROTARY_EMBEDDING_BY_NEOX(RotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
                                       cos_sin_cache, params.rotary_dim, params.query_stride, params.key_stride,
                                       params.num_heads, params.num_kv_heads, params.query_head_size,
-                                      params.key_head_size);
+                                      params.key_head_size, params.is_reverse);
   } else {
     DISPATCH_ROTARY_EMBEDDING_BY_NEOX(MRotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
                                       cos_sin_cache, params.mrope_section, params.rotary_dim, params.query_stride,
@@ -357,12 +357,13 @@ void RotaryEmbeddingCuda::SetInput(const int64_t* positions,  // [batch_size, se
                                    void* key,    // [batch_size, seq_len, num_kv_heads * key_head_size] or
                                                  // [num_tokens, num_kv_heads * key_head_size]
                                    int num_tokens, cudaStream_t& stream, int64_t query_stride, int query_head_size,
-                                   int key_head_size) {
+                                   int key_head_size, bool is_reverse) {
   params_.positions = positions;
   params_.mask = mask;
   query_ = query;
   key_ = key;
   params_.num_tokens_ = num_tokens;
+  params_.is_reverse = is_reverse;
   params_.stream = stream;
   if (query_stride > 0) {
     params_.query_stride = query_stride;

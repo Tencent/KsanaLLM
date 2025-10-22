@@ -18,14 +18,14 @@
 namespace ksana_llm {
 
 Status Worker::Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                       InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue, RunMode run_mode) {
+                       InferStage stage, std::vector<ForwardRequest*>& forward_reqs, bool epilogue, RunMode run_mode) {
   // TODO(karlluo): confirm redundant usage
   SetDevice(rank_);
 
-  KLLM_LOG_DEBUG << "forwarding_tokens_num " << forward_reqs[0].forwarding_tokens.get()[0].size() << ", req_id "
-                 << forward_reqs[0].req_id << ",kv_cached_token_num " << forward_reqs[0].kv_cached_token_num
-                 << ", prefix_cache_len" << forward_reqs[0].prefix_cache_len << ", tokens[1]_num "
-                 << forward_reqs[0].forwarding_tokens.get()[1].size();
+  const auto& req = *forward_reqs.front();
+  KLLM_LOG_DEBUG << "forwarding_tokens_num " << req.forwarding_tokens->size() << ", req_id " << req.req_id
+                 << ", kv_cached_token_num " << req.kv_cached_token_num << ", prefix_cache_len "
+                 << req.prefix_cache_len;
   return model->Forward(multi_batch_id, weight, forward_reqs, epilogue, run_mode);
 }
 
@@ -77,7 +77,7 @@ void Worker::ThreadLoop() {
 
 std::future<Status> Worker::ForwardAsync(size_t multi_batch_id, std::shared_ptr<BaseModel> model,
                                          std::shared_ptr<BaseWeight> weight, InferStage stage,
-                                         std::vector<ForwardRequest>& forward_reqs, bool epilogue, RunMode run_mode) {
+                                         std::vector<ForwardRequest*>& forward_reqs, bool epilogue, RunMode run_mode) {
   PROFILE_EVENT_SCOPE(ForwardAsync, fmt::format("ForwardAsync_{}", multi_batch_id));
   std::promise<Status> promise;
   std::future<Status> future = promise.get_future();

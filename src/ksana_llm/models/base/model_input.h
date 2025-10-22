@@ -118,14 +118,17 @@ class ModelInput {
   Tensor dp_prefill_q_offset_uint64_tensor;
   Tensor dp_prefill_q_offset_int32_tensor;
 
-  // Indicate the corresponding index position of the input during the flexible rotary_embedding kernel computation,
-  // considering the impact of flexible cache optimization.
-  Tensor dp_flexible_rotary_embedding_pos;
-
   // Due to the optimization of PrefixCaching for computation reuse, incorporating the effects of flexible caching, a
   // mask is used during the flexible rotary_embedding computation to avoid multiple executions of flexible
   // rotary_embedding on the prefix block.
   Tensor dp_flexible_rotary_embedding_mask;
+
+  // Indicate the corresponding index position of the input during the flexible rotary_embedding kernel computation,
+  // considering the impact of flexible cache optimization.
+  // Stores pos information of src, used for all models to reverse rope
+  Tensor dp_src_flexible_rotary_embedding_pos;
+  // Stores pos information of dst, used for deepseek models to embed correct rope
+  Tensor dp_dst_flexible_rotary_embedding_pos;
 
   // The 3-dimentional index position for multimodal rotarty embedding.
   Tensor dp_mrotary_embedding_pos;

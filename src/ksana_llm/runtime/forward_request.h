@@ -121,7 +121,7 @@ struct ForwardRequest {
 
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
   // NOTE(xingjinglu)When ENABLE_CUDA, if enable_blocked_multi_token_fowarding_kv is true, it
-  // will use the variable the same as ACL. Now, regardless of whether  enable_blocked_multi_token_fowarding_kv is
+  // will use the variable the same as ACL. Now, regardless of whether enable_blocked_multi_token_fowarding_kv is
   // turned on, the variable definition here will be enabled.
   // NOTE(karlluo): for ATB, all device blocks locate on a
   // flatten plane memory space. The Ksana kv cache consists of blocks, each of which is an independent storage space.

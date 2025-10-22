@@ -54,6 +54,14 @@ class ModelInputTest : public testing::Test {
     RuntimeConfig runtime_config;
     env->GetRuntimeConfig(runtime_config);
 
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    std::string test_name = test_info->name();
+    if (test_name.find("PrepareFlashRotaryMlaFlexibleCacheTest") != std::string::npos) {
+      runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
+      runtime_config.enable_flexible_caching = true;
+      runtime_config.mtp_step_num = 0;
+    }
+
     // Initialize the model input object.
     model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context);
 
@@ -264,6 +272,109 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 }
+
+#ifdef ENABLE_CUDA
+// Test PrepareFlashRotary with flexible caching
+TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
+  // Dummy input req
+  const int block_token_num = 2;
+  const int batch_size = 2;
+  std::vector<int> dummy_block_memory_ids(1, 0);
+  std::vector<int> forwarding_tokens_1 = {0, 1, 2, 4, 5, 6, 7};    // hit {0, 1, 2, 3, 4, 5}
+  std::vector<int> forwarding_tokens_2 = {10, 11, 14, 15, 16, 17};  // hit {10, 11, 12, 13, 14, 15}
+  std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks_1(3);
+  std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks_2(2);
+  flexible_cached_copy_tasks_1[0].Update(2, 2, dummy_block_memory_ids, dummy_block_memory_ids);
+  flexible_cached_copy_tasks_1[1].Update(3, 4, dummy_block_memory_ids, dummy_block_memory_ids);
+  flexible_cached_copy_tasks_1[2].Update(4, 5, dummy_block_memory_ids, dummy_block_memory_ids);
+  flexible_cached_copy_tasks_2[0].Update(2, 4, dummy_block_memory_ids, dummy_block_memory_ids);
+  flexible_cached_copy_tasks_2[1].Update(3, 5, dummy_block_memory_ids, dummy_block_memory_ids);
+  // Construct forward requests as test input.
+  auto forward_req_1 = std::make_unique<ForwardRequest>();
+  auto forward_req_2 = std::make_unique<ForwardRequest>();
+  forward_req_1->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens_1);
+  forward_req_2->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens_2);
+  forward_req_1->kv_cached_token_num = 2;
+  forward_req_2->kv_cached_token_num = 2;
+  forward_req_1->prefix_cache_len = forward_req_1->kv_cached_token_num + flexible_cached_copy_tasks_1.size();
+  forward_req_2->prefix_cache_len = forward_req_2->kv_cached_token_num + flexible_cached_copy_tasks_2.size();
+  forward_req_1->flexible_cached_copy_tasks = &flexible_cached_copy_tasks_1;
+  forward_req_2->flexible_cached_copy_tasks = &flexible_cached_copy_tasks_2;
+
+  const size_t total_tokens = forwarding_tokens_1.size() + forwarding_tokens_2.size();
+  const size_t total_prefix_len = forward_req_1->prefix_cache_len + forward_req_2->prefix_cache_len;
+  const size_t total_flexible_len = flexible_cached_copy_tasks_1.size() + flexible_cached_copy_tasks_2.size();
+
+  const auto& env = Singleton<Environment>::GetInstance();
+  CacheManagerConfig cache_manager_config;
+  env->GetCacheManagerConfig(cache_manager_config);
+  cache_manager_config.enable_prefix_caching = true;
+  cache_manager_config.min_flexible_cache_num = block_token_num;
+  env->SetCacheManagerConfig(cache_manager_config);
+  env->UpdateModelConfig();
+
+  RuntimeConfig runtime_config;
+  env->GetRuntimeConfig(runtime_config);
+  EXPECT_TRUE(runtime_config.enable_prefix_caching);
+  EXPECT_TRUE(runtime_config.enable_flexible_caching);
+
+  EXPECT_TRUE(model_input->model_config_.use_mla);
+  EXPECT_TRUE(model_input->enable_blocked_multi_token_forwarding_kv_);
+  model_input->dp_total_prefix_len = total_prefix_len;
+  model_input->dp_dst_flexible_kv_cache_tensor.shape = {total_flexible_len};
+  model_input->runtime_config_ = runtime_config;
+  std::vector<ForwardRequest*> forward_reqs = {forward_req_1.get(), forward_req_2.get()};
+  model_input->PrepareInputInfo(forward_reqs);
+  EXPECT_EQ(model_input->flash_input.dp_reqs.size(), forward_reqs.size());
+  model_input->PrepareFlashRotary(model_input->flash_input);
+
+  // verify rotary_embedding_pos and rotary_embedding_mask
+  std::vector<int64_t> host_rotary_embedding_pos(total_tokens - total_prefix_len);
+  std::vector<int64_t> host_rotary_embedding_mask(total_tokens - total_prefix_len);
+  std::vector<int64_t> host_src_flexible_rotary_embedding_pos(total_tokens);
+  std::vector<int64_t> host_dst_flexible_rotary_embedding_pos(total_tokens);
+  std::vector<int64_t> host_flexible_rotary_embedding_mask(total_tokens);
+
+  Memcpy(host_rotary_embedding_pos.data(), model_input->flash_input.rotary_embedding_pos.GetPtr<void>(),
+         (total_tokens - total_prefix_len) * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_rotary_embedding_mask.data(), model_input->flash_input.rotary_embedding_mask.GetPtr<void>(),
+         (total_tokens - total_prefix_len) * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_src_flexible_rotary_embedding_pos.data(),
+         model_input->dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), total_tokens * sizeof(int64_t),
+         MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_dst_flexible_rotary_embedding_pos.data(),
+         model_input->dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), total_tokens * sizeof(int64_t),
+         MEMCPY_DEVICE_TO_HOST);
+  Memcpy(host_flexible_rotary_embedding_mask.data(), model_input->dp_flexible_rotary_embedding_mask.GetPtr<void>(),
+         total_tokens * sizeof(int64_t), MEMCPY_DEVICE_TO_HOST);
+
+  int rope_idx = 0;
+  int flexible_rope_idx = 0;
+  for (int i = 0; i < batch_size; ++i) {
+    int context_forwarding_token_num = forward_reqs[i]->forwarding_tokens->size() - forward_reqs[i]->prefix_cache_len;
+    for (int idx = 0; idx < context_forwarding_token_num; ++idx) {
+      EXPECT_EQ(host_rotary_embedding_pos[rope_idx], idx + forward_reqs[i]->prefix_cache_len);
+      EXPECT_EQ(host_rotary_embedding_mask[rope_idx], 1);
+      rope_idx++;
+    }
+
+    for (int idx = 0; idx < forward_reqs[i]->flexible_cached_copy_tasks->size(); ++idx) {
+      auto& task = forward_reqs[i]->flexible_cached_copy_tasks->at(idx);
+      EXPECT_EQ(host_src_flexible_rotary_embedding_pos[flexible_rope_idx + task.dst_token_idx_], task.src_token_idx_);
+      EXPECT_EQ(host_dst_flexible_rotary_embedding_pos[flexible_rope_idx + task.dst_token_idx_], task.dst_token_idx_);
+    }
+
+    for (int idx = 0; idx < forward_reqs[i]->forwarding_tokens->size(); ++idx) {
+      if (idx >= forward_reqs[i]->kv_cached_token_num && idx < forward_reqs[i]->prefix_cache_len) {
+        EXPECT_EQ(host_flexible_rotary_embedding_mask[flexible_rope_idx], 1);
+      } else {
+        EXPECT_EQ(host_flexible_rotary_embedding_mask[flexible_rope_idx], 0);
+      }
+      flexible_rope_idx++;
+    }
+  }
+}
+#endif
 
 #ifdef ENABLE_CUDA
 TEST_F(ModelInputTest, PrepareFlashMlaTest) {

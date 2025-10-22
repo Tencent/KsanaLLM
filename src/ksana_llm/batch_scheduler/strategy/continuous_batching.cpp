@@ -333,6 +333,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     // current token has kv_cache
     req->kv_cached_token_num = req->forwarding_tokens.size();
     req->prefix_cache_len = req->kv_cached_token_num;
+    // clear flexible cache copy tasks after context stage is finished
+    req->flexible_cached_copy_tasks.clear();
 
     // Always update cache manager, even if request is finished.
     // TODO(david): for mtp, it should consider fake prefix.

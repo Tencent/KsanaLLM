@@ -130,9 +130,11 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 
   if (!no_rope && rotary_embedding_cuda.has_value()) {
     if (flexible_len != 0) {
+      // reverse rope for flexible cached tokens, with is_reverse flag setting to true.
+      // pass 0 params to use default value
       rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(flexible_rotary_embedding_pos_ptr),
                                       reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
-                                      k_tensor.data_ptr(), total_tokens, stream);
+                                      k_tensor.data_ptr(), total_tokens, stream, 0, 0, 0, /* is_reverse */ true);
       CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
     }
 
@@ -205,9 +207,9 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   if (enable_blocked_multi_token_forwarding_kv) {
     torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
     auto cache_options = options;
-    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
-        KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
-      // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kUInt8);
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
+                  KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+      // cache_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(torch::kFloat8_e4m3fn);
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
     // kv_cache[num_blocks, block_size, num_kv_heads, head_size]
@@ -472,8 +474,8 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
 
   if (enable_blocked_multi_token_forwarding_kv) {
     auto cache_options = options;
-    if (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
-        KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
+                  KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
       KLLM_THROW("FlashAttention not support fp8 kv cache");
     }
     // kv_cache[num_blocks, 2, block_size, num_kv_heads, head_size]

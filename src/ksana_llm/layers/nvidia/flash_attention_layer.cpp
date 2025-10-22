@@ -32,7 +32,7 @@ Status FlashAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
   //     5: rotary embedding pos tensor shape [max_token_num], type int64
   //        mrotary embedding pos tensor shape [3, max_token_num], type int64 (only for qwen2_vl)
   //     6: rotary embedding mask tensor shape [max_token_num], type int64
-  //     7: flexible_rotary_embedding_pos,
+  //     7: src_flexible_rotary_embedding_pos,
   //     8: flexible_rotary_embedding_mask,
   //     9: dst_flexible_kv_cache_tensor,
   //     10: src_flexible_kv_cache_tensor,
