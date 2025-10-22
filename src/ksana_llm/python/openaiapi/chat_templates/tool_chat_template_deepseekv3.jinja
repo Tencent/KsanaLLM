@@ -13,25 +13,25 @@
             {% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}
         {%- endif %}
     {%- endif %}
-{%- endfor %}
+{%- endfor -%}
+{{- ns.system_prompt -}}
+{# --- Insert tool descriptions as system message after last system message --- #}
+{%- if tools is defined and tools is not none %}
+You are a helpful Assistant.
 
-{{ bos_token }}
-{{ ns.system_prompt }}
-{%- if tools %}
-    {{"\n\n# Tools\n\nYou may call one or more functions to assist with the user query." }}
-    {%- for tool in tools %}
-        {{- "\n" }}
-        {{- tool | tojson }}
-    {%- endfor %}
-    {{"\n</tools>\n\n"}}
+## Tools
 
-    {{"For function call returns, you should first print <｜tool▁calls▁begin｜>"}}
+### Function
 
-    {{"For each function call, you should return object like:\n" }}
-    {{"<｜tool▁call▁begin｜>function<｜tool▁sep｜><function_name>\n```json\n<function_arguments_in_json_format>\n```<｜tool▁call▁end｜>"}}
+You have the following functions available:
 
-    {{"At the end of function call returns, you should print <｜tool▁calls▁end｜><｜end▁of▁sentence｜>"}}
-{%- endif %}
+{% for tool in tools %}
+- `{{ tool.function.name }}`:
+```json
+{{ tool.function | tojson(indent=4, ensure_ascii=true) }}
+```
+{% endfor %}
+{% endif %}
 
 {%- for message in messages %}
     {%- if message['role'] == 'user' %}
@@ -48,20 +48,19 @@
         {%- endif %}
         {%- set ns.is_first = false %}
         {%- set ns.is_tool = false -%}
-        {%- set ns.is_output_first = true %}
-        
+        {%- set ns.is_output_first = true -%}
         {%- for tool in message['tool_calls'] %}
-            {%- if not ns.is_first %}
-                {%- if message['content'] is none %}
+            {%- if not ns.is_first -%}
+                {%- if message['content'] is none -%}
                     {{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments']|tojson + '\n' + '```' + '<｜tool▁call▁end｜>'}}
-                {%- else %}
+                {%- else -%}
                     {{message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments']|tojson + '\n' + '```' + '<｜tool▁call▁end｜>'}}
-                {%- endif %}
-            {%- set ns.is_first = true -%}
-            {%- else %}
+                {%- endif -%}
+                {%- set ns.is_first = true -%}
+            {%- else -%}
                 {{'\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments']|tojson + '\n' + '```' + '<｜tool▁call▁end｜>'}}
             {%- endif %}
-        {%- endfor %}
+        {%- endfor -%}
         {{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}
     {%- endif %}
     {%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none)%}
@@ -69,28 +68,25 @@
         {%- if ns.is_tool %}
             {{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}
             {%- set ns.is_tool = false -%}
-        {%- else %}
-            {% set content = message['content'] %}
-            {{content + '<｜end▁of▁sentence｜>'}}
+        {%- else -%}
+            {{- message['content'] + '<｜end▁of▁sentence｜>' }}
         {%- endif %}
     {%- endif %}
 
-    {%- if message['role'] == 'tool' %}
+    {%- if message['role'] == 'tool' -%}
         {%- set ns.is_last_user = false -%}
         {%- set ns.is_tool = true -%}
-        {%- if ns.is_output_first %}
+        {%- if ns.is_output_first -%}
             {{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}
-            {%- set ns.is_output_first = false %}
-        {%- else %}
+            {%- set ns.is_output_first = false -%}
+        {%- else -%}
             {{'\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}
-        {%- endif %}
+        {%- endif -%}
     {%- endif %}
 {%- endfor -%}
-
-{% if ns.is_tool %}
-    {{'<｜tool▁outputs▁end｜>'}}
-{% endif %}
-
-{% if add_generation_prompt and not ns.is_last_user and not ns.is_tool %}
-    {{'<｜Assistant｜>'}}
-{% endif %}
+{%- if ns.is_tool -%}
+{{'<｜tool▁outputs▁end｜>'}}
+{%- endif -%}
+{%- if add_generation_prompt and not ns.is_last_user and not ns.is_tool -%}
+{{'<｜Assistant｜>'}}
+{%- endif %}

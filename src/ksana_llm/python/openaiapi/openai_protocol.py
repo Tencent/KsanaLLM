@@ -185,6 +185,7 @@ class FunctionDefinition(BaseModel):
     name: str
     description: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
+    strict: bool = False
 
 
 class ChatCompletionToolsParam(BaseModel):
