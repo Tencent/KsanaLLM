@@ -186,6 +186,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             logprobs=logprobs,
             usage=usage,
             choice_index=choice_index,
+            delta_message=delta_message,
             current_output_token=current_output_token,
             num_output_top_logprobs=num_output_top_logprobs
         )
@@ -621,11 +622,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         
                         logprobs = getattr(ksana_python_output, 'logprobs', None) if request_logprobs else None
 
-                        processed_delta = delta_text
-                        if processed_delta or (delta_message and delta_message != DeltaMessage(content="")):
+                        # 当有 logprobs 时，直接使用 delta_message，这样可以保留 reasoning_content 和 content 的区分
+                        # 当没有 logprobs 时，也使用 delta_message 以保持一致性
+                        if delta_message and delta_message != DeltaMessage(content=""):
                             chunk = await self._generate_stream_chunk(
                                 request_id, model_name, tokenizer,
-                                content=processed_delta,
                                 logprobs=logprobs,
                                 delta_message=delta_message,
                                 choice_index=i,

@@ -666,30 +666,39 @@ class RequestConverter:
         self,
         request_id: str,
         model_name: str,
+        #  content 是本条消息的内容
         content: Optional[str] = None,
+        #  role是本条消息的角色
         role: Optional[str] = None,
+        #  finish_reason是请求完成的原因
         finish_reason: Optional[str] = None,
         logprobs: Optional[Any] = None,
         usage: Optional[UsageInfo] = None,
         choice_index: int = 0,
+        #  delta_message是构建完成的增量消息
+        delta_message: Optional[DeltaMessage] = None,
+        #  当前输出的 Token 数，用于 logprobs 的构建
         current_output_token: Optional[List[int]] = None,
+        #  logprobs 中 top logprobs 的数量
         num_output_top_logprobs: Optional[int] = None,
     ) -> str:
         """格式化Chat Completion流式响应块"""
         
         try:
-            delta = DeltaMessage()
-            if role:
-                delta.role = role
-                delta.content = ""
-            elif content is not None:
-                delta.content = content
+            if delta_message is not None:
+                delta = delta_message
+            else:
+                delta = DeltaMessage()
+                if role:
+                    delta.role = role
+                if content is not None:
+                    delta.content = content
             
             formatted_logprobs = None
             if logprobs is not None:
                 formatted_logprobs = self._convert_ksana_logprobs_to_openai(
-                    logprobs, 
-                    current_output_token, 
+                    logprobs,
+                    current_output_token,
                     num_output_top_logprobs)
             
             # 构建choice
