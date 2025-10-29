@@ -155,9 +155,9 @@ TEST_F(BatchSchedulerTest, CheckRequestTimeoutTest) {
 
   req_list[0].req_id = 128;
   req_list[0].req->req_id = 128;
-  req_list[0].req->timestamp_in_ms = 1;
+  req_list[0].req->timestamp_in_us = 1;
   req_list[0].infer_req_group[0]->req_id = 128;
-  req_list[0].infer_req_group[0]->timestamp_in_ms = 1;
+  req_list[0].infer_req_group[0]->timestamp_in_us = 1;
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
   EXPECT_EQ(req_list[0].req->finish_status.GetCode(), RET_REQUEST_TIMEOUT);

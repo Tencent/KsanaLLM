@@ -124,7 +124,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   // Get block related information from device 0.
   // All devices have the same number of blocks.
   SetDevice(0);
-  static time_t last_end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  static time_t last_end_time_us = ProfileTimer::GetCurrentTimeInUs();
 
   std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
   auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
@@ -132,6 +132,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   while (!terminated_) {
     if (terminated_) break;
     const time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
+    const time_t sched_start_time_us = ProfileTimer::GetCurrentTimeInUs();
 
     ScheduleResult schedule_result = schedule_processor_->GetNextScheduleResult(multi_batch_id);
     if (!schedule_result.is_valid) {
@@ -148,7 +149,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       total_seq_len += req->forwarding_tokens.size();
     }
 
-    time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+    time_t start_time_us = ProfileTimer::GetCurrentTimeInUs();
     // Send schedule result to all workers if in distributed mode and init hidden unit buffer.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
@@ -170,7 +171,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       batch_scheduler_->NotifyAsyncFinishedRequests();
     }
 
-    time_t middle_time_ms = ProfileTimer::GetCurrentTimeInMs();
+    time_t middle_time_us = ProfileTimer::GetCurrentTimeInUs();
 
     // Wait until last worker done.
     if (!context_->IsStandalone()) {
@@ -193,26 +194,30 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       FreeHiddenUnits(schedule_result.schedule_output->multi_batch_id);
     }
 
-    time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
+    time_t end_time_us = ProfileTimer::GetCurrentTimeInUs();
     int global_token_throughput =
-        (end_time_ms - last_end_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - last_end_time_ms) : -1;
+        (end_time_us - last_end_time_us) > 0 ? forwarding_token_num * 1000000 / (end_time_us - last_end_time_us) : -1;
     int local_token_throuphput =
-        (end_time_ms - start_time_ms) > 0 ? forwarding_token_num * 1000 / (end_time_ms - start_time_ms) : -1;
+        (end_time_us - start_time_us) > 0 ? forwarding_token_num * 1000000 / (end_time_us - start_time_us) : -1;
     KLLM_LOG_MAIN << "multi_batch_id=" << multi_batch_id
                   << ", running_reqs.size=" << schedule_result.schedule_output->running_reqs.size()
                   << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
-                  << ", 1st step " << (middle_time_ms - start_time_ms) << "ms, 2nd step "
-                  << (end_time_ms - middle_time_ms) << "ms, total " << (end_time_ms - start_time_ms)
-                  << "ms, local token throughput(tokens/s): " << local_token_throuphput
+                  << ", 1st step " << (middle_time_us - start_time_us) << "us, 2nd step "
+                  << (end_time_us - middle_time_us) << "us, total " << (end_time_us - start_time_us)
+                  << "us, local token throughput(tokens/s): " << local_token_throuphput
                   << ", global token throughput(tokens/s): " << global_token_throughput;
-    last_end_time_ms = end_time_ms;
+    last_end_time_us = end_time_us;
 
     REPORT_METRIC("global_token_throughput", global_token_throughput);
     REPORT_METRIC("local_token_throughput", local_token_throuphput);
-    REPORT_METRIC("forwarding_token_num", forwarding_token_num);
-    REPORT_METRIC("first_step_time_ms", middle_time_ms - start_time_ms);
-    REPORT_METRIC("second_step_time_ms", end_time_ms - middle_time_ms);
-    REPORT_METRIC("total_step_time_ms", end_time_ms - start_time_ms);
+    REPORT_COUNTER("forwarding_token_num", forwarding_token_num);
+    REPORT_METRIC("first_step_time_us", middle_time_us - start_time_us);
+    REPORT_METRIC("second_step_time_us", end_time_us - middle_time_us);
+    REPORT_COUNTER("schedule_time_us", start_time_us - sched_start_time_us);
+    REPORT_COUNTER("forwarding_time_us", end_time_us - start_time_us);
+    if (end_time_us - sched_start_time_us != 0) {
+      REPORT_METRIC("forwarding_time_rate", (end_time_us - start_time_us) * 100 / (end_time_us - sched_start_time_us));
+    }
   }
 
   return Status();

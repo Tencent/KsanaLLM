@@ -61,7 +61,8 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
 }
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
-  return batch_state_->schedule_time_in_ms >= req->timestamp_in_ms + batch_scheduler_config_.waiting_timeout_in_ms;
+  return batch_state_->schedule_time_in_ms >=
+         req->timestamp_in_us / 1000 + batch_scheduler_config_.waiting_timeout_in_ms;
 }
 
 Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferRequest> &req, bool is_swap_req) {
@@ -336,6 +337,26 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     // clear flexible cache copy tasks after context stage is finished
     req->flexible_cached_copy_tasks.clear();
 
+    if (req->kv_cached_token_num > req->computed_token_num && !req->is_mock_req) {
+      if (connector_config_.group_role == GroupRole::DECODE && req->computed_token_num == 0) {
+        req->computed_token_num = req->input_tokens.size();
+      }
+      auto computed_token_num = req->kv_cached_token_num - req->computed_token_num;
+      if (req->kv_cached_token_num < req->input_tokens.size()) {
+        REPORT_COUNTER("computed_input_token_num", computed_token_num);
+      }
+      if (req->kv_cached_token_num == req->input_tokens.size()) {
+        REPORT_COUNTER("computed_input_token_num", computed_token_num);
+        REPORT_COUNTER("computed_output_token_num", 1);
+        REPORT_COUNTER("computed_token_num", 1);
+      }
+      if (req->kv_cached_token_num > req->input_tokens.size()) {
+        REPORT_COUNTER("computed_output_token_num", computed_token_num);
+      }
+      REPORT_COUNTER("computed_token_num", computed_token_num);
+      req->computed_token_num = req->kv_cached_token_num;
+    }
+
     // Always update cache manager, even if request is finished.
     // TODO(david): for mtp, it should consider fake prefix.
     // If the fake prefix block will be removed for the LRU algorithm.
@@ -406,11 +427,11 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
     // Check if finished.
     // ProcessPrefillTransferQueue also checks if the request is finished.
     if (CheckRequestFinish(req)) {
-      const auto end_time = ProfileTimer::GetCurrentTimeInMs();
+      const auto end_time = ProfileTimer::GetCurrentTimeInUs();
       const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
-      const uint64_t duration = end_time - req->timestamp_in_ms;
+      const uint64_t duration = end_time - req->timestamp_in_us;
       if (req->finish_status.GetCode() == RET_SUCCESS && output_token_num > 0) {
-        REPORT_METRIC("total_latency_ms", duration);
+        REPORT_METRIC("total_latency_us", duration);
         REPORT_METRIC("output_token_len", output_token_num);
         REPORT_METRIC("input_token_len", req->input_tokens.size());
       } else {
@@ -1214,13 +1235,17 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
   batch_state_->MergeWaitingReqs(waiting_reqs);
   auto start_us = ProfileTimer::GetCurrentTimeInUs();
   ProcessRunningQueue();
-  REPORT_METRIC("batch_scheduler_running_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
+  auto running_queue_start_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_running_queue_time_us", running_queue_start_us - start_us);
   ProcessSwappedQueue();
-  REPORT_METRIC("batch_scheduler_swapped_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
+  auto swapped_queue_start_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_swapped_queue_time_us", swapped_queue_start_us - running_queue_start_us);
   ProcessWaitingQueue();
-  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
+  auto waiting_queue_start_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", waiting_queue_start_us - swapped_queue_start_us);
   ProcessTransferQueue();
-  REPORT_METRIC("batch_scheduler_transfer_queue_time_us", ProfileTimer::GetCurrentTimeInUs() - start_us);
+  auto transfer_queue_start_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_transfer_queue_time_us", transfer_queue_start_us - waiting_queue_start_us);
 
   // Must barrier before reorder.
   scheduler_ticktok_->Barrier();
@@ -1245,6 +1270,8 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
                    << ", ids=" << Vector2Str(batch_state_->merged_swapout_req_ids);
     batch_state_->merged_swapout_req_ids.clear();
   }
+  auto end_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_time_us", end_us - start_us);
 }
 
 }  // namespace ksana_llm

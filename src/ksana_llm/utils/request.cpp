@@ -52,7 +52,7 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
       output_mutex(),
       request_target(ksana_python_input->request_target),
       response(),
-      timestamp_in_ms(ProfileTimer::GetCurrentTimeInMs()),
+      timestamp_in_us(ProfileTimer::GetCurrentTimeInUs()),
       req_ctx(req_ctx) {
   for (auto& [output, req_logprobs, total_score] : output_group) {
     output = ksana_python_input->input_tokens;

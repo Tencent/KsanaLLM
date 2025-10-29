@@ -257,16 +257,16 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
     }
   }
 
-  threadpool_->Submit([reqs]() mutable {
-    const auto current_time = ProfileTimer::GetCurrentTimeInMs();
-    static std::atomic<time_t> s_last_call_finish_time_ms{0};
-    time_t prev = s_last_call_finish_time_ms.exchange(current_time);
+  threadpool_.Submit([reqs]() mutable {
+    const auto current_time = ProfileTimer::GetCurrentTimeInUs();
+    static std::atomic<time_t> s_last_call_finish_time_us{0};
+    const time_t prev = s_last_call_finish_time_us.exchange(current_time);
     if (prev != 0 && current_time > prev) {
-      REPORT_METRIC("inter_token_interval_latency_ms", current_time - prev);
+      REPORT_METRIC("inter_token_interval_latency_us", current_time - prev);
     }
     std::for_each(std::execution::par_unseq, reqs.begin(), reqs.end(), [current_time](const auto& req) {
       if (req->step == 1) {
-        REPORT_METRIC("time_to_first_token_ms", current_time - req->timestamp_in_ms);
+        REPORT_METRIC("time_to_first_token_us", current_time - req->timestamp_in_us);
       }
     });
   });

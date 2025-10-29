@@ -238,13 +238,16 @@ class InferRequest {
   bool &is_cudagraph_capture_request;
 
   // The arrive time.
-  uint64_t timestamp_in_ms;
+  uint64_t timestamp_in_us;
 
   // request context
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
+
+  // The number of tokens that have been computed.
+  size_t computed_token_num = 0;
 
  public:
   // ForwardRequest's lifecycle is bound to InferRequest's, making smart pointers redundant. Any use of ForwardRequest*

@@ -240,7 +240,7 @@ class Request {
   bool is_cudagraph_capture_request = false;
 
   // The arrive time.
-  uint64_t timestamp_in_ms;
+  uint64_t timestamp_in_us;
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 

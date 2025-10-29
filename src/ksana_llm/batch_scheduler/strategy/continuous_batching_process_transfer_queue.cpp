@@ -131,11 +131,11 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
     if (transfer_engine->IsSendDone(req->kv_comm_request_id)) {
       // 发送完成，从传输队列中移除该请求
       KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << req->kv_comm_request_id;
-      const auto end_time = ProfileTimer::GetCurrentTimeInMs();
+      const auto end_time = ProfileTimer::GetCurrentTimeInUs();
       const size_t output_token_num = req->output_tokens.size() - req->input_tokens.size();
-      const uint64_t duration = end_time - req->timestamp_in_ms;
+      const uint64_t duration = end_time - req->timestamp_in_us;
       if (req->finish_status.GetCode() == RET_SUCCESS && output_token_num > 0) {
-        REPORT_METRIC("total_latency_ms", duration);
+        REPORT_METRIC("total_latency_us", duration);
         REPORT_METRIC("output_token_len", output_token_num);
         REPORT_METRIC("input_token_len", req->input_tokens.size());
       } else {
