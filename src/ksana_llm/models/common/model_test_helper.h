@@ -30,8 +30,7 @@ class FakeModel {
     SetDevice(rank_);
     buffer_mgr_.SetRank(rank_);
 
-    bool return_hidden_states = pipeline_config.lower_nextn_layer_idx >= static_cast<int>(model_config.num_layer);
-    buffers_.Init(context_, rank_, model_config, runtime_config, return_hidden_states, &buffer_mgr_);
+    buffers_.Init(context_, rank_, model_config, runtime_config, &buffer_mgr_);
     forwarding_context_.Init(context, rank, model_config, runtime_config, pipeline_config, buffers_.buffers_.get(),
                              &buffer_mgr_,
                              /*multi_batch_id*/ 0);

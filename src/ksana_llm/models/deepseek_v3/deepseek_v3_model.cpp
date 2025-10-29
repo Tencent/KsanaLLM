@@ -355,9 +355,12 @@ Status DeepSeekV3Model::LayerForward(ForwardingContext& forwarding_context, cons
   } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
     forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(forwarding_context, need_recv);
-    for (int layer_idx = forwarding_context.GetPipelineConfig().lower_nextn_layer_idx;
-         layer_idx <= forwarding_context.GetPipelineConfig().upper_nextn_layer_idx; ++layer_idx) {
-      STATUS_CHECK_RETURN(nextn_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
+    STATUS_CHECK_RETURN(nextn_layers_[nextn_layer_idx_]->Forward(residual_buffer, forwarding_context));
+
+    // TODO(lijiajieli): remove to forwarding_context
+    ++nextn_layer_idx_;
+    if (nextn_layer_idx_ >= pipeline_config_.lower_nextn_layer_idx + model_config_.num_nextn_predict_layers) {
+      nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
     }
   }
 

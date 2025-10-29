@@ -63,7 +63,6 @@ Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, Sch
   // Set multi_batch_id
   result.schedule_output->multi_batch_id = multi_batch_id;
 
-  // Reorder requests
   llm_runtime_->ReorderInferRequests(result.schedule_output->running_reqs);
 
   // Create ForwardRequests

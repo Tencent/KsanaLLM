@@ -53,19 +53,10 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
 
-  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config_);
   model_run_config_ = model_run_config;
+  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config_);
 
-  // Init expert_local_rank
-  expert_parallel_config_.local_expert_rank = rank_;
-  Singleton<Environment>::GetInstance()->SetExpertParallelConfig(expert_parallel_config_);
-
-  // Note: better get return_hidden_states flag from RunConfig
-  model_run_config_.return_hidden_states =
-      pipeline_config_.lower_nextn_layer_idx >= static_cast<int>(model_config_.num_layer);
-
-  model_buffers_.Init(context_, rank_, model_config_, runtime_config_, model_run_config_.return_hidden_states,
-                      GetBufferManager());
+  model_buffers_.Init(context_, rank_, model_config_, runtime_config_, GetBufferManager());
 
   // Initialize the buffer of forwarding contexts based on max_pp_batch_num
   forwarding_context_buffer_size_ = runtime_config_.max_pp_batch_num > 0 ? runtime_config_.max_pp_batch_num : 1;
@@ -201,7 +192,7 @@ float* CommonModel::GetLogitsPtr(size_t multi_batch_id) {
   return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>(false);
 }
 
-Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest*>& forward_reqs,
                                       ForwardingContext& forwarding_context) {
   void* input_tokens_ptr = cpu_input_tokens_tensor_.GetPtr<void>();
   memcpy(input_tokens_ptr, forwarding_context.GetModelInput()->input_ids_cpu.data(),
@@ -249,7 +240,7 @@ Status CommonModel::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContex
   return Status();
 }
 
-bool CommonModel::UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage) {
+bool CommonModel::UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Tensor& output, const std::string& stage) {
   bool ret = true;
   int req_offset = 0;
   for (ForwardRequest& req : forward_reqs) {
@@ -418,7 +409,7 @@ ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
 }
 
 Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                            std::vector<ForwardRequest>& forward_reqs, bool epilogue, const RunMode run_mode) {
+                            std::vector<ForwardRequest*>& forward_reqs, bool epilogue, const RunMode run_mode) {
   // Get the forwarding context for this multi_batch_id
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
@@ -478,7 +469,7 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
 
 Status CommonModel::LookupEmbedding(ForwardingContext& forwarding_context,
                                     std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                    std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+                                    std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode) {
   KLLM_LOG_DEBUG << "start lookup embedding multi_batch_id=" << forwarding_context.GetMultiBatchId()
                  << ", rank=" << rank_ << "";
   PROFILE_EVENT_SCOPE(CommonModel_LookupEmbedding, "CommonModel_LookupEmbedding", forwarding_context.GetCurrentRank());
@@ -520,7 +511,7 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
       forwarding_context, !context_->IsStandalone() && context_->IsChief() && run_mode == RunMode::kMain);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
   // save hidden result if enable MTP model
-  if (model_run_config_.return_hidden_states && context_->IsChief() && run_mode == RunMode::kMain) {
+  if (runtime_config_.mtp_step_num > 0 && context_->IsChief()) {
     auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
     mtp_hidden_tensor.shape = residual_buffer[0].shape;
     mtp_hidden_tensor.dtype = residual_buffer[0].dtype;

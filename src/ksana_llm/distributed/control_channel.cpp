@@ -605,10 +605,23 @@ Status ControlChannel::SynchronizeNodeLayers(size_t master_offload_layer_num) {
   pipeline_config.upper_layer_idx = layer_distribution[0].second;
 
   // only master node do nextn predict
-  if (model_config.num_nextn_predict_layers != 0 && enable_mtp_module_) {
-    pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
-    pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
+  RuntimeConfig runtime_config;
+  env_->GetRuntimeConfig(runtime_config);
+  if (model_config.num_nextn_predict_layers > 0 && runtime_config.mtp_step_num > 0) {
+    if (model_config.num_nextn_predict_layers <= runtime_config.mtp_step_num) {
+      pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
+      pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
+    } else if (model_config.num_nextn_predict_layers == 1) {
+      // repeat MTP layer only support exist 1 MTP layer weight
+      pipeline_config.upper_nextn_layer_idx += runtime_config.mtp_step_num - 1;
+      KLLM_LOG_INFO << "repeat MTP layer " << runtime_config.mtp_step_num - 1 << " times";
+    } else {
+      KLLM_LOG_FATAL << fmt::format(
+          "mtp_step_num({}) should <= num_nextn_predict_layers({}) in model config while num_nextn_predict_layers != 1",
+          runtime_config.mtp_step_num, model_config.num_nextn_predict_layers);
+    }
   }
+
   pipeline_config.downstream_host = rank_data_nodes_[1].host;
   pipeline_config.downstream_port = rank_data_nodes_[1].port;
   env_->SetPipelineConfig(pipeline_config);

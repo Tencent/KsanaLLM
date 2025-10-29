@@ -486,20 +486,22 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
 
 void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode) {
   PROFILE_EVENT_SCOPE(PrepareNextnGatherIdx, "PrepareNextnGatherIdx", rank_);
-
   std::unordered_map<size_t, size_t> updated_mtp_req_id_to_pos;
   updated_mtp_req_id_to_pos.reserve(forward_reqs.size());
 
   std::vector<size_t> mtp_hidden_gather_idx;
   size_t total_len = 0;
   for (const auto& req : forward_reqs) {
-    const size_t input_ids_len =
-        req.forwarding_tokens->size() - std::max(req.kv_cached_token_num, req.prefix_cache_len);
-    if (run_mode == RunMode::kMain) {  // record len before nextn
-      mtp_req_id_to_pos_[req.req_id] = total_len;
-      total_len += input_ids_len;
-    } else {  // calc gather idx while nextn
-      const size_t begin_idx = mtp_req_id_to_pos_[req.req_id];
+    const size_t input_ids_len = req->GetInputIdsLength();
+    if (run_mode == RunMode::kMain) {
+      updated_mtp_req_id_to_pos[req->req_id] = total_len;
+    } else {
+      updated_mtp_req_id_to_pos[req->req_id] = total_len + input_ids_len - 1;
+    }
+    total_len += input_ids_len;
+
+    if (run_mode == RunMode::kNextN) {
+      const size_t begin_idx = mtp_req_id_to_pos_[req->req_id];
       for (size_t idx = begin_idx; idx < begin_idx + input_ids_len; ++idx) {
         mtp_hidden_gather_idx.emplace_back(idx);
       }

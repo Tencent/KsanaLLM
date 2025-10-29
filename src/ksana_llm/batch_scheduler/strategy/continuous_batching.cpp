@@ -53,11 +53,14 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
   if (connector_config_.group_role == GroupRole::DECODE) {
     dp_max_decode_batch_size_ = dp_max_batch_size_;
     // 增加预参数的大小
-    dp_max_batch_size_ = batch_scheduler_config_.max_batch_size +
-                         (batch_scheduler_config_.max_pretransfer_batch_size);
+    dp_max_batch_size_ = batch_scheduler_config_.max_batch_size + (batch_scheduler_config_.max_pretransfer_batch_size);
     KLLM_LOG_INFO << "decode dp_max_batch_size_:" << dp_max_batch_size_
-                   << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
+                  << ", dp_max_decode_batch_size_:" << dp_max_decode_batch_size_;
   }
+}
+
+size_t ContinuousBatchingStrategy::GetMaxRequiredTokenNum(const size_t token_num) const {
+  return token_num + runtime_config_.mtp_step_num - std::min(runtime_config_.mtp_step_num, 1ul);
 }
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
@@ -143,7 +146,7 @@ void ContinuousBatchingStrategy::HandleRecomputeRequest(std::shared_ptr<InferReq
   KLLM_LOG_DEBUG << "HandleRecomputeRequest req id is: " << req->req_id
                  << " kv_comm_request_id: " << req->kv_comm_request_id;
 
-  // Add request to the begining of waiting queue.
+  // Add request to the beginning of waiting queue.
   req->kv_cache_blocks.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, {});
   req->checksummed_block_num.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, 0);
   req->infer_stage = InferStage::kContext;
@@ -522,7 +525,8 @@ void ContinuousBatchingStrategy::UpdateRunningRequests() {
 size_t ContinuousBatchingStrategy::GetRunningRequestsBlockNeed() {
   size_t total_needed_block_num = 0;
   for (const auto &req : batch_state_->schedule_output->running_reqs) {
-    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
+    const size_t max_required_token_num = GetMaxRequiredTokenNum(req->forwarding_tokens.size());
+    total_needed_block_num += cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
   }
   return total_needed_block_num;
 }
@@ -533,13 +537,13 @@ Status ContinuousBatchingStrategy::AllocateRequestBlocksWithRetry(std::shared_pt
                                                                   bool &skip_swapout_check) {
   Status status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
+    KLLM_LOG_ERROR << "Allocate blocks error, info: " << status.GetMessage();
     MergePendingSwapoutRequests(true, false);
 
     // Try the allocation again after all swapout finished.
     status = cache_manager_->AllocateRequestBlocks(req->req_id, step_block_num, req->kv_cache_blocks);
     if (!status.OK()) {
-      KLLM_LOG_ERROR << "Alllocate blocks error again, recompute it, info: " << status.GetMessage();
+      KLLM_LOG_ERROR << "Allocate blocks error again, recompute it, info: " << status.GetMessage();
       allocate_block_succ = false;
     } else {
       total_needed_block_num -= step_block_num;
@@ -599,7 +603,8 @@ void ContinuousBatchingStrategy::ProcessRunningQueue() {
     // Whether the allocation operation is successful.
     bool allocate_block_succ = true;
 
-    size_t step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
+    const size_t max_required_token_num = GetMaxRequiredTokenNum(req->forwarding_tokens.size());
+    size_t step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
     size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
     size_t future_free_block_num = cache_manager_->GetFutureFreeBlockNumber();
 
@@ -809,8 +814,8 @@ void ContinuousBatchingStrategy::ProcessSwappedQueue() {
     const size_t swapin_block_threshold = std::ceil(step_batch_size * batch_scheduler_config_.swapin_block_threshold);
 
     const size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
-    const size_t step_needed_block_num =
-        cache_manager_->GetRequestStepBlockNumber(req->req_id, req->forwarding_tokens.size());
+    const size_t max_required_token_num = GetMaxRequiredTokenNum(req->forwarding_tokens.size());
+    const size_t step_needed_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
 
     // In this context, all other db groups will be paused.
     scheduler_ticktok_->Lock();
@@ -1006,6 +1011,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       break;
     }
 
+    // add extra token for MTP sub model if needed
+    unique_block_num += (runtime_config_.mtp_step_num + req->block_token_num - 1) / req->block_token_num;
+
     req->prefix_cache_len = shared_token_num;
     req->is_use_prefix_cache = shared_token_num > 0;
 
@@ -1031,7 +1039,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
         step_token_num + current_token_num <= dp_max_step_token_num_ &&
         unique_block_num + launch_block_threshold <= total_free_block_num) {
-      // Assume we cound succ, so that the AllocateRequestBlocks is not blocked.
+      // Assume we could succ, so that the AllocateRequestBlocks is not blocked.
       scheduler_shared_counter_->step_batch_size.Increase(1);
       scheduler_shared_counter_->step_token_num.Increase(current_token_num);
       scheduler_shared_counter_->step_logits_num.Increase(req->sampling_token_num);
@@ -1084,7 +1092,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         scheduler_shared_counter_->step_token_num.Decrease(current_token_num);
         scheduler_shared_counter_->step_logits_num.Decrease(req->sampling_token_num);
 
-        KLLM_LOG_ERROR << "Alllocate blocks error, waiting req can not be launched, " << *req << status.GetMessage();
+        KLLM_LOG_ERROR << "Allocate blocks error, waiting req can not be launched, " << *req << status.GetMessage();
       }
       KLLM_LOG_DEBUG << "Waiting all pending swapout requests done, and stay in waiting.";
       MergePendingSwapoutRequests(true, false);

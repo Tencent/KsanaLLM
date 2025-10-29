@@ -8,8 +8,8 @@
 #include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
-
-void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_token_num) {
+void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, const size_t batch_size,
+                                              const size_t max_token_num, const DataType& weight_type) {
   auto env = Singleton<Environment>::GetInstance();
   const size_t tensor_para_size = runtime_config.parallel_basic_config.tensor_parallel_size;
   const size_t head_num = model_config.head_num;
@@ -23,6 +23,7 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
   const size_t max_logits_tokens = batch_size * batch_scheduler_config.max_decode_tokens_per_req;
+  const bool enable_mtp = batch_scheduler_config.mtp_step_num > 0;
 
   size_t inter_size_per_tp = model_config.inter_size;
   if (!runtime_config.enable_full_shared_expert) {
@@ -41,31 +42,31 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
 
   // inter_size_per_tp * 2 is used for the output of the fused gate_proj and up_proj in mlp
   const size_t qkv_head_num = model_config.use_mla ? head_num_per_tp : head_num_per_tp + 2 * num_kv_heads_per_tp;
-  size_t max_dim = std::max(std::max(qkv_head_num * size_per_head, hidden_units), inter_size_per_tp * 2);
-  size_t shared_buffer_unit_size = std::max(inter_size_per_tp, hidden_units * 2);
+  const size_t max_dim = std::max({qkv_head_num * size_per_head, hidden_units, inter_size_per_tp * 2});
+  // 2 is for concatenate of embedding_norm and hidden norm in mtp
+  const size_t mtp_concat_hidden_size = (enable_mtp && context->IsChief()) ? hidden_units * 2 : 0;
+  size_t shared_buffer_unit_size = std::max({inter_size_per_tp, hidden_units, mtp_concat_hidden_size});
 
   DataType kv_cache_dtype;
   env->GetKvCacheType(kv_cache_dtype);
   size_t mla_hidden_buffer_size = 0;
   if (model_config.use_mla) {
-    size_t mla_max_dim = max_dim;
-    size_t qk_nope_head_dim = model_config.mla_config.qk_nope_head_dim;
-    size_t qk_rope_head_dim = model_config.mla_config.qk_rope_head_dim;
-    size_t v_head_dim = model_config.mla_config.v_head_dim;
-    size_t kv_lora_rank = model_config.mla_config.kv_lora_rank;
-
-    mla_max_dim = std::max(std::max(mla_max_dim, head_num_per_tp * v_head_dim), head_num_per_tp * qk_nope_head_dim);
+    const size_t qk_nope_head_dim = model_config.mla_config.qk_nope_head_dim;
+    const size_t qk_rope_head_dim = model_config.mla_config.qk_rope_head_dim;
+    const size_t v_head_dim = model_config.mla_config.v_head_dim;
+    const size_t kv_lora_rank = model_config.mla_config.kv_lora_rank;
 
     // For buffer reuse of MlaFlashAtten, see MlaAttenVarlen for details.
     // max (q, k, v)
-    size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), (v_head_dim));
+    const size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), (v_head_dim));
     // shared_buffer is also used to store one of q,k,v
     shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * mla_flash_attn_size);
-    mla_max_dim = std::max(mla_max_dim, head_num_per_tp * mla_flash_attn_size);
-
+    const size_t mla_max_dim = std::max({max_dim, head_num_per_tp * v_head_dim, head_num_per_tp * qk_nope_head_dim,
+                                         head_num_per_tp * mla_flash_attn_size});
     // For buffer reuse of MlaPageAtten, see MlaPagedAttention for details.
-    size_t mla_page_attn_size = kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1);
-    mla_page_attn_size = std::max(mla_page_attn_size, head_num_per_tp * mla_flash_attn_size);
+    const size_t mla_page_attn_size =
+        std::max(kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1),
+                 head_num_per_tp * mla_flash_attn_size);
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
     if (runtime_config.enable_o_proj_out_of_dp) {
       shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
@@ -76,8 +77,8 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
 
     KLLM_LOG_INFO << fmt::format(
         "head_num_per_tp = {}, qk_nope_head_dim = {}, qk_rope_head_dim = {}, v_head_dim = {}, kv_lora_rank = {}, "
-        "mla_page_attn_size = {}, vocab_size_pad = {}, max_dim = {}, mla_flash_attn_size = {}, mla_max_dim={}, "
-        "mla_hidden_buffer_size={}",
+        "mla_page_attn_size = {}, vocab_size_pad = {}, max_dim = {}, mla_flash_attn_size = {}, mla_max_dim = {}, "
+        "mla_hidden_buffer_size = {}",
         head_num_per_tp, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, kv_lora_rank, mla_page_attn_size,
         vocab_size_pad, max_dim, mla_flash_attn_size, mla_max_dim, mla_hidden_buffer_size);
   }
@@ -94,29 +95,27 @@ void ForwardingBuffers::CalculateBuffersShape(size_t batch_size, size_t max_toke
                        {"hidden_buffer_1", {hidden_buffer_size}},
                        {"shared_buffer", {shared_buffer_size}}};
 
-  const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
   // TODO(robertyuan): This buffer is too large
   // TODO(jinxcwu): Move all env to environment
   // Use double-checking to avoid cases where environment variables are configured for non-MLA models.
   if (IsAbsorbWeightsEnabled() && model_config.use_mla) {
     buffers_shape_map["kv_cache_buffer"] = {0};
   } else {
+    const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
     buffers_shape_map["kv_cache_buffer"] = {batch_size, (max_seq_len + 511) / 512, head_num_per_tp, size_per_head + 2};
   }
 
-  if (use_mtp) {
-    buffers_shape_map["mtp_hidden_buffer_tensors"] = {max_token_num * model_config.hidden_units};
-  }
+  buffers_shape_map["mtp_hidden_buffer_tensors"] = {enable_mtp ? max_token_num * model_config.hidden_units : 0};
 }
 
-void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-                             const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr) {
-  this->use_mtp = use_mtp;
+void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
+                             const RuntimeConfig& runtime_config, BufferManager* const buffer_mgr) {
   this->model_config = model_config;
   this->runtime_config = runtime_config;
-  CalculateBuffersShape(runtime_config.max_batch_size, runtime_config.max_step_token_num);
+  const DataType weight_type = model_config.weight_data_type;
+  CalculateBuffersShape(context, runtime_config.max_batch_size, runtime_config.max_step_token_num, weight_type);
 
-  Stream* stream = &(context->GetMemoryManageStreams()[rank]);
+  Stream* const stream = &(context->GetMemoryManageStreams()[rank]);
 
   const DataType weight_type = model_config.weight_data_type;
   // NOTE(karlluo): all create tensor used dynamic memory pool
@@ -129,21 +128,19 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, int rank, const M
   kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
                                                    ksana_llm::LOCATION_DEVICE, stream);
 
-  if (use_mtp) {
-    // mtp_hidden_buffer_tensors will used across main forward and nextn forward
-    TensorBuffer* mtp_hidden_buffer =
-        buffer_mgr->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"],
-                                       weight_type, ksana_llm::LOCATION_DEVICE, stream);
-    mtp_hidden_buffer_tensors = mtp_hidden_buffer->GetTensors();
-  }
+  // mtp_hidden_buffer_tensors will used across main forward and nextn forward
+  TensorBuffer* mtp_hidden_buffer =
+      buffer_mgr->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"],
+                                     weight_type, ksana_llm::LOCATION_DEVICE, stream);
+  mtp_hidden_buffer_tensors = mtp_hidden_buffer->GetTensors();
 
   StreamSynchronize(*stream);
 }
 
 void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-                        const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr) {
+                        const RuntimeConfig& runtime_config, BufferManager* buffer_mgr) {
   buffers_ = std::make_unique<ForwardingBuffers>();
-  buffers_->Init(context, rank, model_config, runtime_config, use_mtp, buffer_mgr);
+  buffers_->Init(context, rank, model_config, runtime_config, buffer_mgr);
 
   int head_num = model_config.head_num;
   int size_per_head = model_config.size_per_head;
@@ -245,7 +242,7 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
   }
 }
 
-void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
+void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
   model_input_->ParseFromRequests(forward_reqs, run_mode);
 
@@ -286,15 +283,7 @@ Status ForwardingContext::AcquireBuffers() {
   // Then allocate memory.
 
   // TODO(yancyliu): Reset shape for mtp_hidden_buffer_tensors
-  if (GetForwardingBuffers()->use_mtp) {
-    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].shape = {residual_buffer_size};
-  }
-
   // TODO(yancyliu): Allocate memory for mtp_hidden_buffer_tensors.
-  if (GetForwardingBuffers()->use_mtp) {
-    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].Acquire();
-  }
-
   // TODO(yancyliu): Acquire signal buffer and reset input buffer of model_communicator.
   if (model_communicator_ != nullptr) {
     // model_communicator_->AcquireSignalBuffer(shared_buffer_tensors[0].GetTotalBytes());
@@ -309,10 +298,6 @@ Status ForwardingContext::ReleaseBuffers() {
   // And then release it's memory.
 
   // TODO(yancyliu): relase mtp_hidden_buffer_tensors
-  if (GetForwardingBuffers()->use_mtp) {
-    // GetForwardingBuffers()->mtp_hidden_buffer_tensors[0].Release();
-  }
-
   // TODO(yancyliu): Release signal buffer.
   if (model_communicator_ != nullptr) {
     // model_communicator_->ReleaseSignalBuffer();

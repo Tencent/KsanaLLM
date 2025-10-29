@@ -158,8 +158,8 @@ TEST_F(ScheduleProcessorTest, ProcessorRun) {
   // Add a fake request to avoid blocking.
   std::shared_ptr<Request> req;
   std::shared_ptr<KsanaPythonInput> python_input;
-  std::vector<std::shared_ptr<InferRequest>> infer_reqs =
-      InitFakeRequest(123, 5, 10, req, {{0, 1}}, tp_num, &python_input);
+  std::vector<std::shared_ptr<InferRequest>> infer_reqs = InitFakeRequest(
+      123, 5, 10, req, {{0, 1}}, tp_num, block_manager_config_.device_allocator_config.block_token_num, &python_input);
   hold_requests_.push_back(req);
   hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
   for (auto& infer_req : infer_reqs) {
@@ -191,8 +191,8 @@ TEST_F(ScheduleProcessorTest, AsyncProcessorRun) {
   // Add a fake request to avoid blocking.
   std::shared_ptr<Request> req;
   std::shared_ptr<KsanaPythonInput> python_input;
-  std::vector<std::shared_ptr<InferRequest>> infer_reqs =
-      InitFakeRequest(123, 5, 10, req, {{0, 1}}, tp_num, &python_input);
+  std::vector<std::shared_ptr<InferRequest>> infer_reqs = InitFakeRequest(
+      123, 5, 10, req, {{0, 1}}, tp_num, block_manager_config_.device_allocator_config.block_token_num, &python_input);
   hold_requests_.push_back(req);
   hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
   for (auto& infer_req : infer_reqs) {
@@ -244,7 +244,8 @@ TEST_F(ScheduleProcessorTest, ProcessAsyncPostProcessing) {
 
   std::shared_ptr<Request> req;
   std::shared_ptr<KsanaPythonInput> python_input;
-  auto infer_reqs = InitFakeRequest(123, 5, 10, req, {{42, 1}}, tp_num, &python_input);
+  auto infer_reqs = InitFakeRequest(123, 5, 10, req, {{42, 1}}, tp_num,
+                                    block_manager_config_.device_allocator_config.block_token_num, &python_input);
   hold_requests_.push_back(req);
   hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
   auto infer_req = infer_reqs[0];

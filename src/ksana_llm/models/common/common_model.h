@@ -57,9 +57,6 @@ struct ModelRunConfig {
   // Use pre-norm or post-norm.
   LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
 
-  // If prepare return hidden states
-  bool return_hidden_states = false;
-
   // If use rotary_embedding_pos for embedding lookup
   bool emb_lookup_use_rotary_embedding_pos = false;
 
@@ -151,6 +148,7 @@ class CommonModel : public BaseModel {
   std::shared_ptr<BaseLayer> assemble_tokens_hidden_layer_;
   std::shared_ptr<BaseLayer> cast_layer_;
   std::shared_ptr<BaseLayer> input_refit_layer_;
+
 #ifdef ENABLE_CUDA
   std::shared_ptr<BaseLayer> set_torch_stream_layer_;
 #endif

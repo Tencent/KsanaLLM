@@ -288,20 +288,46 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
   // TODO(lijiajieli): remove copy and do not modify InferRequest
   std::vector<std::shared_ptr<InferRequest>> mtp_reqs = reqs;
 
+  std::unordered_map<int64_t, size_t> original_kv_cache_token_num;
+  std::unordered_map<int64_t, std::vector<int>> first_tokens;  // store req first token
+  first_tokens.reserve(mtp_reqs.size());
+
+  original_kv_cache_token_num.reserve(mtp_reqs.size());
   for (const auto& req : mtp_reqs) {
     req->draft_tokens.mtp.clear();
     req->forwarding_tokens = req->GetVerifiedTokens();
     req->forwarding_tokens_draft_num = req->accepted_tokens.size();  // already removed wrong token
     req->sampling_token_num = kStepGenerateTokenNum;
     req->last_step_token_num = kStepGenerateTokenNum;
+    original_kv_cache_token_num[req->req_id] = req->kv_cached_token_num;
+
+    first_tokens[req->req_id].emplace_back(req->forwarding_tokens.front());
+    req->forwarding_tokens.erase(req->forwarding_tokens.begin());
   }
 
-  ReorderInferRequests(mtp_reqs);
 
-  std::unordered_map<ModelInstance*, std::unordered_map<InferStage, std::vector<ForwardRequest>>> grouped_req;
-  std::vector<SamplingRequest> sampling_req;
-  BuildForwardRequests(multi_batch_id, mtp_reqs, grouped_req);
-  BuildSamplingRequest(multi_batch_id, mtp_reqs, sampling_req);
+  std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>> sync_grouped_req;
+  std::vector<SamplingRequest> sync_sampling_req;
+  for (size_t mtp_step = 0; mtp_step < mtp_step_num_; ++mtp_step) {
+    KLLM_LOG_DEBUG << "MTP forward step: " << mtp_step;
+
+    for (const auto& req : mtp_reqs) {
+      if (mtp_step != 0) {
+        req->kv_cached_token_num = req->forwarding_tokens.size();
+        req->prefix_cache_len = req->kv_cached_token_num;
+        req->forwarding_tokens.emplace_back(req->draft_tokens.mtp.back());
+      }
+    }
+
+    ReorderInferRequests(mtp_reqs);
+
+    BuildForwardRequests(multi_batch_id, mtp_reqs, sync_grouped_req);
+
+    // Async BuildSamplingRequest
+    auto build_sampling_future = threadpool_.Submit([&]() {
+      sync_sampling_req.clear();
+      BuildSamplingRequest(multi_batch_id, mtp_reqs, sync_sampling_req, false);
+    });
 
     context_->SetIsLastLayer(mtp_step + 1 == mtp_step_num_);
     Forward(multi_batch_id, mtp_reqs, epilogue, sync_grouped_req, RunMode::kNextN);
@@ -317,6 +343,8 @@ Status LlmRuntime::MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr
 
   // reset requests
   for (const auto& req : mtp_reqs) {
+    req->kv_cached_token_num = original_kv_cache_token_num[req->req_id];
+    req->prefix_cache_len = req->kv_cached_token_num;
     req->forwarding_tokens.resize(req->forwarding_tokens.size() - mtp_step_num_);
     req->forwarding_tokens.insert(req->forwarding_tokens.begin(), first_tokens[req->req_id].begin(),
                                   first_tokens[req->req_id].end());

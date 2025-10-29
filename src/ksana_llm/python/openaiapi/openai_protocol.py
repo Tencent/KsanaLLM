@@ -253,9 +253,7 @@ class ChatCompletionRequest(OpenAIRequestModel):
         Literal["required"],
         ChatCompletionNamedToolChoiceParam,
     ]] = "none"
-    return_hidden_states: bool = False
-
-
+  
     top_k: Optional[int] = None
     min_p: Optional[float] = None
     min_tokens: int = 0

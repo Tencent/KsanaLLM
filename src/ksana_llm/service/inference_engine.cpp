@@ -130,10 +130,21 @@ Status InferenceEngine::Initialize() {
     Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
     pipeline_config.lower_layer_idx = 0;
     pipeline_config.upper_layer_idx = model_config.num_layer - 1;
-    if (model_config.num_nextn_predict_layers != 0 && runtime_config.enable_mtp_module) {
-      pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
-      pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
+    if (model_config.num_nextn_predict_layers > 0 && runtime_config.mtp_step_num > 0) {
+      if (model_config.num_nextn_predict_layers <= runtime_config.mtp_step_num) {
+        pipeline_config.lower_nextn_layer_idx = model_config.num_layer;
+        pipeline_config.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
+      } else if (model_config.num_nextn_predict_layers == 1) {
+        // repeat MTP layer only support exist 1 MTP layer weight
+        pipeline_config.upper_nextn_layer_idx += runtime_config.mtp_step_num - 1;
+        KLLM_LOG_INFO << "repeat MTP layer " << runtime_config.mtp_step_num - 1 << " times";
+      } else {
+        KLLM_LOG_FATAL << fmt::format(
+            "mtp_step_num({}) must <= num_nextn_predict_layers({}) in model config while num_nextn_predict_layers != 1",
+            runtime_config.mtp_step_num, model_config.num_nextn_predict_layers);
+      }
     }
+
     Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
     KLLM_LOG_INFO << "InferenceEngine Set layer range:[" << pipeline_config.lower_layer_idx << ", "
                   << pipeline_config.upper_layer_idx << "].";

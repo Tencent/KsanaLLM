@@ -123,8 +123,7 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   Status MergePendingSwapinRequests(bool blocking, bool early_stop);
   Status MergePendingSwapoutRequests(bool blocking, bool early_stop);
 
-  // input_ids <= decode_token_num_threshold_ will regard as decode (use page attention), default is 1
-  size_t decode_token_num_threshold_ = 1;
+  size_t GetMaxRequiredTokenNum(const size_t token_num) const;
 
   friend class ContinuousBatchingStrategyTest;  // for test
   ConnectorConfig connector_config_;

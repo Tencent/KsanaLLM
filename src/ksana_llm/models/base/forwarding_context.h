@@ -43,20 +43,14 @@ struct ForwardingBuffers {
   // This buffer is used among multiple forward calls
   std::vector<Tensor> mtp_hidden_buffer_tensors;
 
-  void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-            const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
+  void Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
+            const RuntimeConfig& runtime_config, BufferManager* const buffer_mgr);
 
-  void CalculateBuffersShape(size_t batch_size, size_t max_token_num);
+  void CalculateBuffersShape(std::shared_ptr<Context> context, const size_t batch_size, const size_t max_token_num,
+                             const DataType& weight_type);
 
-  // Resize buffer to save device memory.
-  Status ResizeBuffers(size_t batch_size, size_t token_num, bool release = false);
-
-  // Model config
   ModelConfig model_config;
   RuntimeConfig runtime_config;
-
-  // Is use multi-token prediction
-  bool use_mtp{false};
 
   // Map to record each buffers shape.
   std::unordered_map<std::string, std::vector<size_t>> buffers_shape_map;
@@ -69,7 +63,7 @@ struct ModelBuffers {
   Tensor cos_sin_cache_tensor_;
 
   void Init(std::shared_ptr<Context> context, int rank, const ModelConfig& model_config,
-            const RuntimeConfig& runtime_config, bool use_mtp, BufferManager* buffer_mgr);
+            const RuntimeConfig& runtime_config, BufferManager* buffer_mgr);
 
   Status AcquireBuffers(std::shared_ptr<ModelInput>& model_input);
   Status ReleaseBuffers();
@@ -101,21 +95,21 @@ class ForwardingContext {
 
   inline const size_t GetMultiBatchId() const { return multi_batch_id_; }
 
-  inline void SetMultiBatchId(size_t multi_batch_id) { multi_batch_id_ = multi_batch_id; }
+  inline void SetMultiBatchId(const size_t multi_batch_id) { multi_batch_id_ = multi_batch_id; }
 
   inline BatchRequestSchedInfo& GetBatchRequestSchedInfo() { return batch_event_info_; }
 
   inline const bool IsForwardingLayers() { return is_forwarding_layers_; }
 
-  inline void SetIsForwardingLayers(bool is_forwarding_layers) { is_forwarding_layers_ = is_forwarding_layers; }
+  inline void SetIsForwardingLayers(const bool is_forwarding_layers) { is_forwarding_layers_ = is_forwarding_layers; }
 
   inline const std::shared_ptr<Context>& GetContext() { return context_; }
 
   inline void SetContext(std::shared_ptr<Context> context) { context_ = context; }
 
-  inline int GetCurrentRank() { return rank_; }
+  inline int GetCurrentRank() const { return rank_; }
 
-  inline void SetCurrentRank(int rank) { rank_ = rank; }
+  inline void SetCurrentRank(const int rank) { rank_ = rank; }
 
   inline const PipelineConfig& GetPipelineConfig() { return pipeline_config_; }
 

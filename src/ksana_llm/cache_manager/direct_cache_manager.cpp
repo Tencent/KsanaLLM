@@ -91,7 +91,7 @@ Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
 
   shared_token_num = 0;
   shared_block_num = 0;
-  size_t block_token_num = cache_manager_config_.block_token_num;
+  const size_t block_token_num = cache_manager_config_.block_token_num;
   unique_block_num = (input_token_ids.size() + block_token_num) / block_token_num;
   return Status();
 }

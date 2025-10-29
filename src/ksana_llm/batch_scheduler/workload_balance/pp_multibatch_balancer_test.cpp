@@ -44,6 +44,7 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   int expected_output_token_num = 10;                 // not used, give any valid value
   std::vector<std::pair<int, int>> seeds = {{0, 0}};  // not used, give any valid value
   int tp_num = 1;
+  constexpr size_t kBlockNum = 16;
 
   std::shared_ptr<Request> batch0_req0;
   size_t batch1_req_num = 11;
@@ -52,18 +53,20 @@ TEST_F(PPMultibatchWorkloadBalancerTest, ReqWbTest) {
   std::vector<std::shared_ptr<InferRequest>> infer_req_list, waiting_reqs;
   std::shared_ptr<Request> waiting_req;
   int req_id = 0;
-  infer_req_list = InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch0_req0, seeds, tp_num);
+  infer_req_list =
+      InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch0_req0, seeds, tp_num, kBlockNum);
   batch_states[0]->schedule_output->running_reqs.push_back(infer_req_list[0]);
   for (size_t i = 0; i < batch1_req_num; i++) {
     infer_req_list =
-        InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch1_reqs[i], seeds, tp_num);
+        InitFakeRequest(req_id++, input_token_num, expected_output_token_num, batch1_reqs[i], seeds, tp_num, kBlockNum);
     if (i < batch1_running_req_num) {
       batch_states[1]->schedule_output->running_reqs.push_back(infer_req_list[0]);
     } else {
       batch_states[1]->waiting_queue.push_back(infer_req_list[0]);
     }
   }
-  infer_req_list = InitFakeRequest(req_id++, input_token_num, expected_output_token_num, waiting_req, seeds, tp_num);
+  infer_req_list =
+      InitFakeRequest(req_id++, input_token_num, expected_output_token_num, waiting_req, seeds, tp_num, kBlockNum);
   waiting_reqs.push_back(infer_req_list[0]);
 
   PPMultibatchWorkloadBalancer balancer(PPMultibatchWBStrategy::WB_BATCH_REQ);

@@ -91,6 +91,7 @@ class DeepSeekV3Test : public testing::Test {
     block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
 
     env->GetRuntimeConfig(runtime_config);
+    runtime_config.mtp_step_num = batch_scheduler_config.mtp_step_num;
 
     BlockAllocatorGroupConfig group_1_config;
     group_1_config.devices = {0};
