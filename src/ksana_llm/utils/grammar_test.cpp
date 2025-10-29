@@ -4,6 +4,8 @@
 #include "ksana_llm/utils/grammar_backend.h"
 #include "ksana_llm/utils/grammar_matcher.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 #include "tests/test.h"
 
 namespace ksana_llm {
@@ -413,6 +415,89 @@ TEST_F(GrammarBackendTest, GrammarMatcherNvidiaNullptrTest) {
   EXPECT_TRUE(true);  // 测试通过，表明接口调用没有崩溃
 #else
   GTEST_SKIP() << "GrammarMatcherNvidia nullptr test is not supported on non-CUDA platforms";
+#endif
+}
+
+TEST_F(GrammarBackendTest, DetectTokenizerTypeTest) {
+#ifdef ENABLE_CUDA
+  // 初始化 Llama tokenizer（包含 ByteFallback decoder）
+  std::string model_path = "/model/llama-hf/7B";
+  auto tokenizer = Singleton<Tokenizer>::GetInstance();
+  Status status = tokenizer->InitTokenizer(model_path);
+
+  if (!status.OK()) {
+    GTEST_SKIP() << "Failed to initialize tokenizer from " << model_path
+                 << ", skipping DetectTokenizerType test";
+  }
+
+  // 获取 vocab 信息
+  std::vector<std::string> vocab;
+  int vocab_size = 32000;
+  std::vector<int> stop_token_ids;
+  status = tokenizer->GetVocabInfo(vocab, vocab_size, stop_token_ids);
+  ASSERT_TRUE(status.OK()) << "Failed to get vocab info";
+
+  // 创建 GrammarBackend，这会触发 DetectTokenizerType
+  auto backend = GrammarBackend::Create(vocab, vocab_size, stop_token_ids);
+  ASSERT_NE(backend, nullptr) << "Failed to create GrammarBackend";
+  ASSERT_TRUE(backend->IsInitialized()) << "GrammarBackend not initialized";
+
+  // 获取 TokenizerInfo 并验证检测到的类型
+  const auto& tokenizer_info = backend->GetTokenizerInfo();
+
+  // Llama 模型使用 ByteFallback decoder，应该被检测为 BYTE_FALLBACK (vocab_type=1)
+  // 根据 XGrammar 的定义：
+  // - RAW = 0
+  // - BYTE_FALLBACK = 1
+  // - BYTE_LEVEL = 2
+  auto vocab_type = tokenizer_info.GetVocabType();
+
+  KLLM_LOG_INFO << "Detected vocab_type: " << static_cast<int>(vocab_type);
+
+  // Llama 模型应该被检测为 BYTE_FALLBACK
+  EXPECT_EQ(vocab_type, xgrammar::VocabType::BYTE_FALLBACK)
+      << "Expected BYTE_FALLBACK for Llama model with ByteFallback decoder, got "
+      << static_cast<int>(vocab_type);
+
+  EXPECT_EQ(tokenizer_info.GetVocabSize(), vocab_size);
+
+  tokenizer->DestroyTokenizer();
+#else
+  GTEST_SKIP() << "DetectTokenizerType test is only supported on CUDA platforms";
+#endif
+}
+
+TEST_F(GrammarBackendTest, DetectTokenizerTypeWithoutInitializationTest) {
+#ifdef ENABLE_CUDA
+  // 应该使用默认值 RAW (vocab_type=0)
+  // 确保 tokenizer 未初始化
+  auto tokenizer = Singleton<Tokenizer>::GetInstance();
+  tokenizer->DestroyTokenizer();
+
+  // 创建简单的 vocab
+  std::vector<std::string> simple_vocab = {"hello", "world", "test"};
+  int simple_vocab_size = simple_vocab.size();
+  std::vector<int> simple_stop_tokens = {0};
+
+  // 创建 GrammarBackend（tokenizer 未初始化）
+  auto backend = GrammarBackend::Create(simple_vocab, simple_vocab_size, simple_stop_tokens);
+  ASSERT_NE(backend, nullptr) << "Failed to create GrammarBackend";
+  ASSERT_TRUE(backend->IsInitialized()) << "GrammarBackend not initialized";
+
+  // 获取 TokenizerInfo
+  const auto& tokenizer_info = backend->GetTokenizerInfo();
+  auto vocab_type = tokenizer_info.GetVocabType();
+
+  KLLM_LOG_INFO << "Detected vocab_type (without tokenizer): " << static_cast<int>(vocab_type);
+
+  // 没有初始化 tokenizer 时，应该使用默认值 RAW (0)
+  EXPECT_EQ(vocab_type, xgrammar::VocabType::RAW)
+      << "Expected RAW when tokenizer is not initialized, got "
+      << static_cast<int>(vocab_type);
+
+  EXPECT_EQ(tokenizer_info.GetVocabSize(), simple_vocab_size);
+#else
+  GTEST_SKIP() << "DetectTokenizerType without initialization test is only supported on CUDA platforms";
 #endif
 }
 

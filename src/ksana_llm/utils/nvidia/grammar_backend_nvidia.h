@@ -27,6 +27,9 @@ class GrammarBackendNvidia : public GrammarBackend {
   bool IsInitialized() const override { return initialized_; }
 
  private:
+  // Detect tokenizer type using XGrammar API
+  void DetectTokenizerType(int& vocab_type, bool& add_prefix_space);
+
   std::unique_ptr<xgrammar::TokenizerInfo> tokenizer_info_;
   std::unique_ptr<xgrammar::GrammarCompiler> compiler_;
   bool initialized_ = false;
