@@ -1,15 +1,11 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "ksana_llm/data_hub/data_hub.h"
-#include "ksana_llm/models/common/common_weight.h"
 #include "ksana_llm/modules/basic/bmm.h"
-#include "ksana_llm/runtime/llm_runtime.h"
-
 #include "ksana_llm/models/base/fake_weight_for_test.h"
+#include "ksana_llm/models/common/common_weight.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/tensor.h"
 #include "tests/test.h"
@@ -75,7 +71,7 @@ void BatchedMatmul(const std::vector<T>& input_data, const std::vector<T>& weigh
           sum += input_data[t * heads * qk_nope_dim + h * qk_nope_dim + k] *
                  weight[h * qk_nope_dim * kv_lora_rank + k * kv_lora_rank + n];
         }
-        // output[heads, tokens, kv_lora_rank]
+        // output[tokens, heads, kv_lora_rank]
         output[t * heads * kv_lora_rank + h * kv_lora_rank + n] = sum;
       }
     }
@@ -123,11 +119,11 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   size_t byte_size1 = elem_count1 * sizeof(T);
   GTEST_LOG_(INFO) << "typesize: " << sizeof(T);
 
-  // input1,2
+  // input
   size_t elem_count2 = heads * qk_nope_dim * tokens;
   size_t byte_size2 = elem_count2 * sizeof(T);
 
-  // intput3/output
+  // output
   size_t elem_count3 = kv_lora_rank * tokens * heads;
   size_t byte_size3 = elem_count3 * sizeof(T);
 
@@ -165,28 +161,18 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   ASSERT_EQ(err, cudaSuccess) << "CUDA memory allocation failed for gpu_buf: " << cudaGetErrorString(err);
   Tensor gpu_tensor(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, qk_nope_dim}, 0, gpu_buf);
   std::vector<float> input_data1(tokens * heads * qk_nope_dim);
-  RandomizeInputData(input_data1, tokens, heads, qk_nope_dim);
+  RandomizeInputData(input_data1, heads, tokens, qk_nope_dim);
   AssignFromVector(gpu_tensor, input_data1);
-  void* gpu_buf1 = nullptr;
-  cudaError_t err1 = cudaMalloc(&gpu_buf1, byte_size2);
-  ASSERT_EQ(err1, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err1);
-  Tensor gpu_tensor1(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, tokens, qk_nope_dim}, 0, gpu_buf1);
 
+  // The space used for calculating the output
   void* gpu_buf2 = nullptr;
   cudaError_t err2 = cudaMalloc(&gpu_buf2, byte_size3);
   ASSERT_EQ(err2, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err2);
-  Tensor gpu_tensor2(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {heads, tokens, kv_lora_rank}, 0,
+  Tensor gpu_tensor2(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, kv_lora_rank}, 0,
                      gpu_buf2);
 
-  // The space used for calculating the output
-  void* gpu_buf3 = nullptr;
-  cudaError_t err3 = cudaMalloc(&gpu_buf3, byte_size3);
-  ASSERT_EQ(err3, cudaSuccess) << "CUDA memory allocation failed for gpu_buf1: " << cudaGetErrorString(err3);
-  Tensor gpu_tensor3(MemoryLocation::LOCATION_DEVICE, GetKsanaDataType<T>(), {tokens, heads, kv_lora_rank}, 0,
-                     gpu_buf3);
-
-  std::vector<Tensor> input_tensors = {gpu_tensor, gpu_tensor1, gpu_tensor2};
-  std::vector<Tensor> output_tensors = {gpu_tensor3};
+  std::vector<Tensor> input_tensors = {gpu_tensor};
+  std::vector<Tensor> output_tensors = {gpu_tensor2};
 
   Status status = my_bmm.Forward(input_tensors, output_tensors);
 
@@ -235,13 +221,6 @@ TEST(BmmInitTest, tokens_e1) {
   std::string test_type = "tokens_e1";
   size_t heads = 8, qk_nope_dim = 12, kv_lora_rank = 20, tokens = 1;
   TestBmmWithType<half>(heads, qk_nope_dim, kv_lora_rank, tokens, test_type);
-}
-
-// input_tensors[0].shape[0] == heads_num_per_tp test
-TEST(BmmInitTest, heads_e_tokens) {
-  std::string test_type = "heads_e_tokens";
-  size_t heads = 4, qk_nope_dim = 4, kv_lora_rank = 2, tokens = 4;
-  TestBmmWithType<float>(heads, qk_nope_dim, kv_lora_rank, tokens, test_type);
 }
 
 // find algo

@@ -293,12 +293,8 @@ void InvokeAbsorbMlaPagedAttention(void* hidden_buffer_1, void* output_ptr, void
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
-  // cat(q_nope, q_pe), write to output temporarily
-  // output layout:
-  //   [attn_out: total_tokens x num_heads x kv_lora_rank]
-  //   [q_concat: total_tokens x num_heads x (kv_lora_rank + qk_rope_head_dim)]
   const size_t output_size = total_tokens * num_heads * kv_lora_rank * sizeof(SCALAR_T);
-  void* q_concat_ptr = output_ptr + output_size;
+  void* q_concat_ptr = hidden_buffer_1;
   constexpr size_t kInnerDimSize = 1;
   const size_t outer_q_dim_size = total_tokens * num_heads;
   const size_t outer_k_dim_size = total_tokens;
@@ -319,8 +315,9 @@ void InvokeAbsorbMlaPagedAttention(void* hidden_buffer_1, void* output_ptr, void
   } else if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
     KLLM_LOG_DEBUG << "FP8 kv cache and flash mla enabled, using FP8 inference, quantizing q tensor.";
     const float q_scale = k_scale;
-    // Quant q_concat and store into hidden_buffer_1 (cannot be done in-place)
-    void* const quant_q_tensor_ptr = hidden_buffer_1;
+    // Quant q_concat and store into qkv_workspace (cannot be done in-place)
+    void* const quant_q_tensor_ptr = qkv_workspace;
+    qkv_workspace += total_tokens * num_heads * (kv_lora_rank + qk_rope_head_dim) * sizeof(CACHE_T);
     llm_kernels::nvidia::ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
         /*q_src*/ reinterpret_cast<SCALAR_T*>(q_concat_ptr), /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_tensor_ptr),
         batch_size, q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim,

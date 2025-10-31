@@ -23,10 +23,10 @@ namespace ksana_llm {
 // Buffers used in mla.
 // TODO(robertyuan): Some maybe reused with other modules
 struct MlaBuffers {
-  TensorBuffer* q_buffer;
   TensorBuffer* kv_lora_or_q_nope_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
+  TensorBuffer* decode_q_nope_buffer;
   TensorBuffer* decode_q_rope_buffer;
 
   // shared

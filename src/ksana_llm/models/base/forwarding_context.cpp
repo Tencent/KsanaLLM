@@ -58,7 +58,7 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
 
     // For buffer reuse of MlaFlashAtten, see MlaAttenVarlen for details.
     // max (q, k, v)
-    const size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), (v_head_dim));
+    const size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), v_head_dim);
     // shared_buffer is also used to store one of q,k,v
     shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * mla_flash_attn_size);
     const size_t mla_max_dim = std::max({max_dim, head_num_per_tp * v_head_dim, head_num_per_tp * qk_nope_head_dim,
@@ -68,9 +68,6 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
         std::max(kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1),
                  head_num_per_tp * mla_flash_attn_size);
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
-    if (runtime_config.enable_o_proj_out_of_dp) {
-      shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * v_head_dim);
-    }
 
     const size_t token_num_per_dp = max_token_num;
     mla_hidden_buffer_size = token_num_per_dp * mla_max_dim;
@@ -142,9 +139,6 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   buffers_ = std::make_unique<ForwardingBuffers>();
   buffers_->Init(context, rank, model_config, runtime_config, buffer_mgr);
 
-  int head_num = model_config.head_num;
-  int size_per_head = model_config.size_per_head;
-  int hidden_units = size_per_head * head_num;
   size_t max_token_num = runtime_config.max_step_token_num;
   const size_t residual_buffer_size = max_token_num * model_config.hidden_units;
   const DataType weight_type = model_config.weight_data_type;

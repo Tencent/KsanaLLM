@@ -114,7 +114,8 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const int32_t ldc, cudaDataType_t c_type, const int32_t batch_count, float f_alpha,
                                 float f_beta, cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
                                 size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale,
-                                const void* b_scale) {
+                                const void* b_scale, int64_t batch_offset_a, int64_t batch_offset_b,
+                                int64_t batch_offset_c) {
   // NOTE(karlluo): half no static cast in regular c_ptr++
   half h_alpha = (half)(f_alpha);
   half h_beta = (half)(f_beta);
@@ -149,17 +150,27 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatrixLayoutCreate(&c_desc, c_type, m, n, ldc));
 
   if (batch_count > 1) {
-    size_t strideA = m * k;
-    size_t strideB = k * n;
-    size_t strideC = m * n;
+    // Batch is the first dim by default
+    if (batch_offset_a == 0) {
+      batch_offset_a = m * k;
+    }
+    if (batch_offset_b == 0) {
+      batch_offset_b = k * n;
+    }
+    if (batch_offset_c == 0) {
+      batch_offset_c = m * n;
+    }
 
     cublasLtMatrixLayoutSetAttribute(a_desc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count));
     cublasLtMatrixLayoutSetAttribute(b_desc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count));
     cublasLtMatrixLayoutSetAttribute(c_desc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count));
 
-    cublasLtMatrixLayoutSetAttribute(a_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideA, sizeof(strideA));
-    cublasLtMatrixLayoutSetAttribute(b_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideB, sizeof(strideB));
-    cublasLtMatrixLayoutSetAttribute(c_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideC, sizeof(strideC));
+    cublasLtMatrixLayoutSetAttribute(a_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &batch_offset_a,
+                                     sizeof(batch_offset_a));
+    cublasLtMatrixLayoutSetAttribute(b_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &batch_offset_b,
+                                     sizeof(batch_offset_b));
+    cublasLtMatrixLayoutSetAttribute(c_desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &batch_offset_c,
+                                     sizeof(batch_offset_c));
   }
 
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescCreate(&operation_desc, inner_compute_type, scale_type));

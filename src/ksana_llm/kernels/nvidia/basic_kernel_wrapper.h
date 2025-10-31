@@ -134,8 +134,10 @@ void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle
 
 template <typename T>
 void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m, int n,
-                         int k, const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream,
-                         void* workspace_ptr, size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo);
+                         int k, int lda, int ldb, int ldc, int64_t batch_offset_a, int64_t batch_offset_b,
+                         int64_t batch_offset_c, const void* a_ptr, const void* b_ptr, void* c_ptr,
+                         cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,
+                         cublasLtMatmulAlgo_t* cublaslt_algo);
 
 template <typename T>
 void InvokeAddBiasResidual(const void* input_a, const void* input_b, const void* bias, const int m, const int n,

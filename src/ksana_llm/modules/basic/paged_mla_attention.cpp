@@ -75,18 +75,19 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, Absor
 Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensors, const std::shared_ptr<ModelInput>& model_input,
                                   const ModelInput::input_info& page_input,
                                   std::vector<Tensor>& hidden_buffer_tensors_1, const AttentionForwardContext& attn_ctx,
-                                  Tensor& workspace_buffer, Tensor& decode_q_buffer_tensor,
+                                  std::vector<Tensor>& workspace_buffer, Tensor& decode_q_buffer_tensor,
                                   Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
                                   Tensor& k_rope_buffer_tensor) {
+  // Swap the usage of output_tensors and workspace_buffer here to ensure the result of bmm
+  // can be placed in output_tensors
   STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward(
       {hidden_buffer_tensors_1[0], page_input.input_length, page_input.kv_list, page_input.kv_cache_offset,
-       page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, workspace_buffer,
+       page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, /*qkv_workspace*/ output_tensors[0],
        model_input->layer_kv_cache_ptr, page_input.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor,
        kv_buffer_tensor, k_rope_buffer_tensor, page_input.tile_scheduler_metadata, page_input.num_splits},
-      output_tensors));
+      /* output*/ workspace_buffer));
 
-  STATUS_CHECK_RETURN(
-      attn_w_uv_bmm_->Forward({output_tensors[0], workspace_buffer, hidden_buffer_tensors_1[0]}, output_tensors));
+  STATUS_CHECK_RETURN(attn_w_uv_bmm_->Forward(workspace_buffer, output_tensors));
 
   return Status();
 }

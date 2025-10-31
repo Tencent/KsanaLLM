@@ -866,9 +866,9 @@ TEST_F(LayerTest, BatchedMatMulLayerTest) {
   BatchedMatMulLayer batched_matmul_layer;
   batched_matmul_layer.Init({}, runtime_config, context_, kDeviceRank);
 
-  Tensor input_a = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, m, k}, kDeviceRank);
+  Tensor input_a = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, batch_size, k}, kDeviceRank);
   Tensor input_b = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, k, n}, kDeviceRank);
-  Tensor output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, m, n}, kDeviceRank);
+  Tensor output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, batch_size, n}, kDeviceRank);
 
   std::vector<dtype> input_a_host(input_a.GetElementNumber());
   std::vector<dtype> input_b_host(input_b.GetElementNumber());
@@ -895,24 +895,24 @@ TEST_F(LayerTest, BatchedMatMulLayerTest) {
 
   // 验证输出形状
   EXPECT_EQ(output.shape.size(), 3);
-  EXPECT_EQ(output.shape[0], batch_size);
-  EXPECT_EQ(output.shape[1], m);
+  EXPECT_EQ(output.shape[0], m);
+  EXPECT_EQ(output.shape[1], batch_size);
   EXPECT_EQ(output.shape[2], n);
 
   // 使用cublas计算参考结果进行验证
-  Tensor ref_output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {batch_size, m, n}, kDeviceRank);
+  Tensor ref_output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, batch_size, n}, kDeviceRank);
 
   // 对每个batch单独计算矩阵乘法作为参考
   for (int b = 0; b < batch_size; ++b) {
     float alpha = 1.0f;
     float beta = 0.0f;
 
-    void* a_ptr = static_cast<char*>(input_a.GetPtr<void>()) + b * m * k * sizeof(device_type);
+    void* a_ptr = static_cast<char*>(input_a.GetPtr<void>()) + b * k * sizeof(device_type);
     void* b_ptr = static_cast<char*>(input_b.GetPtr<void>()) + b * k * n * sizeof(device_type);
-    void* c_ptr = static_cast<char*>(ref_output.GetPtr<void>()) + b * m * n * sizeof(device_type);
+    void* c_ptr = static_cast<char*>(ref_output.GetPtr<void>()) + b * n * sizeof(device_type);
 
-    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, b_ptr, CUDA_R_16F, n, a_ptr, CUDA_R_16F, k,
-                 &beta, c_ptr, CUDA_R_16F, n, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
+    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, b_ptr, CUDA_R_16F, n, a_ptr, CUDA_R_16F,
+                 batch_size * k, &beta, c_ptr, CUDA_R_16F, batch_size * n, CUDA_R_32F, CUBLAS_GEMM_DEFAULT);
   }
 
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);

@@ -384,14 +384,18 @@ INVOKE_MATMUL(half, CUDA_R_16F);
 INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 #undef INVOKE_MATMUL
 
-#define INVOKE_BATCHED_GEMM(T, CUDA_TYPE)                                                                            \
-  template <>                                                                                                        \
-  void InvokeBatchedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m, \
-                              int n, int k, const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, \
-                              void* workspace_ptr, size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo) {     \
-    CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                                \
-        cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_ptr, n, CUDA_TYPE, a_ptr, k, CUDA_TYPE, \
-        c_ptr, n, CUDA_TYPE, CUDA_R_32F, batch_size, stream, workspace_ptr, workspace_size, cublaslt_algo));         \
+#define INVOKE_BATCHED_GEMM(T, CUDA_TYPE)                                                                              \
+  template <>                                                                                                          \
+  void InvokeBatchedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m,   \
+                              int n, int k, int lda, int ldb, int ldc, int64_t batch_offset_a, int64_t batch_offset_b, \
+                              int64_t batch_offset_c, const void* a_ptr, const void* b_ptr, void* c_ptr,               \
+                              cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,                        \
+                              cublasLtMatmulAlgo_t* cublaslt_algo) {                                                   \
+    CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                                  \
+        cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_ptr, ldb, CUDA_TYPE, a_ptr, lda,          \
+        CUDA_TYPE, c_ptr, ldc, CUDA_TYPE, batch_size, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f, CUDA_R_32F, stream,           \
+        workspace_ptr, workspace_size, cublaslt_algo, /*a_scale*/ nullptr, /*b_scale*/ nullptr, batch_offset_b,        \
+        batch_offset_a, batch_offset_c));                                                                              \
   }
 INVOKE_BATCHED_GEMM(float, CUDA_R_32F);
 INVOKE_BATCHED_GEMM(half, CUDA_R_16F);
