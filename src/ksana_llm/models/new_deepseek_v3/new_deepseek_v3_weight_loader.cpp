@@ -94,6 +94,10 @@ Status NewDeepSeekV3WeightLoader::PostProcessModelWeights(std::unordered_map<std
       std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);
   std::unordered_set<std::string> post_processed_weights;
   if (new_deepseek_v3_config->quant_config.is_fp8_blockwise) {
+#if defined(ENABLE_FP8) && defined(ENABLE_FP8_TORCH)
+    // Post process weight and scale for q_b_proj and kv_b_proj
+    weight_impl_->PostProcessFp8E4m3BlockWiseQuantWeights(dev_weights_map, dev_rank, new_deepseek_v3_config);
+#endif
     for (auto& [weight_name, weight_tensor] : dev_weights_map) {
       // for fp8 weight, bind weight scale
       if (weight_tensor.dtype == DataType::TYPE_FP8_E4M3 || weight_tensor.dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
@@ -174,7 +178,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   const size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank);
 
   size_t num_layers = new_deepseek_v3_config->num_layer;
-  if (pipeline_config_.lower_nextn_layer_idx >= num_layers) {
+  if (static_cast<size_t>(pipeline_config_.lower_nextn_layer_idx) >= num_layers) {
     num_layers += pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
   }
   std::vector<std::vector<int>> expert_map(num_layers, std::vector<int>(num_experts, -1));
@@ -209,8 +213,6 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 
   // Dequant GPTQ weight
   std::unordered_map<std::string, Tensor> host_gptq_weights;
-  // Record the weights that need to dequant
-  std::unordered_set<std::string> dequant_weights;
   for (auto& [file_weight_name, host_weight_tensor] : host_model_weights) {
     // for GPTQ weight or moe-int4(mixed with fp8) weight, save to host_gptq_weights and load later
     if (new_deepseek_v3_config->ContainGptqWeights() && new_deepseek_v3_config->IsWeightMatchGptq(file_weight_name) &&
@@ -361,7 +363,6 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
                       para_pitch, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
           device_model_weights[q_b_proj_name] = q_b_proj_tensor;
-          dequant_weights.insert(q_b_proj_name);
         }
         continue;
       }
@@ -501,7 +502,6 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
                       para_pitch, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
 
           device_model_weights[file_weight_name] = kv_b_proj_tensor;
-          dequant_weights.insert(file_weight_name);
         }
         continue;
       }
@@ -532,7 +532,7 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, new_deepseek_v3_config,
                                   mlp_tensor_para_size, !new_deepseek_v3_config->is_quant);
       // TODO(huicongyao): Refactor to eliminate string-based type checking
-      if (new_deepseek_v3_config->type == "deepseek_v3") {
+      if (new_deepseek_v3_config->use_mla && new_deepseek_v3_config->type != "deepseek_v2") {
         // deepseek v3 need to combine gate & up proj
         weight_impl_->ProcessGateUpProjWeight(file_weight_name, dev_tensor, device_model_weights, dev_rank,
                                               new_deepseek_v3_config->is_quant);
@@ -558,10 +558,12 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       continue;
     }
 
-    // 5. norm layer or `gate.e_score_correction_bias`
+    // 5. norm layer/`gate.e_score_correction_bias`/indexer fp8 weight
     // Directly load to each device.
     if (file_weight_name.find("norm.") != std::string::npos ||
-        file_weight_name.find("gate.e_score_correction_bias") != std::string::npos) {
+        file_weight_name.find("gate.e_score_correction_bias") != std::string::npos ||
+        file_weight_name.find("self_attn.indexer.wk") != std::string::npos ||
+        file_weight_name.find("self_attn.indexer.wq_b") != std::string::npos) {
       Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
                                  dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
       MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
@@ -571,9 +573,10 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       continue;
     }
 
-    // 6. gate weight
+    // 6. gate weight/indexer bf16 weight
     // Copy to each device and transpose
-    if (file_weight_name.find(".mlp.gate.weight") != std::string::npos) {
+    if (file_weight_name.find(".mlp.gate.weight") != std::string::npos ||
+        file_weight_name.find("self_attn.indexer.weights_proj") != std::string::npos) {
       Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
                                  dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
 
@@ -616,13 +619,6 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
       continue;
     }
   }
-#ifdef ENABLE_FP8
-#  ifdef ENABLE_FP8_TORCH
-  // handle q_b_proj and kv_b_proj
-  weight_impl_->ProcessMlaFp8E4m3BlockWiseScaleOfWeight(dequant_weights, dev_rank, new_deepseek_v3_config,
-                                                        device_model_weights);
-#  endif
-#endif
 
   // Load gptq weights here
   if (new_deepseek_v3_config->ContainGptqWeights()) {

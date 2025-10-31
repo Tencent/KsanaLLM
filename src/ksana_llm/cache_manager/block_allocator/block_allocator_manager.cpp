@@ -25,9 +25,9 @@ BlockAllocatorGroup::BlockAllocatorGroup(const BlockAllocatorGroupConfig& block_
 }
 
 void BlockAllocatorGroup::Initialize() {
-  host_allocator =
-      block_allocator_creation_fn_(MemoryLocation::LOCATION_HOST, block_allocator_group_config_.host_block_num,
-                                   block_allocator_group_config_.block_size, 0, memory_allocator_, context_);
+  host_allocator = block_allocator_creation_fn_(
+      MemoryLocation::LOCATION_HOST, block_allocator_group_config_.host_block_num,
+      block_allocator_group_config_.block_size, /*device_id*/ 0, memory_allocator_, context_);
   for (int device_id : block_allocator_group_config_.devices) {
     dev_allocators[device_id] =
         block_allocator_creation_fn_(MemoryLocation::LOCATION_DEVICE, block_allocator_group_config_.device_block_num,
@@ -157,9 +157,7 @@ BlockAllocatorManager::BlockAllocatorManager(const BlockAllocatorManagerConfig& 
     block_allocator_group_creation_fn_ = [](const BlockAllocatorGroupConfig& block_allocator_group_config,
                                             std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
                                             std::shared_ptr<Context> context,
-                                            BlockAllocatorCreationFunc block_allocator_creation_fn
-
-                                         ) {
+                                            BlockAllocatorCreationFunc block_allocator_creation_fn) {
       return std::make_shared<BlockAllocatorGroup>(block_allocator_group_config, memory_allocator, context,
                                                    block_allocator_creation_fn);
     };

@@ -69,6 +69,7 @@ class MultiHeadLatentAttention {
   std::shared_ptr<BaseLayer> set_torch_stream_layers_;
 #endif
 
+  bool use_dsa_ = false;
   bool use_q_lora_ = false;
   // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
   bool use_fused_lora_a_ = false;

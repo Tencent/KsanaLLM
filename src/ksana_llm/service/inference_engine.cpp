@@ -197,8 +197,8 @@ Status InferenceEngine::Initialize() {
   status = env->GetProfilerConfig(profiler_config);
   Singleton<Profiler>::GetInstance()->InitMetrics(profiler_config);
 
-  size_t max_batch_size = (size_t)runtime_config.max_batch_size;
-  size_t max_vocab_size = (size_t)model_config.vocab_size;
+  size_t max_batch_size = runtime_config.max_batch_size;
+  size_t max_vocab_size = model_config.vocab_size;
 
   status = LoadOperatorOptimization(model_config);
   if (!status.OK()) {

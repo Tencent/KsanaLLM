@@ -3,17 +3,7 @@
 ==============================================================================*/
 
 #pragma once
-#ifdef ENABLE_CUDA
-#  include <nccl.h>
-#endif
-#include <unistd.h>
 
-#include <any>
-#include <array>
-#include <fstream>
-#include <iostream>
-#include <map>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -175,9 +165,6 @@ class Environment {
   }
 
   void SetBlockManagerConfig(const BlockManagerConfig &block_manager_config);
-
-  size_t GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                           const BlockManagerConfig &block_manager_config);
 
  private:
   void Reset();

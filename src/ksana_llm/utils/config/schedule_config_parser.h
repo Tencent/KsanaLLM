@@ -3,17 +3,7 @@
 ==============================================================================*/
 
 #pragma once
-#ifdef ENABLE_CUDA
-#  include <nccl.h>
-#endif
-#include <unistd.h>
 
-#include <any>
-#include <array>
-#include <fstream>
-#include <iostream>
-#include <map>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -106,9 +96,6 @@ struct AllocatorConfig {
 
   // The block size, in bytes.
   size_t block_size = 0;
-
-  // kv_cache storage type
-  DataType kv_cache_dtype;
 
   // The max token number of one block.
   size_t block_token_num;
@@ -265,12 +252,27 @@ struct ExpertParallelConfig {
   DistributedCommunicationType expert_para_comm_type = DistributedCommunicationType::DEFAULT;
 };
 
+// The config of KV cache
+struct KVCacheConfig {
+  // Bytes occupied by a block
+  size_t block_bytes;
+  // Offset of key/value part within one block of a layer
+  size_t k_offset;
+  size_t v_offset;
+};
+
 // The config of attention backend.
 struct AttnBackendConfig {
   bool enable_blocked_multi_token_forwarding_kv = false;
   DataType kv_cache_dtype;    // kv_cache storage type
   size_t block_token_num{0};  // The max token number of one block.
   size_t block_size{0};       // The block size, in bytes.
+
+  // "kv_cache.dtype" specified in the yaml config
+  std::string kv_cache_dtype_str = "auto";
+  // Config for each KV cache used by the model
+  // Mapping from KV cache type ("attention"/"indexer") to its config
+  std::unordered_map<std::string, KVCacheConfig> kv_cache_configs;
 
   // User preference for FlashAttention implementation selection.
   enum class FlashAttnImplChoice {
@@ -281,9 +283,6 @@ struct AttnBackendConfig {
     FA2_V25    // FlashAttention 2.5+
   };
   FlashAttnImplChoice flash_attn_impl_choice = FlashAttnImplChoice::AUTO;
-
-  // std::vector<float> k_scales;  // to be removed
-  // std::vector<float> v_scales;  // to be removed
 };
 
 struct ParallelismBasicConfig {
@@ -331,7 +330,6 @@ struct RuntimeConfig {
   bool enable_mtp_module = false;
   bool enable_speculative_decoding = false;
   bool enable_async = false;
-  // DataType kv_cache_dtype;
 
   // TODO(robertyuan): No body set it?
   bool embed_tokens_use_cpu{false};  // Embed_tokens gather operation is processed on the CPU.
@@ -355,9 +353,7 @@ class ScheduleConfigParser {
 
   Status UpdateModelConfig(ModelConfig &model_config);
 
-  void UpdateMembers(const std::string &model_dir, ModelConfig &model_config, std::string &kv_cache_dtype_str);
-
-  Status CheckEnvironment();
+  void UpdateMembers(const std::string &model_dir, ModelConfig &model_config);
 
   // Get the config of batch manager.
   Status GetBatchSchedulerConfig(BatchSchedulerConfig &batch_scheduler_config);
@@ -452,16 +448,8 @@ class ScheduleConfigParser {
   // Init Expert-Parallel Config from env.
   void InitializeExpertParallelConfig();
 
-  // Get block size in bytes.
-  size_t GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                           const BlockManagerConfig &block_manager_config);
-
- private:
-  size_t GetCommonBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                            const BlockManagerConfig &block_manager_config);
-
-  size_t GetDeepSeekV3BlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                const BlockManagerConfig &block_manager_config);
+  // Init KV cache configs for all attention modules
+  void InitializeKVCacheConfigs(const ModelConfig &model_config, const PipelineConfig &pipeline_config);
 
  private:
   // The config of batch schedule.

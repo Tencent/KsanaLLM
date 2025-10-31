@@ -91,6 +91,15 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
   kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
                    {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
+  layer_kv_cache_ptr =
+      Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
+  if (model_config.use_dsa) {
+    // kv cache meta for the indexer module
+    indexer_kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
+                             {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
+    layer_indexer_kv_cache_ptr =
+        Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
+  }
   kv_cache_offset =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
   rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
@@ -114,11 +123,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
       info.num_splits = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
     }
 #endif
-  };
-
-  allocate_input_info(flash_input, 0);
-  allocate_input_info(page_dual_input, 2);
-  allocate_input_info(page_single_input, 1);
 
   cpu_input_refit_tensor.pos_pair_tensor =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {input_ids.shape[0], 2}, rank_);
@@ -230,7 +234,18 @@ void ModelInput::CreateVLTensors() {
   }
 }
 
-void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest*>& forward_reqs) {
+  // Reset the offsets of shared tensors
+  input_length.shape = {0};
+  kv_list.shape = {0};
+  indexer_kv_list.shape = {0};
+  kv_cache_offset.shape = {0};
+  rotary_embedding_pos.shape = {0};
+  rotary_embedding_mask.shape = {0};
+  block_table.shape = {0};
+  num_splits.shape = {0};
+
+  // Reset the input_infos
   flash_input.Reset();
   page_single_input.Reset();
   page_dual_input.Reset();
@@ -533,36 +548,6 @@ void ModelInput::PrepareCudagraphParams(const std::vector<ForwardRequest>& forwa
 }
 #endif
 
-int ModelInput::GetKoffsetInBlockLayer() {
-  if (model_config_.mla_config.kv_lora_rank == 0) {
-    // For normal kv.
-    return 0;
-  } else {
-    // For MLA compress-kv.
-    if (IsAbsorbWeightsEnabled()) {
-      // Merge k&v, k will take all block space.
-      return 0;
-    } else {
-      return 0;
-    }
-  }
-}
-
-int ModelInput::GetVoffsetInBlockLayer() {
-  if (model_config_.mla_config.kv_lora_rank == 0) {
-    // For normal kv.
-    return block_size_ / layer_num_on_node_ / 2;
-  } else {
-    // For MLA compress-kv.
-    if (IsAbsorbWeightsEnabled()) {
-      // Merge k&v, k will take all block space, v is useless.
-      return 0;
-    } else {
-      return block_size_ / layer_num_on_node_ / 2;
-    }
-  }
-}
-
 /**
  * Process the input refit information for the current batch of requests.
  *
@@ -707,7 +692,7 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   if (total_block_num != k_cache_blocks_base.shape[0]) {
     void* cur_rank_block_base_ptr = device_allocator->GetBlocksBasePtr();
     void* k_cache_base_ptr = cur_rank_block_base_ptr;
-    void* v_cache_base_ptr = cur_rank_block_base_ptr + (block_size_ / 2);
+    void* v_cache_base_ptr = cur_rank_block_base_ptr + block_size_ / 2;
     k_cache_blocks_base = Tensor(
         MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
         {Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_,
@@ -893,9 +878,9 @@ void ModelInput::PrepareImgMask(size_t pos_num) {
 }
 #endif
 
-void ModelInput::PreparePageInput(input_info& input) {
-  PROFILE_EVENT_SCOPE(PreparePageInput, "PreparePageInput", rank_);
-  const auto reqs = input.dp_reqs;
+void ModelInput::PrepareInputLength(input_info& input) {
+  PROFILE_EVENT_SCOPE(PrepareInputLength, "PrepareInputLength", rank_);
+  const auto& reqs = input.dp_reqs;
 
   std::vector<int> input_length_host(reqs.size());
   for (size_t i = 0; i < reqs.size(); ++i) {
@@ -927,43 +912,55 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
               context_->GetD2HStreams()[rank_]);
 
   const int total_block_num = kv_cache_offset_host.back();
+  const int block_size_per_layer = block_size_ / layer_num_on_node_;
+  for (const auto& [kv_cache_type, kv_cache_config] : runtime_config_.attn_backend_config.kv_cache_configs) {
 #ifdef ENABLE_CUDA
-  std::vector<void*> kv_list_host(total_block_num * 2);
+    std::vector<void*> kv_list_host(total_block_num * 2);
 #else
-  std::vector<void*> kv_list_host(layer_num_on_node_ * total_block_num * 2);
+    std::vector<void*> kv_list_host(layer_num_on_node_ * total_block_num * 2);
 #endif
-  const int k_offset_in_block_layer = GetKoffsetInBlockLayer();
-  const int v_offset_in_block_layer = GetVoffsetInBlockLayer();
 #ifdef ENABLE_CUDA
-  // layer_i = [0, 1)
-  for (size_t layer_i = 0; layer_i < 1; ++layer_i) {
+    // layer_i = [0, 1)
+    for (size_t layer_i = 0; layer_i < 1; ++layer_i) {
 #else
-  for (size_t layer_i = 0; layer_i < layer_num_on_node_; ++layer_i) {
+    for (size_t layer_i = 0; layer_i < layer_num_on_node_; ++layer_i) {
 #endif
-    const size_t cache_block_offset = layer_i * block_size_ / layer_num_on_node_;
-    void** k_ptr = kv_list_host.data() + layer_i * total_block_num * 2;
-    void** v_ptr = kv_list_host.data() + layer_i * total_block_num * 2 + total_block_num;
-    for (size_t req_i = 0; req_i < reqs.size(); ++req_i) {
-      for (const auto& cache_ptr : reqs[req_i]->kv_cache_ptrs[attn_dp_rank_id_]) {
-        *k_ptr++ = cache_ptr + cache_block_offset + k_offset_in_block_layer;
-        *v_ptr++ = cache_ptr + cache_block_offset + v_offset_in_block_layer;
+      const size_t cache_block_offset = layer_i * block_size_per_layer;
+      void** k_ptr = kv_list_host.data() + layer_i * total_block_num * 2;
+      void** v_ptr = kv_list_host.data() + layer_i * total_block_num * 2 + total_block_num;
+      for (size_t req_i = 0; req_i < reqs.size(); ++req_i) {
+        for (const auto& cache_ptr : reqs[req_i]->kv_cache_ptrs[attn_dp_rank_id_]) {
+          *k_ptr++ = cache_ptr + cache_block_offset + kv_cache_config.k_offset;
+          *v_ptr++ = cache_ptr + cache_block_offset + kv_cache_config.v_offset;
+        }
       }
     }
-  }
 
-  KLLM_LOG_DEBUG << "kv_list_host " << kv_list_host;
-  info.kv_list.shape = {static_cast<size_t>(layer_num_on_node_), static_cast<size_t>(total_block_num * 2)};
-  MemcpyAsync(info.kv_list.GetPtr<void>(), kv_list_host.data(),
-              kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+    Tensor* current_info_kv_list;
+    Tensor* current_kv_list;
+    if (kv_cache_type == "attention") {
+      current_info_kv_list = &info.kv_list;
+      current_kv_list = &kv_list;
+    } else {  // kv_cache_type == "indexer"
+      current_info_kv_list = &info.indexer_kv_list;
+      current_kv_list = &indexer_kv_list;
+    }
+    KLLM_LOG_DEBUG << kv_cache_type << " kv_list_host " << kv_list_host;
+    *current_info_kv_list = current_kv_list->GetView(
+        {static_cast<size_t>(layer_num_on_node_), static_cast<size_t>(total_block_num * 2)}, current_kv_list->shape[0]);
+    current_kv_list->shape[0] += current_info_kv_list->GetElementNumber();
+    MemcpyAsync(current_info_kv_list->GetPtr<void>(), kv_list_host.data(),
+                kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
+                context_->GetD2HStreams()[rank_]);
 
 #ifdef ENABLE_CUDA
-  // layer_i = [1, layer_num_on_node_)
-  if (total_block_num > 0 && layer_num_on_node_ > 1) {
-    InvokeProcessKvList(static_cast<void**>(info.kv_list.GetPtr<void>()), layer_num_on_node_, total_block_num * 2,
-                        block_size_, context_->GetD2HStreams()[rank_].Get());
-  }
+    // layer_i = [1, layer_num_on_node_)
+    if (total_block_num > 0 && layer_num_on_node_ > 1) {
+      InvokeProcessKvList(static_cast<void**>(current_info_kv_list->GetPtr<void>()), layer_num_on_node_,
+                          total_block_num * 2, block_size_, context_->GetD2HStreams()[rank_].Get());
+    }
 #endif
+  }
 
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
@@ -1096,28 +1093,37 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
 
   const auto& reqs = info.dp_reqs;
 
-  const int k_offset_in_block_layer = GetKoffsetInBlockLayer();
-  const int v_offset_in_block_layer = GetVoffsetInBlockLayer();
+  // Initiaize layer_kv_cache_ptr once
+  if (!layer_kv_cache_ptr_initialized_) {
+    layer_kv_cache_ptr_initialized_ = true;
 
-  // Get each layer's raw pointer of k_cache and v_cache tensor from
-  // kv_cache[num_blocks, num_layers, 2, block_size, num_kv_heads, head_size]
-  // block_size is [num_layers, 2, block_size, num_kv_heads, head_size]
-  const auto cache_manager = reqs.front()->cache_manager;
-  const auto device_allocator = cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(attn_dp_rank_id_);
-  void* const k_cache_base_ptr = device_allocator->GetBlocksBasePtr() + k_offset_in_block_layer;
-  void* const v_cache_base_ptr = device_allocator->GetBlocksBasePtr() + v_offset_in_block_layer;
+    const auto cache_manager = reqs.front()->cache_manager;
+    const auto device_allocator = cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(attn_dp_rank_id_);
 
-  // first num is kv_cache_block_num, after store ptrs
-  int64_t* const kv_cache_block_num = info.layer_kv_cache_ptr.GetPtr<int64_t>();
-  *kv_cache_block_num = Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * layer_num_on_node_ * 2;
+    const int block_size_per_layer = block_size_ / layer_num_on_node_;
+    for (const auto& [kv_cache_type, kv_cache_config] : runtime_config_.attn_backend_config.kv_cache_configs) {
+      void** current_layer_kv_cache_ptr;
+      if (kv_cache_type == "attention") {
+        current_layer_kv_cache_ptr = layer_kv_cache_ptr.GetPtr<void*>();
+      } else {  // kv_cache_type == "indexer"
+        current_layer_kv_cache_ptr = layer_indexer_kv_cache_ptr.GetPtr<void*>();
+      }
+      *reinterpret_cast<int64_t*>(current_layer_kv_cache_ptr) =
+          Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * layer_num_on_node_ *
+          (model_config_.use_mla ? 1 : 2);
+      ++current_layer_kv_cache_ptr;
 
-  const int block_size_per_layer = block_size_ / layer_num_on_node_;
-  void** layer_kv_cache_ptr = reinterpret_cast<void**>(info.layer_kv_cache_ptr.GetPtr<int64_t>() + 1);
-  for (int layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
-    *layer_kv_cache_ptr++ = k_cache_base_ptr + layer_idx * block_size_per_layer;
-    *layer_kv_cache_ptr++ = v_cache_base_ptr + layer_idx * block_size_per_layer;
+      // Get each layer's raw pointer of k_cache and v_cache tensor from
+      // kv_cache[num_blocks, num_layers, 2, block_size, num_kv_heads, head_size]
+      // block_size is [num_layers, 2, block_size, num_kv_heads, head_size]
+      void* const k_cache_base_ptr = device_allocator->GetBlocksBasePtr() + kv_cache_config.k_offset;
+      void* const v_cache_base_ptr = device_allocator->GetBlocksBasePtr() + kv_cache_config.v_offset;
+      for (int layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
+        *current_layer_kv_cache_ptr++ = k_cache_base_ptr + layer_idx * block_size_per_layer;
+        *current_layer_kv_cache_ptr++ = v_cache_base_ptr + layer_idx * block_size_per_layer;
+      }
+    }
   }
-  info.layer_kv_cache_ptr.shape = {1ul + layer_num_on_node_ * 2};
 
   size_t max_num_blocks_per_query = 0;
   for (const auto& req : reqs) {
@@ -1130,14 +1136,8 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
   for (size_t i = 0; i < reqs.size(); ++i) {
     const auto& block_ids = reqs[i]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_];
     for (size_t base_block_idx = 0; base_block_idx < block_ids.size(); ++base_block_idx) {
-      block_table_host[i * max_num_blocks_per_query + base_block_idx] = block_ids[base_block_idx];
-    }
-  }
-
-  if (IsAbsorbWeightsEnabled()) {
-    *kv_cache_block_num = *kv_cache_block_num / 2;
-    for (auto& i : block_table_host) {
-      i = i / 2;
+      block_table_host[i * max_num_blocks_per_query + base_block_idx] =
+          block_ids[base_block_idx] / (model_config_.use_mla ? 2 : 1);
     }
   }
   KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
@@ -1211,6 +1211,20 @@ void ModelInput::PreparePrefill() {
   }
 
   PrepareFlashRotary(flash_input);
+}
+
+void ModelInput::PrepareDecode() {
+  PROFILE_EVENT_SCOPE(PrepareDecode, "PrepareDecode", rank_);
+  for (auto& page_input : page_inputs) {
+    if (page_input.dp_reqs.empty()) {
+      continue;
+    }
+    PrepareInputLength(page_input);
+    PrepareKVCacheBlocks(page_input);
+    PrepareKVCacheBlockTable(page_input);
+    PrepareDecodeRotary(page_input);
+    PrepareFlashMla(page_input);
+  }
 }
 
 void ModelInput::PrepareFlexibleCache(input_info& input) {
@@ -1301,9 +1315,9 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     // Skip prefix token(include flexible cache token)
     const size_t skip_token_num = std::max(req.kv_cached_token_num, req.prefix_cache_len);
     const size_t input_ids_len = input_length - skip_token_num;
-    KLLM_LOG_DEBUG << "input_ids_cpu size " << input_ids_cpu.size() << ", forwarding_tokens_num " << input_length
-                   << ", skip_token_num " << skip_token_num << ", kv_cached_token_num " << req.kv_cached_token_num
-                   << ", prefix_cache_len " << req.prefix_cache_len;
+    KLLM_LOG_DEBUG << "forwarding_tokens_num " << input_length << ", skip_token_num " << skip_token_num
+                   << ", kv_cached_token_num " << req.kv_cached_token_num << ", prefix_cache_len "
+                   << req.prefix_cache_len;
 
     input_ids_cpu.insert(input_ids_cpu.end(), forwarding_tokens.begin() + skip_token_num, forwarding_tokens.end());
     dp_max_forwarding_tokens = std::max(dp_max_forwarding_tokens, input_ids_len);

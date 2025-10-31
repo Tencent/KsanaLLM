@@ -65,9 +65,7 @@ Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_
   // 2. parse moe config
   new_deepseek_v3_config->moe_config.num_experts = config_json.value("n_routed_experts", 256);
   if (new_deepseek_v3_config->moe_config.num_experts > 1) {
-    if (new_deepseek_v3_config->type == "deepseek_v3" || new_deepseek_v3_config->type == "deepseek_v2") {
-      new_deepseek_v3_config->moe_config.use_vllm_moe = true;
-    }
+    new_deepseek_v3_config->moe_config.use_vllm_moe = true;
     new_deepseek_v3_config->is_moe = true;
     new_deepseek_v3_config->moe_config.moe_inter_size =
         config_json.value("moe_intermediate_size", new_deepseek_v3_config->inter_size);
@@ -83,14 +81,18 @@ Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_
     new_deepseek_v3_config->moe_config.use_e_score_correction_bias =
         (new_deepseek_v3_config->moe_config.topk_method == "noaux_tc");
   }
-  KLLM_LOG_DEBUG << "new_deepseek_v3_config->moe_config.moe_inter_size "
-                 << new_deepseek_v3_config->moe_config.moe_inter_size;
   new_deepseek_v3_config->moe_config.num_shared_experts = config_json.value("n_shared_experts", 1);
   if (new_deepseek_v3_config->moe_config.num_shared_experts > 0) {
     new_deepseek_v3_config->has_shared_experts = true;
     new_deepseek_v3_config->moe_config.shared_expert_inter_size =
         new_deepseek_v3_config->moe_config.num_shared_experts * new_deepseek_v3_config->moe_config.moe_inter_size;
   }
+  KLLM_LOG_INFO << fmt::format(
+      "Using moe model, num_experts: {}, num_shared_experts: {}, experts_topk: {}, moe_inter_size: {}, "
+      "use_e_score_correction_bias: {}",
+      new_deepseek_v3_config->moe_config.num_experts, new_deepseek_v3_config->moe_config.num_shared_experts,
+      new_deepseek_v3_config->moe_config.experts_topk, new_deepseek_v3_config->moe_config.moe_inter_size,
+      new_deepseek_v3_config->moe_config.use_e_score_correction_bias);
 
   // 3. parse mla config
   new_deepseek_v3_config->use_mla = true;
@@ -103,17 +105,27 @@ Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_
   new_deepseek_v3_config->mla_config.qk_nope_head_dim = config_json.value("qk_nope_head_dim", 128);
   new_deepseek_v3_config->mla_config.qk_rope_head_dim = config_json.value("qk_rope_head_dim", 64);
   new_deepseek_v3_config->mla_config.v_head_dim = config_json.value("v_head_dim", 128);
-
   new_deepseek_v3_config->size_per_head =
       new_deepseek_v3_config->mla_config.qk_nope_head_dim + new_deepseek_v3_config->mla_config.qk_rope_head_dim;
   KLLM_LOG_INFO << fmt::format(
-      "Using moe model, num_experts: {}, num_shared_experts: {}, experts_topk: {}, use_mla: {}, "
-      "use_e_score_correction_bias: {}",
-      new_deepseek_v3_config->moe_config.num_experts, new_deepseek_v3_config->moe_config.num_shared_experts,
-      new_deepseek_v3_config->moe_config.experts_topk, new_deepseek_v3_config->use_mla,
-      new_deepseek_v3_config->moe_config.use_e_score_correction_bias);
+      "Using mla model, q_lora_rank: {}, kv_lora_rank: {}, qk_nope_head_dim: {}, qk_rope_head_dim: {}, v_head_dim: {}",
+      new_deepseek_v3_config->mla_config.q_lora_rank, new_deepseek_v3_config->mla_config.kv_lora_rank,
+      new_deepseek_v3_config->mla_config.qk_nope_head_dim, new_deepseek_v3_config->mla_config.qk_rope_head_dim,
+      new_deepseek_v3_config->mla_config.v_head_dim);
 
-  // 4. parse quantization config
+  // 4. parse optional deepseek sparse mla config
+  if (new_deepseek_v3_config->type == "deepseek_v32") {
+    new_deepseek_v3_config->use_dsa = true;
+    new_deepseek_v3_config->dsa_config.index_head_dim = config_json.value("index_head_dim", 128);
+    new_deepseek_v3_config->dsa_config.index_n_heads = config_json.value("index_n_heads", 64);
+    new_deepseek_v3_config->dsa_config.index_topk = config_json.value("index_topk", 2048);
+    KLLM_LOG_INFO << fmt::format("Using dsa model, index_head_dim: {}, index_n_heads: {}, index_topk: {}",
+                                 new_deepseek_v3_config->dsa_config.index_head_dim,
+                                 new_deepseek_v3_config->dsa_config.index_n_heads,
+                                 new_deepseek_v3_config->dsa_config.index_topk);
+  }
+
+  // 5. parse quantization config
   ParseQuantConfig(config_json, new_deepseek_v3_config, env->GetYamlWeightQuantMethod(), env->GetYamlGptqBackend());
   return Status();
 }

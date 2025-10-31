@@ -127,16 +127,16 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
 void ModelPerformanceRunner::OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config,
                                                         const PerfProfileConfig& max_config) {
   // reset blocks_num to speedup
-  size_t block_token_num = block_manager_config.device_allocator_config.block_token_num;
-  size_t needed_block_num = GetNeededBlockNum(block_token_num, max_config);
+  const size_t needed_block_num = GetNeededBlockNum(max_config);
   block_manager_config.device_allocator_config.blocks_num = needed_block_num;
   // do not need many blocks on host
   block_manager_config.host_allocator_config.blocks_num = 10;
   KLLM_LOG_INFO << fmt::format("Reset block_manager_config.device_allocator_config.blocks_num to {}", needed_block_num);
 }
 
-size_t ModelPerformanceRunner::GetNeededBlockNum(size_t block_token_num, const PerfProfileConfig& max_config) const {
+size_t ModelPerformanceRunner::GetNeededBlockNum(const PerfProfileConfig& max_config) const {
   static constexpr size_t kExtraBlockNum = 10;
+  const size_t block_token_num = runtime_config_.attn_backend_config.block_token_num;
 
   size_t max_block_num = 0;
 

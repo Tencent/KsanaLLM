@@ -107,7 +107,9 @@ void ModelInstance::Load() {
     CreateModelInstance<MixtralModel>(unified_model_type, model_config_, runtime_config_, context_, models_,
                                       weight_instance_);
   } else if (unified_model_type.find("deepseek_v3") != std::string::npos ||
-             unified_model_type.find("deepseek_v2") != std::string::npos) {
+             unified_model_type.find("deepseek_v32") != std::string::npos ||
+             unified_model_type.find("deepseek_v2") != std::string::npos ||
+             unified_model_type.find("kimi_k2") != std::string::npos) {
     type = "deepseek_v3";
     // deepseek v2 and v3 share a weight and model build process
     CreateModelInstance<DeepSeekV3Model>(unified_model_type, model_config_, runtime_config_, context_, models_,
@@ -152,9 +154,9 @@ std::vector<Status> ModelInstance::Forward(size_t multi_batch_id, std::shared_pt
 std::vector<std::future<Status>> ModelInstance::ForwardAsync(size_t multi_batch_id,
                                                              std::shared_ptr<WorkerGroup> worker_group,
                                                              InferStage stage,
-                                                             std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                                                             std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
                                                              RunMode run_mode) {
-  std::vector<std::future<Status>> results;
+  std::vector<std::future<Status>> results(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
                                                                        weight_instance_->GetWeight(worker_id), stage,

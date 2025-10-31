@@ -4,6 +4,7 @@
 #pragma once
 
 #include <vector>
+
 #include "ksana_llm/models/base/base_model_config.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/environment.h"
@@ -84,6 +85,9 @@ struct NewDeepSeekV3Config : public BaseModelConfig {
   // Config for mla
   bool use_mla = false;
   MlaConfig mla_config;
+  // Config for dsa
+  bool use_dsa = false;
+  DsaConfig dsa_config;
 
   // others attributes
   std::unordered_map<std::string, std::string> model_attributes;

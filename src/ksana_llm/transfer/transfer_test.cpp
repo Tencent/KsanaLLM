@@ -19,7 +19,6 @@ class MockEnvironment : public Environment {
     pipeline_config_.upper_layer_idx = 3;
 
     block_manager_config_.device_allocator_config.block_size = 4096;
-    block_manager_config_.device_allocator_config.kv_cache_dtype = TYPE_FP32;
 
     // 设置默认的chunk传输配置
     batch_scheduler_config_.transfer_layer_chunk_size = 1;
@@ -66,13 +65,13 @@ class MockTransferEngine : public TransferEngine {
 
     // 从环境中获取配置
     env->GetPipelineConfig(pipeline_config_);
-    env->GetBlockManagerConfig(block_manager_config_);
+    BlockManagerConfig block_manager_config;
+    env->GetBlockManagerConfig(block_manager_config);
     tensor_parallel_size_ = 2;
     attn_data_parallel_size_ = 2;
     // 计算派生值
     layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
-    block_size_ = block_manager_config_.device_allocator_config.block_size;
-    kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
+    block_size_ = block_manager_config.device_allocator_config.block_size;
     transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
   }
 

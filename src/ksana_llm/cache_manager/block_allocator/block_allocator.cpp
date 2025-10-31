@@ -180,7 +180,7 @@ Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<
 
 void* BlockAllocator::GetBlocksBasePtr() { return blocks_base_ptr_; }
 
-int BlockAllocator::GetBlocksBaseId() { return block_base_id_; }
+int BlockAllocator::GetBlocksBaseId() { return blocks_base_id_; }
 
 size_t BlockAllocator::GetFreeBlockNumber() {
   std::unique_lock<std::mutex> lock(mutex_);

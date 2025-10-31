@@ -66,7 +66,7 @@ class ModelPerformanceRunner {
 
   void OptimizeBlockManagerConfig(BlockManagerConfig& block_manager_config, const PerfProfileConfig& max_config);
 
-  size_t GetNeededBlockNum(size_t block_token_num, const PerfProfileConfig& max_config) const;
+  size_t GetNeededBlockNum(const PerfProfileConfig& max_config) const;
 
   void LoadModel();
 

@@ -2,12 +2,12 @@
 
 ==============================================================================*/
 
+#include "ksana_llm/transfer/transfer_engine.h"
+
 #include <cstring>
-#include <future>
 #include <mutex>
 
 #include "ksana_llm/connector/device_info_manager.h"
-#include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
@@ -30,7 +30,8 @@ void TransferEngine::Initialize(GroupRole group_role) {
 
     // 从环境中获取配置
     env->GetPipelineConfig(pipeline_config_);
-    env->GetBlockManagerConfig(block_manager_config_);
+    BlockManagerConfig block_manager_config;
+    env->GetBlockManagerConfig(block_manager_config);
     RuntimeConfig runtime_config;
     env->GetRuntimeConfig(runtime_config);
     tensor_parallel_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
@@ -53,8 +54,7 @@ void TransferEngine::Initialize(GroupRole group_role) {
     }
     KLLM_LOG_DEBUG << "common_layer_num: " << common_layer_num << ", mtp_layer_num: " << mtp_layer_num;
     layer_num_ = common_layer_num + mtp_layer_num;
-    block_size_ = block_manager_config_.device_allocator_config.block_size;
-    kv_cache_dtype_ = block_manager_config_.device_allocator_config.kv_cache_dtype;
+    block_size_ = block_manager_config.device_allocator_config.block_size;
     transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
     // 判断是否处于不需要prefill的decode状态
     decode_node_benchmark =
@@ -298,7 +298,7 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
       continue;
     }
 
-    if (device_dp_offset >= meta->gpu_blocks.size()) {
+    if (device_dp_offset >= static_cast<int>(meta->gpu_blocks.size())) {
       KLLM_LOG_DEBUG << "Invalid device_dp_offset: " << device_dp_offset << ", max: " << meta->gpu_blocks.size() - 1;
       continue;
     }
@@ -358,8 +358,8 @@ void TransferEngine::Send(int device_idx, int layer_idx) {
         task->prefill_device_offset = device_dp_offset;
 
         // 设置张量属性 - 现在传输多层数据
-        task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
-        task->tensor.dtype = kv_cache_dtype_;
+        task->tensor.shape = {static_cast<int64_t>(chunk_element_size), 1};
+        task->tensor.dtype = TYPE_UINT8;
 
         // 如果block_idx有效，设置源指针 - 从chunk起始层开始
         if (block_idx < meta->gpu_blocks[device_dp_offset].size()) {
@@ -475,8 +475,8 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
         task->decode_device_offset = device_idx;
 
         // 设置张量形状和数据类型 - 现在接收多层数据
-        task->tensor.shape = {chunk_element_size / GetTypeSize(kv_cache_dtype_), 1};
-        task->tensor.dtype = kv_cache_dtype_;
+        task->tensor.shape = {static_cast<int64_t>(chunk_element_size), 1};
+        task->tensor.dtype = TYPE_UINT8;
 
         // 如果block_idx有效，设置目标指针 - 从chunk起始层开始
         if (block_idx < transfer_meta->gpu_blocks[device_idx].size()) {

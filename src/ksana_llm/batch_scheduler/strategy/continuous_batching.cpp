@@ -33,7 +33,6 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
   }
 
-  const size_t attn_data_parallel_size = runtime_config_.parallel_basic_config.attn_data_parallel_size;
   /* TODO(zezhao):
    * 在多机 EP 场景下，每台机器都持有完整的 MLA、Embedding 以及 LmHead，多台机器间仅在 MOE 层进行数据共享
    * 对于每台机器，MLA 部分的所有 DP 节点，每轮调度后会产出最多 max_step_token_num 的 token。

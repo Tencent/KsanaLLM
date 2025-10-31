@@ -345,16 +345,15 @@ class MlaTest : public testing::Test {
 
     env->GetModelConfig(model_config);
 
-    BlockManagerConfig block_manager_config;
-    if (test_name.find("ForwardNewAbsorbWithFlashMlaKvFP8Test") != std::string::npos) {
-      env->GetBlockManagerConfig(block_manager_config);
-      // kv_cache_dtype must be set before calling env->InitializeBlockManagerConfig()
-      block_manager_config.host_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
-      block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
-      env->SetBlockManagerConfig(block_manager_config);
-      KLLM_LOG_INFO << "Exec Test ForwardNewAbsorbWithFlashMlaKvFP8Test";
+    // kv_cache_dtype must be set before calling env->InitializeBlockManagerConfig()
+    if (test_name.find("FlashMlaKvFP8") != std::string::npos) {
+      env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "fp8_e4m3";
+    } else if (test_name.find("FlashDsa") != std::string::npos) {
+      // TODO(yfnjin): Change to "fp8_ds_mla" after merging all the DeepSeek-V3.2 code
+      env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "auto";
     }
     env->InitializeBlockManagerConfig();
+    BlockManagerConfig block_manager_config;
     env->GetBlockManagerConfig(block_manager_config);
     block_manager_config.block_host_memory_factor = 0;
     block_manager_config.reserved_device_memory_ratio = 0.98;
@@ -546,8 +545,38 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
   model_config.weight_data_type = TYPE_FP16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
-  runtime_config.attn_backend_config.kv_cache_dtype = TYPE_FP8_E4M3;
-  std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
-  TestMlaForward<float16>();
+  std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
+  TestMlaForward<bfloat16>();
+
+  // test kv scales, FA3 requires special scale input
+  model_config.k_scales[0] = 0.5f;
+  model_config.v_scales[0] = 0.5f;
+  std::cout << "Test TYPE_BF16 weight_data_type forward with kv scales." << std::endl;
+  TestMlaForward<bfloat16>();
+  return;
+}
+
+TEST_F(MlaTest, ForwardWithFlashDsaTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+
+  // 运行时检测 GPU 架构，只有在 Hopper 架构时才运行测试
+  if (!IsHopperSupported()) {
+    GTEST_SKIP_("Test requires Hopper architecture (SM >= 9.0)");
+    return;
+  }
+  // BF16 forward, DeepSeek Sparse MLA only supports BF16
+  model_config.is_quant = false;
+  model_config.weight_data_type = TYPE_BF16;
+  runtime_config.inter_data_type = model_config.weight_data_type;
+  model_config.quant_config.method = QUANT_NONE;
+  // Adjust the model config for DeepSeek Sparse MLA
+  model_config.use_dsa = true;
+  model_config.dsa_config.index_head_dim = 128;
+  model_config.dsa_config.index_n_heads = 64;
+  model_config.dsa_config.index_topk = 2048;
+  std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
+  TestMlaForward<bfloat16>();
   return;
 }

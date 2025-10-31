@@ -4,20 +4,13 @@
 
 #include "ksana_llm/models/common/common_weight.h"
 
-#include <Python.h>
 #include <pybind11/embed.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <torch/nn/functional/normalization.h>
 #include <torch/torch.h>
 #include <cstdlib>
-#include <filesystem>
 #include <regex>
-
-#include "ksana_llm/utils/common_device.h"
-#include "ksana_llm/utils/environment.h"
-#include "ksana_llm/utils/singleton.h"
-#include "nlohmann/json.hpp"
 
 #ifdef ENABLE_CUDA
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
@@ -91,7 +84,16 @@ void CommonWeight<T>::SetEmbeddingsConfig() {
 template <typename T>
 bool CommonWeight<T>::ShouldUseFusedGateUpWeights() {
 #ifdef ENABLE_CUDA
-  const std::vector<std::string> enabled_type_list = {"deepseek_v3", "qwen3", "qwen", "llama"};
+  // If using quant and checkpoint is FP8-serialized (with weight_scale tensors),
+  // disable fused gate_up to avoid missing scales during matmul because safetensors
+  // does not have this scale data
+  bool is_checkpoint_fp8_serialized = model_config_.quant_config.is_checkpoint_fp8_serialized;
+  bool is_quant = model_config_.is_quant;
+  if (is_quant && is_checkpoint_fp8_serialized) {
+    return false;
+  }
+  const std::vector<std::string> enabled_type_list = {"deepseek_v3", "deepseek_v32", "kimi_k2",
+                                                      "qwen3",       "qwen",         "llama"};
   std::string unified_model_type = model_config_.type;
   // unify type to lower case
   std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),

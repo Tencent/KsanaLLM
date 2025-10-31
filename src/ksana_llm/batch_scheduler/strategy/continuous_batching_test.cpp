@@ -61,9 +61,6 @@ class ContinuousBatchingTest : public testing::Test {
       connector_config.group_role = GroupRole::DECODE;
       connector_config.router_endpoint = "127.0.0.1:13579";
       env->SetConnectorConfigs(connector_config);
-      BlockManagerConfig block_manager_config;
-      block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP16;
-      env->SetBlockManagerConfig(block_manager_config);
     }
     RuntimeConfig runtime_config;
     if (test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
@@ -341,7 +338,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
   size_t transfer_req_num = 20;
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
   // 构造若干 transfer_queue 请求，若处理应进入 running_reqs，但由于达到上限，应被阻止
-  for (int i = 0; i < transfer_req_num; ++i) {
+  for (size_t i = 0; i < transfer_req_num; ++i) {
     auto req = std::make_shared<InferRequest>(request, 0);
     req->cache_manager = continuous_batching_strategy_->GetCacheManager();
 
@@ -373,7 +370,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), transfer_req_num);
 
   // 清理传输元数据
-  for (int i = 0; i < transfer_req_num; ++i) {
+  for (size_t i = 0; i < transfer_req_num; ++i) {
     TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
   }
 }
@@ -564,7 +561,6 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
 }
-
 
 // 测试 NotifyAsyncFinishedRequests 函数
 TEST_F(ContinuousBatchingTest, NotifyAsyncFinishedRequestsTest) {

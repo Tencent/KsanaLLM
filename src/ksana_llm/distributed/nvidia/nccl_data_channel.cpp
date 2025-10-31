@@ -255,14 +255,7 @@ Status NcclDataChannel::GetNcclDataType(DataType dtype, ncclDataType_t& nccl_dty
       nccl_dtype = ncclDataType_t::ncclFloat64;
       return Status();
     }
-    case DataType::TYPE_INT16:
-    case DataType::TYPE_UINT16:
-    case DataType::TYPE_INVALID:
-    case DataType::TYPE_FP8_E4M3:
-    case DataType::TYPE_I4_GROUP:
-    case DataType::TYPE_FP8_E5M2:
-    case DataType::TYPE_VOID:
-    case DataType::TYPE_POINTER: {
+    default: {
       return Status(RET_INVALID_ARGUMENT, FormatStr("Not supported dtype %d", dtype));
     }
   }

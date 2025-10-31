@@ -3,11 +3,9 @@
 ==============================================================================*/
 #pragma once
 
-#include <atomic>
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -183,16 +181,11 @@ class TransferEngine {
   // 节点角色
   GroupRole group_role_ = GroupRole::DECODE;
 
-  BlockManagerConfig block_manager_config_;
-
   int layer_num_ = 0;
   // 每次传输的层数量
   size_t transfer_layer_chunk_size_ = 1;
 
   size_t block_size_ = 0;
-
-  // KV缓存数据类型
-  DataType kv_cache_dtype_;
 
   // 传输连接器
   std::shared_ptr<Connector> connector_;

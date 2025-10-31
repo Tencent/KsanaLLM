@@ -21,18 +21,14 @@ class ModelInput {
   ~ModelInput();
 
   // Parse forward request.
-  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
+  void ParseFromRequests(const std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
   // 在 forward 计算之后验证校验和。
   void VerifyChecksumAfterForward(const std::vector<ForwardRequest*>& forward_reqs);
 
  private:
-  // Get the offser of k & v in one layer of the cache block.
-  int GetKoffsetInBlockLayer();
-  int GetVoffsetInBlockLayer();
-
-  void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareInputRefit(const std::vector<ForwardRequest*>& forward_reqs);
+  void PrepareVLInputRefit(const std::vector<ForwardRequest*>& forward_reqs);
   void CreateVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
@@ -196,6 +192,9 @@ class ModelInput {
   std::vector<void*> kv_cache_ptrs;
   Tensor kv_cache_ptrs_tensor;
 #endif
+  // Record the number of kv cache blocks and the addresses of kv cache lists for each layer on the host
+  Tensor layer_kv_cache_ptr;          // for core attention
+  Tensor layer_indexer_kv_cache_ptr;  // for optional indexer
 
   size_t dp_max_forwarding_tokens = 0;
 
@@ -223,12 +222,27 @@ class ModelInput {
   const int rank_;
   std::shared_ptr<Context> context_;
 
+  // Total bytes occupied by one kv cache block
   int block_size_;
   int layer_num_on_node_;
   size_t total_sampling_token_num_;
 
   // for nextn layer(MTP), record each req's first token index in hidden output
   std::unordered_map<size_t, size_t> mtp_req_id_to_pos_;
+
+  // `layer_kv_cache_ptr`/`layer_indexer_kv_cache_ptr` only needs to be initialized once
+  bool layer_kv_cache_ptr_initialized_ = false;
+
+  // Tensors shared by all input_infos
+  Tensor input_length;     // only for page, forwarding_tokens.size()
+  Tensor kv_list;          // for core attention
+  Tensor indexer_kv_list;  // for optional indexer
+  Tensor kv_cache_offset;
+  Tensor rotary_embedding_pos;
+  Tensor rotary_embedding_mask;
+  Tensor block_table;
+  std::vector<Tensor> tile_scheduler_metadatas;  // only for flash mla of page
+  Tensor num_splits;                             // only for flash mla of page
 
  public:
   struct input_info {
@@ -242,6 +256,7 @@ class ModelInput {
 
     Tensor input_length;  // only for page, forwarding_tokens.size()
     Tensor kv_list;
+    Tensor indexer_kv_list;
     Tensor kv_cache_offset;
     Tensor rotary_embedding_pos;
     Tensor rotary_embedding_mask;
@@ -277,7 +292,7 @@ class ModelInput {
 
   // Determine whether to use cache for the current batch of multi token requests
   void PrepareUseCache(input_info& input);
-  void PreparePageInput(input_info& input);
+  void PrepareInputLength(input_info& input);
   void PrepareKVCacheBlocks(input_info& info);
   void PrepareKVCacheBlockTable(input_info& info);
   void PrepareDecodeRotary(input_info& input);

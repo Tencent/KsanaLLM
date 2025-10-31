@@ -918,54 +918,116 @@ TEST_F(EnvironmentTest, InitExpertParaConfig) {
   unsetenv("EXPERT_NODE_RANK");
 }
 
-// 测试Environment的GetCacheBlockSize方法
-TEST_F(EnvironmentTest, GetCacheBlockSize) {
-  auto absorb_type = GetAbsorbWeightsType();
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-  // 创建测试用的ModelConfig
-  ModelConfig model_config;
-  model_config.type = "deepseek_v3";
-  model_config.mla_config.kv_lora_rank = 32;
-  model_config.mla_config.qk_rope_head_dim = 64;
-  model_config.num_layer = 102;
-
+// 测试Environment的InitializeKVCacheConfigs方法
+TEST_F(EnvironmentTest, InitializeKVCacheConfigs) {
   // 创建测试用的PipelineConfig
   PipelineConfig pipeline_config;
   pipeline_config.lower_layer_idx = 0;
-  pipeline_config.upper_layer_idx = 100;
-  pipeline_config.lower_nextn_layer_idx = 101;
-  pipeline_config.upper_nextn_layer_idx = 102;
+  pipeline_config.upper_layer_idx = 99;
+  pipeline_config.lower_nextn_layer_idx = 100;
+  pipeline_config.upper_nextn_layer_idx = 101;
 
-  // 创建测试用的BlockManagerConfig
-  BlockManagerConfig block_manager_config;
-  block_manager_config.device_allocator_config.block_token_num = 16;
-  block_manager_config.device_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
-  block_manager_config.host_allocator_config.kv_cache_dtype = DataType::TYPE_FP8_E4M3;
-  env_.SetBlockManagerConfig(block_manager_config);
+  auto& attn_backend_config = env_.schedule_config_parser_.runtime_config_.attn_backend_config;
+  auto& block_manager_config = env_.schedule_config_parser_.block_manager_config_;
+  // 设置每个block包含的token数量
+  attn_backend_config.block_token_num = 16;
 
+  // 创建测试用的ModelConfig
+  ModelConfig model_config;
+  model_config.num_layer = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
   model_config.weight_data_type = DataType::TYPE_FP16;
-  env_.SetModelConfig(model_config);
 
-  // 设置环境变量
-  setenv("ENABLE_COMPRESSED_KV", "1", 1);
-
-  // 调用GetCacheBlockSize方法
-  auto block_size = env_.GetCacheBlockSize(model_config, pipeline_config, block_manager_config);
-
-  // 验证block_size是否大于0
-  EXPECT_EQ(block_size, 155136);
-
-  env_.GetBlockManagerConfig(block_manager_config);
-  block_manager_config.device_allocator_config.block_size = block_size;
-  block_manager_config.host_allocator_config.block_size = block_size;
-  env_.SetBlockManagerConfig(block_manager_config);
+  // Case 1: Models using MLA with auto KV cache
+  model_config.type = "deepseek_v3";
+  attn_backend_config.kv_cache_dtype_str = "auto";
+  model_config.use_mla = true;
+  model_config.mla_config.kv_lora_rank = 32;
+  model_config.mla_config.qk_rope_head_dim = 64;
+  // Call InitializeKVCacheConfigs
+  env_.schedule_config_parser_.InitializeKVCacheConfigs(model_config, pipeline_config);
+  // Check Result
+  env_.GetAttnBackendConfig(attn_backend_config);
+  EXPECT_EQ(attn_backend_config.kv_cache_dtype, model_config.weight_data_type);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.size(), 1);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").block_bytes, 313344);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").k_offset, 0);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").v_offset, 0);
+  EXPECT_EQ(attn_backend_config.block_size, 313344);
+  block_manager_config.device_allocator_config.block_size = attn_backend_config.block_size;
+  block_manager_config.host_allocator_config.block_size = attn_backend_config.block_size;
   env_.CalculateBlockNumber();
-  env_.GetBlockManagerConfig(block_manager_config);
-  EXPECT_GT(block_manager_config.device_allocator_config.blocks_num, 0);
+  // Expect at least one block
+  EXPECT_GT(env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num, 0);
 
-  // 清理环境变量
-  unsetenv("ENABLE_COMPRESSED_KV");
-  SetAbsorbWeightsType(absorb_type);
+  // Case 2: Models using MLA with fp8_e4m3 KV cache
+  model_config.type = "deepseek_v3";
+  attn_backend_config.kv_cache_dtype_str = "fp8_e4m3";
+  // Call InitializeKVCacheConfigs
+  env_.schedule_config_parser_.InitializeKVCacheConfigs(model_config, pipeline_config);
+  // Check Result
+  env_.GetAttnBackendConfig(attn_backend_config);
+  EXPECT_EQ(attn_backend_config.kv_cache_dtype, TYPE_FP8_E4M3);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.size(), 1);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").block_bytes, 156672);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").k_offset, 0);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").v_offset, 0);
+  EXPECT_EQ(attn_backend_config.block_size, 156672);
+  block_manager_config.device_allocator_config.block_size = attn_backend_config.block_size;
+  block_manager_config.host_allocator_config.block_size = attn_backend_config.block_size;
+  env_.CalculateBlockNumber();
+  // Expect at least one block
+  EXPECT_GT(env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num, 0);
+
+  // Case 3: Models using DeepSeek Sparse MLA
+  model_config.type = "deepseea_v32";
+  attn_backend_config.kv_cache_dtype_str = "fp8_ds_mla";
+  model_config.use_dsa = true;
+  model_config.mla_config.kv_lora_rank = 128;
+  model_config.dsa_config.index_head_dim = 128;
+  // Call InitializeKVCacheConfigs
+  env_.schedule_config_parser_.InitializeKVCacheConfigs(model_config, pipeline_config);
+  // Check Result
+  env_.GetAttnBackendConfig(attn_backend_config);
+  EXPECT_EQ(attn_backend_config.kv_cache_dtype, TYPE_FP8_DS_MLA);
+  // There are two kv caches
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.size(), 2);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("indexer").block_bytes, 215424);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("indexer").k_offset, 0);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("indexer").v_offset, 2048);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").block_bytes, 424320);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").k_offset, 2112);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").v_offset, 2112);
+  EXPECT_EQ(attn_backend_config.block_size, 639744);  // 215424 + 424320
+  block_manager_config.device_allocator_config.block_size = attn_backend_config.block_size;
+  block_manager_config.host_allocator_config.block_size = attn_backend_config.block_size;
+  env_.CalculateBlockNumber();
+  // Expect at least one block
+  EXPECT_GT(env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num, 0);
+
+  // Case 4: Common models
+  model_config.type = "qwen";
+  attn_backend_config.kv_cache_dtype_str = "auto";
+  model_config.use_mla = false;
+  model_config.use_dsa = false;
+  model_config.size_per_head = 128;
+  // local_num_key_value_heads = 8
+  model_config.num_key_value_heads = 16;
+  env_.schedule_config_parser_.runtime_config_.parallel_basic_config.attn_tensor_parallel_size = 2;
+  // Call InitializeKVCacheConfigs
+  env_.schedule_config_parser_.InitializeKVCacheConfigs(model_config, pipeline_config);
+  // Check Result
+  env_.GetAttnBackendConfig(attn_backend_config);
+  EXPECT_EQ(attn_backend_config.kv_cache_dtype, model_config.weight_data_type);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.size(), 1);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").block_bytes, 6684672);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").k_offset, 0);
+  EXPECT_EQ(attn_backend_config.kv_cache_configs.at("attention").v_offset, 32768);
+  EXPECT_EQ(attn_backend_config.block_size, 6684672);
+  block_manager_config.device_allocator_config.block_size = attn_backend_config.block_size;
+  block_manager_config.host_allocator_config.block_size = attn_backend_config.block_size;
+  env_.CalculateBlockNumber();
+  // Expect at least one block
+  EXPECT_GT(env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num, 0);
 }
 
 // 测试Environment的ParseModelQuantConfig方法

@@ -3,17 +3,7 @@
 ==============================================================================*/
 
 #pragma once
-#ifdef ENABLE_CUDA
-#  include <nccl.h>
-#endif
-#include <unistd.h>
 
-#include <any>
-#include <array>
-#include <fstream>
-#include <iostream>
-#include <map>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -224,6 +214,13 @@ struct MlaConfig {
   uint32_t v_head_dim = 0;
 };
 
+// The DeepSeek Sparse MLA informations.
+struct DsaConfig {
+  uint32_t index_head_dim = 0;
+  uint32_t index_n_heads = 0;
+  uint32_t index_topk = 0;
+};
+
 // The model informations.
 struct ModelConfig {
   // The model name.
@@ -296,6 +293,9 @@ struct ModelConfig {
   // For mla model
   bool use_mla = false;
   MlaConfig mla_config;
+  // For dsa model
+  bool use_dsa = false;
+  DsaConfig dsa_config;
 
   // Whether to normalize q and k before rotary position embedding in attention.
   bool enable_qk_pre_norm_before_rotary_pos = false;  // to be removed

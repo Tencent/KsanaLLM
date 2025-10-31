@@ -15,9 +15,7 @@ inline void PrepareDeepSeekV3Attributes(const nlohmann::json &config_json, Model
   // For moe config
   model_config.moe_config.num_experts = config_json.value("n_routed_experts", 256);
   if (model_config.moe_config.num_experts > 1) {
-    if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
-      model_config.moe_config.use_vllm_moe = true;
-    }
+    model_config.moe_config.use_vllm_moe = true;
     model_config.is_moe = true;
     model_config.moe_config.moe_inter_size = config_json.value("moe_intermediate_size", model_config.inter_size);
     model_config.moe_config.experts_topk = config_json.value("num_experts_per_tok", 8);
@@ -35,7 +33,6 @@ inline void PrepareDeepSeekV3Attributes(const nlohmann::json &config_json, Model
       model_config.moe_config.use_e_score_correction_bias = false;
     }
   }
-  KLLM_LOG_DEBUG << "model_config.moe_config.moe_inter_size " << model_config.moe_config.moe_inter_size;
   model_config.moe_config.num_shared_experts = config_json.value("n_shared_experts", 1);
   if (model_config.moe_config.num_shared_experts > 0) {
     model_config.has_shared_experts = true;
@@ -53,13 +50,14 @@ inline void PrepareDeepSeekV3Attributes(const nlohmann::json &config_json, Model
   model_config.mla_config.qk_nope_head_dim = config_json.value("qk_nope_head_dim", 128);
   model_config.mla_config.qk_rope_head_dim = config_json.value("qk_rope_head_dim", 64);
   model_config.mla_config.v_head_dim = config_json.value("v_head_dim", 128);
-
   model_config.size_per_head = model_config.mla_config.qk_nope_head_dim + model_config.mla_config.qk_rope_head_dim;
-  KLLM_LOG_INFO << fmt::format(
-      "Using moe model, num_experts: {}, num_shared_experts: {}, experts_topk: {}, use_mla: {}, "
-      "use_e_score_correction_bias: {}",
-      model_config.moe_config.num_experts, model_config.moe_config.num_shared_experts,
-      model_config.moe_config.experts_topk, model_config.use_mla, model_config.moe_config.use_e_score_correction_bias);
+  // For deepseek sparse mla config
+  if (model_config.type == "deepseek_v32") {
+    model_config.use_dsa = true;
+    model_config.dsa_config.index_head_dim = config_json.value("index_head_dim", 128);
+    model_config.dsa_config.index_n_heads = config_json.value("index_n_heads", 64);
+    model_config.dsa_config.index_topk = config_json.value("index_topk", 2048);
+  }
 }
 
 }  // namespace ksana_llm

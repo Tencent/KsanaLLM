@@ -47,8 +47,6 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   const size_t mtp_concat_hidden_size = (enable_mtp && context->IsChief()) ? hidden_units * 2 : 0;
   size_t shared_buffer_unit_size = std::max({inter_size_per_tp, hidden_units, mtp_concat_hidden_size});
 
-  DataType kv_cache_dtype;
-  env->GetKvCacheType(kv_cache_dtype);
   size_t mla_hidden_buffer_size = 0;
   if (model_config.use_mla) {
     const size_t qk_nope_head_dim = model_config.mla_config.qk_nope_head_dim;

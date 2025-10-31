@@ -5,11 +5,8 @@
 #include "ksana_llm/utils/config/schedule_config_parser.h"
 
 #include <algorithm>
-#include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <stdexcept>
-#include <string>
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
@@ -17,12 +14,8 @@
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/memory_utils.h"
 
-#include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/common/common_config.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
-#include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
-#include "ksana_llm/models/gpt/gpt_config.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/dynamic_memory_counter.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -83,75 +76,6 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
 }
 
 ScheduleConfigParser::ScheduleConfigParser() { Reset(); }
-
-size_t ScheduleConfigParser::GetCommonBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                                const BlockManagerConfig &block_manager_config) {
-  const bool predict_nextn =
-      static_cast<int>(pipeline_config.lower_nextn_layer_idx) >= static_cast<int>(model_config.num_layer);
-  const size_t node_nextn_layer_num =
-      predict_nextn ? pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1 : 0;
-  const size_t node_layer_num =
-      pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1 + node_nextn_layer_num;
-
-  const size_t token_size =
-      node_layer_num *
-      (model_config.num_key_value_heads / (runtime_config_.parallel_basic_config.tensor_parallel_size /
-                                           runtime_config_.parallel_basic_config.attn_data_parallel_size)) *
-      model_config.size_per_head;
-  const size_t block_token_num = block_manager_config.device_allocator_config.block_token_num;
-  const size_t block_dtype_size = GetTypeSize(block_manager_config.device_allocator_config.kv_cache_dtype);
-
-  const size_t cache_block_size = token_size * block_token_num * 2 * block_dtype_size;
-  KLLM_LOG_INFO << fmt::format("Init block num for key or value: ({} / {}) * ({} / {}) * {} = {}", node_layer_num, 1,
-                               model_config.num_key_value_heads,
-                               (runtime_config_.parallel_basic_config.tensor_parallel_size /
-                                runtime_config_.parallel_basic_config.attn_data_parallel_size),
-                               model_config.size_per_head, token_size);
-
-  KLLM_LOG_INFO << fmt::format("Init token size (bytes) of init block for both key and value: {} * {} * 2 * {} = {}",
-                               token_size, block_manager_config.device_allocator_config.block_token_num,
-                               GetTypeSize(block_manager_config.device_allocator_config.kv_cache_dtype),
-                               cache_block_size);
-  return cache_block_size;
-}
-
-size_t ScheduleConfigParser::GetDeepSeekV3BlockSize(const ModelConfig &model_config,
-                                                    const PipelineConfig &pipeline_config,
-                                                    const BlockManagerConfig &block_manager_config) {
-  const bool predict_nextn =
-      static_cast<int>(pipeline_config.lower_nextn_layer_idx) >= static_cast<int>(model_config.num_layer);
-  const size_t node_nextn_layer_num =
-      predict_nextn ? pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1 : 0;
-  const size_t node_layer_num =
-      pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1 + node_nextn_layer_num;
-
-  // For MLA, compressed of kv-cache is (kv_lora_rank + qk_rope_head_dim), and it have only one head.
-  const size_t token_size =
-      node_layer_num * (model_config.mla_config.kv_lora_rank + model_config.mla_config.qk_rope_head_dim);
-  const size_t block_token_num = block_manager_config.device_allocator_config.block_token_num;
-  const size_t block_dtype_size = GetTypeSize(block_manager_config.device_allocator_config.kv_cache_dtype);
-
-  const size_t cache_block_size = token_size * block_token_num * block_dtype_size;
-  KLLM_LOG_INFO << fmt::format(
-      "Init cache block size, node_layer_num:{}, kv_lora_rank:{}, qk_rope_head_dim:{}, block_token_num:{}, "
-      "cache_block_size:{}.",
-      node_layer_num, model_config.mla_config.kv_lora_rank, model_config.mla_config.qk_rope_head_dim, block_token_num,
-      cache_block_size);
-
-  return cache_block_size;
-}
-
-size_t ScheduleConfigParser::GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                               const BlockManagerConfig &block_manager_config) {
-  if (model_config.type == "deepseek_v2" || model_config.type == "deepseek_v3") {
-    if (IsAbsorbWeightsEnabled()) {
-      return GetDeepSeekV3BlockSize(model_config, pipeline_config, block_manager_config);
-    }
-    return GetCommonBlockSize(model_config, pipeline_config, block_manager_config);
-  }
-
-  return GetCommonBlockSize(model_config, pipeline_config, block_manager_config);
-}
 
 void ScheduleConfigParser::Reset() {
   batch_scheduler_config_ = {};
@@ -257,7 +181,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
 
   int device_num;
   GetDeviceCount(&device_num);
-  KLLM_CHECK_WITH_INFO(device_num >= runtime_config_.parallel_basic_config.tensor_parallel_size,
+  KLLM_CHECK_WITH_INFO(device_num >= static_cast<int>(runtime_config_.parallel_basic_config.tensor_parallel_size),
                        fmt::format("{} tensor_parallel_size should not bigger than devices num: {}",
                                    runtime_config_.parallel_basic_config.tensor_parallel_size, device_num));
 
@@ -352,18 +276,19 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   }
 
   // Read block manager config.
-  block_manager_config_.host_allocator_config.block_token_num =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.device_allocator_config.block_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.block_manager.block_token_num", 16);
   block_manager_config_.enable_block_checksum =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.block_manager.enable_block_checksum", false);
-  // If DeepSeek model, automatically enable Flash MLA and set block_token_num to 64.
-  if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
-    block_manager_config_.host_allocator_config.block_token_num = 64;
+  // If the model uses MLA, automatically enable Flash MLA and set block_token_num to 64.
+  if (model_config.use_mla) {
     block_manager_config_.device_allocator_config.block_token_num = 64;
     KLLM_LOG_INFO << "Automatically activate Flash MLA for MLA models, setting block_token_num to 64 for flash_mla";
   }
+  block_manager_config_.host_allocator_config.block_token_num =
+      block_manager_config_.device_allocator_config.block_token_num;
+  runtime_config_.attn_backend_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
+
   block_manager_config_.reserved_device_memory_ratio = yaml_reader.GetScalar<float>(
       yaml_reader.GetRootNode(), "setting.block_manager.reserved_device_memory_ratio", 0.01);
   block_manager_config_.block_device_memory_ratio =
@@ -404,13 +329,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   // Read attn backend config.
   runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.attn_backend.enable_blocked_multi_token_forwarding_kv", false);
-  if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2" || model_config.type == "kimi_k2") {
+  if (model_config.use_mla) {
     runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     KLLM_LOG_INFO
         << "Automatically activate Flash MLA for MLA models, setting enable_blocked_multi_token_forwarding_kv to true.";
   }
-  KLLM_LOG_INFO << "enable_blocked_multi_token_forwarding_kv: "
-                << runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  runtime_config_.attn_backend_config.kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.quantization_config.kv_cache.dtype", "auto");
+  KLLM_LOG_INFO << fmt::format("enable_blocked_multi_token_forwarding_kv: {}, kv_cache.dtype: {}",
+                               runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv,
+                               runtime_config_.attn_backend_config.kv_cache_dtype_str);
 
   // Parse FlashAttention implementation preference (optional)
   {
@@ -460,31 +388,27 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   return Status();
 }
 
-void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConfig &model_config,
-                                         std::string &kv_cache_dtype_str) {
-  DataType kv_cache_dtype = model_config.weight_data_type;
-
-  bool is_mla_model =
-      model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2" || model_config.type == "kimi_k2";
-  if (!is_mla_model && runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
-      IsPrefixCachingEnabled()) {
-    if (kv_cache_dtype_str == "fp8_e5m2" || kv_cache_dtype_str == "fp8_e4m3") {
-      KLLM_THROW("FlashAttention not support fp8 kv cache");
-    }
+void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConfig &model_config) {
+  // Update dtype of kv cache
+  auto &kv_cache_dtype_str = runtime_config_.attn_backend_config.kv_cache_dtype_str;
+  if (model_config.use_dsa) {
+    // DeepSeek Sparse MLA prefers the custom fp8 format
+    kv_cache_dtype_str = "fp8_ds_mla";
   } else {
-    if (kv_cache_dtype_str == "fp8_e5m2") {
-#ifdef ENABLE_CUDA
-      if (is_mla_model) {
-        KLLM_LOG_WARNING << "MLA not support fp8_e5m2 kv cache. Please use fp8_e4m3.";
+    if (!model_config.use_mla && runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv &&
+        IsPrefixCachingEnabled()) {
+      kv_cache_dtype_str = "auto";
+    } else {
+      if (kv_cache_dtype_str == "fp8_e4m3") {
+        PrepareKVScales(model_dir, model_config);
+      } else if (kv_cache_dtype_str != "fp8_e5m2" || model_config.use_mla) {
+        kv_cache_dtype_str = "auto";
       }
-#endif
-      kv_cache_dtype = TYPE_FP8_E5M2;
-    } else if (kv_cache_dtype_str == "fp8_e4m3") {
-      kv_cache_dtype = TYPE_FP8_E4M3;
-      PrepareKVScales(model_dir, model_config);
     }
   }
+  KLLM_LOG_INFO << "Automatically adjust kv_cache.dtype to " << kv_cache_dtype_str;
 
+  // Update reserved memory
   if (model_config.is_quant == true && model_config.quant_config.method == QUANT_FP8_E4M3 &&
       model_config.quant_config.is_checkpoint_fp8_serialized == false) {
     if (block_manager_config_.reserved_device_memory_ratio < 0.02) {
@@ -499,10 +423,6 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
           << "When quant_method is gptq, reserved_device_memory_ratio is set to at least 0.02 to prevent oom.";
     }
   }
-
-  block_manager_config_.host_allocator_config.kv_cache_dtype = kv_cache_dtype;
-  block_manager_config_.device_allocator_config.kv_cache_dtype = kv_cache_dtype;
-  runtime_config_.attn_backend_config.kv_cache_dtype = block_manager_config_.device_allocator_config.kv_cache_dtype;
 }
 
 void ScheduleConfigParser::InitConnectorConfig(
@@ -639,6 +559,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     runtime_config_.max_seq_len = model_config.max_training_seq_len;
   }
   batch_scheduler_config_.max_token_len = runtime_config_.max_seq_len;
+
   if ((batch_scheduler_config_.split_fuse_token_num == 0) &&
       (batch_scheduler_config_.max_step_token_num < batch_scheduler_config_.max_token_len)) {
     // if no split fuse, request cannot be processed if max_step_num < input token num
@@ -662,10 +583,109 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
 
-  runtime_config_.attn_backend_config.kv_cache_dtype = block_manager_config_.device_allocator_config.kv_cache_dtype;
-  runtime_config_.attn_backend_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
-
   return Status();
+}
+
+void ScheduleConfigParser::InitializeKVCacheConfigs(const ModelConfig &model_config,
+                                                    const PipelineConfig &pipeline_config) {
+  runtime_config_.attn_backend_config.kv_cache_configs.clear();
+
+  const bool predict_nextn =
+      static_cast<int>(pipeline_config.lower_nextn_layer_idx) >= static_cast<int>(model_config.num_layer);
+  const size_t node_nextn_layer_num =
+      predict_nextn ? pipeline_config.upper_nextn_layer_idx - pipeline_config.lower_nextn_layer_idx + 1 : 0;
+  const size_t node_layer_num =
+      pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1 + node_nextn_layer_num;
+
+  const size_t block_token_num = runtime_config_.attn_backend_config.block_token_num;
+
+  auto ComputeBlockBytes = [&](const size_t node_layer_num, const size_t local_num_key_value_heads,
+                               const size_t key_value_heads_bytes, const std::string &kv_cache_type) -> size_t {
+    const size_t block_token_bytes = node_layer_num * local_num_key_value_heads * key_value_heads_bytes;
+    const size_t block_bytes = block_token_bytes * block_token_num;
+
+    KLLM_LOG_INFO << fmt::format("Each block of {} takes bytes: {} * {} * {} * {} = {}", kv_cache_type, node_layer_num,
+                                 local_num_key_value_heads, key_value_heads_bytes, block_token_num, block_bytes);
+
+    return block_bytes;
+  };
+
+  // Cumulative offset of current part within one block of a layer
+  size_t total_offset = 0;
+  // Cumulative space occupied by one block across all KV caches
+  runtime_config_.attn_backend_config.block_size = 0;
+
+  if (model_config.use_dsa) {
+    // DeepSeek Sparse MLA has an extra indexer module
+    const std::string kv_cache_type = "indexer";
+    KVCacheConfig kv_cache_config;
+    // Always quant to fp8_e4m3
+    const DataType kv_cache_dtype = TYPE_FP8_E4M3;
+    // layout: [key: block_token_num x index_head_dim (fp8 quant)][value: block_token_num x index_head_dim / 128 (fp32
+    // scale)}]
+    const size_t local_num_key_value_heads = 1;
+    const size_t key_value_heads_bytes =
+        model_config.dsa_config.index_head_dim * GetTypeSize(kv_cache_dtype) +
+        model_config.dsa_config.index_head_dim / /*quant_block_size*/ 128 * GetTypeSize(TYPE_FP32);
+    kv_cache_config.block_bytes =
+        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
+    kv_cache_config.k_offset = total_offset;
+    kv_cache_config.v_offset = kv_cache_config.k_offset + block_token_num * local_num_key_value_heads *
+                                                              model_config.dsa_config.index_head_dim *
+                                                              GetTypeSize(kv_cache_dtype);
+    total_offset += kv_cache_config.block_bytes / node_layer_num;
+    runtime_config_.attn_backend_config.block_size += kv_cache_config.block_bytes;
+    KLLM_LOG_INFO << fmt::format("kv_cache_type: {}, kv_cache_k_offset: {}, kv_cache_v_offset: {}, kv_cache_dtype: {}",
+                                 kv_cache_type, kv_cache_config.k_offset, kv_cache_config.v_offset,
+                                 GetTypeString(kv_cache_dtype));
+    runtime_config_.attn_backend_config.kv_cache_configs.emplace(kv_cache_type, std::move(kv_cache_config));
+  }
+
+  const std::string kv_cache_type = "attention";
+  KVCacheConfig kv_cache_config;
+  DataType &kv_cache_dtype = runtime_config_.attn_backend_config.kv_cache_dtype;
+  if (runtime_config_.attn_backend_config.kv_cache_dtype_str == "fp8_e4m3") {
+    kv_cache_dtype = TYPE_FP8_E4M3;
+  } else if (runtime_config_.attn_backend_config.kv_cache_dtype_str == "fp8_e5m2") {
+    kv_cache_dtype = TYPE_FP8_E5M2;
+  } else if (runtime_config_.attn_backend_config.kv_cache_dtype_str == "fp8_ds_mla") {
+    kv_cache_dtype = TYPE_FP8_DS_MLA;
+  } else {  // runtime_config_.attn_backend_config.kv_cache_dtype_str == "auto"
+    kv_cache_dtype = model_config.weight_data_type;
+  }
+  kv_cache_config.k_offset = total_offset;
+  if (model_config.use_mla) {
+    const size_t local_num_key_value_heads = 1;
+    size_t key_value_heads_bytes;
+    if (kv_cache_dtype == TYPE_FP8_DS_MLA) {
+      // layout: [key/value: block_token_num x (kv_lora_rank (fp8 quant) + kv_lora_rank / 128 (fp32 scale) +
+      // qk_rope_head_dim)]
+      key_value_heads_bytes = model_config.mla_config.kv_lora_rank * GetTypeSize(TYPE_FP8_E4M3) +
+                              model_config.mla_config.kv_lora_rank / /*quant_block_size*/ 128 * GetTypeSize(TYPE_FP32) +
+                              model_config.mla_config.qk_rope_head_dim * GetTypeSize(model_config.weight_data_type);
+    } else {
+      // layout: [key/value: block_token_num x (kv_lora_rank + qk_rope_head_dim)]
+      key_value_heads_bytes = (model_config.mla_config.kv_lora_rank + model_config.mla_config.qk_rope_head_dim) *
+                              GetTypeSize(kv_cache_dtype);
+    }
+    kv_cache_config.block_bytes =
+        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
+    kv_cache_config.v_offset = kv_cache_config.k_offset;
+  } else {
+    // layout: [key {block_token_num, head_num, head_dim}][value {block_token_num, head_num, head_dim}]
+    const size_t local_num_key_value_heads =
+        model_config.num_key_value_heads / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+    const size_t key_value_heads_bytes = model_config.size_per_head * 2 * GetTypeSize(kv_cache_dtype);
+    kv_cache_config.block_bytes =
+        ComputeBlockBytes(node_layer_num, local_num_key_value_heads, key_value_heads_bytes, kv_cache_type);
+    kv_cache_config.v_offset = kv_cache_config.k_offset + kv_cache_config.block_bytes / node_layer_num / 2;
+  }
+  total_offset += kv_cache_config.block_bytes / node_layer_num;
+  runtime_config_.attn_backend_config.block_size += kv_cache_config.block_bytes;
+  KLLM_LOG_INFO << fmt::format("kv_cache_type: {}, kv_cache_k_offset: {}, kv_cache_v_offset: {}, kv_cache_dtype: {}",
+                               kv_cache_type, kv_cache_config.k_offset, kv_cache_config.v_offset,
+                               GetTypeString(kv_cache_dtype));
+  runtime_config_.attn_backend_config.kv_cache_configs.emplace(kv_cache_type, std::move(kv_cache_config));
 }
 
 Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &model_config) {
@@ -678,11 +698,10 @@ Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &mod
     }
   }
 
-  // Determine block size.
-  size_t cache_block_size = GetCacheBlockSize(model_config, pipeline_config_, block_manager_config_);
+  InitializeKVCacheConfigs(model_config, pipeline_config_);
 
-  block_manager_config_.host_allocator_config.block_size = cache_block_size;
-  block_manager_config_.device_allocator_config.block_size = cache_block_size;
+  block_manager_config_.host_allocator_config.block_size = runtime_config_.attn_backend_config.block_size;
+  block_manager_config_.device_allocator_config.block_size = runtime_config_.attn_backend_config.block_size;
 
   block_manager_config_.host_allocator_config.device = MemoryDevice::MEMORY_HOST;
   block_manager_config_.device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
@@ -690,18 +709,6 @@ Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &mod
   // The default block number, will be overwrited through memory usage.
   block_manager_config_.host_allocator_config.blocks_num = 512 * 10;
   block_manager_config_.device_allocator_config.blocks_num = 512;
-
-  runtime_config_.attn_backend_config.block_size = block_manager_config_.device_allocator_config.block_size;
-  return CheckEnvironment();
-}
-
-Status ScheduleConfigParser::CheckEnvironment() {
-  if (block_manager_config_.host_allocator_config.block_size !=
-      block_manager_config_.device_allocator_config.block_size) {
-    return Status(RET_INIT_FAILED, fmt::format("block size of device and host is not equal, {} vs {}.",
-                                               block_manager_config_.host_allocator_config.block_size,
-                                               block_manager_config_.device_allocator_config.block_size));
-  }
 
   return Status();
 }

@@ -166,9 +166,9 @@ class LlamaTest : public testing::Test {
     forward.logits_buf[0] = llama->GetLogitsPtr(schedule_id);
     forward.sampling_config = &sampling_config;
 
-    KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][0],
-                                  forward.kv_cache_ptrs[0][0] + (runtime_config.attn_backend_config.block_size));
-    std::vector<ForwardRequest> forward_reqs = {forward};
+    KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward->kv_cache_ptrs[0][0],
+                                  forward->kv_cache_ptrs[0][0] + runtime_config.attn_backend_config.block_size);
+    std::vector<ForwardRequest *> forward_reqs = {forward};
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
 
     std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};

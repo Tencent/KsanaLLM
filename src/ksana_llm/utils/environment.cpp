@@ -6,8 +6,6 @@
 
 #include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <stdexcept>
 #include <string>
 
 #include "fmt/core.h"
@@ -15,13 +13,8 @@
 
 #include "ksana_llm/utils/memory_utils.h"
 
-#include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/common/common_config.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
-#include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
-#include "ksana_llm/models/gpt/gpt_config.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
-#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"
@@ -123,11 +116,7 @@ Status Environment::ParseModelAndScheduleConfig(YamlReader &yaml_reader, const s
   schedule_config_parser_.ParseScheduleConfig(yaml_reader, model_config_);
   schedule_config_parser_.UpdateModelConfig(model_config_);
 
-  // TODO(robertyuan): move to ScheduleConfigParser
-  std::string kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(
-      yaml_reader.GetRootNode(), "setting.quantization_config.kv_cache.dtype", "auto");
-
-  schedule_config_parser_.UpdateMembers(model_dir, model_config_, kv_cache_dtype_str);
+  schedule_config_parser_.UpdateMembers(model_dir, model_config_);
 
   model_config_initialized_ = true;
 
@@ -167,11 +156,6 @@ Status Environment::GetRuntimeConfig(RuntimeConfig &runtime_config) {
 
 void Environment::SetBlockManagerConfig(const BlockManagerConfig &block_manager_config) {
   schedule_config_parser_.SetBlockManagerConfig(block_manager_config);
-}
-
-size_t Environment::GetCacheBlockSize(const ModelConfig &model_config, const PipelineConfig &pipeline_config,
-                                      const BlockManagerConfig &block_manager_config) {
-  return schedule_config_parser_.GetCacheBlockSize(model_config, pipeline_config, block_manager_config);
 }
 
 Status Environment::CalculateBlockNumber() { return schedule_config_parser_.CalculateBlockNumber(); }

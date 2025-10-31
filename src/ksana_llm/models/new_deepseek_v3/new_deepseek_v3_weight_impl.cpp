@@ -207,27 +207,32 @@ std::pair<Tensor, Tensor> NewDeepSeekV3WeightImpl<T>::QuantFp8E4m3BlockWiseTenso
 
 #  ifdef ENABLE_FP8_TORCH
 template <typename T>
-Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
-    std::unordered_set<std::string>& dequant_weights, int dev_rank,
-    const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
-    std::unordered_map<std::string, Tensor>& device_model_weights) {
+Status NewDeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
+    std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
+    std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) {
   size_t tp_size = context_->GetAttentionTensorParallelSize();
-  size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
   size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
   size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
   size_t head_num_tp = static_cast<size_t>(DivRoundUp(new_deepseek_v3_config->head_num, tp_size));
-  for (auto& weight_name : dequant_weights) {
+
+  // Filter name of weights to be processed
+  std::vector<std::string> weight_names;
+  for (const auto& [weight_name, _] : device_model_weights) {
+    if (weight_name.find("_scale_inv") != std::string::npos) {
+      continue;
+    }
+    if (weight_name.find(".q_b_proj.weight") != std::string::npos ||
+        weight_name.find(".kv_b_proj.weight") != std::string::npos) {
+      weight_names.push_back(weight_name);
+    }
+  }
+
+  for (const auto& weight_name : weight_names) {
     if (weight_name.find(".q_b_proj.weight") != std::string::npos) {
-      std::string weight_scale_name = weight_name + "_scale_inv";
-      if (device_model_weights.find(weight_name) == device_model_weights.end() ||
-          device_model_weights.find(weight_scale_name) == device_model_weights.end()) {
-        KLLM_THROW(fmt::format("Not found weight: {} or weight scale: {}", weight_name, weight_scale_name));
-      }
-      Tensor& quant_weight = device_model_weights.at(weight_name);
-      Tensor& quant_weight_scale = device_model_weights.at(weight_scale_name);
-      std::string quant_nope_rope_weight_name =
+      const std::string weight_scale_name = weight_name + "_scale_inv";
+      const std::string quant_nope_rope_weight_name =
           weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight";
-      std::string quant_nope_rope_weight_scale_name =
+      const std::string quant_nope_rope_weight_scale_name =
           weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.q_b_nope_rope_proj.weight_scale_inv";
       device_model_weights[quant_nope_rope_weight_name] = std::move(device_model_weights[weight_name]);
       device_model_weights[quant_nope_rope_weight_scale_name] = std::move(device_model_weights[weight_scale_name]);
@@ -236,11 +241,7 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
       continue;
     }
     if (weight_name.find(".kv_b_proj.weight") != std::string::npos) {
-      std::string weight_scale_name = weight_name + "_scale_inv";
-      if (device_model_weights.find(weight_name) == device_model_weights.end() ||
-          device_model_weights.find(weight_scale_name) == device_model_weights.end()) {
-        KLLM_THROW(fmt::format("Not found weight: {} or weight scale: {}", weight_name, weight_scale_name));
-      }
+      const std::string weight_scale_name = weight_name + "_scale_inv";
       Tensor& quant_weight = device_model_weights.at(weight_name);
       Tensor& quant_weight_scale = device_model_weights.at(weight_scale_name);
       // Dequant kv_b_proj
@@ -332,7 +333,6 @@ Status NewDeepSeekV3WeightImpl<T>::ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
                                dequant_v_head_proj.shape[1], dev_rank);
       device_model_weights[quant_v_head_weight_name] = quant_v_head_weight;
       device_model_weights[quant_v_head_weight_scale_name] = quant_v_head_weight_scale;
-
       device_model_weights.erase(weight_name);
       device_model_weights.erase(weight_scale_name);
       continue;
@@ -455,6 +455,8 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
     const std::string& host_weight_name, const Tensor& host_weight_tensor, int dev_rank,
     std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
     std::unordered_map<std::string, Tensor>& device_model_weights) {
+  // indexer.wk: Weights are not split and copied to each GPU
+  // indexer.wq_b: Weights are not split and copied to each GPU
   // q_a_proj: Weights are not split and copied to each GPU
   // q_b_proj: Weights are split, requiring dequantization, splitting, requantization, and distribution to each GPU
   // kv_a_proj: Copied to each GPU, split directly on each GPU without dequantization
@@ -474,11 +476,24 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
   if (host_weight_tensor.dtype != TYPE_FP32) {
     KLLM_THROW("Not support data type of scale:" + host_weight_name);
   }
+
   const std::string fused_name = ".fused_lora_a_proj.weight_scale_inv";
-  size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
-  size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
-  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
+  const size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
+  const size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
+  const size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
   const size_t weight_block_size = new_deepseek_v3_config->quant_config.weight_block_size[0];
+
+  // For indexer.wk/indexer.wq_b scale
+  if (host_weight_name.find(".indexer.wk.weight_scale_inv") != std::string::npos ||
+      host_weight_name.find(".indexer.wq_b.weight_scale_inv") != std::string::npos) {
+    Tensor weight_scale_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, host_weight_tensor.shape,
+                                        dev_rank, nullptr, &(context_->GetMemoryManageStreams()[dev_rank]));
+    MemcpyAsync(weight_scale_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(),
+                weight_scale_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[dev_rank]);
+    device_model_weights[host_weight_name] = weight_scale_tensor;
+  }
+  // For q_a_proj scale
   if (host_weight_name.find(".q_a_proj.weight_scale_inv") != std::string::npos) {
     std::vector<size_t> fused_q_a_proj_scale_shape = {
         DivRoundUp(q_lora_rank + kv_lora_rank + qk_rope_head_dim, weight_block_size), host_weight_tensor.shape[1]};
@@ -538,8 +553,7 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
       device_model_weights[fused_tensor_name] = fused_tensor;
     }
   }
-
-  // for kv_b_proj_scale
+  // For kv_b_proj scale
   if (host_weight_name.find(".kv_b_proj.weight_scale_inv") != std::string::npos) {
     size_t para_pitch = DivRoundUp(host_weight_tensor.shape[0], attn_tp_size) * host_weight_tensor.shape[1] *
                         GetTypeSize(host_weight_tensor.dtype);
@@ -554,7 +568,7 @@ bool NewDeepSeekV3WeightImpl<T>::LoadMlaFp8E4m3BlockWiseScale(
                 context_->GetMemoryManageStreams()[dev_rank]);
     device_model_weights[host_weight_name] = weight_scale_tensor;
   }
-
+  // For o_proj scale
   if (host_weight_name.find(".o_proj.weight_scale_inv") != std::string::npos) {
     // fp8: Transpose, then split along axis = 0, then transpose
     size_t split_size =
@@ -581,7 +595,6 @@ Status NewDeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::s
   size_t num_experts = new_deepseek_v3_config->moe_config.num_experts;
   // moe combines tensor parallel and moe parallel
   ExpertParallelConfig& expert_parallel_config = new_deepseek_v3_config->expert_parallel_config;
-  size_t expert_node_rank = expert_parallel_config.expert_node_rank;
   size_t global_expert_para_size = expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
   size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
   size_t moe_tp_rank = dev_rank / expert_parallel_config.expert_para_size;

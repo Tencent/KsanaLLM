@@ -21,13 +21,10 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     o_proj_out_of_dp_ = true;
     KLLM_LOG_DEBUG << "Enable o_proj_out_of_dp";
   }
-  if (absorb_type_ == AbsorbWeightsType::kAbsorbDisabled || absorb_type_ == AbsorbWeightsType::kAbsorbTypeBMM) {
-    o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
-  } else {
-    KLLM_THROW("Unsupported absorb type");
-    return;
-  }
 
+  auto& attn_config = model_creation_config.attn_config;
+  use_dsa_ = attn_config.model_config.use_dsa;
+  o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
   use_q_lora_ = (attn_config.model_config.mla_config.q_lora_rank != 0);
 
   // attn_config.idx is the offset in kv_cache list.

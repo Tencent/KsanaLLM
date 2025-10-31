@@ -28,7 +28,7 @@ enum class ModelArchitecture {
   ARCH_GPT,
   // mixtral
   ARCH_MIXTRAL,
-  // DeepSeek V2/V3/R1
+  // DeepSeek V2/V3/R1/V32 or Kimi K2
   ARCH_DEEPSEEK,
   // unknown
   ARCH_UNKNOWN,

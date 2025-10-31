@@ -72,10 +72,22 @@ class EngineArgs:
         max_token_len = yaml_config["setting"]["batch_scheduler"].get(
             "max_token_len", 2048
         )
+
+        # Temporary workaround for DeepSeek-V3.2 compatibility
+        # Use the same config class as DeepSeek-V3
+        # Can be removed once hf-transformers adds support
+        try:
+            model_config = AutoConfig.from_pretrained(
+                model_dir, trust_remote_code=True
+            ).to_dict()
+        except ValueError as e:
+            if not "deepseek_v32" in str(e):
+                raise e
+            from .hf_transformers_model_config import DeepseekV3Config
+            model_config = DeepseekV3Config.from_pretrained(
+                model_dir, trust_remote_code=True
+            ).to_dict()
         # Parse the model config to determine the model type
-        model_config = AutoConfig.from_pretrained(
-            model_dir, trust_remote_code=True
-        ).to_dict()
         model_type = model_config["model_type"]
         if model_type == "qwen" and "visual" in model_config:
             model_type = "qwen_vl"

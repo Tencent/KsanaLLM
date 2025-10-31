@@ -74,7 +74,7 @@ class BlockAllocator : public BlockAllocatorInterface {
   void* blocks_base_ptr_ = nullptr;
 
   // blocks base id for project kvcache mem to NPU k/vcache mem
-  int block_base_id_ = 0;
+  int blocks_base_id_ = 0;
 };
 
 }  // namespace ksana_llm

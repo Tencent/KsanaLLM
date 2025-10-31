@@ -6,14 +6,10 @@
 
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 
 #include "fmt/core.h"
-#include "gflags/gflags.h"
-
-#include "ksana_llm/utils/memory_utils.h"
 
 #include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/chatglm/chatglm_config.h"
@@ -25,6 +21,7 @@
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/optional_file.h"
 #include "ksana_llm/utils/ret_code.h"
 #include "ksana_llm/utils/status.h"
@@ -164,7 +161,7 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
     } else {
       KLLM_THROW(fmt::format("Not support quant backend {}.", yaml_gptq_backend));
     }
-    if (model_config.type == "deepseek_v3" || model_config.type == "kimi_k2" || model_config.type == "deepseek_v2") {
+    if (model_config.use_mla) {
       // TODO(winminkong): MACHETE_LINEAR_BACKEND will be compatible with all models, int4 matmul layer will be able to
       // automatically select the optimal backend based on conditions such as sm and performance.
       model_config.quant_config.backend = MACHETE_LINEAR_BACKEND;
@@ -231,7 +228,7 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
         model_config.rope_scaling_factor_config.original_max_position_embeddings =
             rope_scaling_setting.value("original_max_position_embeddings", 32768);
         // for deepseek_yarn config
-        if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
+        if (model_config.use_mla) {
           // deepseek v2 and v3 have the same yarn implementation
           model_config.rope_scaling_factor_config.use_deepseek_yarn = true;
         }
@@ -480,7 +477,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       } else {
         PrepareHunyuanTurboAttributes(config_json, model_config);
       }
-    } else if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v2") {
+    } else if (model_config.type == "deepseek_v3" || model_config.type == "deepseek_v32" ||
+               model_config.type == "deepseek_v2" || model_config.type == "kimi_k2") {
       PrepareDeepSeekV3Attributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {
       PrepareBgeRerankerMinicpmAttributes(config_json, model_config);

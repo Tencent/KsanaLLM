@@ -66,18 +66,18 @@ class NewDeepSeekV3WeightImplBase {
                                                const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) = 0;
   virtual std::pair<Tensor, Tensor> QuantFp8E4m3BlockWiseTensor(
       Tensor& weight_tensor, int dev_rank, const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) = 0;
-#  ifdef ENABLE_FP8_TORCH
-  virtual Status ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
-      std::unordered_set<std::string>& dequant_weights, int dev_rank,
-      const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
-      std::unordered_map<std::string, Tensor>& device_model_weights) = 0;
-#  endif
 #endif
 
   virtual Status LoadInt4QuantWeight(std::unordered_map<std::string, Tensor>& host_gptq_weights, int dev_rank,
                                      std::unordered_map<std::string, Tensor>& device_model_weights,
                                      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
                                      std::vector<std::vector<int>>& expert_map) = 0;
+
+#if defined(ENABLE_FP8) && defined(ENABLE_FP8_TORCH)
+  virtual Status PostProcessFp8E4m3BlockWiseQuantWeights(
+      std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
+      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) = 0;
+#endif
 
   virtual Status PostProcessInt4QuantWeights(std::unordered_map<std::string, Tensor>& device_model_weights,
                                              int dev_rank,
@@ -113,12 +113,6 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
 
   std::pair<Tensor, Tensor> QuantFp8E4m3BlockWiseTensor(
       Tensor& weight_tensor, int dev_rank, const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) override;
-#  ifdef ENABLE_FP8_TORCH
-  Status ProcessMlaFp8E4m3BlockWiseScaleOfWeight(
-      std::unordered_set<std::string>& dequant_weights, int dev_rank,
-      const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
-      std::unordered_map<std::string, Tensor>& device_model_weights) override;
-#  endif
 
   bool LoadMoeFp8E4m3BlockWiseScale(const std::string& host_weight_name, const Tensor& host_weight_tensor, int dev_rank,
                                     std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
@@ -134,6 +128,12 @@ class NewDeepSeekV3WeightImpl : public NewDeepSeekV3WeightImplBase {
                              std::unordered_map<std::string, Tensor>& device_model_weights,
                              std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config,
                              std::vector<std::vector<int>>& expert_map) override;
+
+#if defined(ENABLE_FP8) && defined(ENABLE_FP8_TORCH)
+  Status PostProcessFp8E4m3BlockWiseQuantWeights(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                                 int dev_rank,
+                                                 std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) override;
+#endif
 
   Status PostProcessInt4QuantWeights(std::unordered_map<std::string, Tensor>& device_model_weights, int dev_rank,
                                      std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config) override;
