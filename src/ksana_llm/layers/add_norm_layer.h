@@ -30,6 +30,7 @@ class AddNormLayer : public BaseLayer {
   float rms_norm_eps_;
   std::shared_ptr<LayernormLayer> layernorm_layer_;
   std::shared_ptr<AddLayer> add_layer_;
+  bool enable_pdl_{false};
 };
 
 }  // namespace ksana_llm

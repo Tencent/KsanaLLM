@@ -13,6 +13,7 @@ Status AddNormLayer::Init(const std::vector<std::any>& parameters, const Runtime
     int parameter_index = 0;
     rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
     KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
+    enable_pdl_ = GetEnablePDL();
     return Status();
 }
 
@@ -33,7 +34,7 @@ Status AddNormLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vec
   // Step 2: input[i] = (residual[i] / RMS(residual)) * weight[i]
   InvokeFusedAddRmsNorm<T>(input_tensors[0].GetPtr<void>(), input_tensors[1].GetPtr<void>(),
                            input_tensors[2].GetPtr<void>(), rms_norm_eps_, input_tensors[0].shape[0],
-                           input_tensors[0].shape[1], context_->GetComputeStreams()[rank_].Get());
+                           input_tensors[0].shape[1], enable_pdl_, context_->GetComputeStreams()[rank_].Get());
 
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;

@@ -122,10 +122,13 @@ void LookupEmbedding(const void* input_ids, const void* ids_offsets, const void*
                      int vocab_size, int hidden_size, int bs, int vocab_id, cudaStream_t stream,
                      void* workspace_ptr = nullptr);
 
-// Layernorm without bias computes rmsnorm.
 template <typename T>
-void InvokeLayerNorm(const void* input, const void* weight, const void* bias, const float layernorm_eps, const int m,
-                     const int n, void* output, cudaStream_t stream);
+void InvokeLayerNorm(const void* input, const void* weight, const void* bias, float layernorm_eps, int m, int n,
+                     void* output, cudaStream_t stream);
+
+template <typename T>
+void InvokeRMSNorm(void* input, void* weight, float layernorm_eps, int m, int n, void* output, bool enable_pdl,
+                   cudaStream_t stream);
 
 template <typename T>
 void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
@@ -283,7 +286,8 @@ void InvokePerTokenGroupQuantFp8E4m3(const void* input, void* output_q, void* ou
                                      const PerTokenGroupQuantFusionParams& params = {});
 
 template <typename T>
-void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, cudaStream_t stream);
+void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, bool enable_pdl,
+                           cudaStream_t stream);
 
 template <typename T>
 void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs, std::vector<int>& col_offsets,

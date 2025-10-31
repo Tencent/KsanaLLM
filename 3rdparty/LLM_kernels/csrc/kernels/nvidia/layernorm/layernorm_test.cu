@@ -36,7 +36,6 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     std::stringstream ss;
     ss << "python layernorm_test.py --type=" << type_str << " --variance_epsilon=" << std::to_string(variance_epsilon)
        << " --test_mode=" << test_mode;
-    std::cout << "Ref command: " << ss.str() << std::endl;
     system(ss.str().c_str());
   }
 
@@ -76,20 +75,22 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
 
     InvokeLayerNorm<T>(reinterpret_cast<T*>(layernorm_output_meta.data_ptr),
                        reinterpret_cast<const T*>(input_meta.data_ptr),
-                       reinterpret_cast<const T*>(weight_meta.data_ptr), reinterpret_cast<const T*>(bias_meta.data_ptr),
+                       reinterpret_cast<const T*>(weight_meta.data_ptr),
+                       reinterpret_cast<const T*>(bias_meta.data_ptr),
                        layernorm_eps, m, n, stream);
     // compute rmsnorm if bias is none
-    InvokeLayerNorm<T>(reinterpret_cast<T*>(rmsnorm_output_meta.data_ptr),
-                       reinterpret_cast<const T*>(input_meta.data_ptr),
-                       reinterpret_cast<const T*>(weight_meta.data_ptr),
-                       /* bias */ nullptr, layernorm_eps, m, n, stream);
+    InvokeRMSNorm<T>(reinterpret_cast<T*>(rmsnorm_output_meta.data_ptr), reinterpret_cast<T*>(input_meta.data_ptr),
+                     reinterpret_cast<T*>(weight_meta.data_ptr), layernorm_eps, m, n, GetEnablePDL(), stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
     CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
-
+    float tolerance = 1e-5f;
+    if (std::is_same<T, half>::value) {
+      tolerance = 1e-3f;
+    }
     EXPECT_TRUE(CheckResult<T>("layernorm_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
-                               layernorm_output_ref_meta, layernorm_output_meta, 1e-3f, 1e-3f));
+                               layernorm_output_ref_meta, layernorm_output_meta, tolerance, tolerance));
     EXPECT_TRUE(CheckResult<T>("rmsnorm_" + type_str + "_m_" + std::to_string(m) + "_n_" + std::to_string(n),
-                               rmsnorm_output_ref_meta, rmsnorm_output_meta, 1e-3f, 1e-3f));
+                               rmsnorm_output_ref_meta, rmsnorm_output_meta, tolerance, tolerance));
 
     auto cuda_run = [&]() {
       InvokeLayerNorm<T>(reinterpret_cast<T*>(layernorm_output_meta.data_ptr),
@@ -99,10 +100,8 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
     };
     float milliseconds = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
     auto cuda_run_rmsnorm = [&]() {
-      InvokeLayerNorm<T>(reinterpret_cast<T*>(rmsnorm_output_meta.data_ptr),
-                         reinterpret_cast<const T*>(input_meta.data_ptr),
-                         reinterpret_cast<const T*>(weight_meta.data_ptr),
-                         /* bias */ nullptr, layernorm_eps, m, n, stream);
+      InvokeRMSNorm<T>(reinterpret_cast<T*>(rmsnorm_output_meta.data_ptr), reinterpret_cast<T*>(input_meta.data_ptr),
+                       reinterpret_cast<T*>(weight_meta.data_ptr), layernorm_eps, m, n, GetEnablePDL(), stream);
     };
     float milliseconds_rmsnorm = MeasureCudaExecutionTime(cuda_run_rmsnorm, stream, 10, 100);
     std::cout << std::left << type_str << " m=" << std::setw(6) << m << " n=" << std::setw(6) << n

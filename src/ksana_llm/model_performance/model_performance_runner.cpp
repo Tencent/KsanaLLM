@@ -281,9 +281,9 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
           infer_req->infer_stage = InferStage::STATE_DECODE;
         } else {
           // Prefill request (multi token forwarding)
-          infer_req->infer_stage = InferStage::STAGE_CONTEXT;
-          infer_req->kv_cached_token_num = req_info.sequence_len - req_info.forwarding_token_num;
+          infer_req->infer_stage = InferStage::kContext;
         }
+        infer_req->kv_cached_token_num = req_info.sequence_len - req_info.forwarding_token_num;
         infer_req->prefix_cache_len = req_info.sequence_len - req_info.forwarding_token_num;
         infer_req->forwarding_tokens = infer_req->input_tokens;
         Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),

@@ -30,6 +30,7 @@ class LayernormLayer : public BaseLayer {
   // NOTE(karlluo): only need by ascend
   int workspace_block_id_{-1};
   size_t workspace_size_{0ul};
+  bool enable_pdl_{false};
 
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;

@@ -10,6 +10,8 @@
 #include "csrc/utils/nvidia/cuda_type_utils.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
+#include <flashinfer/norm.cuh>
+
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
@@ -519,9 +521,8 @@ template void InvokeLayerNormWithBeta(__nv_bfloat16* out, const __nv_bfloat16* i
                                       cudaStream_t stream, int32_t opt_version);
 
 template <typename T>
-__global__ void InvokeLayerNormKernel(const T* __restrict input, const T* __restrict gamma, T* output,
-                                      const float layernorm_eps, int32_t m, int32_t n) {
-  // layernorm module in the T5 style No bias and no subtraction of mean.
+__global__ void InvokeRMSNormKernel(const T* __restrict input, const T* __restrict gamma, T* output,
+                                    const float layernorm_eps, int32_t m, int32_t n) {
   const int32_t tid = threadIdx.x;
 
   __shared__ float s_variance;
@@ -546,12 +547,27 @@ __global__ void InvokeLayerNormKernel(const T* __restrict input, const T* __rest
 }
 
 template <typename T>
-void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, const float layernorm_eps, const int32_t m,
-                     const int32_t n, cudaStream_t stream) {
-  if (beta != nullptr) {
-    InvokeLayerNormWithBeta(out, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream);
-    return;
-  }
+void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, float layernorm_eps, int32_t m, int32_t n,
+                     cudaStream_t stream) {
+  InvokeLayerNormWithBeta(out, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream);
+}
+
+#define INVOKE_LAYER_NORM(T)                                                                                           \
+  template void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, float layernorm_eps, int32_t m, \
+                                int32_t n, cudaStream_t stream)
+INVOKE_LAYER_NORM(float);
+INVOKE_LAYER_NORM(half);
+INVOKE_LAYER_NORM(__nv_bfloat16);
+#undef INVOKE_LAYER_NORM
+
+template <typename T>
+void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, bool enable_pdl,
+                   cudaStream_t stream) {
+#if defined(ENABLE_FLASHINFER)
+  flashinfer::norm::RMSNorm(input, gamma, out, m, n,
+                            /*stride_input*/ n, /*stride_output*/ n, layernorm_eps, enable_pdl, stream);
+  return;
+#endif
 
   dim3 grid(m);
   dim3 block(min(n, 1024));
@@ -565,16 +581,16 @@ void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, cons
   block.x = block.x / (4 / sizeof(T));  // if using half, only need half of block.x
 
   // should pay attention to the rsqrt precision
-  InvokeLayerNormKernel<T><<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, m, n);  // For gpt-3
+  InvokeRMSNormKernel<T><<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, m, n);  // For gpt-3
 }
 
-template void InvokeLayerNorm(float* out, const float* input, const float* gamma, const float* beta,
-                              const float layernorm_eps, const int32_t m, const int32_t n, cudaStream_t stream);
-template void InvokeLayerNorm(half* out, const half* input, const half* gamma, const half* beta,
-                              const float layernorm_eps, const int32_t m, const int32_t n, cudaStream_t stream);
-template void InvokeLayerNorm(__nv_bfloat16* out, const __nv_bfloat16* input, const __nv_bfloat16* gamma,
-                              const __nv_bfloat16* beta, const float layernorm_eps, const int32_t m, const int32_t n,
-                              cudaStream_t stream);
+#define INVOKE_RMS_NORM(T)                                                                                            \
+  template void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, bool enable_pdl, \
+                              cudaStream_t stream)
+INVOKE_RMS_NORM(float);
+INVOKE_RMS_NORM(half);
+INVOKE_RMS_NORM(__nv_bfloat16);
+#undef INVOKE_RMS_NORM
 
 template <typename T>
 __global__ void InvokeAddResLayerNormKernel(const T* __restrict input, const T* __restrict gamma, T* output,

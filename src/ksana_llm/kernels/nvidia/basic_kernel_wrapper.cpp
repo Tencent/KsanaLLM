@@ -356,19 +356,34 @@ LOOKUP_EMBEDDING(__nv_bfloat16);
 #undef LOOKUP_EMBEDDING
 
 template <typename T>
-void InvokeLayerNorm(const void* input, const void* weight, const void* bias, const float layernorm_eps, const int m,
-                     const int n, void* output, cudaStream_t stream) {
+void InvokeLayerNorm(const void* input, const void* weight, const void* bias, float layernorm_eps, int m, int n,
+                     void* output, cudaStream_t stream) {
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeLayerNorm<T>(
       reinterpret_cast<T*>(output), reinterpret_cast<const T*>(input), reinterpret_cast<const T*>(weight),
       reinterpret_cast<const T*>(bias), layernorm_eps, m, n, stream));
 }
-#define INVOKE_LAYER_NORM(T)                                                                                           \
-  template void InvokeLayerNorm<T>(const void* input, const void* weight, const void* bias, const float layernorm_eps, \
-                                   const int m, const int n, void* output, cudaStream_t stream)
+#define INVOKE_LAYER_NORM(T)                                                                                     \
+  template void InvokeLayerNorm<T>(const void* input, const void* weight, const void* bias, float layernorm_eps, \
+                                   int m, int n, void* output, cudaStream_t stream)
 INVOKE_LAYER_NORM(float);
 INVOKE_LAYER_NORM(half);
 INVOKE_LAYER_NORM(__nv_bfloat16);
 #undef INVOKE_LAYER_NORM
+
+template <typename T>
+void InvokeRMSNorm(void* input, void* weight, float layernorm_eps, int m, int n, void* output, bool enable_pdl,
+                   cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeRMSNorm<T>(reinterpret_cast<T*>(output), reinterpret_cast<T*>(input),
+                                                              reinterpret_cast<T*>(weight), layernorm_eps, m, n,
+                                                              enable_pdl, stream));
+}
+#define INVOKE_RMS_NORM(T)                                                                                   \
+  template void InvokeRMSNorm<T>(void* input, void* weight, float layernorm_eps, int m, int n, void* output, \
+                                 bool enable_pdl, cudaStream_t stream)
+INVOKE_RMS_NORM(float);
+INVOKE_RMS_NORM(half);
+INVOKE_RMS_NORM(__nv_bfloat16);
+#undef INVOKE_RMS_NORM
 
 #define INVOKE_MATMUL(T, CUDA_TYPE)                                                                                  \
   template <>                                                                                                        \
@@ -1155,12 +1170,13 @@ INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3(__nv_bfloat16);
 #undef INVOKE_PER_TOKEN_GROUP_QUANT_FP8E4M3
 
 template <typename T>
-void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, cudaStream_t stream) {
-  llm_kernels::nvidia::InvokeFusedAddRMSNorm<T>(input, residual, weight, eps, /*enable_pdl*/ false, m, n, stream);
+void InvokeFusedAddRmsNorm(void* input, void* residual, void* weight, double eps, int m, int n, bool enable_pdl,
+                           cudaStream_t stream) {
+  llm_kernels::nvidia::InvokeFusedAddRMSNorm<T>(input, residual, weight, eps, enable_pdl, m, n, stream);
 }
 #define INVOKE_FUSED_ADD_RMS_NORM(T)                                                                          \
   template void InvokeFusedAddRmsNorm<T>(void* input, void* residual, void* weight, double eps, int m, int n, \
-                                         cudaStream_t stream);
+                                         bool enable_pdl, cudaStream_t stream);
 INVOKE_FUSED_ADD_RMS_NORM(float);
 INVOKE_FUSED_ADD_RMS_NORM(half);
 INVOKE_FUSED_ADD_RMS_NORM(__nv_bfloat16);

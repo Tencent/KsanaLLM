@@ -24,8 +24,12 @@ void InvokeLayerNormWithBeta(T* out, const T* input, const T* gamma, const T* be
 }
 
 template <typename T>
-void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, const float layernorm_eps, const int32_t m,
-                     const int32_t n, cudaStream_t stream);
+void InvokeLayerNorm(T* out, const T* input, const T* gamma, const T* beta, float layernorm_eps, int32_t m, int32_t n,
+                     cudaStream_t stream);
+
+template <typename T>
+void InvokeRMSNorm(T* out, T* input, T* gamma, float layernorm_eps, int32_t m, int32_t n, bool enable_pdl,
+                   cudaStream_t stream);
 
 template <typename T>
 void InvokeRmsNorm3D(T* out, const T* input, const T* gamma, const float layernorm_eps, const int32_t total_tokens,
