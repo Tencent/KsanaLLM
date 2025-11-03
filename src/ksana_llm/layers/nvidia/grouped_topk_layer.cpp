@@ -24,6 +24,7 @@ Status GroupedTopkLayer::Init(const std::vector<std::any>& parameters, const Run
   expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size;
   expert_world_size_ = runtime_config.parallel_basic_config.expert_world_size;
 
+  is_profile_mode_ = runtime_config.is_profile_mode;
   return Status();
 }
 
@@ -66,6 +67,11 @@ Status GroupedTopkLayer::ForwardT(const std::vector<Tensor>& input_tensors, std:
   InvokeGroupedTopk<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_tokens, total_num_experts, topk_,
                        renormalize_, num_expert_group_, topk_group_, scoring_func_, e_bias, routed_scaling_factor_,
                        rank_, context_->GetComputeStreams()[rank_].Get());
+
+  if (is_profile_mode_) {  // profile 模式下，填充固定的 topk_ids
+    FillRandomInts(static_cast<int*>(topk_ids_ptr), num_tokens * topk_, 0, total_num_experts, rank_,
+                   context_->GetComputeStreams()[rank_].Get());
+  }
 
   return Status();
 }

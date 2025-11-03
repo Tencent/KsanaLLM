@@ -47,5 +47,9 @@ void InvokeDeepSeekV3GroupedTopk(void* gating_output, void* e_bias, float routed
 template <typename T>
 void InvokeBasicSoftmaxTopk(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows,
                             int num_experts, int topk, float routed_scaling_factor, cudaStream_t stream);
+
+//  Fill random integers between start_int and end_int into data_ptr
+void FillRandomInts(int* data_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream);
+
 }  // namespace nvidia
 }  // namespace llm_kernels

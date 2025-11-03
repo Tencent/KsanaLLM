@@ -16,6 +16,7 @@
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
 #include <cub/cub.cuh>
+#include <torch/torch.h>
 
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 
@@ -762,6 +763,21 @@ INVOKE_BASIC_SOFTMAX_TOPK(float);
 INVOKE_BASIC_SOFTMAX_TOPK(half);
 INVOKE_BASIC_SOFTMAX_TOPK(__nv_bfloat16);
 #undef INVOKE_BASIC_SOFTMAX_TOPK
+
+// fill GPU memory with random integers using PyTorch
+void FillRandomInts(int* data_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream) {
+  // Set manual seed for reproducibility
+  // NOTE(rockcao): Using torch to facilitate the same random number generation method across different frameworks
+  torch::manual_seed(42);
+
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt32)
+                     .device(torch::kCUDA, rank)
+                     .requires_grad(false);
+
+  auto tensor = torch::from_blob(data_ptr, {size}, options);
+  tensor.random_(start_int, end_int);
+}
 
 }  // namespace nvidia
 }  // namespace llm_kernels

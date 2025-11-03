@@ -31,6 +31,8 @@ class GroupedTopkLayer : public BaseLayer {
 
   size_t expert_para_size_;
   size_t expert_world_size_;
+
+  bool is_profile_mode_;
 };
 #endif
 

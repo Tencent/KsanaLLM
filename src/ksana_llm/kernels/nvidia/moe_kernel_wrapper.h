@@ -87,4 +87,7 @@ void FusedMarlinMoe(half* output, const half* input, const float* gating_output,
                     const int* g_idx2, const void* sort_indices1, const void* sort_indices2, const void* w1_zeros,
                     const void* w2_zeros, int num_bits, int group_size);
 
+// Fill GPU memory with random integers in range [start_int, end_int)
+void FillRandomInts(int* device_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream);
+
 }  // namespace ksana_llm

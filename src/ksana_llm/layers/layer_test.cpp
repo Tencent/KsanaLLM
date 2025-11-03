@@ -1456,6 +1456,24 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   // 测试带偏置的前向传播
   EXPECT_TRUE(grouped_topk_layer_with_bias.Forward(input_tensors_with_bias, output_tensors_with_bias).OK());
   StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+  // 测试profile模式下输出固定的专家
+  GroupedTopkLayer grouped_topk_layer_profile_mode;
+  std::vector<std::any> parameters_with_fixed_experts = {
+      topk, renormalize, num_expert_group, topk_group, scoring_func, routed_scaling_factor,
+      true  // use_e_score_correction_bias = true
+  };
+  runtime_config.is_profile_mode = true;
+  EXPECT_TRUE(
+    grouped_topk_layer_profile_mode.Init(parameters_with_fixed_experts, runtime_config, context_, kDeviceRank)
+          .OK());
+  EXPECT_TRUE(grouped_topk_layer_profile_mode.Forward(input_tensors, output_tensors).OK());
+  Memcpy(ids_host.data(), topk_ids.GetPtr<void>(), topk_ids.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
+
+  // 验证 topk_ids 的值是固定的根据seed选出来的专家
+  EXPECT_TRUE(ids_host[0] == 3 && ids_host[1] == 1 && ids_host[2] == 6 && ids_host[3] == 2);
+  // set is_profile_mode back to false
+  runtime_config.is_profile_mode = false;
 #endif
 }
 

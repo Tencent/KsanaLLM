@@ -695,4 +695,9 @@ size_t InvokeGetFusedMarlinMoeWorkspaceSize(int num_tokens, int inter_size, int 
   return llm_kernels::nvidia::marlin_moe::get_fused_marlin_moe_workspace_size(num_tokens, inter_size, hidden_size,
                                                                               num_experts, topk, data_type_size);
 }
+
+void FillRandomInts(int* device_ptr, int size, int start_int, int end_int, int rank, cudaStream_t stream) {
+  llm_kernels::nvidia::FillRandomInts(device_ptr, size, start_int, end_int, rank, stream);
+}
+
 }  // namespace ksana_llm
