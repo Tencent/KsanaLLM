@@ -17,7 +17,7 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
                                  int head_size, int stride_size, float k_scale, float v_scale, cudaStream_t stream);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void ConvertQToCacheType(SCALAR_T* q_src, CACHE_T* q_dst, int bs, int req_q_len, int num_heads, int head_size,
-                         int stride_size, float q_scale, cudaStream_t stream);
+void ConvertToCacheType(SCALAR_T* qkv_src, CACHE_T* qkv_dst, int total_len, int num_heads, int head_size,
+                        int stride_size, float qkv_scale, cudaStream_t stream);
 }  // namespace nvidia
 }  // namespace llm_kernels

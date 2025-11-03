@@ -260,30 +260,44 @@ TEST(CacheCopyTest, CacheCopyTest) {
   }
 }
 
-TEST(ConvertQToCacheTypeTest, ConvertQToCacheTypeTest) {
-  int bs = 2;
-  int req_q_len = 1;
-  int num_heads = 5;
-  int head_size = 8;
+// Test parameters structure
+struct ConvertTestParams {
+  int total_len;
+  int head_size;
+  int num_heads;
+  llm_kernels::utils::KVCacheType kv_dtype;
+};
+
+// Parameterized test for different configurations
+class ConvertToCacheTypeTest : public ::testing::TestWithParam<ConvertTestParams> {
+ protected:
+  void SetUp() override {}
+  void TearDown() override {}
+};
+
+TEST_P(ConvertToCacheTypeTest, ConvertToCacheTypeTest) {
+  const auto& params = GetParam();
+  int total_len = params.total_len;
+  int head_size = params.head_size;
+  int num_heads = params.num_heads;
+  auto kv_dtype = params.kv_dtype;
+
   int token_data_size = num_heads * head_size;
   int stride_size = num_heads * head_size;
   float q_scale = 1.0f;
-  std::vector<int16_t> h_src;
-  for (int i = 1; i <= bs; i++) {
-    for (int j = 1; j <= req_q_len; j++) {
-      for (int k = 1; k <= token_data_size; k++) {
-        h_src.push_back(16224);
-      }
-    }
-  }
+
+  std::cout << "Testing with head_size=" << head_size << ", num_heads=" << num_heads << ", total_len=" << total_len
+            << std::endl;
+
+  int16_t test_value = 16224;
+  std::vector<int16_t> h_src(total_len * token_data_size, test_value);
+  uint8_t expected_value = 54;
 
   // 分配设备内存
   float* d_src;
   float* d_dst;
   cudaMalloc(&d_src, h_src.size() * sizeof(int16_t));
-  cudaMalloc(&d_dst, h_src.size() * sizeof(uint8_t));
-  std::cout << "d_src size in bytes: " << h_src.size() * sizeof(int16_t) << std::endl;
-  std::cout << "d_dst size in bytes: " << h_src.size() * sizeof(uint8_t) << std::endl;
+  cudaMalloc(&d_dst, h_src.size() * sizeof(int16_t));
 
   // 将主机数据复制到设备上
   cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(int16_t), cudaMemcpyHostToDevice);
@@ -292,26 +306,66 @@ TEST(ConvertQToCacheTypeTest, ConvertQToCacheTypeTest) {
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  // 调用核函数
-  llm_kernels::nvidia::ConvertQToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
-      reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), bs, req_q_len, num_heads, head_size,
-      stride_size, q_scale, stream);
-  cudaStreamSynchronize(stream);
+  // 根据 KV_DTYPE 调用不同的核函数
+  float excute_time = 0.0f;
+  if (kv_dtype == llm_kernels::utils::KVCacheType::kFp8E4M3) {
+    llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+        reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads,
+        head_size, stride_size, q_scale, stream);
+    cudaStreamSynchronize(stream);
 
-  // 将结果从设备复制回主机并验证
-  std::vector<uint8_t> h_dst(h_src.size());
-  cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    // 测试不同长度的转换
+    for (int m = 1; m <= total_len; m *= 2) {
+      auto cuda_run = [&]() {
+        llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
+            reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads,
+            head_size, stride_size, q_scale, stream);
+      };
+      excute_time = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+      std::cout << "m: " << m << ", excute_time: " << excute_time << " ms" << std::endl;
+    }
+  } else if (kv_dtype == llm_kernels::utils::KVCacheType::kFp8E5M2) {
+    llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2>(
+        reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads,
+        head_size, stride_size, q_scale, stream);
+    cudaStreamSynchronize(stream);
+
+    auto cuda_run = [&]() {
+      llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2>(
+          reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads,
+          head_size, stride_size, q_scale, stream);
+    };
+    excute_time = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    std::cout << "excute_time: " << excute_time << " ms" << std::endl;
+  } else {  // kAuto
+    llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto>(
+        reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<__nv_bfloat16*>(d_dst), total_len, num_heads,
+        head_size, stride_size, q_scale, stream);
+    cudaStreamSynchronize(stream);
+
+    auto cuda_run = [&]() {
+      llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto>(
+          reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<__nv_bfloat16*>(d_dst), total_len, num_heads,
+          head_size, stride_size, q_scale, stream);
+    };
+    excute_time = MeasureCudaExecutionTime(cuda_run, stream, 10, 100);
+    std::cout << "excute_time: " << excute_time << " ms" << std::endl;
+  }
 
   // 验证结果
-  bool correct = true;
-  for (size_t i = 0; i < h_src.size(); ++i) {
-    if (h_dst[i] != 54) {
-      printf("%d ", h_dst[i]);
-      correct = false;
-      break;
+  if (kv_dtype != llm_kernels::utils::KVCacheType::kAuto) {  // for FP8 types
+    std::vector<uint8_t> h_dst(h_src.size());
+    cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    for (size_t i = 0; i < h_src.size(); ++i) {
+      EXPECT_TRUE(h_dst[i] == expected_value);
+    }
+  } else {  // Only Copy
+    std::vector<int16_t> h_dst(h_src.size());
+    cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(int16_t), cudaMemcpyDeviceToHost);
+    for (size_t i = 0; i < h_src.size(); ++i) {
+      EXPECT_TRUE(h_dst[i] == test_value);
     }
   }
-  EXPECT_TRUE(correct);
 
   // 释放设备内存
   cudaStreamDestroy(stream);
@@ -319,62 +373,15 @@ TEST(ConvertQToCacheTypeTest, ConvertQToCacheTypeTest) {
   cudaFree(d_dst);
 }
 
-TEST(ConvertToCacheTypeTest, ConvertToCacheTypeTest) {
-  int bs = 1;
-  int total_len = 65536;
-  int num_heads = 5;
-  int head_size = 8;
-  int token_data_size = num_heads * head_size;
-  int stride_size = num_heads * head_size;
-  float q_scale = 1.0f;
-  std::vector<int16_t> h_src;
-  for (int i = 1; i <= bs; i++) {
-    for (int j = 1; j <= total_len; j++) {
-      for (int k = 1; k <= token_data_size; k++) {
-        h_src.push_back(16224);
-      }
-    }
-  }
-
-  // 分配设备内存
-  float* d_src;
-  float* d_dst;
-  cudaMalloc(&d_src, h_src.size() * sizeof(int16_t));
-  cudaMalloc(&d_dst, h_src.size() * sizeof(uint8_t));
-
-  // 将主机数据复制到设备上
-  cudaMemcpy(d_src, h_src.data(), h_src.size() * sizeof(int16_t), cudaMemcpyHostToDevice);
-
-  // 创建CUDA流
-  cudaStream_t stream;
-  cudaStreamCreate(&stream);
-
-  // 调用核函数
-  llm_kernels::nvidia::ConvertToCacheType<__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3>(
-      reinterpret_cast<__nv_bfloat16*>(d_src), reinterpret_cast<u_int8_t*>(d_dst), total_len, num_heads, head_size,
-      stride_size, q_scale, stream);
-  cudaStreamSynchronize(stream);
-
-  // 将结果从设备复制回主机并验证
-  std::vector<uint8_t> h_dst(h_src.size());
-  cudaMemcpy(h_dst.data(), d_dst, h_src.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
-
-  // 验证结果
-  bool correct = true;
-  for (size_t i = 0; i < h_src.size(); ++i) {
-    if (h_dst[i] != 54) {
-      printf("%d ", h_dst[i]);
-      correct = false;
-      break;
-    }
-  }
-  EXPECT_TRUE(correct);
-
-  // 释放设备内存
-  cudaStreamDestroy(stream);
-  cudaFree(d_src);
-  cudaFree(d_dst);
-}
+// Test with different configurations
+// Testing combinations of head_size, num_heads, and KV_DTYPE
+INSTANTIATE_TEST_SUITE_P(MultipleConfigurations, ConvertToCacheTypeTest,
+                         ::testing::Values(ConvertTestParams{1024, 192, 16, llm_kernels::utils::KVCacheType::kFp8E4M3},
+                                           ConvertTestParams{1024, 192, 128, llm_kernels::utils::KVCacheType::kFp8E4M3},
+                                           ConvertTestParams{1024, 576, 16, llm_kernels::utils::KVCacheType::kFp8E4M3},
+                                           ConvertTestParams{1024, 575, 16, llm_kernels::utils::KVCacheType::kFp8E4M3},
+                                           ConvertTestParams{1024, 575, 128, llm_kernels::utils::KVCacheType::kAuto},
+                                           ConvertTestParams{1024, 576, 128, llm_kernels::utils::KVCacheType::kAuto}));
 
 TEST(FP8WithPrefixReverseCacheCopyTest, FP8WithPrefixReverseCacheCopyTest) {
   std::vector<size_t> h_input_offsets = {0};

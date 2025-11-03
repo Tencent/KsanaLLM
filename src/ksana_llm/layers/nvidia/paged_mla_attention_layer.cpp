@@ -318,9 +318,9 @@ void InvokeAbsorbMlaPagedAttention(void* hidden_buffer_1, void* output_ptr, void
     // Quant q_concat and store into qkv_workspace (cannot be done in-place)
     void* const quant_q_tensor_ptr = qkv_workspace;
     qkv_workspace += total_tokens * num_heads * (kv_lora_rank + qk_rope_head_dim) * sizeof(CACHE_T);
-    llm_kernels::nvidia::ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
+    llm_kernels::nvidia::ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(
         /*q_src*/ reinterpret_cast<SCALAR_T*>(q_concat_ptr), /*q_dst*/ reinterpret_cast<CACHE_T*>(quant_q_tensor_ptr),
-        batch_size, q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim,
+        batch_size * q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim,
         num_heads * (kv_lora_rank + qk_rope_head_dim), q_scale, stream);
     q_concat_ptr = quant_q_tensor_ptr;
   }

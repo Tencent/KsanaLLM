@@ -4,6 +4,7 @@
 #include "cache_copy_flash_attn_layout.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "quant_utils.cuh"
+
 namespace llm_kernels {
 namespace nvidia {
 
@@ -92,30 +93,10 @@ __global__ void CachePosCopyFlashAttnLayoutKernel(SCALAR_T* k_src, SCALAR_T* v_s
   }
 }
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-__global__ void ConvertQToCacheTypeKernel(SCALAR_T* q_src, CACHE_T* q_dst, int stride_size, float q_scale) {
-  const unsigned int batch_idx = blockIdx.z;
-  const unsigned int token_idx = batch_idx * gridDim.y + blockIdx.y;
-  const unsigned int num_heads = gridDim.x;
-  const unsigned int head_size = blockDim.x;
-
-  SCALAR_T* const q_src_ptr = q_src + token_idx * stride_size;
-  CACHE_T* const q_dst_ptr = q_dst + token_idx * stride_size;
-
-  const unsigned int head_offset = blockIdx.x * head_size + threadIdx.x;
-  if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
-    q_dst_ptr[head_offset] = q_src_ptr[head_offset];
-  } else {
-    q_dst_ptr[head_offset] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(q_src_ptr[head_offset], q_scale);
-  }
-}
-
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, int kVecBytes>
-__global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ qkv_src, CACHE_T* __restrict__ qkv_dst,
-                                         int total_len, int num_heads, int head_size, int stride_size,
-                                         float qkv_scale) {
-  constexpr unsigned int kVecSize = kVecBytes / sizeof(SCALAR_T);
-
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, typename VEC_IN_TYPE,
+          typename VEC_OUT_TYPE>
+__global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ src_ptr, CACHE_T* __restrict__ dst_ptr, int total_len,
+                                         int elems_num, int stride_size, float scale, int vec_size) {
   int batch_idx = blockIdx.z;
   int token_idx = batch_idx * gridDim.y + blockIdx.y;
   if (token_idx >= total_len) {
@@ -123,27 +104,20 @@ __global__ void ConvertToCacheTypeKernel(const SCALAR_T* __restrict__ qkv_src, C
   }
 
   // 该 token 的起始位置
-  const SCALAR_T* __restrict__ src = qkv_src + token_idx * stride_size;
-  CACHE_T* __restrict__ dst = qkv_dst + token_idx * stride_size;
+  const SCALAR_T* __restrict__ src = src_ptr + token_idx * stride_size;
+  CACHE_T* __restrict__ dst = dst_ptr + token_idx * stride_size;
 
-  // 每个 block 处理一个线性段
-  int block_base = blockIdx.x * blockDim.x * kVecSize;    // 该块的起始线性元素索引
-  int thread_base = block_base + threadIdx.x * kVecSize;  // 该线程的起始线性元素索引
+  int vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int elem_idx = vec_idx * vec_size;
 
-  // 在该块内的最大可处理元素上限
-  int max_elems = min(num_heads * head_size - block_base, blockDim.x * kVecSize);
-  if (max_elems <= 0) return;
-
-  // 按 VEC 处理，边界保护
-#pragma unroll
-  for (int i = 0; i < kVecSize; ++i) {
-    int idx = thread_base + i;
-    if (idx < block_base + max_elems) {
-      if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {
-        dst[idx] = src[idx];
-      } else {
-        dst[idx] = fp8::scaled_convert<CACHE_T, SCALAR_T, KV_DTYPE>(src[idx], qkv_scale);
-      }
+  if (elem_idx < elems_num) {
+    if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kAuto) {  // only copy
+      VEC_IN_TYPE vec_src = *reinterpret_cast<const VEC_IN_TYPE*>(&src[elem_idx]);
+      *reinterpret_cast<VEC_IN_TYPE*>(&dst[elem_idx]) = vec_src;
+    } else {
+      VEC_IN_TYPE vec_src = *reinterpret_cast<const VEC_IN_TYPE*>(&src[elem_idx]);
+      VEC_OUT_TYPE vec_dst = fp8::scaled_convert<VEC_OUT_TYPE, VEC_IN_TYPE, KV_DTYPE>(vec_src, scale);
+      *reinterpret_cast<VEC_OUT_TYPE*>(&dst[elem_idx]) = vec_dst;
     }
   }
 }
@@ -173,34 +147,47 @@ void CachePosCopyFlashAttnLayout(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list
       k_src, v_src, k_list, v_list, input_lengths, block_offsets, block_size, stride_size, k_scale, v_scale);
 }
 
+// input [total_len, num_heads, head_size]
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void ConvertQToCacheType(SCALAR_T* q_src, CACHE_T* q_dst, int bs, int req_q_len, int num_heads, int head_size,
-                         int stride_size, float q_scale, cudaStream_t stream) {
-  const dim3 grid_shape(num_heads, req_q_len, bs);
-  const dim3 block_shape(head_size);
-  ConvertQToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE>
-      <<<grid_shape, block_shape, 0, stream>>>(q_src, q_dst, stride_size, q_scale);
-}
-
-// For prefill qkv quantization, input [total_len, num_heads, head_size]
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-void ConvertToCacheType(SCALAR_T* qkv_src, CACHE_T* qkv_dst, int total_len, int num_heads, int head_size,
-                        int stride_size, float qkv_scale, cudaStream_t stream) {
+void ConvertToCacheType(SCALAR_T* src, CACHE_T* dst, int total_len, int num_heads, int head_size,
+                         int stride_size, float scale, cudaStream_t stream) {
   constexpr int kBlockThreads = 256;
-  constexpr int kVecBytes = 16;
+  constexpr int kVecSize = 8;
+  constexpr bool is_bfloat16 = std::is_same_v<SCALAR_T, __nv_bfloat16>;
+  
+  int elems_num = num_heads * head_size;
+  int vec_size = kVecSize;
+  
+  // Only support bfloat16 vectorization
+  // Check alignment: addresses must be aligned for vectorized access
+  int src_align_size = kVecSize * sizeof(SCALAR_T);
+  int dst_align_size = kVecSize * sizeof(CACHE_T);
+  bool is_aligned = (reinterpret_cast<uintptr_t>(src) % src_align_size == 0) &&
+                    (reinterpret_cast<uintptr_t>(dst) % dst_align_size == 0);
+  if (!is_bfloat16 || elems_num % vec_size != 0 || !is_aligned) {
+    vec_size = 1;
+  }
 
-  // 每个 block 处理 kBlockThreads * kVecBytes 个字节的元素
-  assert(kVecBytes % sizeof(SCALAR_T) == 0);
-  int elems_per_block = kBlockThreads * kVecBytes / sizeof(SCALAR_T);
-  int grid_x = (num_heads * head_size + elems_per_block - 1) / elems_per_block;
+  int vecs_num = ceil(static_cast<float>(elems_num) / vec_size);
 
+  int grid_x = ceil(static_cast<float>(vecs_num) / kBlockThreads);
   int grid_y = std::min(total_len, MAX_BLOCKS_PER_GRID_Y);
   int grid_z = (total_len + MAX_BLOCKS_PER_GRID_Y - 1) / MAX_BLOCKS_PER_GRID_Y;
   dim3 grid(grid_x, grid_y, grid_z);
   dim3 block(kBlockThreads);
+  if (vec_size > 1) {
+    if constexpr (is_bfloat16) {  // Only supports vectorization on bfloat16
+      using VEC_IN_TYPE = typename Vec<__nv_bfloat16, kVecSize>::Type;
+      using VEC_OUT_TYPE = uint2;
 
-  ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, kVecBytes>
-      <<<grid, block, 0, stream>>>(qkv_src, qkv_dst, total_len, num_heads, head_size, stride_size, qkv_scale);
+      ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, VEC_IN_TYPE, VEC_OUT_TYPE>
+          <<<grid, block, 0, stream>>>(src, dst, total_len, elems_num, stride_size, scale, vec_size);
+      return;
+    }
+  }
+  // For half and float or vec_size==1, use scalar version
+  ConvertToCacheTypeKernel<SCALAR_T, CACHE_T, KV_DTYPE, SCALAR_T, CACHE_T>
+      <<<grid, block, 0, stream>>>(src, dst, total_len, elems_num, stride_size, scale, vec_size);
 }
 
 #define CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(SCALAR_T, CACHE_T, KV_DTYPE)                                 \
@@ -212,9 +199,9 @@ void ConvertToCacheType(SCALAR_T* qkv_src, CACHE_T* qkv_dst, int total_len, int 
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, int* input_lengths, int* block_offsets,        \
       int block_size, int bs, int req_q_len, int num_heads, int head_size, int stride_size, float k_scale,             \
       float v_scale, cudaStream_t stream);                                                                             \
-  template void ConvertQToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T * q_src, CACHE_T * q_dst, int bs,            \
-                                                                 int req_q_len, int num_heads, int head_size,          \
-                                                                 int stride_size, float q_scale, cudaStream_t stream);
+  template void ConvertToCacheType<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T * src, CACHE_T * dst, int total_len,          \
+                                                                int num_heads, int head_size, int stride_size,         \
+                                                                float scale, cudaStream_t stream);
 
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 CACHE_COPY_FLASH_ATTN_LAYOUT_FUNCTION_DECLARATION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);

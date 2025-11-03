@@ -247,6 +247,66 @@ __inline__ __device__ uint8_t scaled_vec_conversion<uint8_t, __nv_bfloat16>(cons
     __builtin_unreachable();
 }
 
+// bf16x4 -> fp8x4
+template <>
+__inline__ __device__ uint32_t scaled_vec_conversion<uint32_t, bf16_4_t>(const bf16_4_t &a, const float scale,
+                                                                          const __nv_fp8_interpretation_t fp8_type)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    assert(false);
+#else
+    union {
+        uint8_t  u8[4];
+        uint32_t u32;
+    } tmp;
+    
+    float inv_scale = 1.0f / scale;
+    float2 f01 = __bfloat1622float2(a.x);
+    float2 f23 = __bfloat1622float2(a.y);
+    
+    tmp.u8[0] = (uint8_t)__nv_cvt_float_to_fp8(f01.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[1] = (uint8_t)__nv_cvt_float_to_fp8(f01.y * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[2] = (uint8_t)__nv_cvt_float_to_fp8(f23.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[3] = (uint8_t)__nv_cvt_float_to_fp8(f23.y * inv_scale, __NV_SATFINITE, fp8_type);
+
+    return tmp.u32;
+#endif
+    __builtin_unreachable();
+}
+
+// bf16x8 -> fp8x8 
+template <>
+__inline__ __device__ uint2 scaled_vec_conversion<uint2, bf16_8_t>(const bf16_8_t &a, const float scale,
+                                                                     const __nv_fp8_interpretation_t fp8_type)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    assert(false);
+#else
+    union {
+        uint8_t  u8[8];
+        uint2    u64;
+    } tmp;
+    
+    float inv_scale = 1.0f / scale;
+    float2 f01 = __bfloat1622float2(a.x);
+    float2 f23 = __bfloat1622float2(a.y);
+    float2 f45 = __bfloat1622float2(a.z);
+    float2 f67 = __bfloat1622float2(a.w);
+    
+    tmp.u8[0] = (uint8_t)__nv_cvt_float_to_fp8(f01.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[1] = (uint8_t)__nv_cvt_float_to_fp8(f01.y * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[2] = (uint8_t)__nv_cvt_float_to_fp8(f23.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[3] = (uint8_t)__nv_cvt_float_to_fp8(f23.y * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[4] = (uint8_t)__nv_cvt_float_to_fp8(f45.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[5] = (uint8_t)__nv_cvt_float_to_fp8(f45.y * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[6] = (uint8_t)__nv_cvt_float_to_fp8(f67.x * inv_scale, __NV_SATFINITE, fp8_type);
+    tmp.u8[7] = (uint8_t)__nv_cvt_float_to_fp8(f67.y * inv_scale, __NV_SATFINITE, fp8_type);
+    
+    return tmp.u64;
+#endif
+    __builtin_unreachable();
+}
+
 // float -> fp8
 template <>
 __inline__ __device__ uint8_t scaled_vec_conversion<uint8_t, float>(const float &a, const float scale,

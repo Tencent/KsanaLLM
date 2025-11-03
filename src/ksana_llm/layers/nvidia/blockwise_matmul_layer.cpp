@@ -118,7 +118,7 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
     //   3. 三种算子的初始开销（截距 b）不同：
     //      deepgemm_swap_ab < deepgemm < cutlass
     //   4. 性能曲线的交点即为最优切换阈值
-    size_t m = 1;
+    size_t m = kAlignSize_;
     while (m <= max_m_) {
       Tensor input_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m, k_}, rank_,
                           static_cast<void*>(input.data_ptr<torch::BFloat16>()));
