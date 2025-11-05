@@ -118,21 +118,25 @@ void GenerationController::FilterDraftTokens(std::vector<std::shared_ptr<InferRe
     return;
   }
 
-  size_t total_hit_num = 0, total_draft_num = 0;
-  for (size_t i = 0; i < hit_count.size(); ++i) {
-    const auto& [hit_num, draft_num] = hit_count[i];
-    KLLM_LOG_DEBUG << fmt::format("Draft index {} hit rate: {} / {}", i, hit_num, draft_num);
-    total_hit_num += hit_num;
-    total_draft_num += draft_num;
-  }
   // Log every 10 seconds
   constexpr size_t kReportIntervalMs = 10000;
   static IntervalLogger interval_logger(kReportIntervalMs);
-  if (interval_logger.ShouldLog()) {
-    KLLM_LOG_INFO << fmt::format(
-        "Draft hit rate: {:.1f}%, Mean acceptance length: {:.2f}, Hit tokens: {}, Draft tokens: {}",
-        total_hit_num * 100.f / total_draft_num, 1 + total_hit_num * 1.f / reqs.size(), total_hit_num, total_draft_num);
+  const bool should_log = interval_logger.ShouldLog();
+
+  size_t total_hit_num = 0, total_draft_num = 0;
+  for (size_t i = 0; i < hit_count.size(); ++i) {
+    const auto& [hit_num, draft_num] = hit_count[i];
+    total_hit_num += hit_num;
+    total_draft_num += draft_num;
+    if (should_log) {
+      KLLM_LOG_INFO << fmt::format("Draft index {} hit rate: {} / {} = {:.3f}%", i, hit_num, draft_num,
+                                   static_cast<double>(hit_num) / static_cast<double>(draft_num) * 100.0);
+    } else {
+      KLLM_LOG_DEBUG << fmt::format("Draft index {} hit rate: {} / {} = {:.3f}%", i, hit_num, draft_num,
+                                    static_cast<double>(hit_num) / static_cast<double>(draft_num) * 100.0);
+    }
   }
+
   // Report
   REPORT_METRIC("spec_draft_hit_num", total_hit_num);
   REPORT_METRIC("spec_draft_token_num", total_draft_num);

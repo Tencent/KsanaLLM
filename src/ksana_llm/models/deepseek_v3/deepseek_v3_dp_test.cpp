@@ -124,20 +124,19 @@ class DeepSeekV3DPTest : public testing::Test {
     }
   }
 
-  ForwardRequest CreateContextForwardRequest(int req_id, int dp_group_id, std::vector<int> &input_ids,
-                                             std::vector<FlexibleCachedCopyTask> &flexible_cached_copy_tasks,
-                                             EmbeddingSlice &embedding_slice) {
-    ForwardRequest forward;
-    forward.req_id = req_id;
-    forward.cache_manager = cache_managers[dp_group_id];
-    forward.attn_dp_group_id = dp_group_id;
-    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
-    forward.draft_token_num = 0;
-    forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    forward.logits_buf.resize(2);  // tp 2
-    forward.logits_buf[0] = deepseek_v3_dps[0]->GetLogitsPtr(multi_batch_id);
-    forward.logits_buf[1] = deepseek_v3_dps[1]->GetLogitsPtr(multi_batch_id);
-    forward.logits_offset = 0;
+  std::unique_ptr<ForwardRequest> CreateContextForwardRequest(
+      int req_id, int dp_group_id, std::vector<int> &input_ids,
+      std::vector<FlexibleCachedCopyTask> &flexible_cached_copy_tasks, EmbeddingSlice &embedding_slice) {
+    auto forward = std::make_unique<ForwardRequest>();
+    forward->req_id = req_id;
+    forward->cache_manager = cache_managers[dp_group_id];
+    forward->attn_dp_group_id = dp_group_id;
+    forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
+    forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
+    forward->logits_buf.resize(2);  // tp 2
+    forward->logits_buf[0] = deepseek_v3_dps[0]->GetLogitsPtr(multi_batch_id);
+    forward->logits_buf[1] = deepseek_v3_dps[1]->GetLogitsPtr(multi_batch_id);
+    forward->logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
     embedding_slice.pos = input_refit_pos;

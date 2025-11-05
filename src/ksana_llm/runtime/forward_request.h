@@ -46,10 +46,6 @@ struct ForwardRequest {
   // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
   int64_t* mrotary_embedding_pos_offset = nullptr;
 
-  // TODO(lijiajieli): This value can be obtained through kv_cached_token_num, but kv_cached_token_num may have errors
-  // in the prefix/flexible case and needs to be optimized.
-  size_t draft_token_num = 0;
-
   // forwarding_tokens contains tokens used in forwarding step. There are two parts:
   // 1. tokens have kv-caches, kv_cached_token_num is the number
   // 2. tokens need to be processed, their kv-caches are generated during computation

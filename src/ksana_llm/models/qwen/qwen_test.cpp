@@ -142,9 +142,8 @@ class QwenTest : public testing::Test {
         7747,  7919,  16734,  271,   23,     16,     223,   9090,  974,   10209,  1735,   10655,  271,   122641, 7524,
         2556,  17288, 621,    4385,  34666,  271,    2792,  2130,  768,   939,    23,     15,     3425,  15,     3130,
         271,   2056,  768,    12183, 9617,   128804};
-    forward.attn_dp_group_id = 0;
-    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
-    forward.draft_token_num = 0;
+    forward->attn_dp_group_id = 0;
+    forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward.logits_buf.resize(1);

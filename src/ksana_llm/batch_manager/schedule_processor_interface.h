@@ -16,7 +16,7 @@ namespace ksana_llm {
 // 调度结果结构体
 struct ScheduleResult {
   std::shared_ptr<ScheduleOutput> schedule_output;
-  std::shared_ptr<std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>>> grouped_reqs;
+  std::shared_ptr<std::map<ModelInstance *, std::vector<ForwardRequest *>>> grouped_reqs;
   std::shared_ptr<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>> deep_copy_forwarding_tokens;
   std::shared_ptr<std::vector<SamplingRequest>> sampling_reqs;
   bool is_valid = false;

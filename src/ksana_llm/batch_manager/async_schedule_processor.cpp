@@ -163,12 +163,10 @@ void AsyncScheduleProcessor::ProcessScheduleDataInternal(ScheduleResult &result,
 
 void AsyncScheduleProcessor::ApplyAsyncForwardingTokens(
     const std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>> &deep_copy_forwarding_tokens,
-    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs) {
-  for (auto &[model_inst, stage_vec_reqs] : grouped_reqs) {
-    for (auto &[stage, vec_req] : stage_vec_reqs) {
-      for (auto &req : vec_req) {
-        req->forwarding_tokens = deep_copy_forwarding_tokens.at(req->req_id);
-      }
+    std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs) {
+  for (auto &[model_inst, reqs] : grouped_reqs) {
+    for (auto &req : reqs) {
+      req->forwarding_tokens = deep_copy_forwarding_tokens.at(req->req_id);
     }
   }
 }
@@ -220,8 +218,7 @@ void AsyncScheduleProcessor::ProcessAsyncPostProcessing(ScheduleResult &result) 
 
   auto deep_copy_forwarding_tokens = DeepCopyForwardRequest(result.schedule_output->running_reqs);
   // 构建ForwardRequests
-  result.grouped_reqs =
-      std::make_shared<std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>>>();
+  result.grouped_reqs = std::make_shared<std::map<ModelInstance *, std::vector<ForwardRequest *>>>();
   llm_runtime_->BuildForwardRequests(result.schedule_output->multi_batch_id, result.schedule_output->running_reqs,
                                      *result.grouped_reqs);
 

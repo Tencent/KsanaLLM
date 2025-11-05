@@ -39,9 +39,7 @@ void BatchManager::SetBatchScheduler(std::shared_ptr<BatchSchedulerInterface> ba
   batch_scheduler_ = batch_scheduler;
 }
 
-void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) {
-  llm_runtime_ = llm_runtime;
-}
+void BatchManager::SetLlmRuntime(std::shared_ptr<LlmRuntime> llm_runtime) { llm_runtime_ = llm_runtime; }
 
 void BatchManager::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
   multi_batch_controller_ = controller;
@@ -50,12 +48,9 @@ void BatchManager::SetMultiBatchController(std::shared_ptr<MultiBatchController>
 Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   KLLM_LOG_DEBUG << "batch manager enqueue req id " << req->req_id;
 
-  Status enqueue_status = Status(RetCode::RET_SUCCESS);
-
   if (req->input_tokens.empty()) {
     KLLM_LOG_ERROR << "Req id " << req->req_id << " input tokens is empty.";
-    req->finish_status = Status(
-      RET_INVALID_ARGUMENT, fmt::format("Req id {} input tokens is empty.", req->req_id));
+    req->finish_status = Status(RET_INVALID_ARGUMENT, fmt::format("Req id {} input tokens is empty.", req->req_id));
     return req->finish_status;
   }
 
@@ -79,10 +74,10 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     }
   }
 
-  std::vector<std::shared_ptr<InferRequest>> infer_request_group;
+  std::vector<std::shared_ptr<InferRequest>> infer_request_group(req->output_group.size());
   for (size_t i = 0; i < req->output_group.size(); i++) {
-    std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, i);
-    infer_request_group.push_back(infer_req);
+    auto &infer_req = infer_request_group[i];
+    infer_req = std::make_shared<InferRequest>(req, i);
     infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
     infer_req->checksummed_block_num.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
     infer_req->block_checksums.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
@@ -100,7 +95,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
   // Init generation state
   generation_controller_->InitGenerationState(infer_request_group);
 
-  enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
+  const Status enqueue_status = batch_scheduler_->AddInferRequest(infer_request_group);
   if (enqueue_status.OK()) {
     KLLM_LOG_DEBUG << "batch scheduler: added req id " << req->req_id << " and "
                    << infer_request_group[0]->input_tokens.size() << " input tokens";
@@ -126,7 +121,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   SetDevice(0);
   static time_t last_end_time_us = ProfileTimer::GetCurrentTimeInUs();
 
-  std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
+  std::map<ModelInstance *, std::vector<ForwardRequest *>> grouped_reqs;
   auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
 
   while (!terminated_) {
@@ -238,7 +233,7 @@ Status BatchManager::WorkerProcess() {
 
     llm_runtime_->ReorderInferRequests(schedule_output->worker_running_reqs);
 
-    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs;
+    std::map<ModelInstance *, std::vector<ForwardRequest *>> grouped_reqs;
     llm_runtime_->BuildForwardRequests(schedule_output->worker_running_reqs, grouped_reqs);
 
     std::vector<SamplingRequest> sampling_reqs;

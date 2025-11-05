@@ -66,8 +66,7 @@ Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, Sch
   llm_runtime_->ReorderInferRequests(result.schedule_output->running_reqs);
 
   // Create ForwardRequests
-  result.grouped_reqs =
-      std::make_shared<std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>>>();
+  result.grouped_reqs = std::make_shared<std::map<ModelInstance*, std::vector<ForwardRequest*>>>();
   llm_runtime_->BuildForwardRequests(result.schedule_output->multi_batch_id, result.schedule_output->running_reqs,
                                      *result.grouped_reqs);
 

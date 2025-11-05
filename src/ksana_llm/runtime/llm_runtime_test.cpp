@@ -18,10 +18,37 @@ class MockTransferEngine : public TransferEngine {
   static void DeleteInstance() { Singleton<MockTransferEngine>::DeleteInstance(); }
 };
 
+class LlmRuntimeMock : public LlmRuntime {
+  using LlmRuntime::LlmRuntime;
+
+  Status Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
+                 bool epilogue, RunMode run_mode = RunMode::kMain) override {
+    return Status();
+  }
+  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                  std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler = true) override {
+    for (auto& req : sampling_reqs) {
+      req.sampling_result_tokens->emplace_back(kMockSamplingToken);
+    }
+    return Status();
+  }
+
+ public:
+  static constexpr int kMockSamplingToken = 1024;
+};
+
 class LlmRuntimeTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
+    std::filesystem::path current_path = __FILE__;
+    std::filesystem::path parent_path = current_path.parent_path();
+    std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";
+    std::string config_path = std::filesystem::absolute(config_path_relate).string();
+
+    const auto env = Singleton<Environment>::GetInstance();
+    env->ParseConfig(config_path);
+
+    llm_runtime_ = std::make_shared<LlmRuntimeMock>(batch_scheduler_config_, runtime_config_, context_);
   }
 
   void TearDown() override { MockTransferEngine::DeleteInstance(); }
@@ -212,17 +239,15 @@ TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
   req2->attn_dp_group_id = 1;
   reqs.emplace_back(req2);
 
-  std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>> grouped_reqs;
+  std::map<ModelInstance*, std::vector<ForwardRequest*>> grouped_reqs;
   llm_runtime_->BuildForwardRequests(reqs, grouped_reqs);
 
   EXPECT_EQ(grouped_reqs.size(), 1);
 
   std::map<int64_t, ForwardRequest*> results;
-  for (auto& [model, stage_map] : grouped_reqs) {
-    for (auto& [stage, forward_reqs] : stage_map) {
-      for (auto& forward_req : forward_reqs) {
-        results[forward_req->req_id] = forward_req;
-      }
+  for (auto& [model, forward_reqs] : grouped_reqs) {
+    for (auto& forward_req : forward_reqs) {
+      results[forward_req->req_id] = forward_req;
     }
   }
 
@@ -236,4 +261,94 @@ TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
 
   EXPECT_EQ(*forward_req1->forwarding_tokens, req1->forwarding_tokens);
   EXPECT_EQ(*forward_req2->forwarding_tokens, req2->forwarding_tokens);
+}
+
+TEST_F(LlmRuntimeTest, PrepareMtpInfoTest) {
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+
+  std::vector<std::shared_ptr<InferRequest>> reqs;
+  auto req1 = std::make_shared<InferRequest>(request, 0);
+  req1->req_id = 101;
+  req1->forwarding_tokens = {1, 2, 3, 4};
+  reqs.emplace_back(req1);
+
+  auto req2 = std::make_shared<InferRequest>(request, 0);
+  req2->req_id = 102;
+  req2->forwarding_tokens = {3, 4, 5, 6};
+  reqs.emplace_back(req2);
+
+  WaitGroup wg(1);
+  llm_runtime_->PrepareMtpInfo(reqs, wg);
+  wg.Wait();
+  EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 0);
+
+  *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 1;
+  wg.Add(1);
+  llm_runtime_->PrepareMtpInfo(reqs, wg);
+  wg.Wait();
+  EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 2);
+
+  auto& prepare_1 = llm_runtime_->mtp_prepared_data_[101];
+  EXPECT_EQ(prepare_1.order_pos, 0);
+  EXPECT_EQ(*prepare_1.tokens, std::vector<int>({2, 3, 4}));
+
+  auto& prepare_2 = llm_runtime_->mtp_prepared_data_[102];
+  EXPECT_EQ(prepare_2.order_pos, 1);
+  EXPECT_EQ(*prepare_2.tokens, std::vector<int>({4, 5, 6}));
+}
+
+TEST_F(LlmRuntimeTest, MtpForwardTest) {
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+
+  std::vector<std::shared_ptr<InferRequest>> reqs;
+  auto req1 = std::make_shared<InferRequest>(request, 0);
+  req1->req_id = 101;
+  req1->forwarding_tokens = {1, 2, 3, 4};
+  req1->generated_token = 5;
+  reqs.emplace_back(req1);
+
+  auto req2 = std::make_shared<InferRequest>(request, 0);
+  req2->req_id = 102;
+  req2->forwarding_tokens = {3, 4, 5, 6};
+  req2->generated_token = 7;
+  reqs.emplace_back(req2);
+
+  ForwardRequest forward_req1, forward_req2;
+  forward_req1.req_id = req1->req_id;
+  forward_req1.kv_cached_token_num = 0;
+  forward_req2.req_id = req2->req_id;
+  forward_req2.kv_cached_token_num = 0;
+
+  std::vector<ForwardRequest*> forward_reqs;
+  forward_reqs.emplace_back(&forward_req1);
+  forward_reqs.emplace_back(&forward_req2);
+
+  std::map<ModelInstance*, std::vector<ForwardRequest*>> grouped_reqs;
+  grouped_reqs[nullptr] = forward_reqs;
+
+  *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 2;
+
+  WaitGroup wg(1);
+  llm_runtime_->PrepareMtpInfo(reqs, wg);
+  wg.Wait();
+
+  std::vector<int> samp_res1, samp_res2;
+  std::vector<SamplingRequest> sampling_reqs(reqs.size());
+  sampling_reqs[0].sampling_result_tokens = &req1->sampling_result_tokens;
+  sampling_reqs[1].sampling_result_tokens = &req2->sampling_result_tokens;
+
+  llm_runtime_->MtpForward(0, grouped_reqs, sampling_reqs, reqs, true);
+
+  constexpr int kSamplingToken = LlmRuntimeMock::kMockSamplingToken;
+  EXPECT_EQ(*forward_req1.forwarding_tokens, std::vector<int>({2, 3, 4, 5, kSamplingToken}));
+  EXPECT_EQ(forward_req2.kv_cached_token_num, 4);
+  EXPECT_EQ(req1->draft_tokens.mtp, std::vector<int>({kSamplingToken, kSamplingToken}));
+
+  EXPECT_EQ(*forward_req2.forwarding_tokens, std::vector<int>({4, 5, 6, 7, kSamplingToken}));
+  EXPECT_EQ(forward_req2.kv_cached_token_num, 4);
+  EXPECT_EQ(req2->draft_tokens.mtp, std::vector<int>({kSamplingToken, kSamplingToken}));
 }

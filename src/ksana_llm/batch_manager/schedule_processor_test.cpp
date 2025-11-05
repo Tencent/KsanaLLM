@@ -214,14 +214,14 @@ TEST_F(ScheduleProcessorTest, ApplyAsyncForwardingTokens) {
   auto deep_copy_forwarding_tokens = std::make_shared<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>>();
   (*deep_copy_forwarding_tokens)[123] = std::shared_ptr<std::vector<int>>(new std::vector<int>{1, 2, 3});
 
-  auto grouped_reqs = std::make_shared<std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>>>();
+  auto grouped_reqs = std::make_shared<std::map<ModelInstance*, std::vector<ForwardRequest*>>>();
 
   ModelInstance* model_inst = reinterpret_cast<ModelInstance*>(0x9876);
   auto forward_req = std::make_unique<ForwardRequest>();
   forward_req->req_id = 123;
   forward_req->forwarding_tokens = std::shared_ptr<std::vector<int>>(new std::vector<int>{4, 5});
 
-  (*grouped_reqs)[model_inst][InferStage::kDecode].push_back(forward_req.get());
+  (*grouped_reqs)[model_inst].push_back(forward_req.get());
 
   async_processor->ApplyAsyncForwardingTokens(*deep_copy_forwarding_tokens, *grouped_reqs);
 

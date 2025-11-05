@@ -51,8 +51,6 @@ class InferRequest {
   // Get this infer request's KV occupied devices.
   std::vector<int> GetKVOccupiedDevices();
 
-  std::vector<int> GetVerifiedTokens();
-
   std::string PrintKVBlockIds(bool print_details = false) const;
 
   std::string ToString(bool print_details = false) const;

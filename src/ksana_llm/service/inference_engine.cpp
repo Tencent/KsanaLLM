@@ -341,8 +341,6 @@ Status InferenceEngine::Initialize() {
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, runtime_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
   llm_runtime_->SetMultiBatchController(multi_batch_controller_);
-  llm_runtime_->SetMtpForward(runtime_config.enable_mtp_module && model_config.num_nextn_predict_layers > 0);
-  llm_runtime_->SetAsync(batch_scheduler_config.enable_async);
   llm_runtime_->SetGenerationController(generation_controller_);
 
 #ifdef ENABLE_CUDA

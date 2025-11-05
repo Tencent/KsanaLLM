@@ -274,17 +274,17 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   // NOTE(karlluo): check batch size
   PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
   batch_size = forward_reqs.size();
-  if (batch_size == 0) {
-    KLLM_THROW(fmt::format("ModelInput empty forward requests, batch_size == 0"));
-  } else if (connector_config_.group_role == GroupRole::DECODE && batch_size > runtime_config_.max_step_token_num) {
-    KLLM_THROW(fmt::format("ModelInput batch_size exceed max_step_token_num at PD disaggregation. {} > {}", batch_size,
-                           runtime_config_.max_step_token_num));
-  } else if (batch_size > (size_t)runtime_config_.max_batch_size) {
-    KLLM_THROW(fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size,
-                           runtime_config_.max_batch_size));
-  }
-  infer_stage = forward_reqs.front().infer_stage;  // for NPU
+  KLLM_CHECK_WITH_INFO(batch_size > 0, "ModelInput empty forward requests, batch_size == 0");
+  KLLM_CHECK_WITH_INFO(
+      !(connector_config_.group_role == GroupRole::DECODE && batch_size > runtime_config_.max_step_token_num),
+      fmt::format("ModelInput batch_size exceed max_step_token_num at PD disaggregation. {} > {}", batch_size,
+                  runtime_config_.max_step_token_num));
+  KLLM_CHECK_WITH_INFO(
+      !(connector_config_.group_role == GroupRole::NONE &&
+        batch_size > static_cast<size_t>(runtime_config_.max_batch_size)),
+      fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size, runtime_config_.max_batch_size));
 
+  infer_stage = forward_reqs.front()->infer_stage;  // for NPU
   SetDevice(rank_);
 
   PrepareInputInfo(forward_reqs);
@@ -295,14 +295,13 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   dp_multi_token_request_total_seq_len = 0;
   total_sampling_token_num_ = 0;
   for (const auto& req : forward_reqs) {
-    if (req->GetType() == ForwardRequestType::kFlash) {
-      if (req->attn_dp_group_id == attn_dp_group_id_) {
+    if (req->attn_dp_group_id == attn_dp_group_id_) {
+      if (req->GetType() == ForwardRequestType::kFlash) {
         dp_context_tokens += req->GetInputIdsLength();
         dp_total_prefix_len += req->prefix_cache_len;
         context_kv_cache_block_num += req->kv_cache_ptrs[attn_dp_rank_id_].size();
-      }
-    } else {  // req->GetType() == ForwardRequestType::kPage
-      if (req->attn_dp_group_id == attn_dp_group_id_) {
+
+      } else {  // req->GetType() == ForwardRequestType::kPage
         dp_decode_tokens += req->GetInputIdsLength();
         decode_kv_cache_block_num += req->kv_cache_ptrs[attn_dp_rank_id_].size();
       }
@@ -627,7 +626,7 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
  * The MRope position information (position and offset) of qwen2_vl is computed by the `_get_input_positions` function
  * in the Python plugin and is passed as additional tensors.
  * Before model inference, copy the position tensor (`additional_tensors[0]`) to the corresponding GPU tensor
- * (`dp_mrotary_embedding_pos`), and record the offset value (`additioanl_tensors[1]`).
+ * (`dp_mrotary_embedding_pos`), and record the offset value (`additional_tensors[1]`).
  */
 void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs) {
   int64_t dp_mrotary_embedding_pos_size = 0;
@@ -686,8 +685,8 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
       cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank_);
 
   // NOTE(karlluo): block manager will change the block number in
-  // ResetPreAllocatedBlocks, block_managr's allocator's blocks_num is difference from the allocator's member config, so
-  // we need get it from allocator instance.
+  // ResetPreAllocatedBlocks, block_manager's allocator's blocks_num is difference from the allocator's member config,
+  // so we need get it from allocator instance.
   size_t total_block_num = Singleton<Environment>::GetInstance()->GetTotalDeviceBlockNum() * 2 * layer_num_on_node_;
   if (total_block_num != k_cache_blocks_base.shape[0]) {
     void* cur_rank_block_base_ptr = device_allocator->GetBlocksBasePtr();
@@ -983,7 +982,7 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_mask_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
 
-  // preapare pos
+  // prepare pos
   std::vector<int64_t> rotary_pos_host(total_input_len, 1);
   size_t rotary_data_offset = 0;
   for (const auto& req : input.dp_reqs) {
@@ -1093,7 +1092,7 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
 
   const auto& reqs = info.dp_reqs;
 
-  // Initiaize layer_kv_cache_ptr once
+  // Initialize layer_kv_cache_ptr once
   if (!layer_kv_cache_ptr_initialized_) {
     layer_kv_cache_ptr_initialized_ = true;
 

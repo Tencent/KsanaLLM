@@ -47,26 +47,37 @@ class LlmRuntime {
     generation_controller_ = controller;
   }
 
-  void SetAsync(const bool is_enable) { enable_async_ = is_enable; }
-
   // Execute one schedule output in parallel.
   // epilogue is used only for distributed master node, to process lm head and sampler.
-  Status Step(ScheduleOutput *schedule_output,
-              std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
+  Status Step(ScheduleOutput *schedule_output, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
               std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
 
   // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
   // and the requests from the Single-Token Forwarding at the back.
   template <typename T>
-  void ReorderInferRequests(std::vector<std::shared_ptr<T>> &reqs) {
+  void ReorderInferRequests(std::vector<T> &reqs) {
     PROFILE_EVENT_SCOPE(ReorderInferRequests, "ReorderInferRequests");
     // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
     // the requests are first sorted to utilize contiguous space for accelerated inference.
     // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
     std::sort(reqs.begin(), reqs.end(), [this](const auto &a, const auto &b) {
-      // For dp case, the order is: [group1_prefill, group2_prefill, group1_decode, group2_decode]
-      const int a_token_num = a->forwarding_tokens.size() - a->kv_cached_token_num;
-      const int b_token_num = b->forwarding_tokens.size() - b->kv_cached_token_num;
+      // For dp case, the order is: [group1_prefill, group1_decode, group2_prefill, group2_decode, ...]
+      // NOTE: prefill may appear after decode (if they are in different dp groups)
+      if (a->attn_dp_group_id != b->attn_dp_group_id) {
+        return a->attn_dp_group_id < b->attn_dp_group_id;
+      }
+
+      auto get_vec_size = [](const auto &item) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(item)>, std::vector<int>>) {
+          return item.size();
+        } else {
+          return item->size();
+        }
+      };
+
+      // For non-dp case, the order is: [prefill, decode]
+      const size_t a_token_num = get_vec_size(a->forwarding_tokens) - a->kv_cached_token_num;
+      const size_t b_token_num = get_vec_size(b->forwarding_tokens) - b->kv_cached_token_num;
 
       const static size_t decode_threshold_len = IsAbsorbWeightsEnabled() && IsAbsorbWeightsEnabled() ? 2 : 1;
 
@@ -93,7 +104,7 @@ class LlmRuntime {
     });
 
     // reset logits offset after reorder
-    if constexpr (std::is_same_v<T, InferRequest>) {
+    if constexpr (!std::is_same_v<std::decay_t<decltype(*std::declval<T>())>, WorkerInferRequest>) {
       size_t logits_offset = 0;
       for (auto &req : reqs) {
         req->logits_offset = logits_offset;
@@ -103,14 +114,12 @@ class LlmRuntime {
   }
 
   // Build forward request, group by model name and stage, for distributed worker node.
-  void BuildForwardRequests(
-      std::vector<std::shared_ptr<WorkerInferRequest>> &reqs,
-      std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs);
+  void BuildForwardRequests(std::vector<std::shared_ptr<WorkerInferRequest>> &reqs,
+                            std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs);
 
   // Build forward request, group by model name and stage.
-  void BuildForwardRequests(
-      size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-      std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs);
+  void BuildForwardRequests(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                            std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs);
 
   // Build sampling request.
   void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
@@ -119,33 +128,22 @@ class LlmRuntime {
   void DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs,
                                        std::vector<SamplingRequest> &sampling_reqs);
 
-  // Execute the forward.
-  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, bool epilogue,
-                 std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
-                 RunMode run_mode = RunMode::kMain);
-
-  // Execute the forward, for distributed worker node.
-  Status Forward(size_t multi_batch_id, std::vector<std::shared_ptr<WorkerInferRequest>> &reqs, bool epilogue,
-                 std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs);
+  virtual Status Forward(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
+                         bool epilogue, RunMode run_mode = RunMode::kMain);
 
  private:
   // Execute the sampling.
-  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                  std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
+  virtual Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                          std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
 
   // Run multi-token and single-token serially in single thread.
-  Status RunSerially(size_t multi_batch_id,
-                     std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
-                     bool epilogue, RunMode run_mode = RunMode::kMain);
+  Status RunSerially(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
+                     bool epilogue, RunMode run_mode);
 
-  // A assisant of forward.
-  Status AuxForward(size_t multi_batch_id,
-                    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
-                    bool epilogue, RunMode run_mode = RunMode::kMain);
-
-  Status MTPForward(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs, const bool epilogue,
-                    std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> grouped_reqs,
-                    std::vector<SamplingRequest> &sampling_reqs);
+  void PrepareMtpInfo(const std::vector<std::shared_ptr<InferRequest>> &reqs, WaitGroup &wg);
+  Status MtpForward(const size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
+                    std::vector<SamplingRequest> &sampling_reqs, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                    const bool epilogue);
 
   void GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>> &reqs);
 
@@ -153,16 +151,20 @@ class LlmRuntime {
                               std::shared_ptr<TransferEngine> transfer_engine = TransferEngine::GetInstance());
 
   Status StepOnChief(ScheduleOutput *schedule_output,
-                     std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
+                     std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
                      std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
   Status StepOnWorker(ScheduleOutput *schedule_output,
-                      std::map<ModelInstance *, std::map<InferStage, std::vector<ForwardRequest *>>> &grouped_reqs,
+                      std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
                       std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
 
  private:
-  bool mtp_forward_ = false;
-
-  bool enable_async_ = false;
+  const size_t mtp_step_num_ = 0;
+  struct MtpPrepareData {
+    std::shared_ptr<std::vector<int>> tokens;
+    InferRequest *infer_req;
+    size_t order_pos;
+  };
+  std::unordered_map<decltype(ForwardRequest::req_id), MtpPrepareData> mtp_prepared_data_;
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;

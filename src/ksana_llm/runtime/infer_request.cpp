@@ -130,17 +130,7 @@ void InferRequest::NotifyStep() {
   }
 }
 
-std::vector<int> InferRequest::GetVerifiedTokens() {
-  std::vector<int> tokens = forwarding_tokens;
-  tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num);
-  tokens.insert(tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
-  tokens.emplace_back(generated_token);
-  return tokens;
-}
-
-std::vector<std::vector<void *>> InferRequest::GetBlockPtrs() {
-  std::vector<std::vector<void *>> block_ptrs;
-  block_ptrs.reserve(kv_cache_blocks.size());
+void InferRequest::UpdateBlockPtrs(std::vector<std::vector<void *>> &block_ptrs) {
   for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
     std::vector<void *> block_ptr(kv_cache_blocks[rank].size());
     cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
@@ -185,7 +175,6 @@ ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logi
   forward_request_->last_step_token_num = last_step_token_num;
   forward_request_->logits_buf = logits_buf;
   forward_request_->logits_offset = logits_offset;
-  forward_request_->draft_token_num = draft_tokens.size();
   forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;

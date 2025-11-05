@@ -8,6 +8,7 @@
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/helpers/environment_test_helper.h"
+#include "ksana_llm/runtime/generation_controller.h"
 #include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/utils/memory_allocator.h"
@@ -148,19 +149,37 @@ TEST_F(BatchManagerTest, RegisterModelInstance) {
   EXPECT_TRUE(status.OK());
 }
 
-TEST_F(BatchManagerTest, EnqueueModelNotFound) {
+TEST_F(BatchManagerTest, EnqueueModel) {
+  ModelConfig model_config;
+  model_config.name = "test_model";
+  RuntimeConfig runtime_config;
+  std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
+  auto model_instance = std::make_shared<ModelInstance>(model_config, runtime_config, context_, weight_instance);
+  model_instance->name = "test_model";
+  batch_manager_->RegisterModelInstance(model_instance);
+
   std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
       std::make_shared<std::unordered_map<std::string, std::string>>();
   std::shared_ptr<Request> request = std::make_shared<Request>(ksana_python_input, req_ctx);
   request->req_id = 1;
+  request->input_tokens = {1, 2, 3};
   request->model_name = "non_existent_model";
   request->waiter = std::make_shared<Waiter>(1);
 
   Status status = batch_manager_->Enqueue(request);
-
   EXPECT_FALSE(status.OK());
   EXPECT_EQ(status.GetCode(), RET_INVALID_ARGUMENT);
+
+  std::shared_ptr<BatchSchedulerInterface> batch_scheduler;
+  std::shared_ptr<CacheManagerInterface> cache_manager;
+  PrepareTestCaseMeterial(2, 1, batch_scheduler, cache_manager);
+  batch_manager_->SetBatchScheduler(batch_scheduler);
+
+  request->model_name = "test_model";
+  batch_manager_->generation_controller_ = std::make_shared<GenerationController>(nullptr);
+  status = batch_manager_->Enqueue(request);
+  EXPECT_TRUE(status.OK());
 }
 
 TEST_F(BatchManagerTest, StartAndStop) {

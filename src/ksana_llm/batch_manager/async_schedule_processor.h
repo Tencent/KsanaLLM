@@ -64,7 +64,7 @@ class AsyncScheduleProcessor : public ScheduleProcessorInterface {
   // 应用深拷贝的forwarding_tokens到grouped_reqs
   void ApplyAsyncForwardingTokens(
       const std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>& deep_copy_forwarding_tokens,
-      std::map<ModelInstance*, std::map<InferStage, std::vector<ForwardRequest*>>>& grouped_reqs);
+      std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs);
 
  private:
   // 工作线程循环：处理调度任务
