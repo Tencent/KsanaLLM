@@ -8,6 +8,7 @@
 #include <mutex>
 #include <stdexcept>
 
+#include "ksana_llm/runtime/structured_generation/reasoning_structured_generator.h"
 #include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 
 namespace ksana_llm {
@@ -26,7 +27,14 @@ std::shared_ptr<StructuredGeneratorInterface> StructuredGeneratorFactory::Create
                              std::to_string(static_cast<int>(config.constraint_type)));
   }
 
-  return it->second->CreateGenerator(config);
+  auto inner_generator = it->second->CreateGenerator(config);
+
+  // TODO(ethanyczeng): true means start in reasoning phase, may need to be configurable in future
+  if (!reasoning_config_.Empty() && inner_generator) {
+    return std::make_shared<ReasoningStructuredGenerator>(inner_generator, reasoning_config_.think_end_token_id, true);
+  }
+
+  return inner_generator;
 }
 
 bool StructuredGeneratorFactory::IsConstraintTypeSupported(StructuredConstraintType constraint_type) {

@@ -16,6 +16,7 @@ from transformers import logging
 
 import ksana_llm
 from ksana_llm.arg_utils import EngineArgs
+from ksana_llm.ksana_engine import ReasoningConfig
 
 try:
     from openaiapi.openai_adapter import add_openai_routes, OpenAIConfig
@@ -45,7 +46,24 @@ class LLMServer:
     def initialize(self) -> None:
         """初始化模型"""
         self.model = ksana_llm.KsanaLLMEngine.from_engine_args(self.engine_args)
-        self.model.initialize()
+        self.reasoning_parser = getattr(self.engine_args, 'reasoning_parser', None)
+        
+        # Prepare reasoning config if reasoning_parser is enabled
+        reasoning_config = None
+        if self.reasoning_parser is not None:
+            try:
+                from openaiapi.reasoning import ReasoningParserManager
+                reasoning_parser_class = ReasoningParserManager.get_reasoning_parser(self.reasoning_parser)
+                reasoning_parser_instance = reasoning_parser_class(self.model.tokenizer)
+                if reasoning_parser_instance is None:
+                    raise ValueError(f"Failed to create reasoning parser instance for: {self.reasoning_parser}")
+                think_end_token_id = reasoning_parser_instance.end_token_id
+                reasoning_config = ReasoningConfig(think_end_token_id=think_end_token_id)
+            except (ImportError, ValueError, AttributeError, TypeError) as e:
+                raise RuntimeError(f"Failed to create reasoning config: {e}") from e
+
+        # Initialize the model with reasoning config
+        self.model.initialize(reasoning_config=reasoning_config)
         self.tokenizer = self.model.tokenizer
         self.pre_post_processor = self.model.pre_post_processor
 
@@ -54,7 +72,7 @@ class LLMServer:
                 # 创建OpenAI配置，传入解析器参数, 添加路由函数
                 openai_config = OpenAIConfig(
                     tool_call_parser=getattr(self.engine_args, 'tool_call_parser', None),
-                    reasoning_parser=getattr(self.engine_args, 'reasoning_parser', None),
+                    reasoning_parser=self.reasoning_parser,
                     enable_auto_tool_choice=getattr(self.engine_args, 'enable_auto_tool_choice', False),
                     tool_parser_plugin=getattr(self.engine_args, 'tool_parser_plugin', None)
                 )

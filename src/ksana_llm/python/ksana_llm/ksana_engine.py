@@ -25,6 +25,23 @@ class EndpointConfig:
     access_log: bool = True  # whether to enable the endpoint access log
 
 
+@dataclass
+class ReasoningConfig:
+    """Configuration for reasoning models that require special handling during inference.
+
+    This config is designed for models with reasoning capabilities like DeepSeek-R1
+    that need to disable constrained decoding during the thinking/reasoning phase.
+
+    Attributes:
+        think_end_token_id: Token ID marking the end of reasoning phase. When this token
+                           is encountered, the model will resume normal constrained decoding.
+
+    Future extensibility examples:
+        - max_think_tokens: maximum number of tokens allowed in the reasoning phase.
+    """
+    think_end_token_id: Optional[int] = None
+
+
 class PyAsyncStreamingIterator:
     """The streaming iterator."""
 
@@ -116,9 +133,13 @@ class KsanaLLMEngine:
         if hasattr(self.tokenizer, "eos_token_id"):
             self.eos_token_id = self.tokenizer.eos_token_id
 
-    def initialize(self) -> None:
-        """Initialize the model."""
-        self._serving.init_serving(self._config_file)
+    def initialize(self, reasoning_config: Optional[ReasoningConfig] = None) -> None:
+        """Initialize the model.
+
+        Args:
+            reasoning_config: Optional configuration for reasoning models.
+        """
+        self._serving.init_serving(self._config_file, reasoning_config)
 
     @classmethod
     def from_engine_args(cls, args: EngineArgs) -> "KsanaLLMEngine":

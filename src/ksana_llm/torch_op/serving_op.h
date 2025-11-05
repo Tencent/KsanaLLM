@@ -20,7 +20,8 @@ class ServingOp : public torch::jit::CustomClassHolder {
   ~ServingOp();
 
   // Initialize the serving server.
-  void InitServing(const std::string &config_file);
+  // think_end_token_id: Optional token ID for reasoning mode. -1 means disabled.
+  void InitServing(const std::string &config_file, int think_end_token_id = -1);
 
   // Generate a response.
   Status Generate(const std::shared_ptr<KsanaPythonInput> &ksana_python_input,

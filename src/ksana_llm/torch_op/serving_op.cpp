@@ -16,8 +16,11 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/service/service_lifetime.h"
 #include "ksana_llm/utils/logger.h"
+#include "ksana_llm/utils/reasoning_config.h"
 #include "ksana_llm/utils/request.h"
 #include "ksana_llm/utils/service_utils.h"
+#include "ksana_llm/utils/singleton.h"
+#include "ksana_llm/utils/tokenizer.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -39,8 +42,11 @@ ServingOp::~ServingOp() {
   SetServiceLifetimeManager(nullptr);
 }
 
-void ServingOp::InitServing(const std::string &config_file) {
+void ServingOp::InitServing(const std::string &config_file, int think_end_token_id) {
   KLLM_LOG_DEBUG << "ServingOp::InitServing, pid:" << getpid();
+
+  // Apply reasoning config automatically
+  ReasoningConfigManager reasoning_config_manager(think_end_token_id);
 
   inference_server_ = std::make_shared<InferenceServer>(config_file, endpoint_config_);
   STATUS_CHECK_FAILURE(inference_server_->Start());
@@ -72,6 +78,7 @@ Status ServingOp::Forward(const std::string &request_bytes,
   KLLM_LOG_DEBUG << "ServingOp::Forward invoked.";
   STATUS_CHECK_AND_REPORT(inference_server_->HandleForward(request_bytes, req_ctx, response_bytes));
 }
+
 
 }  // namespace ksana_llm
 
@@ -194,7 +201,21 @@ PYBIND11_MODULE(libtorch_serving, m) {
   // Export `ServingOp` to python.
   pybind11::class_<ksana_llm::ServingOp, std::shared_ptr<ksana_llm::ServingOp>>(m, "Serving")
       .def(pybind11::init<>())
-      .def("init_serving", &ksana_llm::ServingOp::InitServing)
+      .def("init_serving",
+           [](ksana_llm::ServingOp &self, const std::string &config_file,
+              const pybind11::object &reasoning_config_obj) {
+             int think_end_token_id = -1;
+             if (!reasoning_config_obj.is_none()) {
+               if (pybind11::hasattr(reasoning_config_obj, "think_end_token_id")) {
+                 pybind11::object token_id_obj = reasoning_config_obj.attr("think_end_token_id");
+                 if (!token_id_obj.is_none()) {
+                   think_end_token_id = token_id_obj.cast<int>();
+                 }
+               }
+             }
+             self.InitServing(config_file, think_end_token_id);
+           },
+           py::arg("config_file"), py::arg("reasoning_config") = py::none())
       .def_readwrite("endpoint_config", &ksana_llm::ServingOp::endpoint_config_)
       .def("generate",
            [](std::shared_ptr<ksana_llm::ServingOp> &self,

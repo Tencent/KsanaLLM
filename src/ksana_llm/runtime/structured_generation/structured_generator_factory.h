@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/utils/config/schedule_config_parser.h"
+
 namespace ksana_llm {
 
 /*!
@@ -45,11 +47,24 @@ class StructuredGeneratorFactory {
 
   void RegisterCreator(StructuredConstraintType constraint_type, std::unique_ptr<GeneratorCreator> creator);
 
+  /*!
+   * \brief Set the reasoning configuration
+   * \param reasoning_config The reasoning configuration
+   */
+  void SetReasoningConfig(const ReasoningConfig& reasoning_config) { reasoning_config_ = reasoning_config; }
+
+  /*!
+   * \brief Get the reasoning configuration
+   * \return The reasoning configuration
+   */
+  const ReasoningConfig& GetReasoningConfig() const { return reasoning_config_; }
+
  private:
   void InitializeRegistry();
 
   std::unordered_map<StructuredConstraintType, std::unique_ptr<GeneratorCreator>> creator_registry_;
   std::mutex registry_mutex_;
+  ReasoningConfig reasoning_config_;  // Reasoning configuration
 };
 
 }  // namespace ksana_llm

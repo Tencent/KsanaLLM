@@ -315,6 +315,14 @@ Status InferenceEngine::Initialize() {
         KLLM_LOG_INFO << "Structured generator factory initialized with final "
                          "vocab_size: "
                       << vocab_size;
+
+        // Get reasoning config from Environment and set it to factory
+        ReasoningConfig reasoning_config;
+        Status reasoning_status = env->GetReasoningConfig(reasoning_config);
+        if (reasoning_status.OK() && reasoning_config.IsEnabled()) {
+          structured_generator_factory->SetReasoningConfig(reasoning_config);
+          KLLM_LOG_INFO << "Reasoning mode enabled with think_end_token_id: " << reasoning_config.think_end_token_id;
+        }
       } catch (const std::exception &e) {
         return Status(RET_RUNTIME_FAILED,
                       "Structured generator factory initialization failed: " + std::string(e.what()));

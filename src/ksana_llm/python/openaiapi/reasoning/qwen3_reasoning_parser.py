@@ -7,8 +7,7 @@ from typing import Optional, Union
 
 from transformers import PreTrainedTokenizerBase
 
-from openaiapi.openai_protocol import (ChatCompletionRequest,
-                                              DeltaMessage)
+from openaiapi.openai_protocol import DeltaMessage
 from openaiapi.reasoning import ReasoningParser, ReasoningParserManager
 from utilize.logger import get_logger
 
@@ -118,7 +117,7 @@ class Qwen3ReasoningParser(ReasoningParser):
             return DeltaMessage(content=delta_text)
 
     def extract_reasoning_content(
-            self, model_output: str, request: ChatCompletionRequest
+            self, model_output: str
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Extract reasoning content from the model output.

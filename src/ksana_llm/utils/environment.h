@@ -110,6 +110,15 @@ class Environment {
     return schedule_config_parser_.GetConnectorConfigs(connector_config);
   }
 
+  // Get and set reasoning config
+  Status GetReasoningConfig(ReasoningConfig &reasoning_config) const {
+    return schedule_config_parser_.GetReasoningConfig(reasoning_config);
+  }
+
+  void SetReasoningConfig(const ReasoningConfig &reasoning_config) {
+    schedule_config_parser_.SetReasoningConfig(reasoning_config);
+  }
+
   // Calculate block size via model configs.
   Status InitializeBlockManagerConfig() { return schedule_config_parser_.InitializeBlockManagerConfig(model_config_); }
 

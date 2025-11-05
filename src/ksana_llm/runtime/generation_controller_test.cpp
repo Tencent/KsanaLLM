@@ -9,6 +9,7 @@
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "ksana_llm/runtime/structured_generation/reasoning_structured_generator.h"
 
 namespace ksana_llm {
 
@@ -170,4 +171,145 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   EXPECT_EQ(infer_req->accepted_tokens[1], 6);
   EXPECT_EQ(infer_req->generated_token, 7);
 }
+
+// 测试 ReasoningStructuredGenerator - 有思考内容的模型
+// 当 think_end_token_id > 0 时，会包装 ReasoningStructuredGenerator
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorWithReasoning) {
+  // 期望的输出序列: [10, 20, 30]
+  std::vector<int> expected_output_tokens = {10, 20, 30};
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(expected_output_tokens);
+
+  // 思考结束标记为 999（> 0，表示支持思考）
+  int think_end_token_id = 999;
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, think_end_token_id, true);
+
+  // 验证初始状态：处于推理阶段
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_FALSE(reasoner_generator->IsTerminated());
+  EXPECT_TRUE(reasoner_generator->IsValid());
+
+  // 在推理阶段，任何 token 都应该被接受（模拟思考内容）
+  EXPECT_TRUE(reasoner_generator->AcceptToken(1));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(2));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(3));
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+
+  // 遇到思考结束标记，退出推理阶段
+  EXPECT_TRUE(reasoner_generator->AcceptToken(think_end_token_id));
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+
+  // 推理阶段结束后，只接受符合约束的 token
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));   // 第一个期望的 token
+  EXPECT_FALSE(reasoner_generator->AcceptToken(15));  // 不符合期望的 token
+  EXPECT_TRUE(reasoner_generator->AcceptToken(20));   // 第二个期望的 token
+  EXPECT_TRUE(reasoner_generator->AcceptToken(30));   // 第三个期望的 token
+
+  // 验证约束类型
+  EXPECT_EQ(reasoner_generator->GetConstraintType(), StructuredConstraintType::REGEX);
+}
+
+// 测试没有思考内容的模型 - 直接使用Xgrammar 作为约束解码后端
+// 这个测试模拟 StructuredGeneratorFactory 在 think_end_token_id <= 0 时的行为
+TEST_F(GenerationControllerTest, StructuredGeneratorWithoutReasoning) {
+  // 期望的输出序列: [100, 200, 300]
+  std::vector<int> expected_output_tokens = {100, 200, 300};
+
+  // 对于不支持思考的模型，直接使用内部生成器，不包装 ReasoningStructuredGenerator
+  auto generator = std::make_shared<MockStructuredGenerator>(expected_output_tokens);
+
+  // 验证生成器有效
+  EXPECT_TRUE(generator->IsValid());
+  EXPECT_TRUE(generator->AcceptToken(100));   // 第一个期望的 token
+  EXPECT_FALSE(generator->AcceptToken(150));  // 不符合期望的 token，被拒绝
+  EXPECT_TRUE(generator->AcceptToken(200));   // 第二个期望的 token
+  EXPECT_FALSE(generator->AcceptToken(250));  // 不符合期望的 token，被拒绝
+  EXPECT_TRUE(generator->AcceptToken(300));   // 第三个期望的 token
+
+  // 验证生成器仍然有效
+  EXPECT_TRUE(generator->IsValid());
+  EXPECT_EQ(generator->GetConstraintType(), StructuredConstraintType::REGEX);
+}
+
+// 测试 FillNextTokenBitmask - 推理阶段不应用约束
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorFillNextTokenBitmask) {
+  std::vector<int> expected_output_tokens = {10, 20, 30};
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(expected_output_tokens);
+
+  int think_end_token_id = 999;
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, think_end_token_id, true);
+
+  void* dummy_bitmask = nullptr;
+
+  // 在推理阶段，FillNextTokenBitmask 应该返回 false（不应用约束）
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_FALSE(reasoner_generator->FillNextTokenBitmask(dummy_bitmask));
+
+  // 退出推理阶段
+  reasoner_generator->AcceptToken(think_end_token_id);
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+
+  // 推理阶段结束后，FillNextTokenBitmask 应该返回 true（应用约束）
+  EXPECT_TRUE(reasoner_generator->FillNextTokenBitmask(dummy_bitmask));
+}
+
+// 测试 Rollback - 推理阶段不传递回滚
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorRollback) {
+  std::vector<int> expected_output_tokens = {10, 20, 30};
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(expected_output_tokens);
+
+  int think_end_token_id = 999;
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, think_end_token_id, true);
+
+  // 在推理阶段接受一些 token
+  reasoner_generator->AcceptToken(1);
+  reasoner_generator->AcceptToken(2);
+  reasoner_generator->AcceptToken(3);
+
+  // 在推理阶段回滚不会影响内部生成器（不会抛出异常）
+  EXPECT_NO_THROW(reasoner_generator->Rollback(2));
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+
+  // 退出推理阶段
+  reasoner_generator->AcceptToken(think_end_token_id);
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+
+  // 推理阶段结束后接受一些 token
+  reasoner_generator->AcceptToken(10);
+  reasoner_generator->AcceptToken(20);
+
+  // 推理阶段结束后，回滚会传递给内部生成器
+  EXPECT_NO_THROW(reasoner_generator->Rollback(1));
+
+  // 验证回滚后可以重新接受 token
+  EXPECT_TRUE(reasoner_generator->AcceptToken(20));
+
+  // 测试负数回滚应该抛出异常
+  EXPECT_THROW(reasoner_generator->Rollback(-1), std::invalid_argument);
+}
+
+// 测试 FindJumpForwardTokens - 推理阶段不支持跳跃前进
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorFindJumpForwardTokens) {
+  std::vector<int> expected_output_tokens = {10, 20, 30};
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(expected_output_tokens);
+
+  int think_end_token_id = 999;
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, think_end_token_id, true);
+
+  std::vector<int> jump_tokens;
+
+  // 在推理阶段，FindJumpForwardTokens 应该返回 false 并清空 jump_tokens
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+  jump_tokens = {1, 2, 3};
+  EXPECT_FALSE(reasoner_generator->FindJumpForwardTokens(jump_tokens));
+  EXPECT_TRUE(jump_tokens.empty());
+
+  // 退出推理阶段
+  reasoner_generator->AcceptToken(think_end_token_id);
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+
+  // 推理阶段结束后，FindJumpForwardTokens 会传递给内部生成器
+  // MockStructuredGenerator 的实现返回 false
+  EXPECT_FALSE(reasoner_generator->FindJumpForwardTokens(jump_tokens));
+}
+
 }  // namespace ksana_llm

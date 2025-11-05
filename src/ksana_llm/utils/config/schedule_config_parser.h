@@ -24,6 +24,38 @@ enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
 
 enum PPMultibatchWBStrategy { NO_WB = 0, NO_DYNAMIC_WB = 1, WB_BATCH_REQ = 2, WB_BATCH_TOKEN = 3, WB_REQ_TOKEN = 4 };
 
+// Configuration for Attention Data Parallel Group Balance strategy
+struct AttentionDPGroupBalanceConfig {
+  // Whether to enable ADP balance strategy
+  bool enable_balance = false;
+  // Maximum wait steps before timeout
+  size_t max_waiting_steps = 50;
+  // Maximum wait time in milliseconds before timeout
+  size_t max_waiting_time_in_ms = 1000;
+  // Minimum QPS threshold for waiting, when exceeded, set max_waiting_steps=0 and max_waiting_time_in_ms=0 (no
+  // accumulation) Default -1 means all QPS will use accumulation
+  double min_qps_for_waiting = -1.0;
+};
+
+// Configuration for reasoning mode (e.g., DeepSeek R1)
+struct ReasoningConfig {
+  // Token ID for the end of thinking block (e.g., "</think>")
+  // -1 means reasoning mode is disabled
+  int think_end_token_id = -1;
+
+  // Check if reasoning mode is enabled
+  bool IsEnabled() const { return think_end_token_id >= 0; }
+
+  // Check if the config is empty (not configured)
+  bool Empty() const { return think_end_token_id < 0; }
+
+  // Set the think end token ID
+  void SetThinkEndTokenId(int token_id) { think_end_token_id = token_id; }
+
+  // Get the think end token ID
+  int GetThinkEndTokenId() const { return think_end_token_id; }
+};
+
 struct BatchSchedulerConfig {
   // The batch schedule strategy.
   ScheduleStrategy schedule_strategy = ScheduleStrategy::CONTINUOUS_BATCHING;
@@ -439,6 +471,16 @@ class ScheduleConfigParser {
     return;
   }
 
+  // Get and set reasoning config
+  Status GetReasoningConfig(ReasoningConfig &reasoning_config) const {
+    reasoning_config = reasoning_config_;
+    return Status();
+  }
+
+  void SetReasoningConfig(const ReasoningConfig &reasoning_config) {
+    reasoning_config_ = reasoning_config;
+  }
+
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
 
@@ -471,6 +513,9 @@ class ScheduleConfigParser {
 
   // Store parsed connector configurations
   ConnectorConfig connector_config_;
+
+  // Store reasoning configuration
+  ReasoningConfig reasoning_config_;
 };
 
 }  // namespace ksana_llm
