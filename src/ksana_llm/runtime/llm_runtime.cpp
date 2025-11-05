@@ -235,7 +235,7 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     sampling_req.ngram_dict = &(req->ngram_dict);
     sampling_req.structured_generator = req->structured_generator;
     sampling_req.apply_structured_constraint = enable_main_layers_sampler;
-    sampling_req.apply_no_repeat_ngram_constraint = enable_main_layers_sampler;
+    sampling_req.enable_mtp_sampler = !enable_main_layers_sampler;
   }
 }
 
@@ -338,6 +338,8 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
       sampling_req.forwarding_tokens = forward_req.forwarding_tokens;
       sampling_req.sampling_token_num = forward_req.sampling_token_num;
       sampling_req.logits_offset = forward_req.logits_offset;
+      sampling_req.apply_structured_constraint = false;
+      sampling_req.enable_mtp_sampler = true;
       sampling_req.sampling_result_tokens->clear();
     }
     sampling_reqs = std::move(updated_reqs);

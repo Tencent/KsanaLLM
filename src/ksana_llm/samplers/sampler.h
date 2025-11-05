@@ -12,6 +12,11 @@
 
 namespace ksana_llm {
 
+// TODO(winminkong): To ensure that the sampling_result_tokens align with the indices of the top log probabilities of
+// the output tokens, we will temporarily standardize by computing the top 5 log probabilities. It will be deleted
+// later.
+constexpr int kMinLogprobsNum = 5;
+
 class Sampler {
  public:
   Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context);

@@ -426,30 +426,34 @@ class RequestConverter:
             # 处理第一个批次的结果
             if not isinstance(ksana_logprobs, list) or len(ksana_logprobs) == 0:
                 return None
-                
+
             batch_logprobs = ksana_logprobs[0][-len(token_ids):]
+
             if not isinstance(batch_logprobs, list):
                 return None
-            
+
             # 如果提供了实际生成的token_ids，使用它们；否则使用第一个候选
             for position_idx, position_logprobs in enumerate(batch_logprobs):
                 if not isinstance(position_logprobs, list) or len(position_logprobs) == 0:
                     continue
-                
+
                 # 确定当前位置的token和logprob
                 if token_ids and position_idx < len(token_ids):
                     # 使用实际生成的token
                     current_token_id = token_ids[position_idx]
-                    current_logprob = -9999.0
+                    _, current_logprob = position_logprobs[0]
                     # 在候选中查找对应的logprob
-                    for tid, lp in position_logprobs:
-                        if tid == current_token_id:
-                            current_logprob = lp
+                    for i, (top_idx, top_logprobs) in enumerate(position_logprobs):
+                        if top_idx == current_token_id:
+                            # TODO(winminkong): 为确保输出一致, C++端直接修改logprob的计算方式
+                            # 将找到的元组移动到列表第一个位置,确保输出的顺序跟实际生成的token一致
+                            position_logprobs.insert(0, position_logprobs.pop(i))
+                            current_logprob = top_logprobs
                             break
                 else:
                     # 使用第一个候选
                     current_token_id, current_logprob = position_logprobs[0]
-                
+
                 # 解码token为文本
                 token_text = self._decode_token(current_token_id)
                 
@@ -457,11 +461,11 @@ class RequestConverter:
                 top_logprobs_list = []
                 if num_output_top_logprobs > 0:
                     # 取前N个候选
-                    for tid, lp in position_logprobs[:num_output_top_logprobs]:
-                        candidate_text = self._decode_token(tid)
+                    for top_idx, top_logprobs in position_logprobs[:num_output_top_logprobs]:
+                        candidate_text = self._decode_token(top_idx)
                         top_logprobs_list.append(TopLogprob(
                             token=candidate_text,
-                            logprob=float(lp),
+                            logprob=float(top_logprobs),
                             bytes=list(candidate_text.encode("utf-8", errors="replace"))
                         ))
                 
@@ -472,7 +476,6 @@ class RequestConverter:
                     bytes=list(token_text.encode("utf-8", errors="replace")),
                     top_logprobs=top_logprobs_list
                 ))
-            
             return ChoiceLogprobs(content=content_list) if content_list else None
             
         except (IndexError, TypeError, ValueError, AttributeError) as e:

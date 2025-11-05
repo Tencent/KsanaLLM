@@ -298,11 +298,12 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
 
   // logprobs is not supported in ACL.
 #ifdef ENABLE_CUDA
-  EXPECT_EQ(2, (*sample_req.logprobs.get())[0].size());
+  // Default logprobs num is 5, later will be changed.
+  EXPECT_EQ(5, (*sample_req.logprobs.get())[0].size());
   EXPECT_EQ(2, (*sample_req.logprobs.get())[0][0].first);
-  EXPECT_NEAR(-0.598139f, (*sample_req.logprobs.get())[0][0].second, 1e-6);
+  EXPECT_NEAR(-8.374043f, (*sample_req.logprobs.get())[0][0].second, 1e-6);
   EXPECT_EQ(5, (*sample_req.logprobs.get())[0][1].first);
-  EXPECT_NEAR(-0.798139f, (*sample_req.logprobs.get())[0][1].second, 1e-6);
+  EXPECT_NEAR(-8.574042f, (*sample_req.logprobs.get())[0][1].second, 1e-6);
 #endif
 
   sampling_config_.logprobs_num = 0;

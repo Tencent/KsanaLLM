@@ -246,28 +246,38 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
 Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
                                         SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
   for (auto& sampling_req : sampling_reqs) {
+    // TODO(winminkong): A batch of requests is judged and calculated only once.
+    if (sampling_req.enable_mtp_sampler) {
+      // Do not calculate output token logprobs when sample req is mtp req.
+      continue;
+    }
+
     auto& logprobs_num = sampling_req.sampling_config->logprobs_num;
     if (logprobs_num == 0) {
       sampling_req.logprobs->emplace_back();
       continue;
     }
-
-    std::vector<float> logprobs(logprobs_num);
-    std::vector<int64_t> token_ids(logprobs_num);
+    int universal_logprobs_num = logprobs_num > kMinLogprobsNum ? logprobs_num : kMinLogprobsNum;
+    std::vector<float> logprobs(universal_logprobs_num);
+    std::vector<int64_t> token_ids(universal_logprobs_num);
 #ifdef ENABLE_CUDA
     auto& offset = sampling_req.logits_offset;
     auto& vocab_size = sampling_device_parameter.vocab_size_padded;
     float* device_temperatures_ptr = sampling_device_parameter.device_temperatures == nullptr
                                          ? nullptr
                                          : sampling_device_parameter.device_temperatures + offset;
-    CalcLogprobs(device_logits + (offset * vocab_size), device_temperatures_ptr, vocab_size, 1,
-                 sampling_req.sampling_config->logprobs_num, logprobs.data(), token_ids.data());
+    for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
+      CalcLogprobs(device_logits + (offset + sampling_index) * vocab_size, device_temperatures_ptr, vocab_size, 1,
+                   universal_logprobs_num, logprobs.data(), token_ids.data());
 #endif
-    std::vector<std::pair<int, float>> logprobs_output;
-    for (int logprobs_index = 0; logprobs_index < sampling_req.sampling_config->logprobs_num; logprobs_index++) {
-      logprobs_output.push_back({token_ids[logprobs_index], logprobs[logprobs_index]});
+      std::vector<std::pair<int, float>> logprobs_output;
+      for (int logprobs_index = 0; logprobs_index < universal_logprobs_num; logprobs_index++) {
+        logprobs_output.push_back({token_ids[logprobs_index], logprobs[logprobs_index]});
+      }
+      sampling_req.logprobs->emplace_back(logprobs_output);
+#ifdef ENABLE_CUDA
     }
-    sampling_req.logprobs->emplace_back(logprobs_output);
+#endif
   }
   return Status();
 }
@@ -397,7 +407,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
 
     const int input_tokens_size = sampling_req.input_tokens->size();
     // NOTE(winminkong): Do not apply NoRepeatNgram sampling when sample req is mtp req.
-    if (!sampling_req.apply_no_repeat_ngram_constraint) {
+    if (sampling_req.enable_mtp_sampler) {
       continue;
     }
     // NOTE(winminkong): When mtp_step_num > 0, the NoRepeatNgram sampling is applied only to the first token generated.

@@ -920,17 +920,18 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
   auto options = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kFloat32);
   auto logits_tensor = torch::from_blob(logits, {bs, vocab_size}, options);
 
-  torch::Tensor logits_sort, logits_idx;
-  std::tie(logits_sort, logits_idx) = logits_tensor.sort(-1, true);
-
-  logits_sort = logits_sort.narrow(1, 0, logprobs_num);
   if (temperatures != nullptr) {
     auto temperatures_tensor = torch::from_blob(temperatures, {bs}, options);
-    logits_sort = logits_sort.div_(temperatures_tensor.unsqueeze_(1));
+    logits_tensor = logits_tensor.div_(temperatures_tensor.unsqueeze_(1));
   }
-  logits_sort = logits_sort.log_softmax(-1).to(torch::kCPU).view({-1});
-  logits_idx = logits_idx.narrow(1, 0, logprobs_num).to(torch::kCPU).view({-1});
+  logits_tensor = logits_tensor.log_softmax(-1);
 
+  torch::Tensor logits_sort, logits_idx;
+  // TODO(winminkong): Modify top-k to use a calculation method consistent with the generated tokens. Avoid the
+  // situation where the index of the maximum logprobs does not match the generated tokens.
+  std::tie(logits_sort, logits_idx) = logits_tensor.topk(logprobs_num, 1, true, true);
+  logits_sort = logits_sort.to(torch::kCPU).view({-1});
+  logits_idx = logits_idx.to(torch::kCPU).view({-1});
   memcpy(logprobs, logits_sort.data_ptr<float>(), logprobs_num * bs * sizeof(float));
   memcpy(token_ids, logits_idx.data_ptr<int64_t>(), logprobs_num * bs * sizeof(int64_t));
 }

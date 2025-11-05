@@ -109,6 +109,11 @@ void GenerationController::FilterDraftTokens(std::vector<std::shared_ptr<InferRe
 
     req->accepted_tokens.swap(draft_tokens);
     req->accepted_tokens.resize(draft_hit_num);
+    // Delete logprobs of tokens that were not accepted.
+    size_t unaccepted_num = req->sampling_result_tokens.size() - kStepGenerateTokenNum - draft_hit_num;
+    for (size_t i = 0; i < unaccepted_num; ++i) {
+      if (!req->logprobs.empty()) req->logprobs.pop_back();
+    }
     req->generated_token = req->sampling_result_tokens[draft_hit_num];  // only kStepGenerateTokenNum(1) token now
     req->sampling_result_tokens.clear();
     req->draft_tokens.clear();
