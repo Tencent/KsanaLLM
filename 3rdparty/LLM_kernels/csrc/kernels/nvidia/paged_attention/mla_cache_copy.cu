@@ -18,6 +18,110 @@ namespace nvidia {
 #define MAX_THREADS_PER_BLOCK 1024
 #define MAX_BLOCKS_PER_GRID_Y 65535
 
+#ifdef ENABLE_FP8
+__device__ __forceinline__ void IndexerCommonKCacheCopyKernel(const __nv_fp8_e4m3* __restrict__ k_src,
+                                                              void** __restrict__ k_list,
+                                                              const int* __restrict__ block_offsets, int block_size,
+                                                              int k_stride_size, int token_idx, int batch_idx,
+                                                              int input_offset) {
+  __nv_fp8_e4m3* const k_dst_ptr =
+      reinterpret_cast<__nv_fp8_e4m3*>(k_list[block_offsets[batch_idx] + input_offset / block_size]) +
+      input_offset % block_size * k_stride_size;
+  const __nv_fp8_e4m3* k_src_ptr = k_src + token_idx * k_stride_size;
+  constexpr unsigned int kVecSize = sizeof(float) / sizeof(__nv_fp8_e4m3);
+  vec_t<__nv_fp8_e4m3, kVecSize> k_src_vec;
+  k_src_vec.load(k_src_ptr + threadIdx.x * kVecSize);
+  k_src_vec.store(k_dst_ptr + threadIdx.x * kVecSize);
+}
+
+__device__ __forceinline__ void IndexerCommonVCacheCopyKernel(const float* __restrict__ v_src,
+                                                              void** __restrict__ v_list,
+                                                              const int* __restrict__ block_offsets, int block_size,
+                                                              int v_stride_size, int token_idx, int batch_idx,
+                                                              int input_offset, int k_thread_num) {
+  float* const v_dst_ptr = reinterpret_cast<float*>(v_list[block_offsets[batch_idx] + input_offset / block_size]) +
+                           input_offset % block_size * v_stride_size;
+  const float* v_src_ptr = v_src + token_idx * v_stride_size;
+  v_dst_ptr[threadIdx.x - k_thread_num] = v_src_ptr[threadIdx.x - k_thread_num];
+}
+
+__global__ void MlaIndexerFlashKVCacheCopyKernel(const __nv_fp8_e4m3* __restrict__ k_src,
+                                                 const float* __restrict__ v_src, void** __restrict__ k_list,
+                                                 void** __restrict__ v_list, const size_t* __restrict__ prefix_offsets,
+                                                 const size_t* __restrict__ without_prefix_offsets,
+                                                 const int* __restrict__ block_offsets, int block_size, int batch_size,
+                                                 int k_stride_size, int v_stride_size, int k_thread_num) {
+  const int token_idx = blockIdx.x;
+  int batch_idx = 0;
+  for (batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+    if (token_idx < without_prefix_offsets[batch_idx + 1]) {
+      break;
+    }
+  }
+
+  // Token index in the whole input of current request
+  const int input_offset =
+      (prefix_offsets[batch_idx + 1] - prefix_offsets[batch_idx]) + (token_idx - without_prefix_offsets[batch_idx]);
+
+  threadIdx.x < k_thread_num ? IndexerCommonKCacheCopyKernel(k_src, k_list, block_offsets, block_size, k_stride_size,
+                                                             token_idx, batch_idx, input_offset)
+                             : IndexerCommonVCacheCopyKernel(v_src, v_list, block_offsets, block_size, v_stride_size,
+                                                             token_idx, batch_idx, input_offset, k_thread_num);
+}
+
+void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list,
+                                size_t* prefix_offsets, size_t* without_prefix_offsets, int* block_offsets,
+                                int block_size, int batch_size, int total_len, int k_stride_size, int v_stride_size,
+                                cudaStream_t stream) {
+  // num_heads == 1
+  dim3 grid_shape(total_len);
+  // For DeepSeek-V32: k_thread_num = 128 / 4 = 32 (1 warp), v_thread_num = 1
+  // Each thread reads and writes one float
+  const int k_thread_num = k_stride_size * sizeof(__nv_fp8_e4m3) / sizeof(float);
+  const int v_thread_num = v_stride_size;
+  assert(k_thread_num + v_thread_num <= MAX_THREADS_PER_BLOCK);
+  const dim3 block_shape(k_thread_num + v_thread_num);
+  MlaIndexerFlashKVCacheCopyKernel<<<grid_shape, block_shape, 0, stream>>>(
+      k_src, v_src, k_list, v_list, prefix_offsets, without_prefix_offsets, block_offsets, block_size, batch_size,
+      k_stride_size, v_stride_size, k_thread_num);
+}
+
+__global__ void MlaIndexerPagedKVCacheCopyKernel(const __nv_fp8_e4m3* __restrict__ k_src,
+                                                 const float* __restrict__ v_src, void** __restrict__ k_list,
+                                                 void** __restrict__ v_list, const int* __restrict__ input_lengths,
+                                                 const int* __restrict__ block_offsets, const int block_size,
+                                                 const int k_stride_size, const int v_stride_size,
+                                                 const int k_thread_num) {
+  const int batch_idx = blockIdx.y;
+  const int token_idx = batch_idx * gridDim.x + blockIdx.x;
+
+  // Token index in the whole input of current request
+  const int input_offset = input_lengths[batch_idx] - gridDim.x + blockIdx.x;
+
+  threadIdx.x < k_thread_num ? IndexerCommonKCacheCopyKernel(k_src, k_list, block_offsets, block_size, k_stride_size,
+                                                             token_idx, batch_idx, input_offset)
+                             : IndexerCommonVCacheCopyKernel(v_src, v_list, block_offsets, block_size, v_stride_size,
+                                                             token_idx, batch_idx, input_offset, k_thread_num);
+}
+
+void MlaIndexerPagedKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list, int* input_lengths,
+                                int* block_offsets, int block_size, int batch_size, int req_q_len, int k_stride_size,
+                                int v_stride_size, cudaStream_t stream) {
+  // num_heads == 1
+  const dim3 grid_shape(req_q_len, batch_size);
+  assert(k_stride_size % (sizeof(float) / sizeof(__nv_fp8_e4m3)) == 0);
+  // For DeepSeek-V32: k_thread_num = 128 / 4 = 32 (1 warp), v_thread_num = 1
+  // Each thread reads and writes one float
+  const int k_thread_num = k_stride_size * sizeof(__nv_fp8_e4m3) / sizeof(float);
+  const int v_thread_num = v_stride_size;
+  assert(k_thread_num + v_thread_num <= MAX_THREADS_PER_BLOCK);
+  const dim3 block_shape(k_thread_num + v_thread_num);
+  MlaIndexerPagedKVCacheCopyKernel<<<grid_shape, block_shape, 0, stream>>>(k_src, v_src, k_list, v_list, input_lengths,
+                                                                           block_offsets, block_size, k_stride_size,
+                                                                           v_stride_size, k_thread_num);
+}
+#endif
+
 // Copy MLA-kv compressed kv cache to kv blocks.
 // This kernel will skip shared prefix blocks, and copy only the kv cache of tokens that need to be calculated.
 //
@@ -427,9 +531,10 @@ void MlaFlexibleTokenCacheCopy(CACHE_T** kv_src, CACHE_T** kv_dst, int* kv_list_
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-__global__ void MlaFlashFlexibleKCacheCopyKernel(SCALAR_T* k_src, void** k_list, size_t* flexible_offsets, size_t* prefix_offsets,
-                                      size_t* seq_len_offset, int* block_offsets, int block_size, int bs, int total_len,
-                                      int k_stride_size, int v_stride_size, float k_scale) {
+__global__ void MlaFlashFlexibleKCacheCopyKernel(SCALAR_T* k_src, void** k_list, size_t* flexible_offsets,
+                                                 size_t* prefix_offsets, size_t* seq_len_offset, int* block_offsets,
+                                                 int block_size, int bs, int total_len, int k_stride_size,
+                                                 int v_stride_size, float k_scale) {
   // Each batch in the sequence structures as follow:
   // | prefix_cached_tokens | flexible_cached_tokens | forwarding_new_tokens |
   // |       skipped        |        copying         |        skipped        |

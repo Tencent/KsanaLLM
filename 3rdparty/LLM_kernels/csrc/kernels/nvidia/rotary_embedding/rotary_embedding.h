@@ -93,8 +93,8 @@ class RotaryEmbeddingCuda {
                                            // [num_tokens, num_heads * head_size]
                 void* key,                 // [batch_size, seq_len, num_kv_heads * head_size] or
                                            // [num_tokens, num_kv_heads * head_size]
-                int num_tokens, cudaStream_t& stream, int64_t query_stride = 0, int query_head_size = 0,
-                int key_head_size = 0, bool is_reverse = false);
+                int num_tokens, cudaStream_t& stream, int64_t query_stride = 0, int64_t key_stride = 0, 
+                int query_head_size = 0, int key_head_size = 0, bool is_reverse = false);
 
   template <typename T>
   void Forward();

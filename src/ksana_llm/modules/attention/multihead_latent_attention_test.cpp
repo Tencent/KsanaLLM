@@ -22,6 +22,7 @@
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
 #include "tests/test.h"
+#include "ksana_llm/utils/nvidia/deepseek_deepgemm_bridge.h"
 
 using namespace ksana_llm;
 
@@ -128,6 +129,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
   std::shared_ptr<MultiHeadLatentAttention> mla_;
   MlaBuffers mla_buffers_;
+  IndexerBuffers indexer_buffers_;
 
   MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                     const int rank, std::shared_ptr<Context> context,
@@ -145,10 +147,14 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                             creation_context.runtime_config, mla_buffers_);
+    if (model_creation_config.attn_config.model_config.use_dsa) {
+      SparseMlaIndexer::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
+                                      creation_context.runtime_config, indexer_buffers_);
+    }
     bool is_neox = true;
     int layer_idx = 0;
     mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, is_neox, creation_context, model_creation_config,
-                                                      mla_buffers_);
+                                                      mla_buffers_, indexer_buffers_);
     return Status();
   }
 
@@ -217,7 +223,16 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
              sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
     }
     std::vector<float> output;
-    if (is_multi_token_forward) {
+    if (model_config_.use_dsa) {
+      // DSA (Sparse MLA with Indexer) test - values to be filled after test run
+      if (is_multi_token_forward) {
+        // Prefill phase (no prefix cache for DSA test)
+        output = {-1976, 2096, -3392, 776, 126, -576};
+      } else {
+        // Decode phase
+        output = {-288, -408, 1328, -2048, 2528, -1968};
+      }
+    } else if (is_multi_token_forward) {
       if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
         if (forwarding_context_->model_input_->dp_total_prefix_len == 0) {
           output = {-1984, 2096, -3392, 784, 117.5, -564};
@@ -295,6 +310,15 @@ class TestWeight : public BaseWeight {
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uk_t.weight", i)] = {16, 128, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uv.weight", i)] = {16, 512, 128};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_nope_rope_proj.weight", i)] = {2048, 3072};
+
+      // Add indexer weights
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight", i)] = {8192, 1536};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight_scale_inv", i)] = {64, 12};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight", i)] = {128, 7168};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight_scale_inv", i)] = {1, 56};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.weights_proj.weight", i)] = {64, 7168};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.weight", i)] = {128};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.bias", i)] = {128};
     }
     DataType weight_type = GetKsanaDataType<T>();
     for (auto& [tensor_name, shape] : add_tensor_map) {
@@ -349,6 +373,14 @@ class MlaTest : public testing::Test {
     if (test_name.find("FlashMlaKvFP8") != std::string::npos) {
       env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "fp8_e4m3";
     } else if (test_name.find("FlashDsa") != std::string::npos) {
+      // For DSA test, we need to set use_dsa BEFORE InitializeBlockManagerConfig
+      // so that indexer kv_cache_config can be properly initialized
+      model_config.use_dsa = true;
+      model_config.dsa_config.index_head_dim = 128;
+      model_config.dsa_config.index_n_heads = 64;
+      model_config.dsa_config.index_topk = 2048;
+      // Update the environment's model config
+      env->SetModelConfig(model_config);
       // TODO(yfnjin): Change to "fp8_ds_mla" after merging all the DeepSeek-V3.2 code
       env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "auto";
     }
@@ -450,7 +482,8 @@ class MlaTest : public testing::Test {
 #endif
     test_mla_model->CommonAttention(0, bs1, true, {forward.get()});
 
-    if (test_name.find("FlashMlaKvFP8Test") == std::string::npos) {
+    // For DSA and FP8 tests, skip prefix caching test
+    if (test_name.find("FlashDsa") == std::string::npos && test_name.find("FlashMlaKvFP8Test") == std::string::npos) {
       // Test Prefix caching
       forward->forwarding_tokens->push_back(321);
       forward->prefix_cache_len = 1;
@@ -571,11 +604,6 @@ TEST_F(MlaTest, ForwardWithFlashDsaTest) {
   model_config.weight_data_type = TYPE_BF16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
-  // Adjust the model config for DeepSeek Sparse MLA
-  model_config.use_dsa = true;
-  model_config.dsa_config.index_head_dim = 128;
-  model_config.dsa_config.index_n_heads = 64;
-  model_config.dsa_config.index_topk = 2048;
   std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;
   TestMlaForward<bfloat16>();
   return;

@@ -7,6 +7,7 @@ add_library(llm_kernels_nvidia_kernel_paged_attention STATIC ${PAGED_ATTENTION_S
 target_link_libraries(llm_kernels_nvidia_kernel_paged_attention PUBLIC -lcudart)
 set_property(TARGET llm_kernels_nvidia_kernel_paged_attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_paged_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_compile_definitions(llm_kernels_nvidia_kernel_paged_attention PRIVATE FLASHINFER_USE_FP8=1)
 
 # for test
 file(GLOB_RECURSE PAGED_ATTENTION_TEST_SRCS *test.cu)

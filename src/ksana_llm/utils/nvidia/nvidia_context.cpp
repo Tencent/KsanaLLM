@@ -7,6 +7,7 @@
 #include <csignal>
 
 #include "3rdparty/LLM_kernels/csrc/utils/nvidia/cuda_utils.h"
+#include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 
 namespace ksana_llm {
 
@@ -185,7 +186,10 @@ void NvidiaContextExtension<T>::Destroy() {
   // wait nccl async init finish
   GetNCCLParam();
 
-  for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
+  // Shutdown DeepGEMM runtime before destroying other resources
+  nvidia::DeepSeekDeepGEMMWrapper::Shutdown();
+
+  for (size_t worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
     CUDA_CHECK(cudaSetDevice(worker_id));
     CUDA_CHECK(cublasDestroy(cublas_handles_[worker_id]));
     CUDA_CHECK(cublasLtDestroy(cublaslt_handles_[worker_id]));

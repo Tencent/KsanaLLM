@@ -12,6 +12,7 @@
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
 #include "ksana_llm/endpoints/streaming/streaming_iterator.h"
+#include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 #include "ksana_llm/profiler/profiler.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/service/service_lifetime.h"
@@ -37,7 +38,6 @@ ServingOp::ServingOp() {}
 
 ServingOp::~ServingOp() {
   inference_server_->Stop();
-
   // unreferenced inference_server.
   SetServiceLifetimeManager(nullptr);
 }

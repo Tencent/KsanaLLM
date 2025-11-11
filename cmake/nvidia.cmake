@@ -83,3 +83,112 @@ if(${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
   add_definitions("-DENABLE_FP8")
   message(STATUS "CUDA version: ${CUDA_VERSION} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
 endif()
+
+
+# DeepGEMM support - only for SM90/SM90a
+set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 0)
+set(_deepgemm_candidate_arches ${CMAKE_CUDA_ARCHITECTURES})
+if(DEFINED SM AND NOT SM STREQUAL "")
+  string(REPLACE "," ";" _sm_arch_list "${SM}")
+  list(APPEND _deepgemm_candidate_arches ${_sm_arch_list})
+endif()
+
+foreach(ARCH IN LISTS _deepgemm_candidate_arches)
+  if(ARCH STREQUAL "90" OR ARCH STREQUAL "90a")
+    set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG 1)
+    break()
+  endif()
+endforeach()
+
+if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
+  message(STATUS "DeepGEMM support enabled (SM90/90a detected).")
+else()
+  message(STATUS "DeepGEMM support disabled (requires SM90/90a).")
+endif()
+
+add_compile_definitions(ENABLE_DEEPSEEK_DEEPGEMM=${ENABLE_DEEPSEEK_DEEPGEMM_FLAG})
+set(ENABLE_DEEPSEEK_DEEPGEMM_FLAG ${ENABLE_DEEPSEEK_DEEPGEMM_FLAG} CACHE INTERNAL "Toggle DeepSeek DeepGEMM kernels" FORCE)
+unset(_deepgemm_candidate_arches)
+
+find_package(Git QUIET)
+if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
+    set(DEEPGEMM_SOURCE_DIR ${CMAKE_BINARY_DIR}/third_party/DeepGEMM)
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/third_party)
+
+    if(NOT EXISTS ${DEEPGEMM_SOURCE_DIR})
+        message(STATUS "Cloning DeepGEMM repository...")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} clone --recursive https://github.com/deepseek-ai/DeepGEMM.git ${DEEPGEMM_SOURCE_DIR}
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/third_party
+            RESULT_VARIABLE GIT_CLONE_RESULT
+        )
+        if(NOT GIT_CLONE_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to clone DeepGEMM repository.")
+        endif()
+    else()
+        message(STATUS "DeepGEMM repository already exists, skipping clone.")
+    endif()
+
+    # Check if DeepGEMM is already built
+    set(DEEPGEMM_BUILT_MARKER ${DEEPGEMM_SOURCE_DIR}/build)
+    if(EXISTS ${DEEPGEMM_BUILT_MARKER})
+        message(STATUS "DeepGEMM already built, skipping build process.")
+    else()
+        message(STATUS "Updating DeepGEMM submodules...")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+            WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
+            RESULT_VARIABLE GIT_SUBMODULE_RESULT
+        )
+        if(NOT GIT_SUBMODULE_RESULT EQUAL 0)
+            message(WARNING "Failed to update DeepGEMM submodules.")
+        endif()
+        message(STATUS "Checking out DeepGEMM to version v2.1.0...")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} checkout v2.1.0
+            WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
+            RESULT_VARIABLE GIT_CHECKOUT_RESULT
+        )
+        if(NOT GIT_CHECKOUT_RESULT EQUAL 0)
+            message(WARNING "Failed to checkout DeepGEMM to v2.1.0, using current branch.")
+        endif()
+
+        message(STATUS "Applying DeepGEMM patch...")
+        set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm/deepgemm.patch)
+        if(EXISTS ${DEEPGEMM_PATCH_FILE})
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} apply ${DEEPGEMM_PATCH_FILE}
+                WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
+                RESULT_VARIABLE GIT_APPLY_RESULT
+            )
+            if(NOT GIT_APPLY_RESULT EQUAL 0)
+                message(WARNING "Failed to apply DeepGEMM patch, continuing anyway.")
+            else()
+                message(STATUS "DeepGEMM patch applied successfully.")
+            endif()
+        else()
+            message(WARNING "DeepGEMM patch file not found at ${DEEPGEMM_PATCH_FILE}, skipping patch.")
+        endif()
+
+        message(STATUS "Building and installing DeepGEMM...")
+        execute_process(
+            COMMAND bash develop.sh
+            WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
+            RESULT_VARIABLE DEEPGEMM_INSTALL_RESULT
+        )
+        if(NOT DEEPGEMM_INSTALL_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to build and install DeepGEMM.")
+        endif()
+        message(STATUS "DeepGEMM built and installed successfully.")
+    endif()
+
+    set(DEEPGEMM_SOURCE_DIR ${DEEPGEMM_SOURCE_DIR} CACHE PATH "DeepGEMM source directory" FORCE)
+    set(DEEPGEMM_LIBRARY_ROOT_PATH ${DEEPGEMM_SOURCE_DIR}/deep_gemm CACHE PATH "DeepGEMM library root path" FORCE)
+    set(DEEPGEMM_INCLUDE_DIRS
+        ${DEEPGEMM_SOURCE_DIR}/csrc
+        ${DEEPGEMM_SOURCE_DIR}/deep_gemm/include
+        ${DEEPGEMM_SOURCE_DIR}/third-party/cutlass/include
+        ${DEEPGEMM_SOURCE_DIR}/third-party/cutlass/tools/util/include
+        ${DEEPGEMM_SOURCE_DIR}/third-party/fmt/include
+        CACHE INTERNAL "DeepGEMM include directories")
+endif()

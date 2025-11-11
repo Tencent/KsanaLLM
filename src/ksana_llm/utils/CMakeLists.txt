@@ -15,8 +15,11 @@ set(utils_nvidia_SRCS "")
 set(utils_nvidia_LIBS "")
 
 if(WITH_CUDA)
-  file(GLOB_RECURSE utils_nvidia_SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/nvidia/*.cpp)
-  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt -lcuda llm_kernels_nvidia_utils)
+  file(GLOB_RECURSE utils_nvidia_SRCS
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/nvidia/*.cpp
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/nvidia/*.cu)
+  list(APPEND utils_nvidia_LIBS ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt -lcuda -lnvrtc -lcudadevrt
+    llm_kernels_nvidia_utils)
 endif()
 
 set(utils_ascend_SRCS "")
@@ -41,6 +44,18 @@ target_link_libraries(utils PUBLIC
   -lpthread -ldl gflags loguru yaml-cpp profiler ${utils_nvidia_LIBS} ${utils_ascend_LIBS} ${utils_zixiao_LIBS}
   absl::base absl::strings re2 Boost::dll ${TORCH_LIBRARIES} ${PYTHON_LIBRARY} xgrammar
 )
+
+if(WITH_CUDA)
+  set_target_properties(utils PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON)
+  target_include_directories(utils PRIVATE ${TORCH_INCLUDE_DIRS})
+  if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
+    target_include_directories(utils PRIVATE ${DEEPGEMM_INCLUDE_DIRS})
+    target_compile_definitions(utils PRIVATE
+      DEEPGEMM_LIBRARY_ROOT_PATH="${DEEPGEMM_LIBRARY_ROOT_PATH}"
+      DEEPGEMM_CUDA_HOME="${CUDA_TOOLKIT_ROOT_DIR}")
+  endif()
+endif()
 
 # for test
 if(WITH_STANDALONE_TEST)

@@ -243,6 +243,9 @@ class ModelInput {
   Tensor block_table;
   std::vector<Tensor> tile_scheduler_metadatas;  // only for flash mla of page
   Tensor num_splits;                             // only for flash mla of page
+  Tensor cur_seq_len_start;                      // 每个token可以看到的开始位置的token索引
+  Tensor cur_seq_len_end;                        // 每个token可以看到的结束位置的token索引
+  std::vector<Tensor> paged_schedule_metas;      // for paged sparse mla indexer
 
  public:
   struct input_info {
@@ -264,6 +267,9 @@ class ModelInput {
     Tensor block_table;
     Tensor tile_scheduler_metadata;
     Tensor num_splits;
+    Tensor cur_seq_len_start;    // 每个token可以看到的开始位置的token索引
+    Tensor cur_seq_len_end;      // 每个token可以看到的结束位置的token索引
+    Tensor paged_schedule_meta;  // for paged sparse mla indexer
 
     size_t total_dp_input_ids_len = 0;
     size_t kv_cache_block_num = 0;
@@ -299,6 +305,8 @@ class ModelInput {
   void PrepareFlashMla(input_info& input);
   void PrepareFlashRotary(input_info& input);
   void PrepareFlexibleCache(input_info& input);
+  void PrepareCuSeqLen(input_info& input, bool is_paged);
+  void PreparePagedScheduleMeta(input_info& input);
 };
 
 }  // namespace ksana_llm

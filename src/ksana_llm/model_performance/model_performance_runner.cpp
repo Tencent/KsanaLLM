@@ -10,8 +10,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <random>
-
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
+#include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/singleton.h"

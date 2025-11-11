@@ -356,8 +356,8 @@ void RotaryEmbeddingCuda::SetInput(const int64_t* positions,  // [batch_size, se
                                                  // [num_tokens, num_heads * query_head_size]
                                    void* key,    // [batch_size, seq_len, num_kv_heads * key_head_size] or
                                                  // [num_tokens, num_kv_heads * key_head_size]
-                                   int num_tokens, cudaStream_t& stream, int64_t query_stride, int query_head_size,
-                                   int key_head_size, bool is_reverse) {
+                                   int num_tokens, cudaStream_t& stream, int64_t query_stride, int64_t key_stride, 
+                                   int query_head_size, int key_head_size, bool is_reverse) {
   params_.positions = positions;
   params_.mask = mask;
   query_ = query;
@@ -367,6 +367,9 @@ void RotaryEmbeddingCuda::SetInput(const int64_t* positions,  // [batch_size, se
   params_.stream = stream;
   if (query_stride > 0) {
     params_.query_stride = query_stride;
+  }
+  if (key_stride > 0) {
+    params_.key_stride = key_stride;
   }
   if (query_head_size > 0) {
     params_.query_head_size = query_head_size;

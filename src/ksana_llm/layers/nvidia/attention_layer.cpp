@@ -150,5 +150,64 @@ float AttentionLayer::common_yarn_get_mscale(const float scale) {
   }
   return 0.1f * std::log(scale) + 1.0f;
 }
+template <typename T>
+Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
+                               const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr,
+                               float rope_theta, int rope_head_dim, int max_seq_len, int head_dim, int n_heads,
+                               cudaStream_t stream) {
+  // Initialize rotary embedding using YARN scaling
+  rotary_embedding_cuda.emplace();
+
+  int rotary_dim = rope_head_dim;
+
+  // YARN scaling parameters
+  float scaling_factor = rope_scaling_factor_config.factor;
+  float attn_factor = 1.0f;
+  float beta_fast = 32.0f;
+  float beta_slow = 1.0f;
+  float mscale = 1.0f;
+  float mscale_all_dim = 1.0f;
+  int original_max_position_embeddings = rope_scaling_factor_config.original_max_position_embeddings;
+
+  if (rope_scaling_factor_config.use_deepseek_yarn) {
+    // DeepSeek YARN specific configuration
+    beta_fast = rope_scaling_factor_config.beta_fast;
+    beta_slow = rope_scaling_factor_config.beta_slow;
+    mscale_all_dim = rope_scaling_factor_config.mscale_all_dim;
+    mscale = AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, rope_scaling_factor_config.mscale) /
+             AttentionLayer::deepseek_yarn_get_mscale(scaling_factor, mscale_all_dim) * attn_factor;
+  } else {
+    mscale = AttentionLayer::common_yarn_get_mscale(scaling_factor) * attn_factor;
+  }
+
+  // Initialize rotary embedding with YARN configuration
+  rotary_embedding_cuda->SetConfig<T>(cos_sin_cache_ptr, rotary_dim, max_seq_len, rope_theta, head_dim, head_dim,
+                                      n_heads,   // num_heads
+                                      1,         // num_kv_heads = num_heads for indexer
+                                      head_dim,  // stride_size
+                                      false,     // is_neox (DeepSeek uses False)
+                                      stream, llm_kernels::nvidia::RotaryEmbeddingType::YARN_SCALING, scaling_factor,
+                                      1.0f,  // low_freq_factor (not used in YARN)
+                                      4.0f,  // high_freq_factor (not used in YARN)
+                                      original_max_position_embeddings,
+                                      1.0f,     // scaling_alpha (not used in YARN)
+                                      nullptr,  // mrope_section_ptr (not used in YARN)
+                                      beta_fast, beta_slow, mscale, mscale_all_dim,
+                                      rope_scaling_factor_config.use_deepseek_yarn);
+
+  return Status();
+}
+
+// Explicit template instantiations
+#define INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(T)                                                                     \
+  template Status InitYarnRotaryEmbedding<T>(                                                                         \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                                \
+      const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr, float rope_theta,                \
+      int rope_head_dim, int max_seq_len, int head_dim, int n_heads, cudaStream_t stream)
+
+INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(float16);
+INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(bfloat16);
+INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(float);
+#undef INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING
 
 }  // namespace ksana_llm

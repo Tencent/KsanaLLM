@@ -43,6 +43,13 @@ class AttentionLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
+#ifdef ENABLE_CUDA
+  // for deepseek yarn - static helper functions
+  static float deepseek_yarn_get_mscale(const float scale, const float mscale);
+
+  static float common_yarn_get_mscale(const float scale);
+#endif
+
  private:
   template <typename T>
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
@@ -80,11 +87,6 @@ class AttentionLayer : public BaseLayer {
   QuantMode mm_quant_mode_;
 
 #ifdef ENABLE_CUDA
-  // for deepseek yarn
-  float deepseek_yarn_get_mscale(const float scale, const float mscale);
-
-  float common_yarn_get_mscale(const float scale);
-
   std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda> rotary_embedding_cuda_;
   std::optional<void*> alibi_slopes_;
 #endif
@@ -128,4 +130,18 @@ class AttentionLayer : public BaseLayer {
       KLLM_THROW(fmt::format("{}: Unsupported Dtype type: {}.", __PRETTY_FUNCTION__, dtype)); \
   }
 
+  #ifdef ENABLE_CUDA
+  // Utility function for initializing YARN rotary embedding (used by sparse MLA indexer layers)
+  template <typename T>
+  Status InitYarnRotaryEmbedding(
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
+      const RoPEScalingFactor& rope_scaling_factor_config,
+      void* cos_sin_cache_ptr,
+      float rope_theta,
+      int rope_head_dim,
+      int max_seq_len,
+      int head_dim,
+      int n_heads,
+      cudaStream_t stream);
+  #endif
 }  // namespace ksana_llm

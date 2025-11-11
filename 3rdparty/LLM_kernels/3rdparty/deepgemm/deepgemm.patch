@@ -1,0 +1,278 @@
+diff --git a/csrc/apis/runtime.hpp b/csrc/apis/runtime.hpp
+index 9ef4207..27bf49a 100644
+--- a/csrc/apis/runtime.hpp
++++ b/csrc/apis/runtime.hpp
+@@ -23,6 +23,10 @@ static void register_apis(pybind11::module_& m) {
+         Compiler::prepare_init(library_root_path, cuda_home_path_by_python);
+         KernelRuntime::prepare_init(cuda_home_path_by_python);
+     });
++
++    m.def("shutdown", [&]() {
++        shutdown_device_runtime();
++    });
+ }
+ 
+ } // namespace deep_gemm::runtime
+diff --git a/csrc/jit/cache.hpp b/csrc/jit/cache.hpp
+index 1e8659f..a1a7d10 100644
+--- a/csrc/jit/cache.hpp
++++ b/csrc/jit/cache.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <filesystem>
+ #include <memory>
++#include <string>
+ #include <unordered_map>
+ 
+ #include "kernel_runtime.hpp"
+@@ -16,12 +17,15 @@ public:
+     KernelRuntimeCache() = default;
+ 
+     std::shared_ptr<KernelRuntime> get(const std::filesystem::path& dir_path) {
+-        // Hit the runtime cache
+-        if (const auto& iterator = cache.find(dir_path); iterator != cache.end())
++        int current_device = 0;
++        DG_CUDA_RUNTIME_CHECK(cudaGetDevice(&current_device));
++        const auto key = dir_path.string() + "#" + std::to_string(current_device);
++        // Hit the runtime cache (per-device)
++        if (const auto& iterator = cache.find(key); iterator != cache.end())
+             return iterator->second;
+ 
+         if (KernelRuntime::check_validity(dir_path))
+-            return cache[dir_path] = std::make_shared<KernelRuntime>(dir_path);
++            return cache[key] = std::make_shared<KernelRuntime>(dir_path);
+         return nullptr;
+     }
+ };
+diff --git a/csrc/jit/compiler.hpp b/csrc/jit/compiler.hpp
+index 55bcc60..827f4e5 100644
+--- a/csrc/jit/compiler.hpp
++++ b/csrc/jit/compiler.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
+ #include <cuda_runtime.h>
+ #include <filesystem>
+ #include <fstream>
+@@ -271,7 +272,8 @@ public:
+     }
+ };
+ 
+-static auto compiler = LazyInit<Compiler>([]() -> std::shared_ptr<Compiler> {
++static auto compiler = PerDeviceLazyInit<Compiler>([](int device) -> std::shared_ptr<Compiler> {
++    at::cuda::CUDAGuard guard(device);
+     if (get_env<int>("DG_JIT_USE_NVRTC", 0)) {
+         return std::make_shared<NVRTCCompiler>();
+     } else {
+diff --git a/csrc/jit/device_runtime.hpp b/csrc/jit/device_runtime.hpp
+index 6ffd26f..7cb07e0 100644
+--- a/csrc/jit/device_runtime.hpp
++++ b/csrc/jit/device_runtime.hpp
+@@ -1,7 +1,11 @@
+ #pragma once
+ 
++#include <atomic>
++#include <mutex>
++
+ #include <cublasLt.h>
+ #include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
+ 
+ #include "../utils/exception.hpp"
+ #include "../utils/lazy_init.hpp"
+@@ -9,8 +13,10 @@
+ namespace deep_gemm {
+ 
+ class DeviceRuntime {
+-    int num_sms = 0, tc_util = 0;
++    std::atomic<int> num_sms{0};
++    std::atomic<int> tc_util{0};
+     std::shared_ptr<cudaDeviceProp> cached_prop;
++    std::once_flag prop_once;
+ 
+     // cuBLASLt utils
+     static constexpr size_t kCublasLtWorkspaceSize = 32 * 1024 * 1024;
+@@ -36,8 +42,9 @@ public:
+     }
+ 
+     std::shared_ptr<cudaDeviceProp> get_prop() {
+-        if (cached_prop == nullptr)
++        std::call_once(prop_once, [&]() {
+             cached_prop = std::make_shared<cudaDeviceProp>(*at::cuda::getCurrentDeviceProperties());
++        });
+         return cached_prop;
+     }
+ 
+@@ -62,26 +69,43 @@ public:
+     }
+ 
+     void set_num_sms(const int& new_num_sms) {
+-        DG_HOST_ASSERT(0 <= new_num_sms and new_num_sms <= get_prop()->multiProcessorCount);
+-        num_sms = new_num_sms;
++        const auto prop = get_prop();
++        DG_HOST_ASSERT(0 <= new_num_sms and new_num_sms <= prop->multiProcessorCount);
++        num_sms.store(new_num_sms, std::memory_order_relaxed);
+     }
+ 
+     int get_num_sms() {
+-        if (num_sms == 0)
+-            num_sms = get_prop()->multiProcessorCount;
+-        return num_sms;
++        int current = num_sms.load(std::memory_order_relaxed);
++        if (current == 0) {
++            const int default_sms = get_prop()->multiProcessorCount;
++            int expected = 0;
++            if (num_sms.compare_exchange_strong(expected, default_sms, std::memory_order_relaxed)) {
++                current = default_sms;
++            } else {
++                current = expected;
++            }
++        }
++        return current;
+     }
+ 
+     void set_tc_util(const int& new_tc_util) {
+         DG_HOST_ASSERT(0 <= new_tc_util and new_tc_util <= 100);
+-        tc_util = new_tc_util;
++        tc_util.store(new_tc_util, std::memory_order_relaxed);
+     }
+ 
+     int get_tc_util() const {
+-        return tc_util == 0 ? 100 : tc_util;
++        const int current = tc_util.load(std::memory_order_relaxed);
++        return current == 0 ? 100 : current;
+     }
+ };
+ 
+-static auto device_runtime = LazyInit<DeviceRuntime>([](){ return std::make_shared<DeviceRuntime>(); });
++static auto device_runtime = PerDeviceLazyInit<DeviceRuntime>([](int device){
++    at::cuda::CUDAGuard guard(device);
++    return std::make_shared<DeviceRuntime>();
++});
++
++inline void shutdown_device_runtime() {
++    device_runtime.reset();
++}
+ 
+ } // namespace deep_gemm
+diff --git a/csrc/utils/lazy_init.hpp b/csrc/utils/lazy_init.hpp
+index 386b1b4..8a79c17 100644
+--- a/csrc/utils/lazy_init.hpp
++++ b/csrc/utils/lazy_init.hpp
+@@ -2,6 +2,12 @@
+ 
+ #include <functional>
+ #include <memory>
++#include <mutex>
++#include <unordered_map>
++
++#include <cuda_runtime.h>
++
++#include "exception.hpp"
+ 
+ #define DG_DECLARE_STATIC_VAR_IN_CLASS(cls, name) decltype(cls::name) cls::name
+ 
+@@ -24,4 +30,52 @@ private:
+     std::function<std::shared_ptr<T>()> factory;
+ };
+ 
++template <typename T>
++class PerDeviceLazyInit {
++public:
++    explicit PerDeviceLazyInit(std::function<std::shared_ptr<T>(int)> factory)
++        : factory(std::move(factory)) {}
++
++    T* operator -> () {
++        return get_for_current_device().get();
++    }
++
++    std::shared_ptr<T> get_for_current_device() {
++        int device = 0;
++        const auto err = cudaGetDevice(&device);
++        DG_HOST_ASSERT(err == cudaSuccess);
++        return get(device);
++    }
++
++    std::shared_ptr<T> get(int device) {
++        {
++            std::scoped_lock lock(mutex);
++            if (const auto it = instances.find(device); it != instances.end())
++                return it->second;
++        }
++
++        auto instance = factory(device);
++
++        std::scoped_lock lock(mutex);
++        auto& slot = instances[device];
++        if (!slot)
++            slot = std::move(instance);
++        return slot;
++    }
++
++    void reset() {
++        decltype(instances) to_release;
++        {
++            std::scoped_lock lock(mutex);
++            to_release.swap(instances);
++        }
++        to_release.clear();
++    }
++
++private:
++    std::mutex mutex;
++    std::unordered_map<int, std::shared_ptr<T>> instances;
++    std::function<std::shared_ptr<T>(int)> factory;
++};
++
+ } // namespace deep_gemm
+diff --git a/csrc/utils/system.hpp b/csrc/utils/system.hpp
+index b0e28ba..de3e12b 100644
+--- a/csrc/utils/system.hpp
++++ b/csrc/utils/system.hpp
+@@ -1,11 +1,15 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
++#include <chrono>
+ #include <filesystem>
+ #include <functional>
+-#include <random>
++#include <iomanip>
+ #include <string>
++#include <sstream>
+ #include <memory>
++#include <thread>
+ #include <unistd.h>
+ 
+ #include "exception.hpp"
+@@ -79,18 +83,18 @@ static std::filesystem::path make_dirs(const std::filesystem::path& path) {
+ }
+ 
+ static std::string get_uuid() {
+-    static std::random_device rd;
+-    static std::mt19937 gen([]() {
+-        return rd() ^ std::chrono::steady_clock::now().time_since_epoch().count();
+-    }());
+-    static std::uniform_int_distribution<uint32_t> dist;
++    static std::atomic<uint64_t> counter{0};
++    const auto seq = counter.fetch_add(1, std::memory_order_relaxed);
++    const auto pid = static_cast<uint64_t>(getpid());
++    const auto tid = static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
++    const auto now = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+ 
+     std::stringstream ss;
+-    ss << getpid() << "-"
++    ss << pid << "-"
+        << std::hex << std::setfill('0')
+-       << std::setw(8) << dist(gen) << "-"
+-       << std::setw(8) << dist(gen) << "-"
+-       << std::setw(8) << dist(gen);
++       << std::setw(16) << now << "-"
++       << std::setw(16) << tid << "-"
++       << std::setw(16) << seq;
+     return ss.str();
+ }
+ 

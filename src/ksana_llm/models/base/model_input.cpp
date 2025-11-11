@@ -10,6 +10,8 @@
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
+#  include "csrc/utils/nvidia/cuda_utils.h"
+#  include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #endif
 #include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
@@ -94,11 +96,21 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   layer_kv_cache_ptr =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
   if (model_config.use_dsa) {
+    cur_seq_len_start = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
+    cur_seq_len_end = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
     // kv cache meta for the indexer module
     indexer_kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
                              {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
     layer_indexer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
+    for (size_t q_len = 1; q_len <= GetDecodeTokenNumThreshold(); q_len++) {
+      int num_sms = 0;
+#ifdef ENABLE_CUDA
+      num_sms = llm_kernels::utils::GetSMCount();
+#endif
+      paged_schedule_metas.emplace_back(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                                        std::vector<size_t>{static_cast<size_t>(num_sms + 1), 2}, rank_);
+    }
   }
   kv_cache_offset =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
@@ -244,6 +256,8 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest*>& forward_re
   rotary_embedding_mask.shape = {0};
   block_table.shape = {0};
   num_splits.shape = {0};
+  cur_seq_len_start.shape = {0};
+  cur_seq_len_end.shape = {0};
 
   // Reset the input_infos
   flash_input.Reset();
@@ -1210,6 +1224,7 @@ void ModelInput::PreparePrefill() {
   }
 
   PrepareFlashRotary(flash_input);
+  PrepareCuSeqLen(flash_input, false);
 }
 
 void ModelInput::PrepareDecode() {
@@ -1223,6 +1238,8 @@ void ModelInput::PrepareDecode() {
     PrepareKVCacheBlockTable(page_input);
     PrepareDecodeRotary(page_input);
     PrepareFlashMla(page_input);
+    PrepareCuSeqLen(page_input, true);
+    PreparePagedScheduleMeta(page_input);
   }
 }
 
@@ -1446,6 +1463,103 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   // Event wait between streams seems not work, force sync here.
   StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
+}
+
+// TODO(qiannan): consider prefix cache len
+// Prepare cumulative sequence length arrays for both flash (prefill) and paged (decode) inputs
+void ModelInput::PrepareCuSeqLen(input_info& input, bool is_paged) {
+  if (!model_config_.use_dsa || input.dp_reqs.empty()) {
+    return;
+  }
+  PROFILE_EVENT_SCOPE(PrepareCuSeqLen, "PrepareCuSeqLen", rank_);
+
+  const size_t batch_size = input.dp_reqs.size();
+
+  // Prepare cumulative_seq_lens array
+  std::vector<int> cumulative_seq_lens(batch_size + 1, 0);
+  for (size_t i = 0; i < batch_size; ++i) {
+    cumulative_seq_lens[i + 1] = cumulative_seq_lens[i] + input.dp_reqs[i]->GetInputIdsLength();
+  }
+
+  // Calculate cur_seq_len_start and cur_seq_len_end with unified batch-first iteration
+  std::vector<int> cur_seq_len_start_host(cumulative_seq_lens.back());
+  std::vector<int> cur_seq_len_end_host(cumulative_seq_lens.back());
+
+  for (size_t b = 0; b < batch_size; ++b) {
+    const auto& req = input.dp_reqs[b];
+    const int token_begin = cumulative_seq_lens[b];
+    const int token_end = cumulative_seq_lens[b + 1];
+    const size_t input_ids_len = token_end - token_begin;
+
+    for (size_t i = 0; i < input_ids_len; ++i) {
+      const int idx = token_begin + i;
+      const int local_idx = idx - token_begin;
+
+      if (is_paged) {
+        // Paged: start is always 0, end is cumulative visible length
+        const size_t skip_token_num = std::max(req->kv_cached_token_num, req->prefix_cache_len);
+        cur_seq_len_start_host[idx] = 0;
+        cur_seq_len_end_host[idx] = skip_token_num + local_idx + 1;
+      } else {
+        // Flash: start points to sequence beginning, end increments within sequence
+        cur_seq_len_start_host[idx] = token_begin;
+        cur_seq_len_end_host[idx] = token_begin + local_idx + 1;
+      }
+    }
+  }
+
+  // Set tensor shapes and copy data to device
+  input.cur_seq_len_start = cur_seq_len_start.GetView({cur_seq_len_start_host.size()}, cur_seq_len_start.shape[0]);
+  cur_seq_len_start.shape[0] += input.cur_seq_len_start.GetElementNumber();
+  MemcpyAsync(input.cur_seq_len_start.GetPtr<void>(), cur_seq_len_start_host.data(),
+              cur_seq_len_start_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+
+  input.cur_seq_len_end = cur_seq_len_end.GetView({cur_seq_len_end_host.size()}, cur_seq_len_end.shape[0]);
+  cur_seq_len_end.shape[0] += input.cur_seq_len_end.GetElementNumber();
+  MemcpyAsync(input.cur_seq_len_end.GetPtr<void>(), cur_seq_len_end_host.data(),
+              cur_seq_len_end_host.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
+}
+
+void ModelInput::PreparePagedScheduleMeta(input_info& input) {
+#ifdef ENABLE_CUDA
+  if (!model_config_.use_dsa || input.dp_reqs.empty()) {
+    return;
+  }
+  PROFILE_EVENT_SCOPE(PreparePagedScheduleMeta, "PreparePagedScheduleMeta", rank_);
+
+  // Get the appropriate paged_schedule_meta tensor based on q_seq_len
+  // For page_inputs, q_seq_len is the number of tokens per request
+  KLLM_CHECK_WITH_INFO(input.q_seq_len > 0 && input.q_seq_len <= paged_schedule_metas.size(),
+                       fmt::format("q_seq_len is out of range, q_seq_len: {}, paged_schedule_metas.size(): {}",
+                                   input.q_seq_len, paged_schedule_metas.size()));
+  input.paged_schedule_meta = paged_schedule_metas[input.q_seq_len - 1];
+
+  // Use input_length as context_lens (already prepared in PrepareInputLength)
+  // For paged input, input_length contains the forwarding_tokens->size() for each request
+  const int batch_size = static_cast<int>(input.input_length.shape[0]);
+
+  // Call PagedMqaLogitsMetadata to compute schedule metadata
+  auto deepseek_deepgemm_wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance(rank_);
+
+  // Wrap input.input_length as torch tensor (context_lens)
+  auto context_lens_torch = torch::from_blob(input.input_length.GetPtr<void>(), {batch_size},
+                                             torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank_));
+
+  auto schedule_meta_torch = torch::from_blob(input.paged_schedule_meta.GetPtr<void>(),
+                                              {static_cast<int64_t>(input.paged_schedule_meta.shape[0]),
+                                               static_cast<int64_t>(input.paged_schedule_meta.shape[1])},
+                                              torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA, rank_));
+
+  const int block_size = runtime_config_.attn_backend_config.block_token_num;
+  deepseek_deepgemm_wrapper->PagedMqaLogitsMetadata(context_lens_torch, schedule_meta_torch, batch_size, block_size);
+
+  KLLM_LOG_DEBUG << fmt::format("PreparePagedScheduleMeta completed: q_seq_len={}, batch_size={}", input.q_seq_len,
+                                batch_size);
+#endif  // ENABLE_CUDA
 }
 
 }  // namespace ksana_llm

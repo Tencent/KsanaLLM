@@ -10,12 +10,12 @@
 namespace ksana_llm {
 
 MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
-                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers)
+                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
+                                                   IndexerBuffers& indexer_buffers)
     : layer_idx_(layer_idx),
       tensor_parallel_size_(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size),
-      mla_buffers_(mla_buffers) {
-  auto& attn_config = model_creation_config.attn_config;
-  absorb_type_ = GetAbsorbWeightsType();
+      mla_buffers_(mla_buffers),
+      indexer_buffers_(indexer_buffers) {
   if (creation_context.runtime_config.enable_o_proj_out_of_dp) {
     // TODO(rockcao): support `o_proj_out_of_dp_` again
     o_proj_out_of_dp_ = true;
@@ -35,6 +35,12 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     attn_config.idx = creation_context.pipeline_config.upper_layer_idx -
                       creation_context.pipeline_config.lower_layer_idx + layer_idx -
                       model_creation_config.attn_config.model_config.num_layer + 1;
+  }
+
+  // Initialize sparse MLA indexer if using sparse MLA
+  if (use_dsa_) {
+    sparse_mla_indexer_ =
+        std::make_shared<SparseMlaIndexer>(layer_idx, creation_context, model_creation_config, indexer_buffers);
   }
 
   flash_mla_attention_layers_ = std::make_shared<FlashMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
@@ -179,6 +185,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(decode_q_nope_tensors, mla_buffers_.decode_q_nope_buffer);
   CREATE_BUFFER_SCOPE(decode_q_rope_tensors, mla_buffers_.decode_q_rope_buffer);
   CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
+
   if (dp_total_tokens > 0) {
     std::vector<Tensor>& kv_lora_buffer_tensors = q_nope_rope_buffer_tensors;
     std::vector<Tensor>& q_buffer_tensors = reduce_buffer_tensors;
@@ -225,6 +232,14 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
         q_a_layernorms_->Forward(q_buffer_tensors, hidden_buffer_tensors_1);
       }
       q_b_input = hidden_buffer_tensors_1[0];
+    }
+
+    // TODO(qiannan): 这里这么写有点问题，后面把topk_indices_buffer挪到mla buffer里面。
+    // 将 buffer scope 限制在 sparse_mla_indexer Forward 调用的最小范围内，避免重复获取
+    if (use_dsa_ && sparse_mla_indexer_) {
+      CREATE_BUFFER_SCOPE(indices_tensors, indexer_buffers_.topk_indices_buffer);
+      Tensor indices_tensor = indices_tensors[0];
+      STATUS_CHECK_RETURN(sparse_mla_indexer_->Forward(dp_hidden_input, q_b_input, indices_tensor, forwarding_context));
     }
 
     PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);

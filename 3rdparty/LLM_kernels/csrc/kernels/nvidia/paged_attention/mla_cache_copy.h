@@ -5,10 +5,24 @@
 
 #include <cuda_runtime.h>
 
+#ifdef ENABLE_FP8
+#  include <cuda_fp8.h>
+#endif
 #include "csrc/utils/quant_type.h"
 
 namespace llm_kernels {
 namespace nvidia {
+
+#ifdef ENABLE_FP8
+void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list,
+                                size_t* prefix_offsets, size_t* without_prefix_offsets, int* block_offsets,
+                                int block_size, int batch_size, int total_len, int k_stride_size, int v_stride_size,
+                                cudaStream_t stream);
+
+void MlaIndexerPagedKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list, int* input_lengths,
+                                int* block_offsets, int block_size, int batch_size, int req_q_len, int k_stride_size,
+                                int v_stride_size, cudaStream_t stream);
+#endif
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void** v_list, size_t* prefix_offsets,

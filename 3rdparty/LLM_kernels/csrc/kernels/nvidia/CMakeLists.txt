@@ -35,3 +35,7 @@ add_subdirectory(marlin_moe)
 add_subdirectory(gemm)
 add_subdirectory(others)
 add_subdirectory(moe)
+# index
+add_subdirectory(weight_scale)
+add_subdirectory(logits_topk)
+

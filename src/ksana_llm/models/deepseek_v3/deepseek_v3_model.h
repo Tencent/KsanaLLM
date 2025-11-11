@@ -11,6 +11,7 @@
 
 #include "ksana_llm/models/common/common_model.h"
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
+#include "ksana_llm/modules/attention/sparse_mla_indexer.h"
 
 #include "ksana_llm/modules/basic/add_norm.h"
 #include "ksana_llm/modules/basic/layernorm.h"
@@ -23,7 +24,8 @@ namespace ksana_llm {
 class DeepSeekV3DecoderLayer {
  public:
   DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
-                         ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers, TensorBuffer* moe_buffer);
+                         ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
+                         IndexerBuffers& indexer_buffers, TensorBuffer* moe_buffer);
 
   ~DeepSeekV3DecoderLayer() = default;
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
@@ -58,7 +60,8 @@ class DeepSeekV3DecoderLayer {
   std::shared_ptr<MoE> moe_;
 
   MlaBuffers& mla_buffers_;
-  TensorBuffer* moe_buffer_;
+  IndexerBuffers& indexer_buffers_;
+  TensorBuffer* const moe_buffer_;
 
   // Be a replacement of residual_buffer_, for distributed mode only.
   std::vector<Tensor> local_residual_buffer_{1};
@@ -110,6 +113,7 @@ class DeepSeekV3Model : public CommonModel {
 
   int first_k_dense_replace_;
   MlaBuffers mla_buffers_;
+  IndexerBuffers indexer_buffers_;
   TensorBuffer* moe_buffer_;
 };
 }  // namespace ksana_llm

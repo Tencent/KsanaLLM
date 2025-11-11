@@ -17,6 +17,7 @@
 #include "ksana_llm/modules/basic/mem_adjuster.h"
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
 #include "ksana_llm/modules/basic/split.h"
+#include "ksana_llm/modules/attention/sparse_mla_indexer.h"
 
 namespace ksana_llm {
 
@@ -36,7 +37,8 @@ struct MlaBuffers {
 class MultiHeadLatentAttention {
  public:
   MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
-                           ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers);
+                          ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
+                          IndexerBuffers& indexer_buffers);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
@@ -63,6 +65,7 @@ class MultiHeadLatentAttention {
   const int layer_idx_;
   const int tensor_parallel_size_;
   MlaBuffers& mla_buffers_;
+  IndexerBuffers& indexer_buffers_;
 
  protected:
 #ifdef ENABLE_CUDA
@@ -91,6 +94,7 @@ class MultiHeadLatentAttention {
   std::shared_ptr<MemAdjuster> mem_adjuster_;
   std::shared_ptr<Layernorm> kv_a_layernorms_;
   std::shared_ptr<Layernorm> q_a_layernorms_;
+  std::shared_ptr<SparseMlaIndexer> sparse_mla_indexer_;
 
   size_t o_proj_k_dim_ = 0;
 

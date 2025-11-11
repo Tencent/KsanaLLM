@@ -333,8 +333,8 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
     rotary_embedding_cuda->SetInput(
         reinterpret_cast<int64_t*>(rotary_embedding_pos), reinterpret_cast<int64_t*>(rotary_embedding_mask),
         reinterpret_cast<SCALAR_T*>(q_nope_rope_ptr) + qk_nope_head_dim, reinterpret_cast<SCALAR_T*>(k_pe_ptr),
-        total_q_tokens, stream, num_heads * (qk_nope_head_dim + qk_rope_head_dim), qk_nope_head_dim + qk_rope_head_dim,
-        qk_rope_head_dim);
+        total_q_tokens, stream, num_heads * (qk_nope_head_dim + qk_rope_head_dim), /*key_stride*/ 0,
+        qk_nope_head_dim + qk_rope_head_dim, qk_rope_head_dim);
     CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
   }
 
@@ -391,14 +391,14 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
         // reverse rope for flexible cached tokens, with is_reverse flag setting to true.
         rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(src_flexible_rotary_embedding_pos_ptr),
                                         reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
-                                        k_rope_buffer, total_tokens, stream, 0, 0, qk_rope_head_dim,
+                                        k_rope_buffer, total_tokens, stream, 0, /*key_stride=*/0, 0, qk_rope_head_dim,
                                         /* is_reverse */ true);
         CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
 
         // correct rope for flexible cached tokens
         rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(dst_flexible_rotary_embedding_pos_ptr),
                                         reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
-                                        k_rope_buffer, total_tokens, stream, 0, 0, qk_rope_head_dim);
+                                        k_rope_buffer, total_tokens, stream, 0, /*key_stride=*/0, 0, qk_rope_head_dim);
         CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
       }
 
