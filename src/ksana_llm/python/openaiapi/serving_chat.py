@@ -447,8 +447,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             if self.reasoning_parser:
                                 _, content = \
                                 reasoning_parser.extract_reasoning_content(
-                                    current_text,
-                                    request
+                                    current_text
                                 )
                             else:
                                 content = current_text
@@ -953,8 +952,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         logger.exception("Error in reasoning parser creation.")
                         continue
                     reasoning_content, content = (
-                        reasoning_parser.extract_reasoning_content(
-                            full_output_text, request=request))
+                        reasoning_parser.extract_reasoning_content(full_output_text))
                 else:
                     reasoning_content = None
                     content = full_output_text

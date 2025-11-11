@@ -10,8 +10,7 @@ from collections.abc import Sequence
 from functools import cached_property
 from typing import Callable, Optional, Union
 
-from openaiapi.openai_protocol import (ChatCompletionRequest,
-                                              DeltaMessage)
+from openaiapi.openai_protocol import DeltaMessage
 from openaiapi.transformers_utils.chat_utils import AnyTokenizer
 from utilize.utils import import_from_path, is_list_of
 
@@ -68,7 +67,7 @@ class ReasoningParser:
 
     @abstractmethod
     def extract_reasoning_content(
-            self, model_output: str, request: ChatCompletionRequest
+            self, model_output: str
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Extract reasoning content from a complete model-generated string.
@@ -79,9 +78,6 @@ class ReasoningParser:
         Parameters:
         model_output: str
             The model-generated string to extract reasoning content from.
-
-        request: ChatCompletionRequest
-            The request object that was used to generate the model_output.
 
         Returns:
         tuple[Optional[str], Optional[str]]
