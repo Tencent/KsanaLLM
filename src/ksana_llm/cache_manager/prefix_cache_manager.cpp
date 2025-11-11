@@ -553,6 +553,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
 
   // If not waiting, remove request from associated cache blocks.
   if (cached_request->req_state != RequestState::REQUEST_STATE_WAITING) {
+    size_t delete_count = 0;
     for (size_t i = 0; i < cached_request->cached_blocks.size(); ++i) {
       PrefixCachedBlock* cached_block = cached_request->cached_blocks[i];
 
@@ -560,7 +561,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
       if (!cached_block->is_shareable) {
         ResetCachedBlock(cached_block);
         free_cached_blocks_.push(cached_block);
-        cached_request->cached_blocks.pop_back();
+        ++delete_count;  // the not shareable block must at the end
         continue;
       }
 
@@ -581,6 +582,7 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
         reusable_cached_blocks_.insert(cached_block);
       }
     }
+    cached_request->cached_blocks.resize(cached_request->cached_blocks.size() - delete_count);
   }
 
   // Remove blocks from request.
