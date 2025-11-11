@@ -206,9 +206,17 @@ class TaskDispatcherTest : public ::testing::Test {
     task->is_completed = false;
     task->tensor.dtype = DataType::TYPE_FP32;
     task->tensor.src_ptr = nullptr;
-    size_t element_count = tensor_size > 0 ? tensor_size : 1;
-    size_t element_size = GetTypeSize(DataType::TYPE_FP32);
-    size_t total_bytes = element_count * element_size;
+    // Calculate required buffer size
+    // When tensor_size > 0, allocate for tensor data
+    // When tensor_size == 0, allocate for tokens (MAX_TRANSFER_TOKENS * sizeof(int32_t))
+    size_t total_bytes;
+    if (tensor_size > 0) {
+      size_t element_size = GetTypeSize(DataType::TYPE_FP32);
+      total_bytes = tensor_size * element_size;
+    } else {
+      // Allocate enough space for tokens array
+      total_bytes = MAX_TRANSFER_TOKENS * sizeof(int32_t);
+    }
     task->dst_ptr = std::malloc(total_bytes);
     if (task->dst_ptr != nullptr) {
       std::memset(task->dst_ptr, 0, total_bytes);

@@ -92,10 +92,13 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       KLLM_LOG_DEBUG << "Received first_tokens: " << Vector2Str(first_tokens);
 
       req->forwarding_tokens.push_back(first_tokens[0]);
-      // TODO(winminkong): PD disaggregation supports mutil draft token and speculative decoding.
-      if (first_tokens[1] != -1 && runtime_config_.enable_mtp_module) {
-        req->draft_tokens.mtp.push_back(first_tokens[1]);
-        req->forwarding_tokens.push_back(first_tokens[1]);
+      for (int mtp_step_idx = 1; mtp_step_idx <= runtime_config_.mtp_step_num; mtp_step_idx++) {
+        if (first_tokens[mtp_step_idx] == -1) {
+          KLLM_LOG_WARNING << "PD transfer tokens invalid, mtp_step_idx:" << mtp_step_idx;
+          break;
+        }
+        req->draft_tokens.mtp.push_back(first_tokens[mtp_step_idx]);
+        req->forwarding_tokens.push_back(first_tokens[mtp_step_idx]);
       }
       req->forwarding_tokens_draft_num = req->draft_tokens.size();
       req->sampling_token_num =

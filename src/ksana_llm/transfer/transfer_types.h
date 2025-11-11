@@ -9,7 +9,7 @@
 
 namespace ksana_llm {
 
-constexpr int MAX_TRANSFER_TOKENS = 2;
+constexpr int MAX_TRANSFER_TOKENS = 8;
 
 /**
  * @brief 网络地址结构

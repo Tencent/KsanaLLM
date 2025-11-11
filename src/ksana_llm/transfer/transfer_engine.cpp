@@ -47,11 +47,9 @@ void TransferEngine::Initialize(GroupRole group_role) {
     connector_->Initialize(group_role, device_info_manager_);
 
     // 计算派生值
-    int common_layer_num = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
-    int mtp_layer_num = 0;
-    if (runtime_config.enable_mtp_module) {
-      mtp_layer_num = pipeline_config_.upper_nextn_layer_idx - pipeline_config_.lower_nextn_layer_idx + 1;
-    }
+    const int common_layer_num = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+    // MTP Eagle模式下仅需要传输一层
+    const int mtp_layer_num = runtime_config.mtp_step_num > 0 ? 1 : 0;
     KLLM_LOG_DEBUG << "common_layer_num: " << common_layer_num << ", mtp_layer_num: " << mtp_layer_num;
     layer_num_ = common_layer_num + mtp_layer_num;
     block_size_ = block_manager_config.device_allocator_config.block_size;
