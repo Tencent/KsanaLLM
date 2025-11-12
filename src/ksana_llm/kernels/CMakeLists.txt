@@ -30,7 +30,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant
     llm_kernels_nvidia_kernel_marlin_moe llm_kernels_nvidia_kernel_trt_all_reduce
     llm_kernels_nvidia_kernel_quant_fp8 llm_kernels_nvidia_kernel_fused_add_norm
-    llm_kernels_nvidia_kernel_deepgemm_aot_wrapper llm_kernels_nvidia_kernel_split
+    llm_kernels_nvidia_kernel_split llm_kernels_nvidia_kernel_sglang_elementwise
     llm_kernels_nvidia_kernel_adjust_mem llm_kernels_nvidia_kernel_gemm_deepgemm
     llm_kernels_nvidia_kernel_moe_cutlass_moe llm_kernels_nvidia_kernel_moe_expert_map
     llm_kernels_nvidia_kernel_moe_per_tensor_quant_by_scale

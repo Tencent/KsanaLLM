@@ -33,6 +33,7 @@
 #include "csrc/kernels/nvidia/grouped_topk/grouped_topk.h"
 #include "csrc/kernels/nvidia/layernorm/layernorm.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
+#include "csrc/kernels/nvidia/others/sglang/main/elementwise/concat_mla.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
@@ -587,7 +588,6 @@ void Concat(const void* input_a, const void* input_b, size_t concat_size_a, size
       reinterpret_cast<const T*>(input_a), reinterpret_cast<const T*>(input_b), concat_size_a, concat_size_b,
       outer_dim_size, inner_dim_size, reinterpret_cast<T*>(output), stream));
 }
-
 #define CONCAT(T)                                                                                               \
   template void Concat<T>(const void* input_a, const void* input_b, size_t concat_size_a, size_t concat_size_b, \
                           size_t outer_dim_size, size_t inner_dim_size, void* output, cudaStream_t& stream);
@@ -595,6 +595,21 @@ CONCAT(float);
 CONCAT(half);
 CONCAT(__nv_bfloat16);
 #undef CONCAT
+
+template <typename T>
+void ConcatMlaK(const void* k_nope, const void* k_rope, void* k, const int num_tokens, const int num_heads,
+                const int qk_nope_head_dim, const int qk_rope_head_dim, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::concat_mla_k<T>(
+      reinterpret_cast<const T*>(k_nope), reinterpret_cast<const T*>(k_rope), reinterpret_cast<T*>(k), num_tokens,
+      num_heads, qk_nope_head_dim, qk_rope_head_dim, stream));
+}
+#define CONCAT_MLA_K(T)                                                                                    \
+  template void ConcatMlaK<T>(const void*, const void*, void*, const int, const int, const int, const int, \
+                              cudaStream_t);
+CONCAT_MLA_K(float);
+CONCAT_MLA_K(half);
+CONCAT_MLA_K(__nv_bfloat16);
+#undef CONCAT_MLA_K
 
 template <typename T>
 void Expand(void* input, void* output, const int m, const int expand_size, const int n, const size_t stride,

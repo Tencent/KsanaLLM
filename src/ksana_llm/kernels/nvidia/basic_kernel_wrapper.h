@@ -186,6 +186,10 @@ void Concat(const void* input_a, const void* input_b, size_t concat_size_a, size
             size_t inner_dim_size, void* output, cudaStream_t& stream);
 
 template <typename T>
+void ConcatMlaK(const void* k_nope, const void* k_rope, void* k, const int num_tokens, const int num_heads,
+                const int qk_nope_head_dim, const int qk_rope_head_dim, cudaStream_t stream);
+
+template <typename T>
 void InvokeQKRmsNorm(void* qkv_ptr, const void* q_gamma, const void* k_gamma, const float layernorm_eps,
                      const int32_t total_tokens, const int32_t num_heads, const int32_t num_kv_heads,
                      const int32_t head_size, const int64_t* mask, cudaStream_t stream);

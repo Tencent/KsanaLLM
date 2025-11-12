@@ -5,8 +5,6 @@
 #include "ksana_llm/layers/flash_mla_attention_layer.h"
 
 #include "csrc/kernels/nvidia/blockwise_gemm/blockwise_gemm.h"
-#include "csrc/kernels/nvidia/concat/concat.h"
-#include "csrc/kernels/nvidia/expand/expand.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
@@ -348,10 +346,8 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
 
   const int total_tokens = total_q_tokens + total_prefix_tokens;
   void* k_rope_buffer = k_pe_ptr;
-  // output_buffer layout(temporary use): [k_nope] [k_rope]
+  // output_buffer layout(temporary use): [k_nope]
   void* const k_nope_ptr = output_buffer;
-  const size_t k_nope_size = total_tokens * num_heads * qk_nope_head_dim * sizeof(SCALAR_T);
-  void* const k_rope_ptr = output_buffer + k_nope_size;
   void* k_ptr = k_buffer;
   void* v_ptr = v_buffer;
 
@@ -478,10 +474,8 @@ void MlaAttenVarlenAbsorb(void* output_buffer, void* q_nope_rope_ptr, void* k_pe
   }
 
   // cat(k_nope, k_pe)
-  const size_t k_outer_dim = total_tokens * num_heads;
-  constexpr size_t inner_dim = 1;
-  Expand<SCALAR_T>(k_rope_buffer, k_rope_ptr, total_tokens, num_heads, qk_rope_head_dim, 0, stream);
-  Concat<SCALAR_T>(k_nope_ptr, k_rope_ptr, qk_nope_head_dim, qk_rope_head_dim, k_outer_dim, inner_dim, k_ptr, stream);
+  ConcatMlaK<SCALAR_T>(k_nope_ptr, k_rope_buffer, k_ptr, total_tokens, num_heads, qk_nope_head_dim, qk_rope_head_dim,
+                       stream);
 
   // Enables kContextDecodeUseFP8Cache to simulate the effect of KV cache quantization on flash attention,
   // intended for use in testing accuracy outcomes only.
