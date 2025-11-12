@@ -64,6 +64,9 @@ struct SamplingConfig {
 
   // Check and adjust sampling config arguments.
   Status VerifyArgs();
+
+  // Whether the current request uses greedy sampling
+  bool UseGreedy() const;
 };
 
 typedef std::tuple<std::vector<int>, std::vector<std::vector<std::pair<int, float>>>, float> OutputTuple;
@@ -162,8 +165,8 @@ class Request {
   // Build Request based on the given KsanaPythonInput.
   // The lifetime of the KsanaPythonInput object must be longer than Request,
   // since some members in Request are references to KsanaPythonInput.
-  explicit Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
-                   const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
+  Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
+          const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx);
 
   ~Request();
 

@@ -3,25 +3,22 @@
 ==============================================================================*/
 #pragma once
 
-#include <mutex>
-#include <unordered_map>
-
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/layers/set_torch_stream_layer.h"
+#endif
 #include "ksana_llm/layers/add_layer.h"
 #include "ksana_llm/layers/assemble_tokens_hidden_layer.h"
 #include "ksana_llm/layers/base_layer.h"
 #include "ksana_llm/layers/cast_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
+#include "ksana_llm/layers/greedy_sampler_layer.h"
 #include "ksana_llm/layers/input_refit_layer.h"
 #include "ksana_llm/layers/layernorm_layer.h"
 #include "ksana_llm/layers/matmul_layer_factory.h"
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
-#include "ksana_llm/runtime/infer_stage.h"
-#ifdef ENABLE_CUDA
-#  include "ksana_llm/layers/set_torch_stream_layer.h"
-#endif
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/models/base/model_communicator.h"
 #include "ksana_llm/models/base/model_input.h"
@@ -73,12 +70,14 @@ class CommonModel : public BaseModel {
  public:
   CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
               std::shared_ptr<Context> context);
-  ~CommonModel() override;
+  ~CommonModel() override{};
 
   // Initialize the run config.
   void InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight);
 
   float* GetLogitsPtr(size_t multi_batch_id) override;
+
+  int* GetOutputTokensPtr(size_t multi_batch_id) override;
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
@@ -90,7 +89,7 @@ class CommonModel : public BaseModel {
   Status FreeResources(size_t multi_batch_id);
 
   // Update response. Stop inference when the return value is true.
-  bool UpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
+  bool UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Tensor& output, const std::string& stage);
 
  private:
   virtual Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) = 0;
@@ -98,7 +97,7 @@ class CommonModel : public BaseModel {
  private:
   // Execute the embedding lookup.
   Status LookupEmbedding(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
+                         std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
   // Execute the forward of specific layers.
   virtual Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
@@ -155,6 +154,9 @@ class CommonModel : public BaseModel {
 
   std::shared_ptr<Linear> lm_head_;
   std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};
+
+  // The layer for fast greedy sampler
+  std::unique_ptr<GreedySamplerLayer> greedy_sampler_layer_;
 
   // The layer number of the model on current node.
   int layer_num_on_node_;

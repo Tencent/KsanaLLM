@@ -41,6 +41,9 @@ class BaseModel {
   // The output logits pointer on device, used by sampler to avoid memory copy.
   virtual float* GetLogitsPtr(size_t multi_batch_id) = 0;
 
+  // The output tokens pointer on host when all requests use greedy sampler.
+  virtual int* GetOutputTokensPtr(size_t multi_batch_id) = 0;
+
   // Implement this method if cuda graph is used.
   virtual Status WarmUpCudaGraph() { return Status(); }
 

@@ -141,6 +141,14 @@ std::vector<float*> ModelInstance::GetLogitsPtr(size_t multi_batch_id) {
   return results;
 }
 
+std::vector<int*> ModelInstance::GetOutputTokensPtr(size_t multi_batch_id) {
+  std::vector<int*> results(models_.size());
+  for (size_t i = 0; i < models_.size(); ++i) {
+    results[i] = models_[i]->GetOutputTokensPtr(multi_batch_id);
+  }
+  return results;
+}
+
 std::vector<Status> ModelInstance::Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
                                            InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
   std::vector<Status> results;

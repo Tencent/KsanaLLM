@@ -29,6 +29,11 @@ Status SamplingConfig::VerifyArgs() {
   return Status();
 }
 
+bool SamplingConfig::UseGreedy() const {
+  return num_beams == 1 && topk == 1 && logprobs_num == 0 && no_repeat_ngram_size == 0 &&
+         encoder_no_repeat_ngram_size == 0 && decoder_no_repeat_ngram_size == 0;
+}
+
 Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
                  const std::shared_ptr<std::unordered_map<std::string, std::string>>& req_ctx)
     : req_id(0),

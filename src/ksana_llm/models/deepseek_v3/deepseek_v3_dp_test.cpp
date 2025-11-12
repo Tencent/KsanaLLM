@@ -133,10 +133,6 @@ class DeepSeekV3DPTest : public testing::Test {
     forward->attn_dp_group_id = dp_group_id;
     forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    forward->logits_buf.resize(2);  // tp 2
-    forward->logits_buf[0] = deepseek_v3_dps[0]->GetLogitsPtr(multi_batch_id);
-    forward->logits_buf[1] = deepseek_v3_dps[1]->GetLogitsPtr(multi_batch_id);
-    forward->logits_offset = 0;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
     embedding_slice.pos = input_refit_pos;

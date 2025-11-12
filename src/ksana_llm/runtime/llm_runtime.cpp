@@ -25,6 +25,7 @@
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {
+
 LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
                        std::shared_ptr<Context> context)
     : context_(context) {
@@ -63,7 +64,7 @@ void LlmRuntime::BuildForwardRequests(size_t multi_batch_id, std::vector<std::sh
     ModelInstance* const key = req->model_instance.get();
     auto& model_reqs = grouped_reqs[key];
     model_reqs.reserve(reqs.size());
-    model_reqs.emplace_back(req->GetForwardRequest(key->GetLogitsPtr(multi_batch_id)));
+    model_reqs.emplace_back(req->GetForwardRequest());
   }
 }
 
@@ -241,25 +242,40 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
 
 Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                             std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
-  PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
-
-  std::vector<std::future<Status>> results;
-  for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(
-        worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs));
+  if (reqs.empty()) {
+    return Status();
   }
 
-  // Wait all instances done and check status.
-  Status result_status = Status();
-  for (auto& result : results) {
-    try {
-      Status status = result.get();
-      if (!status.OK()) {
-        result_status = status;
+  PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
+
+  Status result_status;
+
+  // Take the shortcut when all sampling are greedy
+  if (int* output_tokens_ptr = reqs.front()->model_instance->GetOutputTokensPtr(multi_batch_id).front();
+      output_tokens_ptr != nullptr) {
+    for (auto& sampling_req : sampling_reqs) {
+      sampling_req.sampling_result_tokens->insert(
+          sampling_req.sampling_result_tokens->end(), output_tokens_ptr + sampling_req.logits_offset,
+          output_tokens_ptr + sampling_req.logits_offset + sampling_req.sampling_token_num);
+    }
+  } else {
+    std::vector<std::future<Status>> results(context_->GetTensorParallelSize());
+    for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
+      results[worker_id] =
+          worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs);
+    }
+
+    // Wait all instances done and check status.
+    for (auto& result : results) {
+      try {
+        const Status status = result.get();
+        if (!status.OK()) {
+          result_status = status;
+        }
+      } catch (const std::exception& e) {
+        KLLM_LOG_FATAL << "Exception in sampling, info: " << e.what();
+        result_status = Status(RET_RUNTIME_FAILED, "Failed to sampling.");
       }
-    } catch (const std::exception& e) {
-      KLLM_LOG_FATAL << "Exception in sampling, info: " << e.what();
-      result_status = Status(RET_RUNTIME_FAILED, "Failed to sampling.");
     }
   }
 

@@ -280,7 +280,7 @@ TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
   const int block_token_num = 2;
   const int batch_size = 2;
   std::vector<int> dummy_block_memory_ids(1, 0);
-  std::vector<int> forwarding_tokens_1 = {0, 1, 2, 4, 5, 6, 7};    // hit {0, 1, 2, 3, 4, 5}
+  std::vector<int> forwarding_tokens_1 = {0, 1, 2, 4, 5, 6, 7};     // hit {0, 1, 2, 3, 4, 5}
   std::vector<int> forwarding_tokens_2 = {10, 11, 14, 15, 16, 17};  // hit {10, 11, 12, 13, 14, 15}
   std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks_1(3);
   std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks_2(2);
@@ -601,4 +601,38 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
     }
   }
 }
+
+TEST_F(ModelInputTest, PrepareUseGreedyTest) {
+#ifdef ENABLE_CUDA
+  SamplingConfig sampling_config1;
+  auto forward_req1 = std::make_unique<ForwardRequest>();
+  forward_req1->sampling_config = &sampling_config1;
+  auto forward_req2 = std::make_unique<ForwardRequest>();
+  SamplingConfig sampling_config2;
+  forward_req2->sampling_config = &sampling_config2;
+  std::vector<ForwardRequest*> forward_reqs{forward_req1.get(), forward_req2.get()};
+  // Use greedy sampler by default
+  model_input->PrepareUseGreedy(forward_reqs);
+  EXPECT_TRUE(model_input->use_greedy);
+
+  // Greedy sampler is disabled when using topk
+  forward_req2->sampling_config->topk = 2;
+  model_input->PrepareUseGreedy(forward_reqs);
+  EXPECT_FALSE(model_input->use_greedy);
+  forward_req2->sampling_config->topk = 1;
+
+  // Greedy sampler is disabled when requiring logits
+  forward_req2->logits_custom_length = 1;
+  model_input->PrepareUseGreedy(forward_reqs);
+  EXPECT_FALSE(model_input->use_greedy);
+  forward_req2->logits_custom_length = 0;
+
+  // Greedy sampler is disabled when using xgrammar
+  model_input->batch_scheduler_config_.enable_xgrammar = true;
+  model_input->PrepareUseGreedy(forward_reqs);
+  EXPECT_FALSE(model_input->use_greedy);
+  model_input->batch_scheduler_config_.enable_xgrammar = false;
+#endif
+}
+
 }  // namespace ksana_llm

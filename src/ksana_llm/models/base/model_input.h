@@ -13,7 +13,7 @@
 
 namespace ksana_llm {
 
-// Convert input ids to expected format.
+// Prepare input for model forward
 class ModelInput {
  public:
   ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
@@ -43,6 +43,9 @@ class ModelInput {
 
   void PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs);
 #endif
+
+  // Whether all requests in the current batch use greedy sampling
+  void PrepareUseGreedy(const std::vector<ForwardRequest*>& forward_reqs);
 
   // 执行校验和验证，可以在 forward 计算之前或之后使用。
   void ExecuteChecksumVerification(const std::vector<ForwardRequest*>& forward_reqs, bool is_after_forward);
@@ -86,6 +89,8 @@ class ModelInput {
   // For cutoff layer
   int cutoff_layer = 0;
 
+  // Whether to use greedy sampler.
+  bool use_greedy = false;
   // Whether to use kv cache.
   bool use_cache = true;
 
@@ -216,6 +221,7 @@ class ModelInput {
   ModelConfig model_config_;
   RuntimeConfig runtime_config_;
   ConnectorConfig connector_config_;
+  BatchSchedulerConfig batch_scheduler_config_;
 
   bool enable_blocked_multi_token_forwarding_kv_;
 

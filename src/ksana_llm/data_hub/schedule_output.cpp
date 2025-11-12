@@ -22,7 +22,6 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest() {
         std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens)*) {});
     forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
     forward_request_->logits_custom_length = 0;
-    forward_request_->logits_buf.clear();
     forward_request_->is_cudagraph_capture_request = false;
     forward_request_->cache_manager = cache_manager;
 

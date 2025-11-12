@@ -28,7 +28,7 @@ struct SamplingDeviceParameter {
   bool logits_softmax{false};
   // Whether to do sampling, i.e., get tokens based on logits.
   bool do_sampling{false};
-  int vocab_size_padded = 0;
+  int vocab_size = 0;
   int max_topK = 0;
   int bs = 0;
 };

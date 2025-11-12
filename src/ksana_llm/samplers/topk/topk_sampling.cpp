@@ -2,17 +2,16 @@
 
 ==============================================================================*/
 
+#include "ksana_llm/samplers/topk/topk_sampling.h"
+
 #include <cstdint>
 #include <random>
 
-#include "ksana_llm/samplers/topk/topk_sampling.h"
+#include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/utils/logger.h"
-
 #ifdef ENABLE_CUDA
 #  include "3rdparty/LLM_kernels/csrc/kernels/nvidia/samplers/sampling_topk_kernels.h"
 #endif
-
-#include "ksana_llm/kernels/argmax.h"
 
 namespace ksana_llm {
 TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandState* device_curandstates)
@@ -57,10 +56,10 @@ Status TopkSampling::RunSampling(float* logits, uint32_t* output_token, const Sa
                                  Stream& stream) {
   if (sampling_device_parameter.device_topKs == nullptr) {
 #ifdef ENABLE_CUDA
-    ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream);
+    return ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size, output_token, stream);
 #elif defined(ENABLE_ACL)
-    ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream,
-           atb_executors_ptr_);
+    return ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size, output_token, stream,
+                  atb_executors_ptr_);
 #endif
   } else {
 #ifdef ENABLE_CUDA
@@ -68,14 +67,13 @@ Status TopkSampling::RunSampling(float* logits, uint32_t* output_token, const Sa
         workspace_, workspace_size_, logits, sampling_device_parameter.device_output_tokens_ptrs, nullptr, nullptr,
         nullptr, nullptr, nullptr, sampling_device_parameter.device_curandstates, sampling_device_parameter.max_topK,
         sampling_device_parameter.device_topKs, 1.0, sampling_device_parameter.device_topPs,
-        static_cast<int>(sampling_device_parameter.vocab_size_padded), nullptr, nullptr, stream.Get(),
+        static_cast<int>(sampling_device_parameter.vocab_size), nullptr, nullptr, stream.Get(),
         static_cast<int>(sampling_device_parameter.bs), 0, nullptr, false, sampling_device_parameter.logits_softmax));
+    return Status();
 #else
     KLLM_THROW("Not support topk > 1 in Ascend NPU.");
 #endif
   }
-
-  return Status();
 }
 
 }  // namespace ksana_llm

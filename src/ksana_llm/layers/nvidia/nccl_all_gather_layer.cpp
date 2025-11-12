@@ -9,7 +9,7 @@
 namespace ksana_llm {
 
 Status NcclAllGatherLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
-  DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
+  DISPATCH_BY_3_DTYPE(input_tensors[0].dtype, ForwardT, input_tensors, output_tensors);
 }
 
 template <typename T>
@@ -37,9 +37,9 @@ Status NcclAllGatherLayer::ForwardT(const std::vector<Tensor>& input_tensors, st
     PROFILE_EVENT_SCOPE(nccl_allgather_multi_batch_id_, "nccl_allgather_multi_batch_id_{}", rank_);
     void* output_ptr = gather_along_dim_0 ? output_tensors[0].GetPtr<void>() : input_tensors[1].GetPtr<void>();
     NCCL_CHECK(ncclGroupStart());
-    ncclResult_t ncclError = ncclAllGather(reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()), output_ptr,
-                                           input_tensors[0].GetElementNumber(), GetNcclDataType(inter_data_type_),
-                                           context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
+    ncclResult_t ncclError =
+        ncclAllGather(input_tensors[0].GetPtr<const void>(), output_ptr, input_tensors[0].GetElementNumber(),
+                      GetNcclDataType(input_tensors[0].dtype), context_->ext->GetNCCLParam()[rank_].nccl_comm, *stream);
     if (ncclError != ncclSuccess) {
       KLLM_LOG_ERROR << fmt::format("NCCL error: {}\n", ncclGetErrorString(ncclError));
       return Status(RetCode::RET_INFER_FAILED, "NCCL error");

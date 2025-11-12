@@ -65,9 +65,8 @@ struct ForwardRequest {
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;
 
-  // The output logits buf and offset.
-  std::vector<float*> logits_buf;
-  size_t logits_offset;
+  // The output logits offset.
+  size_t logits_offset = 0;
 
   // The accepted hidden states for mtp input
   Tensor* accepted_hidden_states_ptr = nullptr;

@@ -83,9 +83,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   dp_input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
   dp_flexible_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
 
-  BatchSchedulerConfig batch_scheduler_config;
-  env->GetBatchSchedulerConfig(batch_scheduler_config);
-  const size_t max_logits_tokens = max_batch_size * batch_scheduler_config.max_decode_tokens_per_req;
+  env->GetBatchSchedulerConfig(batch_scheduler_config_);
+  const size_t max_logits_tokens = max_batch_size * batch_scheduler_config_.max_decode_tokens_per_req;
   logits_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_logits_tokens}, rank_);
 
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num}, rank_);
@@ -339,6 +338,8 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareCutoffLayer(forward_reqs);
   PrepareNextNGatherIdx(forward_reqs, run_mode);
 
+  PrepareUseGreedy(forward_reqs);
+
   PreparePrefill();
   PrepareDualDecode();
   PrepareSingleDecode();
@@ -350,6 +351,22 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 #ifdef ENABLE_ACL
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, multi_token_request_num > 0);
+#endif
+}
+
+void ModelInput::PrepareUseGreedy(const std::vector<ForwardRequest*>& forward_reqs) {
+  if (batch_scheduler_config_.enable_xgrammar) {
+    use_greedy = false;
+    return;
+  }
+  for (const auto& req : forward_reqs) {
+    if (req->logits_custom_length > 0 || !req->sampling_config || !req->sampling_config->UseGreedy()) {
+      use_greedy = false;
+      return;
+    }
+  }
+#ifdef ENABLE_CUDA
+  use_greedy = true;
 #endif
 }
 

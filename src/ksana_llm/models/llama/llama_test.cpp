@@ -153,18 +153,11 @@ class LlamaTest : public testing::Test {
     EXPECT_EQ(wrong_tensor.location, MemoryLocation::LOCATION_UNKNOWN);
     EXPECT_TRUE(wrong_tensor.shape.empty());
 
-    SamplingConfig sampling_config;
-
     // ContextDecode
     ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
-    request_builder.CreateForwardRequest(1, forward, input_ids);
-
-    // TODO(robertyuan): these settings are used in Sampling, should be removed from ForwardRequest
-    forward.logits_buf.resize(1);
-    forward.logits_buf[0] = llama->GetLogitsPtr(schedule_id);
-    forward.sampling_config = &sampling_config;
+    auto forward = request_builder.CreateForwardRequest(1, input_ids);
 
     KLLM_LOG_DEBUG << fmt::format("kv_cache_ptrs {} end {}", forward->kv_cache_ptrs[0][0],
                                   forward->kv_cache_ptrs[0][0] + runtime_config.attn_backend_config.block_size);
@@ -200,8 +193,8 @@ class LlamaTest : public testing::Test {
     sample_req.sampling_result_tokens = &sampling_result_tokens;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = forward_reqs[0].logits_buf;
-    sample_req.model_config = &model_config;
+    sample_req.logits_buf = std::vector<float*>{llama->GetLogitsPtr(schedule_id)};
+    SamplingConfig sampling_config;
     sample_req.sampling_config = &sampling_config;
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -276,9 +269,6 @@ class LlamaTest : public testing::Test {
     // 模拟多次请求，计算checksum
     context_->SetIsLastLayer(true);
     auto forward_checksum = request_builder.CreateForwardRequest(2, input_ids);
-    forward_checksum->logits_buf.resize(1);
-    forward_checksum->logits_buf[0] = llama->GetLogitsPtr(schedule_id);
-    forward_checksum->sampling_config = &sampling_config;
     forward_checksum->block_checksums->resize(1);
     forward_checksum->checksummed_block_num->resize(1, 0);
     std::vector<ForwardRequest *> forward_reqs_checksum = {forward_checksum};

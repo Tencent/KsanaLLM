@@ -176,6 +176,9 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
       lm_head_prenorm_ =
           std::make_shared<Layernorm>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_);
     }
+
+    greedy_sampler_layer_ = std::make_unique<GreedySamplerLayer>();
+    greedy_sampler_layer_->Init({}, runtime_config_, context_, rank_);
   }
 
   MemGetInfo(&free_device_mem_after_init, &total_device_mem);
@@ -187,9 +190,15 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 }
 
 float* CommonModel::GetLogitsPtr(size_t multi_batch_id) {
-  SetDevice(rank_);
-  ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
+  ForwardingContext* const forwarding_context = GetForwardingContext(multi_batch_id);
   return forwarding_context->GetModelOutput()->logits_tensor.template GetPtr<float>(false);
+}
+
+int* CommonModel::GetOutputTokensPtr(size_t multi_batch_id) {
+  ForwardingContext* const forwarding_context = GetForwardingContext(multi_batch_id);
+  return forwarding_context->GetModelInput()->use_greedy
+             ? forwarding_context->GetModelOutput()->output_tokens_host_tensor.template GetPtr<int>(false)
+             : nullptr;
 }
 
 Status CommonModel::EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest*>& forward_reqs,
@@ -576,24 +585,49 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     StreamWaitEvent(context_->GetCommStreams()[rank_], forwarding_context.GetModelOutput()->compute_ready_event);
   }
 
+  // Change forward shape
+  forwarding_context.UpdateAfterForward(forward_reqs);
   if (forwarding_context.GetModelCommunicator()) {
+    if (forwarding_context.GetModelInput()->use_greedy) {
+      // Local argmax
+      STATUS_CHECK_RETURN(greedy_sampler_layer_->Forward(
+          {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape},
+          hidden_buffer_tensors_1));
+      std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+      // Correctly set the shape and data type of the intermediate buffer for the following allgather
+      hidden_buffer_tensors_1[0].shape = {hidden_buffer_tensors_0[0].shape[0],
+                                          hidden_buffer_tensors_0[0].shape[1] * context_->GetTensorParallelSize()};
+      hidden_buffer_tensors_1[0].dtype = hidden_buffer_tensors_0[0].dtype;
+    }
     forwarding_context.GetModelCommunicator()->AllGather({hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]},
                                                          hidden_buffer_tensors_0);
   }
 
-  if (is_multi_token_forward && run_mode == RunMode::kMain) {
-    if (UpdateResponse(forward_reqs, hidden_buffer_tensors_0[0], "logits")) {
-      StreamSynchronize(context_->GetComputeStreams()[rank_]);
-      return Status();
-    }
-  }
-
-  PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast_{}", forwarding_context.GetMultiBatchId()),
-                      forwarding_context.GetCurrentRank());
-  forwarding_context.UpdateAfterForward(forward_reqs);
   std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
-  STATUS_CHECK_RETURN(cast_layer_->Forward(
-      {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
+  if (forwarding_context.GetModelInput()->use_greedy) {
+    if (rank_ == 0) {
+      // Final argmax
+      STATUS_CHECK_RETURN(greedy_sampler_layer_->Forward(
+          {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
+      // Copy sampling tokens from device to host
+      MemcpyAsync(forwarding_context.GetModelOutput()->output_tokens_host_tensor.template GetPtr<int>(),
+                  logits_buffer[0].GetPtr<int>(), sizeof(int) * logits_buffer[0].shape[0], MEMCPY_DEVICE_TO_HOST,
+                  context_->GetComputeStreams()[rank_]);
+    }
+    // At this point, do not need to update response or cast
+  } else {
+    if (is_multi_token_forward && run_mode == RunMode::kMain) {
+      if (UpdateResponse(forward_reqs, hidden_buffer_tensors_0[0], "logits")) {
+        StreamSynchronize(context_->GetComputeStreams()[rank_]);
+        return Status();
+      }
+    }
+
+    PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast_{}", forwarding_context.GetMultiBatchId()),
+                        forwarding_context.GetCurrentRank());
+    STATUS_CHECK_RETURN(cast_layer_->Forward(
+        {hidden_buffer_tensors_0[0], forwarding_context.GetAttentionForwardContext().forward_shape}, logits_buffer));
+  }
 
   StreamSynchronize(context_->GetComputeStreams()[rank_]);
   forwarding_context.GetModelInput()->VerifyChecksumAfterForward(forward_reqs);

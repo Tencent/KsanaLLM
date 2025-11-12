@@ -354,7 +354,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
 
   float *device_logits = reinterpret_cast<float *>(logits_buf_);
   SamplingDeviceParameter sampling_device_parameter;
-  sampling_device_parameter.vocab_size_padded = vocab_size_;
+  sampling_device_parameter.vocab_size = vocab_size_;
 
   // Test with no grammar matcher (should return early due to enable_xgrammar=false)
   sample_reqs[0].structured_generator = nullptr;
@@ -383,7 +383,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
 
   float *device_logits = reinterpret_cast<float *>(logits_buf_);
   SamplingDeviceParameter sampling_device_parameter;
-  sampling_device_parameter.vocab_size_padded = vocab_size_;
+  sampling_device_parameter.vocab_size = vocab_size_;
 
   // Test with no grammar matcher (should return early due to empty grammar_req_indices)
   sample_reqs[0].structured_generator = nullptr;

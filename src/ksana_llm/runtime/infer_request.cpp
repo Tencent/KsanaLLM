@@ -148,7 +148,7 @@ std::vector<int> InferRequest::GetKVOccupiedDevices() {
   return kv_occupied_devices;
 }
 
-ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logits_buf) {
+ForwardRequest *InferRequest::GetForwardRequest() {
   forward_request_ = std::make_unique<ForwardRequest>();
   forward_request_->req_id = req_id;
   forward_request_->req_ctx = req_ctx;
@@ -173,7 +173,6 @@ ForwardRequest *InferRequest::GetForwardRequest(const std::vector<float *> &logi
   forward_request_->logits_custom_length = logits_custom_length;
   forward_request_->sampling_token_num = sampling_token_num;
   forward_request_->last_step_token_num = last_step_token_num;
-  forward_request_->logits_buf = logits_buf;
   forward_request_->logits_offset = logits_offset;
   forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();

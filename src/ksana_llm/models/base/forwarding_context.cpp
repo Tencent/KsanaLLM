@@ -265,8 +265,7 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest*>& forwar
 
 void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs) {
   // Cast to float & Copy to logits buffer
-  attn_ctx_.forward_shape.shape = {forward_reqs[0].logits_offset * vocab_size_ * sizeof(float), vocab_size_,
-                                   vocab_size_pad_};
+  attn_ctx_.forward_shape.shape = {/*logits_offset*/ 0, vocab_size_, vocab_size_pad_};
 }
 
 Status ForwardingContext::AcquireBuffers() {

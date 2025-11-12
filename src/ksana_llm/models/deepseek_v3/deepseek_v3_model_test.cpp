@@ -174,10 +174,7 @@ class DeepSeekV3Test : public testing::Test {
     forward->attn_dp_group_id = 0;
     forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
-    forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    forward.logits_buf.resize(1);
-    forward.logits_buf[0] = deepseek_v3->GetLogitsPtr(multi_batch_id);
-    forward.logits_offset = 0;
+    forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
     EmbeddingSlice embedding_slice;
@@ -247,8 +244,7 @@ class DeepSeekV3Test : public testing::Test {
     sample_req.sampling_result_tokens = &generated_tokens0;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = forward_reqs[0].logits_buf;
-    sample_req.model_config = &model_config;
+    sample_req.logits_buf = std::vector<float*>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
     SamplingConfig sample_config;
     sample_config.num_beams = 1;
     sample_config.topk = 1;
@@ -261,8 +257,8 @@ class DeepSeekV3Test : public testing::Test {
 
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;
-    decode_sample_req.logits_offset = forward_reqs[1].logits_offset;
-    decode_sample_req.logits_buf = forward_reqs[1].logits_buf;
+    decode_sample_req.logits_offset = forward_reqs[1]->logits_offset;
+    decode_sample_req.logits_buf = std::vector<float*>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
 
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);

@@ -215,8 +215,8 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
-void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
-                                        std::vector<std::vector<float>>& probs_output, Stream& stream) {
+void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+  std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
   StreamSynchronize(stream);
   copy_probs_after_synchronize();
@@ -262,7 +262,7 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
     std::vector<int64_t> token_ids(universal_logprobs_num);
 #ifdef ENABLE_CUDA
     auto& offset = sampling_req.logits_offset;
-    auto& vocab_size = sampling_device_parameter.vocab_size_padded;
+    auto& vocab_size = sampling_device_parameter.vocab_size;
     float* device_temperatures_ptr = sampling_device_parameter.device_temperatures == nullptr
                                          ? nullptr
                                          : sampling_device_parameter.device_temperatures + offset;
@@ -379,7 +379,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
       return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
     }
     device_logits = logits;
-    sampling_device_parameter.vocab_size_padded = batch_schedule_config_.max_vocab_size;
+    sampling_device_parameter.vocab_size = batch_schedule_config_.max_vocab_size;
     const size_t offset = sampling_req.logits_offset;
     if (offset >= max_logits_num) {
       return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_logits_num");
@@ -451,8 +451,8 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
 #ifdef ENABLE_CUDA
     CUDA_CHECK_LAST_ERROR(tensorrt_llm::kernels::InvokeAddBiasSoftMax<float>(
         device_logits, nullptr, sampling_device_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
-        sampling_device_parameter.bs, 0, 1, sampling_device_parameter.vocab_size_padded,
-        sampling_device_parameter.vocab_size_padded, false, true, stream.Get()));
+        sampling_device_parameter.bs, 0, 1, sampling_device_parameter.vocab_size, sampling_device_parameter.vocab_size,
+        false, true, stream.Get()));
 #else
     KLLM_THROW("Softmax is not supported on NPU.");
 #endif
@@ -465,8 +465,7 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
                 MEMCPY_DEVICE_TO_HOST, stream);
   }
 
-  std::vector<std::vector<float>> probs_output(sampling_reqs.size());
-  CopyProbsOutputToRequests(sampling_reqs, probs_output, stream);
+  CopyProbsOutputToRequests(sampling_reqs, stream);
 
   return Status();
 }
@@ -532,7 +531,7 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
     MemcpyAsync(device_vocab_mask_, host_vocab_mask_.data(), vocab_mask_size, MEMCPY_HOST_TO_DEVICE, stream);
 
     // Apply bitmask only to structured-enabled requests
-    ApplyTokenBitmaskSelective(device_logits, device_vocab_mask_, sampling_device_parameter.vocab_size_padded,
+    ApplyTokenBitmaskSelective(device_logits, device_vocab_mask_, sampling_device_parameter.vocab_size,
                                structured_req_offsets, stream);
   }
 }

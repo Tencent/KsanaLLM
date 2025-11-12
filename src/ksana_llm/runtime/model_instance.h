@@ -59,6 +59,9 @@ class ModelInstance {
   // Get the base ptr of model's logits buf.
   std::vector<float*> GetLogitsPtr(size_t multi_batch_id);
 
+  // Get the base ptr of model's output tokens host buf.
+  std::vector<int*> GetOutputTokensPtr(size_t multi_batch_id);
+
   const ModelConfig& GetModelConfig() { return model_config_; }
 
   size_t GetMaxTokenNum() { return runtime_config_.max_seq_len; }

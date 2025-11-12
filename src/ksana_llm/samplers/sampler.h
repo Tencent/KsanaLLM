@@ -21,6 +21,7 @@ class Sampler {
  public:
   Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context);
   ~Sampler();
+
   Status Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
   Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
                                  SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
@@ -39,8 +40,7 @@ class Sampler {
   void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                               const int vocab_size, const float repetition_penalty, Stream& stream);
 
-  void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,
-                                 std::vector<std::vector<float>>& probs_output, Stream& stream);
+  void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
 
   void GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
                  NgramDict* ngram_dict);
@@ -72,6 +72,7 @@ class Sampler {
  private:
   const BatchSchedulerConfig batch_schedule_config_;
   const int rank_;
+
   TopkSampling* topk_sampling_{nullptr};
   void* device_buffer_ = nullptr;
   uint32_t* device_output_tokens_;
@@ -84,6 +85,7 @@ class Sampler {
   float* device_prob_;
   float** device_prob_ptrs_;
   RandState* device_curandstates_{nullptr};
+
   std::vector<int> host_output_tokens_;
   std::vector<int> host_topKs_;
   std::vector<float> host_topPs_;

@@ -154,10 +154,7 @@ class ForwardTest : public testing::Test {
     ForwardRequest forward;
     std::vector<int> input_ids = {1, 529};  // 示例输入 token
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
-    request_builder.CreateForwardRequest(1, forward, input_ids);
-
-    // 设置 logits 相关参数
-    forward.logits_buf.resize(1);
+    auto forward = request_builder.CreateForwardRequest(1, input_ids);
 
     // 设置 request_target 参数，使用 GATHER_ALL 模式
     std::map<std::string, ksana_llm::TargetDescribe> request_target;

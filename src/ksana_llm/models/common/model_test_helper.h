@@ -209,9 +209,12 @@ class ForwardRequestBuilderForTest {
                            "faild to allocate blocks");
     }
 
-    infer_reqs_[req_id] = infer_req;
-    std::vector<float*> logits_buf;  // TODO(robertyuan): this buffer seems useless, but it refs to model_instance
-    LlmRuntime::BuildForwardRequestFromInferRequest(forward_req, infer_req, layer_num_, logits_buf);
+    // set model_instance
+    std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
+    infer_req->model_instance = std::make_shared<ModelInstance>(ModelConfig(), RuntimeConfig(),
+                                                                std::make_shared<Context>(1, 1, 1), weight_instance);
+
+    return infer_req->GetForwardRequest();
   }
 
  private:

@@ -250,7 +250,7 @@ class InferRequest {
  public:
   // ForwardRequest's lifecycle is bound to InferRequest's, making smart pointers redundant. Any use of ForwardRequest*
   // requires the guaranteed existence of its associated InferRequest.
-  ForwardRequest *GetForwardRequest(const std::vector<float *> &logits_buf);
+  ForwardRequest *GetForwardRequest();
   std::unique_ptr<ForwardRequest> forward_request_;
   int last_block_id_ = -1;
 };

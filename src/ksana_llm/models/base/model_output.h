@@ -23,6 +23,8 @@ class ModelOutput {
 
   // Store logist result, shape: [max_logits_num, vocab_size], dtype: float
   Tensor logits_tensor;
+  // Store output tokens on the host, shape: [max_logits_num], dtype: int
+  Tensor output_tokens_host_tensor;
 
  private:
   int rank_;

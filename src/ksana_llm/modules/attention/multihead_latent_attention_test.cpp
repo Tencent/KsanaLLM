@@ -459,10 +459,7 @@ class MlaTest : public testing::Test {
     forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     forward.sampling_config = &sampling_config;
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
-    forward.flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-    forward.logits_buf.resize(1);
-    forward.logits_buf[0] = test_mla_model->GetLogitsPtr(schedule_id);
-    forward.logits_offset = 0;
+    forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     std::vector<int> input_refit_pos;
     std::vector<std::vector<float>> input_refit_embedding;
     EmbeddingSlice embedding_slice;
