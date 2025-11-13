@@ -17,6 +17,6 @@ target_compile_definitions(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC ENAB
 target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC -lcublas -lcudart -lcublasLt
                       llm_kernels_nvidia_utils)
 if (ENABLE_CUTLASSMOE)
-    target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC llm_kernels_nvidia_kernel_others_trtllm_dev_cutlass_kernels)
+    target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PUBLIC llm_kernels_nvidia_kernel_others_trtllm_dev_thop)
 endif()
 target_link_libraries(llm_kernels_nvidia_kernel_moe_cutlass_moe PRIVATE cutlass_c4x)

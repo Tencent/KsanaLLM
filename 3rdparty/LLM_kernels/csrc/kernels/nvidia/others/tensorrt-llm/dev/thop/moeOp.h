@@ -32,7 +32,7 @@
 
 #include <fmt/format.h>
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/utils.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
 #include "csrc/utils/nvidia/assert.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 
@@ -47,6 +47,11 @@ using TmaWarpSpecializedGroupedGemmInput =
     llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels::TmaWarpSpecializedGroupedGemmInput;
 using profiler_backend = CUTLASS_MOE_GEMM_KERNELS_NAMESPACE::GemmProfilerBackend;
 }  // namespace internal
+
+struct WorkspaceInfo {
+  void* workspace{};
+  void* src_to_dest_map{};
+};
 
 class FusedMoeRunner {
  public:
@@ -171,19 +176,19 @@ class FusedMoeRunner {
 
   nvinfer1::DataType GetNvinferDataType(ScalarType scalarType) {
     switch (scalarType) {
-      case Long:
+      case ScalarType::Long:
         return nvinfer1::DataType::kINT64;
-      case Float8_e4m3fn:
+      case ScalarType::Float8_e4m3fn:
         return nvinfer1::DataType::kFP8;
-      case QUInt4x2:
+      case ScalarType::QUInt4x2:
         return nvinfer1::DataType::kINT4;
-      case Int:
+      case ScalarType::Int:
         return nvinfer1::DataType::kINT32;
-      case Float:
+      case ScalarType::Float:
         return nvinfer1::DataType::kFLOAT;
-      case BFloat16:
+      case ScalarType::BFloat16:
         return nvinfer1::DataType::kBF16;
-      case Half:
+      case ScalarType::Float16:
         return nvinfer1::DataType::kHALF;
       default:
         KLLM_KERNEL_THROW("Unknown ScalarType");
@@ -192,20 +197,20 @@ class FusedMoeRunner {
 
   size_t GetElementSize(ScalarType scalarType) {
     switch (scalarType) {
-      case Long:
+      case ScalarType::Long:
         return 8;
-      case Float8_e4m3fn:
+      case ScalarType::Float8_e4m3fn:
         return 1;
       // TODO(jinxcwu) torch.quint4x2不确定是1字节还是0.5字节
-      case QUInt4x2:
+      case ScalarType::QUInt4x2:
         return 1;
-      case Int:
+      case ScalarType::Int:
         return 4;
-      case Float:
+      case ScalarType::Float:
         return 4;
-      case BFloat16:
+      case ScalarType::BFloat16:
         return 2;
-      case Half:
+      case ScalarType::Float16:
         return 2;
       default:
         KLLM_KERNEL_THROW("Unknown ScalarType");

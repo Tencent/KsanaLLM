@@ -3,7 +3,8 @@
 ==============================================================================*/
 #include "ksana_llm/layers/cutlass_moe_layer.h"
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/utils.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
+#include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/profiler/timer.h"
@@ -22,7 +23,7 @@ static const std::unordered_map<DataType, KScalarType> DataTypeToScalarTypeMap =
     {DataType::TYPE_UINT8, KScalarType::QUInt4x2},  // NOTE(jinxcwu) 特殊配置的，需要注意
     {DataType::TYPE_INT8, KScalarType::QUInt4x2},   // NOTE(jinxcwu) 特殊配置的，需要注意
     {DataType::TYPE_INT32, KScalarType::Int},      {DataType::TYPE_FP32, KScalarType::Float},
-    {DataType::TYPE_BF16, KScalarType::BFloat16},  {DataType::TYPE_FP16, KScalarType::Half}};
+    {DataType::TYPE_BF16, KScalarType::BFloat16},  {DataType::TYPE_FP16, KScalarType::Float16}};
 
 inline KTensor TensorToKTensor(const Tensor& tensor) {
   return KTensor(tensor.GetPtr<void>(), tensor.shape, DataTypeToScalarTypeMap.at(tensor.dtype));

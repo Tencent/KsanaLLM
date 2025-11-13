@@ -20,7 +20,7 @@
  * limitations under the License.
  */
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/moeOp.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/moeOp.h"
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
 
@@ -33,7 +33,7 @@ std::unique_ptr<internal::kernels::CutlassMoeFCRunnerInterface> FusedMoeRunner::
       // TODO We need an atomic FP8 reduction for the finalize fusions
       KLLM_KERNEL_THROW(fmt::format("Outputting {} directly is not currently supported", output_type));
       // return std::make_unique<internal::kernels::CutlassMoeFCRunner<Type, Type>>();
-    case ScalarType::Half:
+    case ScalarType::Float16:
       if constexpr (NeedQuant) {
         return std::make_unique<internal::kernels::CutlassMoeFCRunner<TypeAct, TypeWeight, half, half>>();
       } else {
@@ -63,7 +63,7 @@ FusedMoeRunner::FusedMoeRunner(ScalarType activation_dtype, ScalarType weight_dt
   mInnerDimMultiplier = 1;
 
   // keep consistent with cpp/tensorrt_llm/plugins/mixtureOfExperts/mixtureOfExpertsPlugin.cpp
-  if (mActivationDtype == ScalarType::Half && mWeightDtype == ScalarType::Half) {
+  if (mActivationDtype == ScalarType::Float16 && mWeightDtype == ScalarType::Float16) {
     mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<half, half>>();
   } else if (mActivationDtype == ScalarType::BFloat16 && mWeightDtype == ScalarType::BFloat16) {
     mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<__nv_bfloat16, __nv_bfloat16>>();
@@ -88,7 +88,8 @@ FusedMoeRunner::FusedMoeRunner(ScalarType activation_dtype, ScalarType weight_dt
   if (isNvfp4Quant()) {
     mInnerDimMultiplier = 16;
     switch (mActivationDtype) {
-      case ScalarType::Half:
+      case ScalarType::Float16:
+#  ifdef ENABLE_BF16
       case ScalarType::BFloat16:
         mKernelRunner = switch_output_type<__nv_fp4_e2m1, __nv_fp4_e2m1, true>(mOutputDtype);
         break;
@@ -99,28 +100,29 @@ FusedMoeRunner::FusedMoeRunner(ScalarType activation_dtype, ScalarType weight_dt
 #endif
   if (isInt4Quant()) {
     mInnerDimMultiplier = 2;
-    if (mActivationDtype == ScalarType::Half) {
-#ifdef ENABLE_FP8
-      if (mUseW4A8GroupScaling) {
-        mKernelRunner =
-            std::make_unique<internal::kernels::CutlassMoeFCRunner<__nv_fp8_e4m3, cutlass::uint4b_t, half, half>>();
-      } else {
-        mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<half, cutlass::uint4b_t>>();
-      }
-#else
-      mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<half, cutlass::uint4b_t>>();
+    if (mActivationDtype == ScalarType::Float16) {
+      mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<half, __nv_fp4_e2m1>>();
+    }
+#  ifdef ENABLE_BF16
+    else if (mActivationDtype == ScalarType::BFloat16) {
+      mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<__nv_bfloat16, __nv_fp4_e2m1>>();
+    }
+#  endif
+  }
 #endif
-    } else if (mActivationDtype == ScalarType::BFloat16) {
-#ifdef ENABLE_FP8
-      if (mUseW4A8GroupScaling) {
-        mKernelRunner = std::make_unique<
-            internal::kernels::CutlassMoeFCRunner<__nv_fp8_e4m3, cutlass::uint4b_t, __nv_bfloat16, __nv_bfloat16>>();
-      } else {
-        mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<__nv_bfloat16, cutlass::uint4b_t>>();
-      }
-#else
-      mKernelRunner = std::make_shared<internal::kernels::CutlassMoeFCRunner<__nv_bfloat16, cutlass::uint4b_t>>();
-#endif
+  if (isIntWeightOnlyQuant()) {
+    if (isInt4Quant()) {
+      mInnerDimMultiplier = 2;  // 2 INT4 -> 1 INT8
+    }
+    switch (mActivationDtype) {
+      case ScalarType::Float16:
+        mKernelRunner = create_weight_quant_runner<half>();
+        break;
+      case ScalarType::BFloat16:
+        mKernelRunner = create_weight_quant_runner<__nv_bfloat16>();
+        break;
+      default:
+        KLLM_KERNEL_THROW("Unsupported activation type for int-type weight");
     }
   }
   if (!mKernelRunner) {

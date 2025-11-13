@@ -9,7 +9,8 @@
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
 
-enum ScalarType { Long, Float8_e4m3fn, QUInt4x2, Int, Float, BFloat16, Half };
+/** ScalarType: 轻量数据类型枚举，用于内部表示（替代 torch::ScalarType），含常用浮点/整型与设备/量化格式。 */
+enum ScalarType { Long, Int, Int8, UInt8, QUInt4x2, Float, BFloat16, Float16, Float8_e4m3fn, Byte, Char };
 
 template <typename T>
 inline ScalarType GetScalarType();
@@ -19,9 +20,12 @@ inline ScalarType GetScalarType();
     return DATA_TYPE;                    \
   }
 GET_SCALAR_TYPE(float, ScalarType::Float);
-GET_SCALAR_TYPE(half, ScalarType::Half);
+GET_SCALAR_TYPE(half, ScalarType::Float16);
 GET_SCALAR_TYPE(__nv_bfloat16, ScalarType::BFloat16);
+GET_SCALAR_TYPE(__nv_fp8_e4m3, ScalarType::Float8_e4m3fn);
 GET_SCALAR_TYPE(int32_t, ScalarType::Int);
+GET_SCALAR_TYPE(char, ScalarType::Int8);
+GET_SCALAR_TYPE(int8_t, ScalarType::Int8);
 #undef GET_SCALAR_TYPE
 
 struct Tensor {
@@ -33,11 +37,6 @@ struct Tensor {
       : data(data), shape(shape), dtype(dtype) {}
 
   inline Tensor() : data(nullptr), dtype(ScalarType::Float) {}
-};
-
-struct WorkspaceInfo {
-  void* workspace{};
-  void* src_to_dest_map{};
 };
 
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev

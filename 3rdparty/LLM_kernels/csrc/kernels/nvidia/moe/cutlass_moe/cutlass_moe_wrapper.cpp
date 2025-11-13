@@ -5,8 +5,8 @@
 #include "csrc/kernels/nvidia/moe/cutlass_moe/cutlass_moe_wrapper.h"
 
 #if ENABLE_CUTLASSMOE
-#  include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/moeOp.h"
-#  include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/utils.h"
+#  include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/moeOp.h"
+#  include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
 #endif
 #include "csrc/utils/nvidia/cuda_utils.h"
 
