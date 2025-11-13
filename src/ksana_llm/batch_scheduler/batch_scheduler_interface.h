@@ -19,6 +19,8 @@ class BatchSchedulerInterface {
   // Get the next infer reqs that ready to run.
   virtual std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) = 0;
 
+  virtual void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup &generation_output) = 0;
+
   // Add infer request to waiting list.
   virtual Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) = 0;
 
@@ -32,11 +34,6 @@ class BatchSchedulerInterface {
   virtual bool IsIdle(size_t multi_batch_id) = 0;
 
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) = 0;
-
-  // Process async finished requests for all strategies
-  virtual void NotifyAsyncFinishedRequests() = 0;
-
-  virtual void NotifyAsyncRecomputedRequests() = 0;
 
   virtual void Stop() = 0;
 };

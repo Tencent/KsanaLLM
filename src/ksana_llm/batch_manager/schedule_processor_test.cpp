@@ -7,7 +7,6 @@
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/model_instance.h"
 
-#include "ksana_llm/batch_manager/async_schedule_processor.h"
 #include "ksana_llm/batch_manager/schedule_processor.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
@@ -104,7 +103,8 @@ class ScheduleProcessorTest : public testing::Test {
     model_instances.push_back(model_instance_);
     runtime_config_.parallel_basic_config.tensor_parallel_size = tensor_para_size;
     runtime_config_.parallel_basic_config.attn_data_parallel_size = data_para_size;
-    batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_, model_instances);
+    batch_scheduler_ =
+        std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_, false, model_instances);
 
     cache_manager_ = std::make_shared<PrefixCacheManager>(cache_manager_config_, block_allocator_group_);
     cache_manager_->InitializeCachedBlocks();
@@ -122,163 +122,8 @@ TEST_F(ScheduleProcessorTest, ProcessorConstructorAndInitialize) {
   auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
   llm_runtime->SetMultiBatchController(multi_batch_controller_);
 
-  auto processor = std::make_shared<ScheduleProcessor>();
+  auto processor = std::make_shared<ScheduleProcessor>(false);
   processor->Initialize(batch_scheduler_, llm_runtime, multi_batch_controller_);
 
   SUCCEED();
-}
-
-TEST_F(ScheduleProcessorTest, AsyncProcessorConstructorAndInitialize) {
-  int dp_num = 1;
-  int tp_num = 1;
-  PrepareTestCaseMaterial(dp_num, tp_num);
-
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
-  llm_runtime->SetMultiBatchController(multi_batch_controller_);
-
-  auto async_processor = std::make_shared<AsyncScheduleProcessor>();
-  async_processor->Initialize(batch_scheduler_, llm_runtime, multi_batch_controller_);
-
-  SUCCEED();
-}
-
-TEST_F(ScheduleProcessorTest, ProcessorRun) {
-  int dp_num = 1;
-  int tp_num = 1;
-  PrepareTestCaseMaterial(dp_num, tp_num);
-
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
-  llm_runtime->SetMultiBatchController(multi_batch_controller_);
-
-  auto processor = std::make_shared<ScheduleProcessor>();
-  processor->Initialize(batch_scheduler_, llm_runtime, multi_batch_controller_);
-
-  processor->Start();
-
-  // Add a fake request to avoid blocking.
-  std::shared_ptr<Request> req;
-  std::shared_ptr<KsanaPythonInput> python_input;
-  std::vector<std::shared_ptr<InferRequest>> infer_reqs = InitFakeRequest(
-      123, 5, 10, req, {{0, 1}}, tp_num, block_manager_config_.device_allocator_config.block_token_num, &python_input);
-  hold_requests_.push_back(req);
-  hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
-  for (auto& infer_req : infer_reqs) {
-    infer_req->model_instance = model_instance_;
-  }
-  batch_scheduler_->AddInferRequest(infer_reqs);
-
-  // In test mode, there is no real request, so GetNextScheduleResult will not get any result.
-  // But it will not block.
-  processor->GetNextScheduleResult(0);
-  processor->Stop();
-
-  SUCCEED();
-}
-
-TEST_F(ScheduleProcessorTest, AsyncProcessorRun) {
-  int dp_num = 1;
-  int tp_num = 1;
-  PrepareTestCaseMaterial(dp_num, tp_num);
-
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
-  llm_runtime->SetMultiBatchController(multi_batch_controller_);
-
-  auto async_processor = std::make_shared<AsyncScheduleProcessor>();
-  async_processor->Initialize(batch_scheduler_, llm_runtime, multi_batch_controller_);
-
-  async_processor->Start();
-
-  // Add a fake request to avoid blocking.
-  std::shared_ptr<Request> req;
-  std::shared_ptr<KsanaPythonInput> python_input;
-  std::vector<std::shared_ptr<InferRequest>> infer_reqs = InitFakeRequest(
-      123, 5, 10, req, {{0, 1}}, tp_num, block_manager_config_.device_allocator_config.block_token_num, &python_input);
-  hold_requests_.push_back(req);
-  hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
-  for (auto& infer_req : infer_reqs) {
-    infer_req->model_instance = model_instance_;
-  }
-  batch_scheduler_->AddInferRequest(infer_reqs);
-
-  // In test mode, there is no real request, so GetNextScheduleResult will not get any result.
-  // But it will not block.
-  async_processor->GetNextScheduleResult(0);
-  async_processor->Stop();
-
-  SUCCEED();
-}
-
-TEST_F(ScheduleProcessorTest, ApplyAsyncForwardingTokens) {
-  auto async_processor = std::make_shared<AsyncScheduleProcessor>();
-
-  auto deep_copy_forwarding_tokens = std::make_shared<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>>();
-  (*deep_copy_forwarding_tokens)[123] = std::shared_ptr<std::vector<int>>(new std::vector<int>{1, 2, 3});
-
-  auto grouped_reqs = std::make_shared<std::map<ModelInstance*, std::vector<ForwardRequest*>>>();
-
-  ModelInstance* model_inst = reinterpret_cast<ModelInstance*>(0x9876);
-  auto forward_req = std::make_unique<ForwardRequest>();
-  forward_req->req_id = 123;
-  forward_req->forwarding_tokens = std::shared_ptr<std::vector<int>>(new std::vector<int>{4, 5});
-
-  (*grouped_reqs)[model_inst].push_back(forward_req.get());
-
-  async_processor->ApplyAsyncForwardingTokens(*deep_copy_forwarding_tokens, *grouped_reqs);
-
-  EXPECT_EQ(forward_req->forwarding_tokens->size(), 3);
-  EXPECT_EQ((*forward_req->forwarding_tokens)[0], 1);
-  EXPECT_EQ((*forward_req->forwarding_tokens)[1], 2);
-  EXPECT_EQ((*forward_req->forwarding_tokens)[2], 3);
-}
-
-TEST_F(ScheduleProcessorTest, ProcessAsyncPostProcessing) {
-  int dp_num = 1;
-  int tp_num = 1;
-  PrepareTestCaseMaterial(dp_num, tp_num);
-
-  auto llm_runtime = std::make_shared<LlmRuntime>(batch_scheduler_config_, runtime_config_, context_);
-  llm_runtime->SetMultiBatchController(multi_batch_controller_);
-
-  auto async_processor = std::make_shared<AsyncScheduleProcessor>();
-  async_processor->Initialize(batch_scheduler_, llm_runtime, multi_batch_controller_);
-
-  std::shared_ptr<Request> req;
-  std::shared_ptr<KsanaPythonInput> python_input;
-  auto infer_reqs = InitFakeRequest(123, 5, 10, req, {{42, 1}}, tp_num,
-                                    block_manager_config_.device_allocator_config.block_token_num, &python_input);
-  hold_requests_.push_back(req);
-  hold_python_inputs_.push_back(python_input);  // 保存 python_input 确保其生命周期
-  auto infer_req = infer_reqs[0];
-  infer_req->step = 2;
-  infer_req->infer_stage = InferStage::kDecode;
-  infer_req->forwarding_tokens = {10, 11, 12, 13, 14};
-  infer_req->forwarding_tokens_draft_num = 2;
-  infer_req->last_step_draft_num = 2;
-  infer_req->accepted_tokens = {13};
-  infer_req->generated_token = 99;
-  infer_req->draft_tokens.mtp = {20, 21};
-  infer_req->cache_manager = cache_manager_;
-  infer_req->kv_cached_token_num = 3;
-  infer_req->model_instance = model_instance_;
-
-  auto schedule_output = std::make_shared<ScheduleOutput>();
-  schedule_output->running_reqs.push_back(infer_req);
-
-  ScheduleResult result;
-  result.is_valid = true;
-  result.schedule_output = schedule_output;
-  result.sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
-
-  async_processor->ProcessAsyncPostProcessing(result);
-
-  // According to the implementation, the new size is calculated as:
-  // 5 - 2 + 1 - 1 - 2 = 1.
-  // Then, generated_token is added, and new draft_tokens are added.
-  // Final size = 1 (resized) + 1 (generated) + 2 (new draft) = 4.
-  EXPECT_EQ(infer_req->forwarding_tokens.size(), 4);
-  EXPECT_EQ(infer_req->kv_cached_token_num, 1);
-  EXPECT_EQ(infer_req->forwarding_tokens[0], 10);
-  EXPECT_EQ(infer_req->forwarding_tokens[1], 99);
-  EXPECT_EQ(infer_req->forwarding_tokens[2], 20);
-  EXPECT_EQ(infer_req->forwarding_tokens[3], 21);
 }

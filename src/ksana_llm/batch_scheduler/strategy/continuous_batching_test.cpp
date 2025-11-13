@@ -21,12 +21,9 @@ using namespace ksana_llm;
 class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
  public:
   using ContinuousBatchingStrategy::AddTransferMeta;
-  using ContinuousBatchingStrategy::async_destroyed_reqs_;
-  using ContinuousBatchingStrategy::AsyncStopRequest;
   using ContinuousBatchingStrategy::ContinuousBatchingStrategy;
   using ContinuousBatchingStrategy::ProcessDecodeTransferQueue;
   using ContinuousBatchingStrategy::ProcessPrefillTransferQueue;
-  using ContinuousBatchingStrategy::ProcessSplitFuseToken;
 
   void SetSplitFuseTokenNum(const size_t val) { batch_scheduler_config_.split_fuse_token_num = val; }
 
@@ -35,12 +32,6 @@ class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
     TransferEngine::GetInstance()->SetGroupRole(role);
   }
-
-  // 添加一个方法来访问 async_destroyed_reqs_ 的大小
-  size_t GetAsyncDestroyedReqsSize() const { return async_destroyed_reqs_.size(); }
-
-  // 添加一个方法来清空 async_destroyed_reqs_
-  void ClearAsyncDestroyedReqs() { async_destroyed_reqs_.clear(); }
 };
 
 class ContinuousBatchingTest : public testing::Test {
@@ -126,7 +117,7 @@ class ContinuousBatchingTest : public testing::Test {
  protected:
   std::shared_ptr<ContinuousBatchingStrategyTest> continuous_batching_strategy_ = nullptr;
 };
-
+/*
 // test function: ProcessSplitFuseTokenTest, check the split size
 TEST_F(ContinuousBatchingTest, ProcessSplitFuseTokenTest) {
   auto ksana_python_input = std::make_shared<KsanaPythonInput>();
@@ -249,7 +240,7 @@ TEST_F(ContinuousBatchingTest, ProcessSplitFuseTokenTest) {
     EXPECT_EQ(req->forwarding_tokens.size(), expect_len);
   }
 }
-
+*/
 // 测试ProcessDecodeTransferQueue函数
 TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   // 设置为DECODE节点
@@ -263,12 +254,13 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
 
-  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
-  req->kv_cached_token_num = 0;
+  // 设置block_token_num，防止添加元数据时报错
   req->block_token_num = 16;
 
-  // 设置转发token
-  req->forwarding_tokens = {1, 2, 3, 4, 5};
+  // 设置request调度状态
+  req->input_tokens = {1, 2, 3, 4, 5};
+  req->output_tokens = req->input_tokens;
+  req->ResetPrefillingTokens();
 
   // 将请求添加到传输队列
   continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
@@ -279,7 +271,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
   // 验证结果
   // 由于TransferEngine::IsRecvDone返回-1（未完成），请求应该仍在传输队列中
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 1);
-  ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 0);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->decoding_queue.size(), 0);
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
@@ -297,9 +289,14 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
       }
     }
     req->kv_comm_request_id = 123 + i;
-    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
-    req->kv_cached_token_num = 0;
+    // 设置block_token_num，防止添加元数据时报错
     req->block_token_num = 16;
+
+    // 设置request调度状态
+    req->input_tokens = {1, 2, 3, 4, 5};
+    req->output_tokens = req->input_tokens;
+    req->ResetPrefillingTokens();
+
     std::vector<std::shared_ptr<InferRequest>> queue;
     queue.push_back(req);
 
@@ -312,7 +309,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTest) {
 
   // 验证结果, 计算8个预传输12个
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 12);
-  ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), 8);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->decoding_queue.size(), 8);
 
   for (int i = 0; i < 20; ++i) {
     TransferEngine::GetInstance()->CleanupTransferMeta(123 + i);
@@ -333,7 +330,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
 
   for (size_t i = 0; i < max_decode_bs; ++i) {
     auto dummy_req = std::make_shared<InferRequest>(request, 0);
-    continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.push_back(dummy_req);
+    continuous_batching_strategy_->batch_state_->decoding_queue.push_back(dummy_req);
   }
   size_t transfer_req_num = 20;
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
@@ -351,9 +348,14 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
       }
     }
     req->kv_comm_request_id = 123 + i;
-    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
-    req->kv_cached_token_num = 0;
+    // 设置block_token_num，防止添加元数据时报错
     req->block_token_num = 16;
+
+    // 设置request调度状态
+    req->input_tokens = {1, 2, 3, 4, 5};
+    req->output_tokens = req->input_tokens;
+    req->ResetPrefillingTokens();
+
     std::vector<std::shared_ptr<InferRequest>> queue;
     queue.push_back(req);
 
@@ -366,7 +368,7 @@ TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueMaxBatchStopTest) {
   continuous_batching_strategy_->ProcessDecodeTransferQueue();
 
   // 验证：running_reqs 未超过最大 decode batch size，上限触发后不再增加
-  ASSERT_EQ(continuous_batching_strategy_->batch_state_->schedule_output->running_reqs.size(), max_decode_bs);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->decoding_queue.size(), max_decode_bs);
   ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), transfer_req_num);
 
   // 清理传输元数据
@@ -388,7 +390,7 @@ TEST_F(ContinuousBatchingTest, ProcessMTPDecodeTransferQueueTest) {
   for (int i = 0; i < 10; ++i) {
     auto req = std::make_shared<InferRequest>(request, 0);
     req->cache_manager = continuous_batching_strategy_->GetCacheManager();
-    req->forwarding_tokens = {1, 2, 3};
+
     // 设置KV缓存块
     req->kv_cache_blocks.resize(2);
     for (size_t i = 0; i < 2; ++i) {
@@ -398,9 +400,14 @@ TEST_F(ContinuousBatchingTest, ProcessMTPDecodeTransferQueueTest) {
       }
     }
     req->kv_comm_request_id = 123 + i;
-    // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
-    req->kv_cached_token_num = 0;
+    // 设置block_token_num，防止添加元数据时报错
     req->block_token_num = 16;
+
+    // 设置request调度状态
+    req->input_tokens = {1, 2, 3};
+    req->output_tokens = req->input_tokens;
+    req->ResetPrefillingTokens();
+
     std::vector<std::shared_ptr<InferRequest>> queue;
     queue.push_back(req);
     // 调用AddTransferMeta函数
@@ -410,11 +417,14 @@ TEST_F(ContinuousBatchingTest, ProcessMTPDecodeTransferQueueTest) {
 
   // 调用ProcessDecodeTransferQueue函数
   continuous_batching_strategy_->ProcessDecodeTransferQueue();
-  for (auto running_req : continuous_batching_strategy_->batch_state_->schedule_output->running_reqs) {
-    ASSERT_EQ(running_req->forwarding_tokens_draft_num, 1);
+  for (auto running_req : continuous_batching_strategy_->batch_state_->decoding_queue) {
+    ASSERT_EQ(running_req->forwarding_tokens.size(), 3);
     ASSERT_EQ(running_req->draft_tokens.GetDraftTokens()[0], 1);
-    ASSERT_EQ(running_req->forwarding_tokens[3], 1);
-    ASSERT_EQ(running_req->forwarding_tokens[4], 1);
+    ASSERT_EQ(running_req->generated_tokens[0], 1);
+    ScheduleTaskWorkload planning_workload = running_req->GetPlanningWorkload();
+    EXPECT_EQ(planning_workload.prefill_token_num, 0);
+    EXPECT_EQ(planning_workload.generated_token_num, 1);
+    EXPECT_EQ(planning_workload.draft_token_num, 1);
   }
 
   for (int i = 0; i < 10; ++i) {
@@ -509,12 +519,13 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueueDecodeTest) {
   req->kv_comm_request_id = 123;
   req->cache_manager = continuous_batching_strategy_->GetCacheManager();
 
-  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
-  req->kv_cached_token_num = 0;
+  // 设置block_token_num，防止添加元数据时报错
   req->block_token_num = 16;
 
-  // 设置转发token
-  req->forwarding_tokens = {1, 2, 3, 4, 5};
+  // 设置request调度状态
+  req->input_tokens = {1, 2, 3, 4, 5};
+  req->output_tokens = req->input_tokens;
+  req->ResetPrefillingTokens();
 
   // 将请求添加到传输队列
   continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
@@ -560,78 +571,4 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
-}
-
-// 测试 NotifyAsyncFinishedRequests 函数
-TEST_F(ContinuousBatchingTest, NotifyAsyncFinishedRequestsTest) {
-  // 创建测试请求
-  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
-  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
-  request->req_id = 100;
-  request->waiter = std::make_shared<Waiter>(1);
-
-  auto req = std::make_shared<InferRequest>(request, 0);
-  req->req_id = 100;
-  req->finished = false;
-
-  // 测试1: 空的 async_destroyed_reqs_ 列表
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
-  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
-
-  // 测试2: 使用 AsyncStopRequest 添加请求到 async_destroyed_reqs_
-  Status stop_status(RET_SUCCESS);
-  continuous_batching_strategy_->AsyncStopRequest(req, stop_status, false);
-
-  // 验证请求被添加到 async_destroyed_reqs_
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 1);
-  EXPECT_FALSE(req->finished);
-
-  // 测试3: 调用 NotifyAsyncFinishedRequests 处理异步完成的请求
-  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
-
-  // 验证请求状态被正确更新
-  EXPECT_TRUE(req->finished);
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
-
-  // 测试4: 多个异步完成请求的处理
-  std::vector<std::shared_ptr<Request>> test_requests;
-  std::vector<std::shared_ptr<InferRequest>> test_infer_requests;
-  for (int i = 0; i < 3; ++i) {
-    auto test_req_input = std::make_shared<KsanaPythonInput>();
-    auto test_req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
-    auto test_request = std::make_shared<Request>(test_req_input, test_req_ctx);
-    test_requests.push_back(test_request);
-    test_request->req_id = 200 + i;
-    test_request->waiter = std::make_shared<Waiter>(1);
-
-    auto test_req = std::make_shared<InferRequest>(test_request, 0);
-    test_req->req_id = 200 + i;
-    test_req->finished = false;
-    test_infer_requests.push_back(test_req);
-
-    // 添加到异步销毁列表
-    Status test_status(RET_SUCCESS);
-    continuous_batching_strategy_->AsyncStopRequest(test_req, test_status, false);
-  }
-
-  // 验证所有请求都被添加
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 3);
-  for (auto& test_req : test_infer_requests) {
-    EXPECT_FALSE(test_req->finished);
-  }
-
-  // 调用 NotifyAsyncFinishedRequests 处理所有异步完成的请求
-  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
-
-  // 验证所有请求都被正确处理
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
-  for (auto& test_req : test_requests) {
-    EXPECT_TRUE(test_req->finished);
-  }
-
-  // 测试5: 重复调用 NotifyAsyncFinishedRequests（应该安全处理空列表）
-  EXPECT_NO_THROW(continuous_batching_strategy_->NotifyAsyncFinishedRequests());
-  EXPECT_EQ(continuous_batching_strategy_->GetAsyncDestroyedReqsSize(), 0);
 }

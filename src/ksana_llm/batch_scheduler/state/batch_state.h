@@ -6,12 +6,14 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/runtime/infer_request.h"
+#include "ksana_llm/runtime/request_state.h"
 
 namespace ksana_llm {
 
@@ -28,9 +30,6 @@ struct BatchState {
 
     size_t in_processing_req_num = schedule_output->running_reqs.size();
     in_processing_req_num += waiting_queue.size();
-    in_processing_req_num += swapped_queue.size();
-    in_processing_req_num += swapin_pending_requests_.size();
-    in_processing_req_num += swapout_pending_requests_.size();
 
     // Process requests from the head of waiting_reqs until we reach max_batch_size
     size_t processed_count = 0;
@@ -58,31 +57,6 @@ struct BatchState {
     }
   }
 
-  void MergeRunningPendingReqs(size_t max_batch_size) {
-    std::lock_guard<std::mutex> guard(queue_mutex);
-
-    // Calculate how many requests we can add without exceeding max_batch_size
-    size_t current_size = schedule_output->running_reqs.size();
-    size_t available_slots = 0;
-
-    if (current_size < max_batch_size) {
-      available_slots = max_batch_size - current_size;
-    }
-
-    // If we have available slots and pending requests
-    if (available_slots > 0 && !running_pending_reqs.empty()) {
-      // Determine how many requests to move
-      size_t requests_to_move = std::min(available_slots, running_pending_reqs.size());
-
-      // Insert only the calculated number of requests
-      schedule_output->running_reqs.insert(schedule_output->running_reqs.end(), running_pending_reqs.begin(),
-                                           running_pending_reqs.begin() + requests_to_move);
-
-      // Remove the moved requests from running_pending_reqs
-      running_pending_reqs.erase(running_pending_reqs.begin(), running_pending_reqs.begin() + requests_to_move);
-    }
-  }
-
   void ResetInfoBeforeSchedule() {
     schedule_time_in_ms = GetCurrentTimeInMs();
     step_sched_finish = false;
@@ -95,11 +69,9 @@ struct BatchState {
   std::string ToString() const {
     std::ostringstream oss;
     oss << " BatchState(multi_batch_id:" << multi_batch_id_
-        << ", running_queue_size:" << schedule_output->running_reqs.size()
-        << ", waiting_queue_size:" << waiting_queue.size() << ", running_pending_reqs:" << running_pending_reqs.size()
-        << ", swapped_queue_size:" << swapped_queue.size()
-        << ", swapin_pending_requests_size:" << swapin_pending_requests_.size()
-        << ", swapout_pending_requests_size:" << swapout_pending_requests_.size()
+        << ", schedule_output.running_queue_size:" << schedule_output->running_reqs.size()
+        << ", waiting_queue_size:" << waiting_queue.size()
+        << ", decoding_queue_size:" << decoding_queue.size()
         << ", transfer_queue_size:" << transfer_queue.size() << ", step_sched_finish:" << step_sched_finish << ") ";
     return oss.str();
   }
@@ -115,7 +87,7 @@ struct BatchState {
   BatchSchedulerConfig batch_scheduler_config_;
 
   // The waiting queue, double end queue.
-  std::deque<std::shared_ptr<InferRequest>> waiting_queue;
+  std::vector<std::shared_ptr<InferRequest>> waiting_queue;
 
   // The mocked req queue， used to make sure attn has one req at least.
   std::vector<std::shared_ptr<InferRequest>> mock_queue;
@@ -123,18 +95,16 @@ struct BatchState {
   // The kv transfer queue, vector.
   std::vector<std::shared_ptr<InferRequest>> transfer_queue;
 
-  // The buffer queue used to save finished swapin request temporary.
-  std::vector<std::shared_ptr<InferRequest>> running_pending_reqs;
+  // Running decoding requests
+  std::vector<std::shared_ptr<InferRequest>> decoding_queue;
 
-  std::vector<int64_t> merged_swapout_req_ids;
-  std::vector<int64_t> merged_swapin_req_ids;
-
-  // The swapped queue, sorted map.
-  std::map<int, std::shared_ptr<InferRequest>> swapped_queue;
-
-  // The pending requests used for swap in/out, unordered.
-  std::unordered_map<int, std::shared_ptr<InferRequest>> swapin_pending_requests_;
-  std::unordered_map<int, std::shared_ptr<InferRequest>> swapout_pending_requests_;
+  struct StoppedReqInfo {
+    std::shared_ptr<InferRequest> infer_request;
+    Status ret_status;
+    RequestState req_state;
+  };
+  std::unordered_map<int64_t, StoppedReqInfo> async_stoped_reqs;
+  std::unordered_map<int64_t, std::shared_ptr<InferRequest>> async_recomputed_reqs;
 
   // To guard queue.
   std::mutex queue_mutex;

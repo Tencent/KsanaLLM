@@ -105,7 +105,7 @@ class BaseCacheManager {
     CachedRequestType* cached_request_ptr = cached_request.get();
     // Append to request list.
     cached_requests_.emplace(req_id, std::move(cached_request));
-
+    KLLM_LOG_DEBUG << " create cache request req_id=" << req_id;
     return cached_request_ptr;
   }
 

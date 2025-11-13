@@ -137,6 +137,44 @@ class ParallelTester {
     BatchSchedulerEnvironmentSimulator* env_simulator_;
   };
 
+  // Check split fuse
+  class SplitFuseCheckHook : public ExeHookInterface {
+   public:
+    explicit SplitFuseCheckHook(size_t split_fuse_token_num, size_t prefix_token_num = 0)
+        : split_fuse_token_num_(split_fuse_token_num), prefix_token_num_(prefix_token_num) {}
+    ~SplitFuseCheckHook() {
+      KLLM_LOG_INFO << "~SplitFuseCheckHook, before_step_num=" << before_step_num
+                    << ", after_exe_num=" << after_exe_num;
+      EXPECT_GT(before_step_num, 0);
+      EXPECT_GT(after_exe_num, 0);
+    }
+
+    void CheckRequestsBeforeAStep(const std::vector<std::shared_ptr<InferRequest>>& reqs) override {
+      before_step_num++;
+      for (auto req : reqs) {
+        if (split_fuse_token_num_ > 0 && req->forwarding_tokens.size() < req->output_tokens.size()) {
+          EXPECT_EQ((req->forwarding_tokens.size() - req->kv_cached_token_num), split_fuse_token_num_);
+          req_split_step_[req->req_id]++;
+        }
+      }
+    }
+
+    void CheckRequestsAfterExecution(const std::vector<RequestInfo>& reqs) override {
+      after_exe_num++;
+      for (auto req : reqs) {
+        if ((split_fuse_token_num_ > 0) && ((req.input_token_num - prefix_token_num_) > split_fuse_token_num_)) {
+          EXPECT_GE(req_split_step_[req.infer_req_group[0]->req_id],
+                    (req.input_token_num - prefix_token_num_) / split_fuse_token_num_);
+        }
+      }
+    }
+
+   private:
+    std::unordered_map<int, int> req_split_step_;
+    size_t split_fuse_token_num_;
+    size_t prefix_token_num_;
+  };
+
   // Generate RequestInfos
   void GenerateRequests(int request_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
                         int max_input_num, std::vector<ParallelTester::RequestInfo>& reqs) {
@@ -187,10 +225,13 @@ class ParallelTester {
     // Wait for request enqueue
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     // schedule and generate tokens
+    GenerationOutputGroup generation_output_group;
+    size_t multi_batch_idx = 0;
+    int step = 0;
     while (true) {
-      std::shared_ptr<ScheduleOutputGroup> output_group = batch_scheduler_->Schedule(0);
+      std::shared_ptr<ScheduleOutputGroup> output_group = batch_scheduler_->Schedule(multi_batch_idx);
       ScheduleOutput* scheduled_out = output_group->outputs.at(0);
-      std::vector<std::shared_ptr<InferRequest>>& scheduled_reqs = scheduled_out->running_reqs;
+      std::vector<std::shared_ptr<InferRequest>> scheduled_reqs = scheduled_out->running_reqs;
       if (scheduled_reqs.empty()) {
         if (client_simulator.IsAllRequestFinished()) {
           KLLM_LOG_INFO << "All requests finished";
@@ -204,11 +245,19 @@ class ParallelTester {
         std::this_thread::sleep_for(std::chrono::microseconds(1));
         continue;
       }
-
+      step++;
+      for (auto req : scheduled_reqs) {
+        KLLM_LOG_DEBUG << "Before RunAStep step=" << step << ", " << req->ScheduleStateToStr();
+      }
+      KLLM_CHECK(scheduled_out->IsLaunchable());
+      scheduled_out->LaunchScheduleOutput();
+      generation_output_group.BuildFromScheduleOutputGroup(*output_group);
+      scheduled_out->Clear();
       for (auto hook : hooks) {
         hook->CheckRequestsBeforeAStep(scheduled_reqs);
       }
       env_simulator_->RunAStep(scheduled_reqs);
+      batch_scheduler_->UpdateWithGenerationResult(multi_batch_idx, generation_output_group);
     }
 
     // Check request results
@@ -253,8 +302,9 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
 
 class FixPrefixTestCase {
  public:
-  FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num, bool init_env_simulator = true)
-      : prefix_block_num_(prefix_block_num), device_num_(device_num) {
+  FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num, size_t splitfuse_token_num,
+                    bool init_env_simulator = true)
+      : prefix_block_num_(prefix_block_num), device_num_(device_num), splitfuse_token_num_(splitfuse_token_num) {
     // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEnvironmentSimulator
     block_manager_config_.host_allocator_config.blocks_num = 100;
     block_manager_config_.device_allocator_config.blocks_num = 100;
@@ -334,9 +384,9 @@ class FixPrefixTestCase {
             prefix_token_num);
 
     auto& stat = env_simulator_->GetBlockManagerStat();
-    EXPECT_GT(stat.swapout_succ_num, 0);
+    EXPECT_EQ(stat.swapout_succ_num, 0);  // recomputed
     EXPECT_EQ(stat.swapout_fail_num, 0);
-    EXPECT_GT(stat.swapin_succ_num, 0);
+    EXPECT_EQ(stat.swapin_succ_num, 0);  // recomputed
     EXPECT_EQ(stat.swapin_fail_num, 0);
   }
 
@@ -345,8 +395,8 @@ class FixPrefixTestCase {
   // Test: all requests have same prefix token
   class SamePrefixCacheNoMergeBeforeFirstBatchCheckHook : public ParallelTester::ExeHookInterface {
    public:
-    SamePrefixCacheNoMergeBeforeFirstBatchCheckHook(int prefix_block_num, int tp_num)
-        : prefix_block_num_(prefix_block_num), tp_num_(tp_num) {
+    SamePrefixCacheNoMergeBeforeFirstBatchCheckHook(int prefix_block_num, int block_token_num, int tp_num)
+        : prefix_block_num_(prefix_block_num), block_token_num_(block_token_num), tp_num_(tp_num) {
       prefix_blocks_.resize(tp_num_);
       for (int i = 0; i < tp_num_; i++) {
         prefix_blocks_[i].resize(prefix_block_num_);
@@ -362,6 +412,10 @@ class FixPrefixTestCase {
     void CheckRequestsBeforeAStep(const std::vector<std::shared_ptr<InferRequest>>& reqs) override {
       before_step_num++;
       ASSERT_GT(reqs.size(), 0);
+      if (reqs[0]->forwarding_tokens.size() < prefix_block_num_ * block_token_num_) {
+        return;
+      }
+
       if (!is_cache_set_) {
         if (reqs_in_first_step_.size() == 0) {
           // record requests in first step. Their kv cache will be reused.
@@ -419,7 +473,8 @@ class FixPrefixTestCase {
     }
 
    private:
-    int prefix_block_num_;
+    size_t prefix_block_num_;
+    size_t block_token_num_;
     int tp_num_;
     std::vector<std::vector<int>> prefix_blocks_;
 
@@ -436,10 +491,13 @@ class FixPrefixTestCase {
 
     std::vector<ParallelTester::ExeHookInterface*> hooks;
     ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+    ParallelTester::SplitFuseCheckHook splitfuse_check_hook(splitfuse_token_num_, prefix_token_num);
     PrintStepHook print_hook(true);
     SamePrefixCacheNoMergeBeforeFirstBatchCheckHook prefix_check_hook(
-        prefix_token_num / block_manager_config_.device_allocator_config.block_token_num, device_num_);
+        prefix_token_num / block_manager_config_.device_allocator_config.block_token_num,
+        block_manager_config_.device_allocator_config.block_token_num, device_num_);
     hooks.push_back(&default_hook);
+    hooks.push_back(&splitfuse_check_hook);
     hooks.push_back(&print_hook);
     hooks.push_back(&prefix_check_hook);
 
@@ -465,6 +523,7 @@ class FixPrefixTestCase {
  private:
   int prefix_block_num_;
   int device_num_;
+  size_t splitfuse_token_num_;
 
   BatchSchedulerInterface* batch_scheduler_ = nullptr;
   BatchSchedulerEnvironmentSimulator* env_simulator_ = nullptr;

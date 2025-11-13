@@ -107,10 +107,11 @@ size_t PrefixCacheManager::GetRequestStepBlockNumberForOneNextToken(int64_t req_
 }
 
 Status PrefixCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
-                                                       size_t& shared_block_num, size_t& unique_block_num,
-                                                       size_t& shared_token_num) {
+                                                       size_t check_token_num, size_t& shared_block_num,
+                                                       size_t& unique_block_num, size_t& shared_token_num) {
   auto it = cached_requests_.find(req_id);
   PrefixCachedRequest* request = (it == cached_requests_.end()) ? CreateCachedRequest(req_id) : it->second.get();
+  KLLM_CHECK(input_token_ids.size() >= check_token_num);
 
   // Check whether existed blocks is still valid.
   if (!request->cached_blocks.empty()) {
@@ -133,8 +134,7 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
 
   // Research from last block, because new matched block maybe generated yet.
   PrefixCachedBlock* cur_block = request->cached_blocks.empty() ? root_cached_block_ : request->cached_blocks.back();
-  for (size_t i = request->cached_blocks.size(); i < input_token_ids.size() / cache_manager_config_.block_token_num;
-       ++i) {
+  for (size_t i = request->cached_blocks.size(); i < check_token_num / cache_manager_config_.block_token_num; ++i) {
     cur_block = FindChildCacheBlock(cur_block, input_token_ids.data() + (i * cache_manager_config_.block_token_num),
                                     cache_manager_config_.block_token_num);
     if (cur_block != nullptr) {
@@ -146,9 +146,8 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
   }
 
   shared_block_num = request->cached_blocks.size();
-  unique_block_num =
-      (input_token_ids.size() + cache_manager_config_.block_token_num) / cache_manager_config_.block_token_num -
-      shared_block_num;
+  unique_block_num = (check_token_num + cache_manager_config_.block_token_num) / cache_manager_config_.block_token_num -
+                     shared_block_num;
   shared_token_num = shared_block_num * cache_manager_config_.block_token_num;
   request->shared_block_num = shared_block_num;
 

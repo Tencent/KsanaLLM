@@ -19,7 +19,7 @@ class TestBatchScheduler : public BatchScheduler {
  public:
   TestBatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
                      std::vector<std::shared_ptr<ModelInstance>> req_group)
-      : BatchScheduler(batch_scheduler_config, runtime_config, req_group) {}
+      : BatchScheduler(batch_scheduler_config, runtime_config, false, req_group) {}
 
   void AddToWaitingReqs(std::vector<std::shared_ptr<InferRequest>>& requests) {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
@@ -197,8 +197,8 @@ TEST_F(BalanceReqsTest, BalanceWaitingReqsTest) {
   InitReqs(dp_num * 5 + 1, src_reqs, requests);
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->decoding_queue.clear();
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);
-    test_batch_scheduler_->batch_states_[i][multi_batch_id]->swapped_queue.clear();
   }
 
   // 添加请求到waiting_reqs_
@@ -236,8 +236,8 @@ TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
   }
   for (size_t i = 0; i < test_batch_scheduler_->batch_states_.size(); ++i) {
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->waiting_queue.clear();
+    test_batch_scheduler_->batch_states_[i][multi_batch_id]->decoding_queue.clear();
     test_batch_scheduler_->batch_states_[i][multi_batch_id]->schedule_output->running_reqs.resize(i + 1);
-    test_batch_scheduler_->batch_states_[i][multi_batch_id]->swapped_queue.clear();
   }
 
   // 添加请求到waiting_reqs_

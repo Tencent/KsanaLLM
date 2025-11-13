@@ -336,8 +336,11 @@ Status InferenceEngine::Initialize() {
   // Create generation controller
   generation_controller_ = std::make_shared<GenerationController>(structured_generator_factory);
 
+  ExpertParallelConfig ep_config;
+  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
   // Create batch scheduler.
-  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config, model_instances_);
+  batch_scheduler_ = std::make_shared<BatchScheduler>(batch_scheduler_config, runtime_config,
+                                                      ep_config.expert_world_size > 1, model_instances_);
   for (size_t dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }

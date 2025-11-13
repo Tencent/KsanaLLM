@@ -128,12 +128,20 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   infer_req->structured_generator = structured_generator;
   std::vector<std::shared_ptr<InferRequest>> reqs = {infer_req};
 
+  // Prefilling, no new token is generated
+  infer_req->sampling_result_tokens.clear();
+  infer_req->draft_tokens.clear();
+  generation_controller_->UpdateGenerationState(reqs);
+  EXPECT_EQ(infer_req->accepted_tokens.size(), 0);
+  EXPECT_EQ(infer_req->generated_tokens.size(), 0);
+
   // First sampling_result_tokens is acceptable, generated_token is sampling_result_tokens[0];
   infer_req->sampling_result_tokens = {1};
   infer_req->draft_tokens.clear();
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(infer_req->accepted_tokens.size(), 0);
-  EXPECT_EQ(infer_req->generated_token, 1);
+  EXPECT_EQ(infer_req->generated_tokens.size(), 1);
+  EXPECT_EQ(infer_req->generated_tokens[0], 1);
 
   // Expecting 2 to be generated, but sampling result is 1, so generated_token is -1;
   infer_req->sampling_result_tokens = {1};
@@ -150,7 +158,8 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(infer_req->accepted_tokens.size(), 1);
   EXPECT_EQ(infer_req->accepted_tokens[0], 2);
-  EXPECT_EQ(infer_req->generated_token, 3);
+  EXPECT_EQ(infer_req->generated_tokens.size(), 1);
+  EXPECT_EQ(infer_req->generated_tokens[0], 3);
 
   // Expecting 4,5,6 to be generated, draft_tokens is 4,5 and sampling result is 4,7,8, so accepted_token is null
   // because generated token 7 is rejected by structure generator, generated_token is 4;
@@ -159,7 +168,7 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   infer_req->draft_tokens.mtp = {4, 5};
   generation_controller_->UpdateGenerationState(reqs);
   EXPECT_EQ(infer_req->accepted_tokens.size(), 0);
-  EXPECT_EQ(infer_req->generated_token, 4);
+  EXPECT_EQ(infer_req->generated_tokens[0], 4);
 
   // Expecting 5,6,7 to be generated, draft_tokens is 5,6 and sampling result is 5,6,7, so accepted_token is 5,6 because
   // 6,7 are accepted by structure generator, generated_token is 7;
@@ -169,7 +178,7 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
   EXPECT_EQ(infer_req->accepted_tokens.size(), 2);
   EXPECT_EQ(infer_req->accepted_tokens[0], 5);
   EXPECT_EQ(infer_req->accepted_tokens[1], 6);
-  EXPECT_EQ(infer_req->generated_token, 7);
+  EXPECT_EQ(infer_req->generated_tokens[0], 7);
 }
 
 // 测试 ReasoningStructuredGenerator - 有思考内容的模型

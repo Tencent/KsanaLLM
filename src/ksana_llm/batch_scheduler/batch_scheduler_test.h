@@ -7,9 +7,7 @@
 
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_client.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
-
-#include "ksana_llm/cache_manager/direct_cache_manager.h"
-#include "ksana_llm/cache_manager/prefix_cache_manager.h"
+#include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/helpers/environment_test_helper.h"
 
@@ -22,9 +20,15 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   static void SetUpTestSuite() { InitLoguru(); }
 
+  void SetUp() override {
+    enable_prefix_cache_ = false;
+    split_fuse_token_num_ = 0;
+  }
+
   void CommonSetUp(int dp_num = 1, int tp_num = 4, int ep_world_size = 1) {
     runtime_config_.parallel_basic_config.tensor_parallel_size = tp_num;
     runtime_config_.parallel_basic_config.attn_data_parallel_size = dp_num;
+    runtime_config_.parallel_basic_config.attn_tensor_parallel_size = tp_num / dp_num;
     ep_world_size_ = ep_world_size;
 
     // Init BatchSchedulerEnvironmentSimulator and BatchScheduler
@@ -36,9 +40,10 @@ class BatchSchedulerTest : public testing::Test {
     env_simulator_ = new BatchSchedulerEnvironmentSimulator(block_manager_config_, tp_num, block_allocator_group);
 
     // Create Context
-    int pp_batch_num = 1;
     std::string config_file = GetTestConfigFile();
     Singleton<Environment>::GetInstance()->ParseConfig(config_file);
+
+    int pp_batch_num = 1;
     std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, pp_batch_num);
 
     // Create ModelInstance
@@ -55,15 +60,12 @@ class BatchSchedulerTest : public testing::Test {
     std::vector<std::shared_ptr<ModelInstance>> model_instances;
     model_instances.push_back(model_instance);
 
-    // Init expert parallel config.
-    ExpertParallelConfig ep_config;
-    Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
-    ep_config.expert_world_size = ep_world_size_;
-    Singleton<Environment>::GetInstance()->SetExpertParallelConfig(ep_config);
+    KLLM_LOG_INFO << "enable_prefix_cache=" << cache_manager_config.enable_prefix_caching
+                  << ", split_fuse_num=" << batch_scheduler_config_.split_fuse_token_num;
+    batch_scheduler_ =
+        new BatchScheduler(batch_scheduler_config_, runtime_config_, ep_world_size_ > 1, model_instances);
 
-    batch_scheduler_ = new BatchScheduler(batch_scheduler_config_, runtime_config_, model_instances);
-
-    cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
+    cache_manager = CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
     batch_scheduler_->SetCacheManager(cache_manager, 0);
   }
@@ -92,11 +94,12 @@ class BatchSchedulerTest : public testing::Test {
     batch_scheduler_config_.swapin_block_threshold = 2.0;
     batch_scheduler_config_.launch_block_threshold = 2.0;
     batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(0);
+    batch_scheduler_config_.split_fuse_token_num = split_fuse_token_num_;
 
     cache_manager_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
     cache_manager_config.swap_threadpool_size = 8;
-    cache_manager_config.enable_prefix_caching = false;
+    cache_manager_config.enable_prefix_caching = enable_prefix_cache_;
   }
 
  protected:
@@ -112,6 +115,9 @@ class BatchSchedulerTest : public testing::Test {
   CacheManagerConfig cache_manager_config;
   RuntimeConfig runtime_config_;
   int ep_world_size_;
+
+  bool enable_prefix_cache_;
+  size_t split_fuse_token_num_;
 };
 
 }  // namespace ksana_llm

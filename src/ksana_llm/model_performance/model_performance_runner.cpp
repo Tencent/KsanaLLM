@@ -322,8 +322,8 @@ size_t ModelPerformanceRunner::GetBlockNum(std::shared_ptr<InferRequest> req) co
   size_t shared_block_num = 0;
   size_t unique_block_num = 0;
   size_t shared_token_num = 0;
-  req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, shared_block_num,
-                                                  unique_block_num, shared_token_num);
+  req->cache_manager->GetRequestPrefixBlockNumber(req->req_id, req->forwarding_tokens, req->forwarding_tokens.size(),
+                                                  shared_block_num, unique_block_num, shared_token_num);
   return shared_block_num + unique_block_num;
 }
 

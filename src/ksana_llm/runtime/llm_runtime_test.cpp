@@ -68,7 +68,7 @@ TEST_F(LlmRuntimeTest, TransferGeneratedTokenTest) {
   auto req1 = std::make_shared<InferRequest>(request, 0);
   req1->kv_comm_group_key = "group_key_0";
   req1->kv_comm_request_id = 110;
-  req1->generated_token = 66;
+  req1->generated_tokens = {66};
   // first req : has draft token
   req1->draft_tokens.mtp.push_back(15);
   reqs.push_back(req1);
@@ -76,16 +76,22 @@ TEST_F(LlmRuntimeTest, TransferGeneratedTokenTest) {
   auto req2 = std::make_shared<InferRequest>(request, 0);
   req2->kv_comm_group_key = "group_key_0";
   req2->kv_comm_request_id = 111;
-  req2->generated_token = 77;
+  req2->generated_tokens = {77, 88};
+  req2->draft_tokens.clear();
   // second req : no draft token
   reqs.push_back(req2);
 
   // expected params
   std::vector<int> req1_send_tokens(MAX_TRANSFER_TOKENS, -1);
-  req1_send_tokens[0] = 66;
-  req1_send_tokens[1] = 15;
+  req1_send_tokens[0] = req1->generated_tokens.size();
+  req1_send_tokens[1] = 66;
+  req1_send_tokens[2] = req1->draft_tokens.mtp.size();
+  req1_send_tokens[3] = 15;
   std::vector<int> req2_send_tokens(MAX_TRANSFER_TOKENS, -1);
-  req2_send_tokens[0] = 77;
+  req2_send_tokens[0] = req2->generated_tokens.size();
+  req2_send_tokens[1] = 77;
+  req2_send_tokens[2] = 88;
+  req2_send_tokens[3] = req2->draft_tokens.mtp.size();
 
   std::vector<std::tuple<std::string, int, std::vector<int>>> expected = {
       std::make_tuple("group_key_0", 110, req1_send_tokens),
@@ -308,13 +314,13 @@ TEST_F(LlmRuntimeTest, MtpForwardTest) {
   auto req1 = std::make_shared<InferRequest>(request, 0);
   req1->req_id = 101;
   req1->forwarding_tokens = {1, 2, 3, 4};
-  req1->generated_token = 5;
+  req1->generated_tokens = {5};
   reqs.emplace_back(req1);
 
   auto req2 = std::make_shared<InferRequest>(request, 0);
   req2->req_id = 102;
   req2->forwarding_tokens = {3, 4, 5, 6};
-  req2->generated_token = 7;
+  req2->generated_tokens = {7};
   reqs.emplace_back(req2);
 
   ForwardRequest forward_req1, forward_req2;

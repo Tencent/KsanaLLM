@@ -9,6 +9,7 @@
 
 namespace ksana_llm {
 
+// {generated_tokens.size(), generated_tokens, draft_tokens.size(), draft_tokens}
 constexpr int MAX_TRANSFER_TOKENS = 8;
 
 /**

@@ -22,6 +22,19 @@ struct DraftTokens {
     return draft_tokens;
   }
 
+  void TruncDraft(size_t new_size) {
+    assert(new_size <= mtp.size() + trie.size());
+    if (mtp.size() > new_size) {
+      mtp.resize(new_size);
+      trie.clear();
+      return;
+    }
+    new_size -= mtp.size();
+    if (trie.size() > new_size) {
+      trie.resize(new_size);
+    }
+  }
+
   void clear() {
     mtp.clear();
     trie.clear();

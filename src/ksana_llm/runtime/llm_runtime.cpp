@@ -336,7 +336,9 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
     forward_req->forwarding_tokens->resize(forward_req->forwarding_tokens->size() -
                                            prepared.infer_req->forwarding_tokens_draft_num +
                                            prepared.infer_req->accepted_tokens.size());
-    forward_req->forwarding_tokens->emplace_back(prepared.infer_req->generated_token);
+    forward_req->forwarding_tokens->insert(forward_req->forwarding_tokens->end(),
+                                           prepared.infer_req->generated_tokens.begin(),
+                                           prepared.infer_req->generated_tokens.end());
     forward_req->sampling_token_num = kStepGenerateTokenNum;
   }
   ReorderInferRequests(forward_reqs);
@@ -393,11 +395,11 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
   for (auto& req : reqs) {
     std::vector<int> tokens;
     tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +
-                   kStepGenerateTokenNum + req->draft_tokens.mtp.size());
+                   req->generated_tokens.size() + req->draft_tokens.mtp.size());
     tokens.insert(tokens.end(), req->forwarding_tokens.begin(),
                   req->forwarding_tokens.end() - req->forwarding_tokens_draft_num);
     tokens.insert(tokens.end(), req->accepted_tokens.begin(), req->accepted_tokens.end());
-    tokens.emplace_back(req->generated_token);
+    tokens.insert(tokens.end(), req->generated_tokens.begin(), req->generated_tokens.end());
     tokens.insert(tokens.end(), req->draft_tokens.mtp.begin(), req->draft_tokens.mtp.end());
     draft_generator_->GenerateDraft(tokens, req->step, req->suggested_draft_num, req->draft_tokens.trie,
                                     req->draft_tokens.mtp.size(), req->accepted_tokens.size(), req->req_id);
@@ -409,16 +411,19 @@ void LlmRuntime::TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest
   std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_transfer_tokens;
   for (auto& req : reqs) {
     std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
-    // TODO(winminkong): In the future, MTP will be improved to generate multiple draft tokens or gen tokens, and the
-    // transmission method will be modified subsequently.
+    // {generated_tokens.size(), generated_tokens, draft_tokens.size(), draft_tokens}
     std::vector<int> send_tokens(MAX_TRANSFER_TOKENS, -1);
-    send_tokens[0] = req->generated_token;
-    if (draft_tokens.size() > (MAX_TRANSFER_TOKENS - 1)) {
+    send_tokens[0] = req->generated_tokens.size();
+    std::copy(req->generated_tokens.begin(), req->generated_tokens.end(), send_tokens.begin() + 1);
+    if (draft_tokens.size() > (MAX_TRANSFER_TOKENS - req->generated_tokens.size() - 2)) {
       KLLM_LOG_ERROR << "Out of token transfer memory: draft_tokens size: " << draft_tokens.size() << " > "
-                     << MAX_TRANSFER_TOKENS - 1;
+                     << MAX_TRANSFER_TOKENS - req->generated_tokens.size() - 2;
       KLLM_THROW("Out of token transfer memory");
     }
-    std::copy(draft_tokens.begin(), draft_tokens.end(), send_tokens.begin() + 1);
+    send_tokens[req->generated_tokens.size() + 1] = draft_tokens.size();
+    if (draft_tokens.size() > 0) {
+      std::copy(draft_tokens.begin(), draft_tokens.end(), send_tokens.begin() + 2 + req->generated_tokens.size());
+    }
     KLLM_LOG_DEBUG << "TransferGeneratedToken req " << req->req_id << " send tokens: " << Vector2Str(send_tokens);
     reqs_transfer_tokens.emplace_back(req->kv_comm_group_key, req->kv_comm_request_id, send_tokens);
   }

@@ -58,7 +58,7 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
     scheduler_shared_counter_->step_batch_size.Reset(0);
   }
   scheduler_ticktok_->Barrier();
-  scheduler_shared_counter_->step_batch_size.Increase(batch_state_->schedule_output->running_reqs.size());
+  scheduler_shared_counter_->step_batch_size.Increase(batch_state_->decoding_queue.size());
   scheduler_ticktok_->Barrier();
   if (batch_state_->transfer_queue.empty()) {
     KLLM_LOG_DEBUG << "transfer queue empty, return";
@@ -72,8 +72,8 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
     auto req = *it;
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
-    std::vector<int> first_tokens = transfer_engine->IsRecvDone(req->kv_comm_request_id);
-    if (first_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
+    std::vector<int> recv_tokens = transfer_engine->IsRecvDone(req->kv_comm_request_id);
+    if (recv_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
       // 检查是否达到最大的batch
       scheduler_ticktok_->Lock();
       size_t step_batch_size = scheduler_shared_counter_->step_batch_size.Get();
@@ -85,27 +85,32 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
       scheduler_shared_counter_->step_batch_size.Increase(1);
       scheduler_ticktok_->Unlock();
       // 接收完成，更新请求状态
-      req->kv_cached_token_num = req->forwarding_tokens.size();
-      req->prefix_cache_len = req->kv_cached_token_num;
-      req->output_tokens.push_back(first_tokens[0]);
-      req->generated_token = first_tokens[0];
-      KLLM_LOG_DEBUG << "Received first_tokens: " << Vector2Str(first_tokens);
+      KLLM_LOG_DEBUG << "Received recv_tokens: " << Vector2Str(recv_tokens);
 
-      req->forwarding_tokens.push_back(first_tokens[0]);
-      for (int mtp_step_idx = 1; mtp_step_idx <= runtime_config_.mtp_step_num; mtp_step_idx++) {
-        if (first_tokens[mtp_step_idx] == -1) {
-          KLLM_LOG_WARNING << "PD transfer tokens invalid, mtp_step_idx:" << mtp_step_idx;
-          break;
-        }
-        req->draft_tokens.mtp.push_back(first_tokens[mtp_step_idx]);
-        req->forwarding_tokens.push_back(first_tokens[mtp_step_idx]);
+      // task is processed on prefill node
+      req->SetPlanningTask();
+      req->LaunchPlanningTask();
+
+      // Get generation result
+      req->generated_tokens.clear();
+      req->accepted_tokens.clear();
+
+      // TODO(robertyuan): support multi generated tokens
+      int generated_token_num = recv_tokens[0];
+      req->generated_tokens.insert(req->generated_tokens.end(), recv_tokens.begin() + 1,
+                                   recv_tokens.begin() + 1 + generated_token_num);
+      req->draft_tokens.clear();
+      int draft_token_num = recv_tokens[generated_token_num + 1];
+      if (draft_token_num > 0) {
+        req->draft_tokens.mtp.insert(req->draft_tokens.mtp.end(), recv_tokens.begin() + generated_token_num + 2,
+                                     recv_tokens.begin() + generated_token_num + 2 + draft_token_num);
       }
-      req->forwarding_tokens_draft_num = req->draft_tokens.size();
-      req->sampling_token_num =
-          req->logits_custom_length > 0 ? req->logits_custom_length : req->draft_tokens.size() + kStepGenerateTokenNum;
 
-      KLLM_LOG_DEBUG << "Decode running_reqs insert for compute, req id:" << req->kv_comm_request_id;
-      batch_state_->schedule_output->running_reqs.push_back(req);
+      req->UpdateAfterInflightTaskFinished();
+      req->ResetInflightTask();
+
+      KLLM_LOG_DEBUG << "Move transfer req to decoding queue, req id:" << req->kv_comm_request_id;
+      batch_state_->decoding_queue.push_back(req);
       it = batch_state_->transfer_queue.erase(it);
       transfer_engine->CleanupTransferMeta(req->kv_comm_request_id);
     } else {
@@ -145,12 +150,8 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }
 
-      // for async, the kvblock should be destroyed later to avoid the trash token forward error.
-      if (batch_scheduler_config_.enable_async) {
-        AsyncStopRequest(req, Status(RET_SUCCESS), false);
-      } else {
-        StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
-      }
+      StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
+
       it = batch_state_->transfer_queue.erase(it);
     } else {
       // 发送未完成，继续检查下一个请求

@@ -78,8 +78,8 @@ class DirectCacheManager : public CacheManagerInterface,
 
   // Check the block num of specific request, the token number must be enough for next generation.
   // The shared block num always 0.
-  Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids, size_t& shared_block_num,
-                                     size_t& unique_block_num, size_t& shared_token_num);
+  Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids, size_t check_token_num,
+                                     size_t& shared_block_num, size_t& unique_block_num, size_t& shared_token_num);
 
   // Allocate new blocks for request, called only when req is running.
   Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<std::vector<int>>& req_block_ids);

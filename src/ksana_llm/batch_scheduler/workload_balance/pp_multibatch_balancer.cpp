@@ -41,8 +41,8 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
     // Calculate workload using CalculateWorkload for each request
     size_t batch_workload = 0;
 
-    // Calculate workload for running_reqs (vector)
-    batch_workload += CalculateWorkloadForReqs(batch->schedule_output->running_reqs);
+    // Calculate workload for decoding_queue (vector)
+    batch_workload += CalculateWorkloadForReqs(batch->decoding_queue);
 
     // Calculate workload for waiting_queue (deque) by directly using CalculateWorkload
     for (const auto& req : batch->waiting_queue) {
@@ -90,14 +90,81 @@ void PPMultibatchWorkloadBalancer::DistributeWaitingReqs(std::vector<std::shared
   for (size_t i = 0; i < batch_states.size(); i++) {
     auto& batch = batch_states[i];
     ss << "[ batch " << batch->multi_batch_id_ << ", workload:" << current_workloads[i]
-       << ", running:" << batch->schedule_output->running_reqs.size() << ", waiting:" << batch->waiting_queue.size()
-       << " ] ";
+       << ", decoding:" << batch->decoding_queue.size() << ", waiting:" << batch->waiting_queue.size() << " ] ";
   }
   KLLM_LOG_SCHEDULER << "After distribute: " << ss.str();
 
   // Clear the waiting_reqs vector since all requests have been
   // distributed
   waiting_reqs.clear();
+}
+
+void PPMultibatchWorkloadBalancer::DistributeDecodingReqs(std::vector<std::shared_ptr<InferRequest>>& decoding_reqs,
+                                                          std::vector<std::shared_ptr<BatchState>>& batch_states) {
+  if (decoding_reqs.empty() || batch_states.empty()) {
+    return;
+  }
+
+  KLLM_LOG_SCHEDULER << "Distributing " << decoding_reqs.size() << " decoding requests to balance workload";
+
+  // Calculate the current workload for each batch state
+  std::vector<size_t> current_workloads;
+  size_t total_current_workload = 0;
+
+  for (const auto& batch : batch_states) {
+    // Calculate workload using CalculateWorkload for each request
+    size_t batch_workload = 0;
+
+    // Calculate workload for decoding_queue (vector)
+    batch_workload += CalculateWorkloadForReqs(batch->decoding_queue);
+
+    current_workloads.push_back(batch_workload);
+    total_current_workload += batch_workload;
+  }
+
+  // Greedy approach: distribute each decoding request to the batch with minimum workload
+  std::stringstream ss;
+  std::vector<std::vector<int>> req_list{batch_states.size()};
+  for (auto& req : decoding_reqs) {
+    auto min_it = std::min_element(current_workloads.begin(), current_workloads.end());
+    int min_idx = std::distance(current_workloads.begin(), min_it);
+
+    auto& min_batch = batch_states[min_idx];
+    {
+      std::lock_guard<std::mutex> guard(min_batch->queue_mutex);
+      min_batch->decoding_queue.push_back(req);
+    }
+    size_t cur_req_workload = CalculateWorkload(req);
+    KLLM_LOG_SCHEDULER << "req_id:" << req->req_id << ", cur_req_workload:" << cur_req_workload << ", add to batch id "
+                       << min_idx << ", last batch workload:" << current_workloads[min_idx];
+    req_list[min_idx].push_back(req->req_id);
+    current_workloads[min_idx] += cur_req_workload;
+  }
+
+  for (size_t i = 0; i < req_list.size(); i++) {
+    auto& reqs = req_list[i];
+    if (reqs.empty()) {
+    } else {
+      ss << "[ batch " << batch_states[i]->multi_batch_id_ << " add " << reqs.size()
+         << " reqs, workload: " << current_workloads[i] << ", req ids: ";
+      for (auto req_id : reqs) {
+        ss << req_id << ", ";
+      }
+      ss << " ] ";
+    }
+  }
+  KLLM_LOG_SCHEDULER << "Distribute " << decoding_reqs.size() << " reqs. " << ss.str();
+
+  ss.str("");
+  for (size_t i = 0; i < batch_states.size(); i++) {
+    auto& batch = batch_states[i];
+    ss << "[ batch " << batch->multi_batch_id_ << ", workload:" << current_workloads[i]
+       << ", decoding:" << batch->decoding_queue.size() << ", waiting:" << batch->waiting_queue.size() << " ] ";
+  }
+  KLLM_LOG_SCHEDULER << "After distribute: " << ss.str();
+
+  // Clear the decoding_reqs vector since all requests have been distributed
+  decoding_reqs.clear();
 }
 
 void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
@@ -110,7 +177,7 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
   auto& target_batch = batch_states[multi_batch_id];
 
   // No need to offload if few requests left
-  if ((target_batch->schedule_output->running_reqs.size() + target_batch->waiting_queue.size()) < 5) {
+  if ((target_batch->decoding_queue.size() + target_batch->waiting_queue.size()) < 5) {
     return;
   }
 
@@ -118,23 +185,23 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
   std::vector<size_t> workloads;
   size_t total_workload = 0;
 
-  int target_running_workload, target_waiting_workload;
+  int target_decoding_workload, target_waiting_workload;
   for (size_t i = 0; i < batch_states.size(); i++) {
     auto& batch = batch_states[i];
     size_t batch_workload = 0;
 
-    // Calculate workload for running_reqs (vector)
-    int running_workload = CalculateWorkloadForReqs(batch->schedule_output->running_reqs);
-    batch_workload += running_workload;
+    // Calculate workload for decoding_queue (vector)
+    int decoding_workload = CalculateWorkloadForReqs(batch->decoding_queue);
+    batch_workload += decoding_workload;
 
     // Calculate workload for waiting_queue (deque) by directly using CalculateWorkload
     int waiting_workload = 0;
     for (const auto& req : batch->waiting_queue) {
       waiting_workload += CalculateWorkload(req);
     }
-    batch_workload = running_workload + waiting_workload;
+    batch_workload = decoding_workload + waiting_workload;
     if (i == multi_batch_id) {
-      target_running_workload = running_workload;
+      target_decoding_workload = decoding_workload;
       target_waiting_workload = waiting_workload;
     }
     workloads.push_back(batch_workload);
@@ -153,7 +220,7 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
   // Check if target batch's workload exceeds the threshold
   if (workloads[multi_batch_id] <= threshold_workload) {
     KLLM_LOG_SCHEDULER << "No need to balance workload. Target batch " << multi_batch_id << " has workload "
-                       << workloads[multi_batch_id] << "(running: " << target_running_workload
+                       << workloads[multi_batch_id] << "(decoding: " << target_decoding_workload
                        << ", waiting:" << target_waiting_workload << "), which is below threshold "
                        << threshold_workload;
     return;
@@ -163,7 +230,7 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
   size_t workload_to_move = workloads[multi_batch_id] - ideal_workload;
 
   KLLM_LOG_SCHEDULER << "Balancing workload. Target batch " << multi_batch_id << " has workload "
-                     << workloads[multi_batch_id] << "( running: " << target_running_workload
+                     << workloads[multi_batch_id] << "( decoding: " << target_decoding_workload
                      << ", waiting:" << target_waiting_workload << " ), ideal_workload: " << ideal_workload
                      << ", threshold_workload: " << threshold_workload << ", workload_to_move: " << workload_to_move;
 
@@ -171,7 +238,7 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
   std::lock_guard<std::mutex> target_guard(target_batch->queue_mutex);
 
   // Collect requests to migrate
-  std::vector<std::shared_ptr<InferRequest>> requests_to_migrate;
+  std::vector<std::shared_ptr<InferRequest>> waiting_requests_to_migrate, decoding_requests_to_migrate;
   size_t migrated_workload = 0;
 
   // First try to migrate requests from waiting_queue
@@ -182,36 +249,36 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
       // TODO(robertyuan): find better requests
       break;
     }
-    requests_to_migrate.push_back(*waiting_it);
+    waiting_requests_to_migrate.push_back(*waiting_it);
     migrated_workload += req_workload;
     target_waiting_workload -= req_workload;
     waiting_it = target_batch->waiting_queue.erase(waiting_it);
   }
 
-  // If waiting_queue is empty but we still need to move more workload, take from running_reqs (from the end to minimize
-  // impact)
+  // If waiting_queue is empty but we still need to move more workload, take from decoding_queue (from the end to
+  // minimize impact)
   if (target_batch->waiting_queue.empty() && migrated_workload < workload_to_move &&
-      !target_batch->schedule_output->running_reqs.empty()) {
-    auto running_it = target_batch->schedule_output->running_reqs.end() - 1;
-    while (running_it >= target_batch->schedule_output->running_reqs.begin() && migrated_workload < workload_to_move) {
-      int req_workload = CalculateWorkload(*running_it);
+      !target_batch->decoding_queue.empty()) {
+    auto decoding_it = target_batch->decoding_queue.end() - 1;
+    while (decoding_it >= target_batch->decoding_queue.begin() && migrated_workload < workload_to_move) {
+      int req_workload = CalculateWorkload(*decoding_it);
       if ((migrated_workload + req_workload) > workload_to_move) {
         // TODO(robertyuan): find better requests
         break;
       }
-      requests_to_migrate.push_back(*running_it);
+      decoding_requests_to_migrate.push_back(*decoding_it);
       migrated_workload += req_workload;
       target_waiting_workload -= req_workload;
 
       // Move iterator before erasing
-      auto to_erase = running_it;
-      running_it--;
-      target_batch->schedule_output->running_reqs.erase(to_erase);
+      auto to_erase = decoding_it;
+      decoding_it--;
+      target_batch->decoding_queue.erase(to_erase);
     }
   }
 
   // No request to migrate
-  if (requests_to_migrate.empty()) {
+  if (decoding_requests_to_migrate.empty() && waiting_requests_to_migrate.empty()) {
     return;
   }
 
@@ -222,12 +289,19 @@ void PPMultibatchWorkloadBalancer::OffloadBatchWorkload(size_t multi_batch_id,
       recipient_batches.push_back(batch_states[i]);
     }
   }
-  KLLM_LOG_SCHEDULER << "Migrating " << requests_to_migrate.size() << " requests with total workload "
+
+  KLLM_LOG_SCHEDULER << "Migrating waiting_reqs.size=" << waiting_requests_to_migrate.size()
+                     << ", decoding_reqs.size=" << decoding_requests_to_migrate.size() << "  with total workload "
                      << migrated_workload << " from batch " << multi_batch_id
-                     << ", target workload: (running:" << target_running_workload
+                     << ", target workload: (decoding:" << target_decoding_workload
                      << ", waiting:" << target_waiting_workload << " )";
-  // Distribute the migrated requests to other batch states using DistributeWaitingReqs
-  DistributeWaitingReqs(requests_to_migrate, recipient_batches);
+  if (!decoding_requests_to_migrate.empty()) {
+    DistributeDecodingReqs(decoding_requests_to_migrate, recipient_batches);
+  }
+
+  if (!waiting_requests_to_migrate.empty()) {
+    DistributeWaitingReqs(waiting_requests_to_migrate, recipient_batches);
+  }
 }
 
 int PPMultibatchWorkloadBalancer::CalculateWorkload(const std::shared_ptr<InferRequest>& req) {

@@ -99,7 +99,8 @@ class BatchManagerTest : public testing::Test {
     block_allocator_group_ = block_allocator_manager.GetBlockAllocatorGroup(1);
     std::vector<std::shared_ptr<ModelInstance>> model_instances;
     runtime_config_.parallel_basic_config.attn_data_parallel_size = data_para_size;
-    batch_scheduler = std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_, model_instances);
+    batch_scheduler =
+        std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_, false, model_instances);
 
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config_, block_allocator_group_);
     cache_manager->InitializeCachedBlocks();

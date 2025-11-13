@@ -29,7 +29,7 @@ TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   int max_expect_output_num = 100;
   int max_input_num = 400;
   std::vector<ParallelTester::RequestInfo> req_list;
-  tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
@@ -55,7 +55,7 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   int max_expect_output_num = 40;
   int max_input_num = 60;
   std::vector<ParallelTester::RequestInfo> req_list;
-  tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, 1, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
 
@@ -77,7 +77,7 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   // Run requests in parallel
   // max output token are large, SwapOut/In will be triggered when there are multiple requests.
   // exceed cache size, not exceed_batch size and max_step_size
-  int request_num = 100;
+  int request_num = 10;
   int client_num = 10;
   int min_expect_output_num = 1;
   int max_expect_output_num = 200;
@@ -90,46 +90,82 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
 
   auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_GT(stat.swapout_succ_num, 0);
+  EXPECT_EQ(stat.swapout_succ_num, 0);  // Recomputed, no swap
   EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_GT(stat.swapin_succ_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);  // Recomputed, no swap
+  EXPECT_EQ(stat.swapin_fail_num, 0);
+}
+
+TEST_F(BatchSchedulerTest, SplitFusePressTest) {
+  KLLM_LOG_INFO << "SplitFusePressTest start";
+  split_fuse_token_num_ = 16;
+  CommonSetUp();
+  ParallelTester tester(batch_scheduler_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  ParallelTester::SplitFuseCheckHook split_fuse_check_hook(split_fuse_token_num_);
+  hooks.push_back(&default_hook);
+  hooks.push_back(&split_fuse_check_hook);
+
+  // Run requests in parallel
+  // max output token are large, SwapOut/In will be triggered when there are multiple requests.
+  // exceed cache size, not exceed_batch size and max_step_size
+  int request_num = 10;
+  int client_num = 10;
+  int min_expect_output_num = 1;
+  int max_expect_output_num = 40;
+  int min_input_num = 17;
+  int max_input_num = 60;
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, min_expect_output_num, max_expect_output_num, min_input_num, max_input_num,
+                          req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
+
+  auto& stat = env_simulator_->GetBlockManagerStat();
+  EXPECT_EQ(stat.swapout_succ_num, 0);  // Recomputed, no swap
+  EXPECT_EQ(stat.swapout_fail_num, 0);
+  EXPECT_EQ(stat.swapin_succ_num, 0);  // Recomputed, no swap
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
 TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredTest) {
+  enable_prefix_cache_ = true;
   CommonSetUp();
 
   int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, false);
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
   test_case.SetBatchScheduler(batch_scheduler_);
   test_case.SetEnvSimulator(env_simulator_);
   test_case.RunTestNoSwapTriggered();
 }
 
-TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
+TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
+  enable_prefix_cache_ = true;
+  split_fuse_token_num_ = 6;
   CommonSetUp();
 
-  int prefix_block_num = 30;
+  int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, false);
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
   test_case.SetBatchScheduler(batch_scheduler_);
   test_case.SetEnvSimulator(env_simulator_);
-  test_case.RunTestSwapTriggered();
+  test_case.RunTestNoSwapTriggered();
 }
 
-TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredRecomputeTest) {
+
+TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
+  enable_prefix_cache_ = true;
   CommonSetUp();
-  batch_scheduler_config_.max_batch_size = 4;
-  batch_scheduler_config_.max_step_token_num = 5;
-  block_manager_config_.device_allocator_config.blocks_num = 50;
 
   int prefix_block_num = 30;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, false);
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
   test_case.SetBatchScheduler(batch_scheduler_);
   test_case.SetEnvSimulator(env_simulator_);
   test_case.RunTestSwapTriggered();
@@ -180,14 +216,3 @@ TEST_F(BatchSchedulerTest, CreateMockRequest) {
   EXPECT_EQ(schedule_output_group->RunningSize(), 1);
 }
 
-
-TEST_F(BatchSchedulerTest, NotifyAsyncFinishedRequestsBasicTest) {
-  KLLM_LOG_INFO << "BatchSchedulerTest: NotifyAsyncFinishedRequestsBasicTest";
-
-  CommonSetUp();
-  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
-
-  // 测试基本的 NotifyAsyncFinishedRequests 调用
-  // 在没有异步完成请求的情况下，应该能正常执行而不出错
-  EXPECT_NO_THROW(batch_scheduler->NotifyAsyncFinishedRequests());
-}

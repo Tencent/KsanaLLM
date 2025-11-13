@@ -29,11 +29,13 @@ namespace ksana_llm {
 class BatchScheduler : public BatchSchedulerInterface {
  public:
   BatchScheduler(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config,
-                 std::vector<std::shared_ptr<ModelInstance>> &model_instances);
+                 bool always_return_launchable_req, std::vector<std::shared_ptr<ModelInstance>> &model_instances);
   ~BatchScheduler();
 
   // Get the next infer reqs that ready to run.
   std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) override;
+
+  void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup &generation_output) override;
 
   // Add infer request to waiting list.
   Status AddInferRequest(std::vector<std::shared_ptr<InferRequest>> &infer_request_group) override;
@@ -47,13 +49,6 @@ class BatchScheduler : public BatchSchedulerInterface {
   bool IsIdle(size_t multi_batch_id) override;
 
   void WaitUntilHaveReqs(size_t multi_batch_id) override;
-
-  // Process async finished requests for all strategies
-  void NotifyAsyncFinishedRequests();
-
-  // This is to avoid simultaneous scheduling and Step operations on InferRequest after enabling asynchronous
-  // scheduling.
-  void NotifyAsyncRecomputedRequests();
 
   std::vector<std::shared_ptr<InferRequest>> GetMockRequest() { return mock_request_group_; }
 
@@ -97,6 +92,7 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   size_t dp_num_;
   size_t pp_batch_num_;
+  bool always_return_launchable_req_ = false;  // Always return launchable request when expert parallel world size>1
 
   // The thread pool of batch scheduler.
   std::unique_ptr<ThreadPool> threadpool_ = nullptr;

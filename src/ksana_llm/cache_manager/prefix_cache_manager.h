@@ -118,10 +118,9 @@ class PrefixCacheManager : public CacheManagerInterface,
   // The method will exclude the cached blocks of this request.
   size_t GetRequestUsableBlockNumber(int64_t req_id);
 
-  // Check the shared and unique block num of specific request, the token number must be enough for next generation.
-  // The unique_block_num will always be larger than 0.
-  Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids, size_t& shared_block_num,
-                                     size_t& unique_block_num, size_t& shared_token_num);
+  // WARNING: Allocated blocks may be truncated according to check_token_num.
+  Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids, size_t check_token_num,
+                                     size_t& shared_block_num, size_t& unique_block_num, size_t& shared_token_num);
 
   // Allocate new blocks for request, called only when req is running.
   Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<std::vector<int>>& req_block_ids);

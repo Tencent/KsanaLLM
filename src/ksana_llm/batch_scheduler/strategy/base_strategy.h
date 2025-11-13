@@ -21,9 +21,7 @@ class BaseScheduleStrategy {
   explicit BaseScheduleStrategy(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config)
       : batch_scheduler_config_(batch_scheduler_config), runtime_config_(runtime_config) {}
 
-  virtual void UpdateRunningRequests() = 0;
-
-  virtual void UpdateSwapPendingRequests() = 0;
+  virtual void UpdateRunningRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs) = 0;
 
   // Get the next infer reqs that ready to run.
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;

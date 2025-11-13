@@ -8,7 +8,7 @@
 #include <thread>
 
 #include "ksana_llm/batch_manager/batch_manager.h"
-#include "ksana_llm/batch_manager/schedule_processor_factory.h"
+#include "ksana_llm/batch_manager/schedule_processor.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/profiler/sched_event_tracer.h"
@@ -26,7 +26,8 @@ namespace ksana_llm {
 BatchManager::BatchManager(const RuntimeConfig &runtime_config, std::shared_ptr<Context> context) {
   context_ = context;
   runtime_config_ = runtime_config;
-  schedule_processor_ = ScheduleProcessorFactory::CreateProcessor(runtime_config_);
+  schedule_processor_ =
+      std::make_unique<ScheduleProcessor>(runtime_config_.enable_async, runtime_config_.max_pp_batch_num);
 }
 
 Status BatchManager::RegisterModelInstance(const std::shared_ptr<ModelInstance> &model_instance) {
@@ -129,17 +130,18 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     const time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
     const time_t sched_start_time_us = ProfileTimer::GetCurrentTimeInUs();
 
-    ScheduleResult schedule_result = schedule_processor_->GetNextScheduleResult(multi_batch_id);
-    if (!schedule_result.is_valid) {
+    std::shared_ptr<ScheduleResult> schedule_result = schedule_processor_->GetNextScheduleResult(multi_batch_id);
+    if (!schedule_result) {
+      // Only happen during stopping
       continue;
     }
 
     multi_batch_controller_->NotifyCurrentBatchIsStandby(multi_batch_id);
-    RecordRequestSchedEventsWithStartTime(schedule_result.schedule_output->running_reqs, 0, multi_batch_id, 0,
+    RecordRequestSchedEventsWithStartTime(schedule_result->schedule_output->running_reqs, 0, multi_batch_id, 0,
                                           "Schedule", sched_start_time_ns);
 
     size_t forwarding_token_num = 0, total_seq_len = 0;
-    for (auto &req : schedule_result.schedule_output->running_reqs) {
+    for (auto &req : schedule_result->schedule_output->running_reqs) {
       forwarding_token_num += req->forwarding_tokens.size() - req->kv_cached_token_num;
       total_seq_len += req->forwarding_tokens.size();
     }
@@ -150,20 +152,16 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
       PROFILE_EVENT_SCOPE(LockAndBroadcastScheduleOutput, "LockAndBroadcastScheduleOutput");
       KLLM_LOG_MAIN << "wait to run multi_batch_id=" << multi_batch_id << ", epilogue=false";
       multi_batch_controller_->WaitUntilCurrentBatchCanRun(multi_batch_id);
-      BroadcastScheduleOutput(schedule_result.schedule_output.get());
-      InitHiddenUnits(schedule_result.schedule_output->multi_batch_id);
+      BroadcastScheduleOutput(schedule_result->schedule_output.get());
+      InitHiddenUnits(schedule_result->schedule_output->multi_batch_id);
     }
-    RecordRequestSchedEvents(schedule_result.schedule_output->running_reqs, 0,
-                             schedule_result.schedule_output->multi_batch_id, 0, "PrepareForwarding",
+    RecordRequestSchedEvents(schedule_result->schedule_output->running_reqs, 0,
+                             schedule_result->schedule_output->multi_batch_id, 0, "PrepareForwarding",
                              RequestEventPhase::Begin);
-    Status status = llm_runtime_->Step(schedule_result.schedule_output.get(), *schedule_result.grouped_reqs.get(),
-                                       *schedule_result.sampling_reqs.get(), false);
+    Status status = llm_runtime_->Step(schedule_result->schedule_output.get(), schedule_result->grouped_reqs,
+                                       schedule_result->sampling_reqs, false);
     if (!status.OK()) {
       KLLM_LOG_ERROR << status.ToString();
-    }
-    if (runtime_config_.enable_async) {
-      // 开启异步调度之后，当请求完成不能直接stop，因为此时该请求还在推理中，Notify后请求就会析构，不应该再访问，因此延迟到Step结束之后再Notify。
-      batch_scheduler_->NotifyAsyncFinishedRequests();
     }
 
     time_t middle_time_us = ProfileTimer::GetCurrentTimeInUs();
@@ -171,23 +169,25 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     // Wait until last worker done.
     if (!context_->IsStandalone()) {
       PROFILE_EVENT_SCOPE(SendAndStepOnChief_,
-                          fmt::format("SendAndStepOnChief_{}_true", schedule_result.schedule_output->multi_batch_id));
-      multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(schedule_result.schedule_output->multi_batch_id);
-      SendHiddenUnits(schedule_result.schedule_output->multi_batch_id);
+                          fmt::format("SendAndStepOnChief_{}_true", schedule_result->schedule_output->multi_batch_id));
+      multi_batch_controller_->NotifyLastBatchHiddenUnitCanRecv(schedule_result->schedule_output->multi_batch_id);
+      SendHiddenUnits(schedule_result->schedule_output->multi_batch_id);
 
       // lm head & sampling
-      RecordRequestSchedEvents(schedule_result.schedule_output->running_reqs, 0,
-                               schedule_result.schedule_output->multi_batch_id, 0, "PrepareForwarding",
+      RecordRequestSchedEvents(schedule_result->schedule_output->running_reqs, 0,
+                               schedule_result->schedule_output->multi_batch_id, 0, "PrepareForwarding",
                                RequestEventPhase::Begin);
 
-      status = llm_runtime_->Step(schedule_result.schedule_output.get(), *schedule_result.grouped_reqs.get(),
-                                  *schedule_result.sampling_reqs.get(), true);
+      status = llm_runtime_->Step(schedule_result->schedule_output.get(), schedule_result->grouped_reqs,
+                                  schedule_result->sampling_reqs, true);
       if (!status.OK()) {
         KLLM_LOG_ERROR << status.ToString();
       }
       // free again.
-      FreeHiddenUnits(schedule_result.schedule_output->multi_batch_id);
+      FreeHiddenUnits(schedule_result->schedule_output->multi_batch_id);
     }
+
+    schedule_processor_->UpdateWithGenerationResult(multi_batch_id, schedule_result->generation_output_group);
 
     time_t end_time_us = ProfileTimer::GetCurrentTimeInUs();
     int global_token_throughput =
@@ -195,7 +195,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
     int local_token_throuphput =
         (end_time_us - start_time_us) > 0 ? forwarding_token_num * 1000000 / (end_time_us - start_time_us) : -1;
     KLLM_LOG_MAIN << "multi_batch_id=" << multi_batch_id
-                  << ", running_reqs.size=" << schedule_result.schedule_output->running_reqs.size()
+                  << ", running_reqs.size=" << schedule_result->schedule_output->running_reqs.size()
                   << ", forwarding_token_num=" << forwarding_token_num << ", total_seq_len=" << total_seq_len
                   << ", 1st step " << (middle_time_us - start_time_us) << "us, 2nd step "
                   << (end_time_us - middle_time_us) << "us, total " << (end_time_us - start_time_us)
@@ -265,7 +265,6 @@ Status BatchManager::Start() {
   // Start main threads for standalone or master node of distributed mode.
   if (context_->IsChief()) {
     schedule_processor_->Initialize(batch_scheduler_, llm_runtime_, multi_batch_controller_);
-    schedule_processor_->Start();
 
     main_threads_.reserve(runtime_config_.max_pp_batch_num);
     for (size_t multi_batch_id = 0; multi_batch_id < runtime_config_.max_pp_batch_num; ++multi_batch_id) {
@@ -285,13 +284,12 @@ Status BatchManager::Stop() {
 
   terminated_ = true;
 
-  // 停止调度处理器
-  if (schedule_processor_) {
-    schedule_processor_->Stop();
-  }
-
   if (batch_scheduler_) {
     batch_scheduler_->Stop();
+  }
+
+  if (schedule_processor_) {
+    schedule_processor_->Stop();
   }
 
   // stop data hub pool, will unlock the blocking Get().

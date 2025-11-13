@@ -101,6 +101,32 @@ struct ScheduleOutput {
     swapin_req_block_ids.clear();
   }
 
+  bool IsLaunchable() {
+    for (auto req : running_reqs) {
+      if (req->HasInflightTask()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void SetPlanningTask() {
+    for (auto req : running_reqs) {
+      req->SetPlanningTask();
+    }
+  }
+
+  // Try to launch schedule output if all running reqs do not have infight task.
+  void LaunchScheduleOutput() {
+    if (!IsLaunchable()) {
+      return;
+    }
+    for (const auto& req : running_reqs) {
+      if (req->finished) continue;  // request may be finished in async mode.
+      req->LaunchPlanningTask();
+    }
+  }
+
   // Make it empty again, called only on worker node.
   void Clear() {
     Reset();
@@ -179,6 +205,28 @@ struct ScheduleOutputGroup {
       size += output->running_reqs.size();
     }
     return size;
+  }
+};
+
+struct GenerationOutputGroup {
+  size_t schedule_id = DEFAULT_SCHEDULE_ID;
+  std::vector<std::vector<std::shared_ptr<InferRequest>>> reqs;
+
+  void Reset() {
+    schedule_id = DEFAULT_SCHEDULE_ID;
+    reqs.clear();
+  }
+
+  void BuildFromScheduleOutputGroup(const ScheduleOutputGroup& schedule_output_group) {
+    schedule_id = schedule_output_group.schedule_id;
+    reqs.resize(schedule_output_group.outputs.size());
+    for (size_t i = 0; i < schedule_output_group.outputs.size(); ++i) {
+      auto& output = schedule_output_group.outputs[i];
+      if (output == nullptr) {
+        continue;
+      }
+      reqs[i] = output->running_reqs;
+    }
   }
 };
 

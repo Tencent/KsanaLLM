@@ -82,8 +82,8 @@ size_t DirectCacheManager::GetRequestStepBlockNumberForOneNextToken(int64_t req_
 }
 
 Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
-                                                       size_t& shared_block_num, size_t& unique_block_num,
-                                                       size_t& shared_token_num) {
+                                                       size_t check_token_num, size_t& shared_block_num,
+                                                       size_t& unique_block_num, size_t& shared_token_num) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     CreateCachedRequest(req_id);
@@ -92,7 +92,7 @@ Status DirectCacheManager::GetRequestPrefixBlockNumber(int64_t req_id, const std
   shared_token_num = 0;
   shared_block_num = 0;
   const size_t block_token_num = cache_manager_config_.block_token_num;
-  unique_block_num = (input_token_ids.size() + block_token_num) / block_token_num;
+  unique_block_num = (check_token_num + block_token_num) / block_token_num;
   return Status();
 }
 

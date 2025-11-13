@@ -20,6 +20,10 @@ class PPMultibatchWorkloadBalancer {
   void DistributeWaitingReqs(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs,
                              std::vector<std::shared_ptr<BatchState>>& batch_states);
 
+  // Distribute decoding requests to multiple batch states based on capacity
+  void DistributeDecodingReqs(std::vector<std::shared_ptr<InferRequest>>& decoding_reqs,
+                              std::vector<std::shared_ptr<BatchState>>& batch_states);
+
   // Offload batch load
   void OffloadBatchWorkload(size_t multi_batch_id, std::vector<std::shared_ptr<BatchState>>& batch_states);
 

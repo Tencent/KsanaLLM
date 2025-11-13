@@ -314,12 +314,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
     KLLM_LOG_WARNING << "prefix caching not support NPU, will change enable_prefix_caching as false";
   }
 #endif
-  // TODO(zakwang): Implement support for cases where prefix caching is disabled while split_fuse_token_num is non-zero.
-  if (batch_scheduler_config_.split_fuse_token_num != 0 && !cache_manager_config_.enable_prefix_caching) {
-    KLLM_LOG_WARNING << "While prefix caching is disabled，split_fuse_token_num will always be disabled. So set "
-                        "split_fuse_token_num to 0.";
-    batch_scheduler_config_.split_fuse_token_num = 0;
-  }
 
   // Read parallel config.
   expert_parallel_config_.expert_world_size =
@@ -386,6 +380,11 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
   }
 
   InitConnectorConfig(yaml_reader);
+  // TODO(zhongzhicao): Support PD + prefix cache + split fuse.
+  if (connector_config_.group_role != GroupRole::NONE && batch_scheduler_config_.split_fuse_token_num != 0) {
+    KLLM_LOG_WARNING << "Split-fuse is not supported for PD separation, setting split_fuse_token_num to 0.";
+    batch_scheduler_config_.split_fuse_token_num = 0;
+  }
   return Status();
 }
 
@@ -581,7 +580,10 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
-  runtime_config_.enable_prefix_caching = cache_manager_config_.enable_prefix_caching;
+  runtime_config_.enable_prefix_caching = (connector_config_.group_role == GroupRole::DECODE) ||
+                                          cache_manager_config_.enable_prefix_caching ||
+                                          (batch_scheduler_config_.split_fuse_token_num > 0);
+
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
 
   return Status();

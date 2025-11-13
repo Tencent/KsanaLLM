@@ -123,28 +123,34 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, BasicTokenGenerationTest) {
   infer_reqs.push_back(infer_req2_diff_seed);
   infer_reqs.push_back(infer_req2_same20_diff30);
 
-  int max_output_step = std::max(expected_output_token_num1, expected_output_token_num2) + 1;
+  for (auto req : infer_reqs) {
+    req->ResetPrefillingTokens();
+  }
+
+  int max_output_step = std::max(expected_output_token_num1, expected_output_token_num2) + 10;
   for (int i = 0; i < max_output_step; i++) {
-    std::vector<std::shared_ptr<InferRequest>> scheduled_reqs;
+    std::vector<std::shared_ptr<InferRequest>> running_reqs;
+    KLLM_LOG_DEBUG << "Scheduling step=" << i;
     for (auto& req : infer_reqs) {
-      if (req->sampling_result_tokens.size() > 0) {
-        req->output_tokens.push_back(req->sampling_result_tokens.back());
-        req->sampling_result_tokens.clear();
+      if (req->finished) {
+        continue;
       }
-      req->forwarding_tokens = req->output_tokens;
-      if (!env_simulator->IsRequestFinished(req)) {
-        scheduled_reqs.push_back(req);
-      }
+      req->SetPlanningTask();
+      req->LaunchPlanningTask();
+      running_reqs.push_back(req);
     }
 
-    if (scheduled_reqs.empty()) break;
-    KLLM_LOG_DEBUG << "Step " << i << ": scheduled_reqs.size(): " << scheduled_reqs.size();
-    env_simulator->RunAStep(scheduled_reqs);
-    for (auto req : scheduled_reqs) {
-      KLLM_LOG_DEBUG << "Step " << i << ": req_id:" << req->req_id
-                     << ", output_token.size()=" << req->output_tokens.size()
-                     << ", sampling_result_tokens.size()=" << req->sampling_result_tokens.size()
-                     << ", sampling_result_tokens token= " << req->sampling_result_tokens.back();
+    if (running_reqs.empty()) break;
+    KLLM_LOG_DEBUG << "Step " << i << ": running_reqs.size(): " << running_reqs.size();
+    env_simulator->RunAStep(running_reqs);
+
+    KLLM_LOG_DEBUG << "After step " << i;
+    for (auto req : running_reqs) {
+      req->UpdateAfterInflightTaskFinished();
+      req->ResetInflightTask();
+      if (req->IsEosGenerated()) {
+        req->finished = true;
+      }
     }
   }
 
@@ -221,6 +227,28 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager(int attn_dp_idx) { return dummy_cache_mgr_; }
 
+  void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup& generation_output) override {
+    assert(generation_output.reqs.size() == 1);                       // only support one dp
+    assert(generation_output.reqs[0].size() == running_reqs.size());  //
+
+    for (auto req : generation_output.reqs[0]) {
+      req->UpdateAfterInflightTaskFinished();
+      req->ResetInflightTask();
+      if (req->IsEosGenerated()) {
+        ClearRequestAfterFinished(req);
+        auto it = std::find(running_reqs.begin(), running_reqs.end(), req);
+        KLLM_CHECK(it != running_reqs.end());
+        KLLM_CHECK((*it)->req_id == req->req_id);
+        KLLM_LOG_DEBUG << "Remove request from queue, req id:" << req->req_id;
+        running_reqs.erase(it);
+        continue;
+      }
+      ScheduleTaskWorkload planning_workload;
+      planning_workload.generated_token_num = req->generated_tokens.size();
+      req->SetPlanningWorkload(planning_workload);
+    }
+  }
+
   std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) override {
     assert(multi_batch_id == 0);  // only support one batch
     std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -230,19 +258,11 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
     std::lock_guard<std::mutex> guard(mux_);
     if (running_reqs.size() > 0) {
       for (auto it = running_reqs.begin(); it != running_reqs.end();) {
-        // Update request status
         auto& req = *it;
-        if (req->sampling_result_tokens.size() > 0) {
-          req->output_tokens.push_back(req->sampling_result_tokens.back());
-          req->sampling_result_tokens.clear();
-        }
-        if (env_simulator_->IsRequestFinished(req)) {
-          ClearRequestAfterFinished(req);
-          it = running_reqs.erase(it);
-          continue;
-        }
+        KLLM_CHECK(!req->HasInflightTask());
+
         // Need to add block?
-        if (req->output_tokens.size() > (req->kv_cache_blocks[0].size() * block_token_num_)) {
+        if (req->GetPlanningSequenceLen() > (req->kv_cache_blocks[0].size() * block_token_num_)) {
           AdjustRequestKvCacheBlocks(req);
         }
         it++;
@@ -294,10 +314,8 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       step_++;
     }
     KLLM_LOG_DEBUG << " ========= Schedule, running_reqs.size = " << running_reqs.size();
-    for (auto& req : running_reqs) {
-      req->forwarding_tokens = req->output_tokens;
-    }
     schedule_output->running_reqs = running_reqs;
+    schedule_output->SetPlanningTask();
 
     std::shared_ptr<ScheduleOutputGroup> schedule_output_group = std::make_shared<ScheduleOutputGroup>();
     schedule_output_group->outputs[0] = schedule_output;
@@ -317,10 +335,6 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) override {}
 
-  virtual void NotifyAsyncRecomputedRequests() override {}
-
-  virtual void NotifyAsyncFinishedRequests() override {}
-
   void Stop() override {}
 
  private:
@@ -332,9 +346,11 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
       prefix_cache_tokens_.resize(prefix_token_num_, 0);
       std::copy(input_tokens.begin(), input_tokens.begin() + prefix_token_num_, prefix_cache_tokens_.begin());
     }
-    // set prefix info
-    infer_req->is_use_prefix_cache = true;
-    infer_req->prefix_cache_len = prefix_token_num_;
+    // set prefill info and planning workload
+    infer_req->output_tokens = infer_req->input_tokens;
+    infer_req->ResetPrefillingTokens();
+    infer_req->SetPlanningWorkload(infer_req->GetRemainingWorkload());
+
     waiting_reqs.push_back(infer_req);
     return Status();
   }
@@ -389,7 +405,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
   void AdjustRequestKvCacheBlocks(const std::shared_ptr<InferRequest>& req) {
     auto& kv_cache_blocks = req->kv_cache_blocks;
     int adding_block_num =
-        (req->output_tokens.size() + block_token_num_ - 1) / block_token_num_ - kv_cache_blocks[0].size();
+        (req->GetPlanningSequenceLen() + block_token_num_ - 1) / block_token_num_ - kv_cache_blocks[0].size();
     for (int i = 0; i < tp_num_; i++) {
       std::vector<int> new_blocks;
       env_simulator_->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(i)->AllocateBlocks(adding_block_num,
@@ -425,7 +441,8 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
   int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num);
+  size_t splitfuse_token_num = 0;
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, splitfuse_token_num);
   FixPrefixBatchScheduler batch_scheduler(test_case.GetEnvSimulator(), prefix_block_num * block_token_num, device_num);
   test_case.SetBatchScheduler(&batch_scheduler);
   test_case.RunTestNoSwapTriggered();

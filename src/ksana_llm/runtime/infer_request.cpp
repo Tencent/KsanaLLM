@@ -70,7 +70,7 @@ std::string InferRequest::ToString(bool print_details) const {
       << ", kv_cached_token_num:" << kv_cached_token_num << ", prefix_cache_len:" << prefix_cache_len
       << ", input_tokens_size:" << input_tokens.size() << ", output_tokens_size:" << output_tokens.size()
       << ", forwarding_tokens_size:" << forwarding_tokens.size() << ", draft_tokens_size:" << draft_tokens.size()
-      << ", accepted_tokens_size:" << accepted_tokens.size() << ", generated_token:" << generated_token
+      << ", accepted_tokens_size:" << accepted_tokens.size() << ", generated_token_size:" << generated_tokens.size()
       << PrintKVBlockIds(print_details) << ", swap_pending:" << swap_pending << ", finished:" << finished
       << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString() << " ) ";
   return oss.str();
@@ -113,6 +113,36 @@ void InferRequest::Notify() {
   if (step_waiter) {
     step_waiter->Notify();
   }
+}
+
+const std::vector<int> &InferRequest::GetInflightSequence() const { return forwarding_tokens; }
+
+size_t InferRequest::GetInflightSequenceLen() const { return forwarding_tokens.size(); }
+
+size_t InferRequest::GetInflightQueryLen() const { return forwarding_tokens.size() - kv_cached_token_num; }
+
+size_t InferRequest::GetInflightSamplingTokenNum() const { return sampling_token_num; }
+
+size_t InferRequest::GetPlanningSequenceLen() const {
+  if (planning_workload_.prefill_token_num > 0) {
+    return planning_workload_.prefill_start_offset + planning_workload_.GetTokenNum();
+  }
+  // Decoding
+  if (inflight_task_.IsEmpty()) {
+    return forwarding_tokens.size() + planning_workload_.GetTokenNum();
+  } else {
+    return forwarding_tokens.size() + inflight_task_estimated_generated_token_num_ +
+           inflight_task_estimated_draft_token_num_ + planning_workload_.GetTokenNum();
+  }
+}
+
+size_t InferRequest::GetPlanningQueryLen() const { return planning_workload_.GetTokenNum(); }
+
+size_t InferRequest::GetPlanningSamplingTokenNum() const { return planning_workload_.sampling_token_num; }
+
+void InferRequest::SetKvCachedTokenNum(size_t num) {
+  kv_cached_token_num = num;
+  prefix_cache_len = num;
 }
 
 void InferRequest::NotifyStep() {
@@ -239,4 +269,162 @@ void AppendFlatKVCacheBlkIds(const uint32_t layer_num, const std::vector<std::ve
   }
 }
 #endif
+
+void InferRequest::ResetPrefillingTokens() {
+  infer_stage = InferStage::kContext;
+  prefilling_tokens_ = output_tokens;
+  kv_cached_token_num = 0;
+  step = 0;
+  suggested_draft_num = 0;
+  prefix_cache_len = 0;
+  remaining_workload_.Reset();
+  remaining_workload_.prefill_token_num = prefilling_tokens_.size();
+
+  // Assumption: if logits_custom_length > 0, then sampling_token_num = logits_custom_length
+  //             because user asked to generate logits for a specific number of tokens
+  //             In runtime implementation, sampling_token_num is used to determine the number of logits to generate
+  remaining_workload_.sampling_token_num = std::max(kStepGenerateTokenNum, logits_custom_length);
+
+  planning_workload_ = remaining_workload_;
+}
+
+void InferRequest::SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num) {
+  KLLM_CHECK(!inflight_task_.IsEmpty());
+  inflight_task_estimated_generated_token_num_ = generated_token_num;
+  inflight_task_estimated_draft_token_num_ = draft_token_num;
+}
+
+void InferRequest::SetRemainingWorkload(const ScheduleTaskWorkload &workload) { remaining_workload_ = workload; }
+
+void InferRequest::SetPlanningWorkload(const ScheduleTaskWorkload &workload) { planning_workload_ = workload; }
+
+void InferRequest::SetPlanningTask() {
+  KLLM_CHECK(planning_task_.IsEmpty());
+  planning_task_.workload = planning_workload_;
+
+  KLLM_CHECK(remaining_workload_.prefill_token_num >= planning_workload_.prefill_token_num);
+  remaining_workload_.prefill_token_num -= planning_workload_.prefill_token_num;
+  remaining_workload_.prefill_start_offset += planning_workload_.prefill_token_num;
+  remaining_workload_.generated_token_num = 0;
+  remaining_workload_.draft_token_num = 0;
+  KLLM_CHECK((remaining_workload_.prefill_token_num + remaining_workload_.prefill_start_offset) ==
+             prefilling_tokens_.size());
+  planning_workload_.Reset();
+}
+
+void InferRequest::UpdateAfterInflightTaskFinished() {
+  output_mutex.lock();
+  if (inflight_task_.workload.draft_token_num > 0) {
+    // replace draft tokens with accepted tokens.
+    forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
+    output_tokens.insert(output_tokens.end(), forwarding_tokens.end() - accepted_tokens.size(),
+                         forwarding_tokens.end());
+    // forwarding_tokens.insert(forwarding_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+    // output_tokens.insert(output_tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+    accepted_tokens.clear();
+  }
+  // current token has kv_cache
+  kv_cached_token_num = forwarding_tokens.size();
+
+  if (generated_tokens.size() > 0) {
+    // append new tokens to output_tokens
+    output_tokens.insert(output_tokens.end(), generated_tokens.begin(), generated_tokens.end());
+  }
+  // GenerationController makes sure eos only appears at the end of accepted_tokens + generated_tokens
+  if (std::find(sampling_config.stop_token_ids.begin(), sampling_config.stop_token_ids.end(), output_tokens.back()) !=
+      sampling_config.stop_token_ids.end()) {
+    KLLM_LOG_DEBUG << "req " << req_id << " finished. output_tokens.size=" << output_tokens.size()
+                   << ", eos token=" << output_tokens.back();
+    is_eos_generated_ = true;
+  }
+  output_mutex.unlock();
+
+  // If task is prefill task and not the last step, drop draft_tokens.
+  // generated_tokens should be empty.
+  if (inflight_task_.workload.prefill_token_num > 0 &&
+      (inflight_task_.workload.prefill_token_num + inflight_task_.workload.prefill_start_offset <
+       prefilling_tokens_.size())) {
+    assert(generated_tokens.size() == 0);
+    draft_tokens.clear();
+  }
+  // generated token and draft token are new workload to be processed
+  remaining_workload_.generated_token_num = generated_tokens.size();
+  remaining_workload_.draft_token_num = draft_tokens.size();
+
+  // Adjust planning workload for scheduling
+  assert(!(remaining_workload_.prefill_token_num > 0 &&
+           (remaining_workload_.generated_token_num > 0 || remaining_workload_.draft_token_num > 0)));
+  planning_workload_.Reset();
+  if (remaining_workload_.prefill_token_num > 0) {
+    planning_workload_.prefill_token_num = remaining_workload_.prefill_token_num;
+  } else {
+    planning_workload_.generated_token_num = generated_tokens.size();
+    planning_workload_.draft_token_num = draft_tokens.size();
+  }
+}
+
+void InferRequest::LaunchPlanningTask() {
+  KLLM_CHECK(!planning_task_.IsEmpty());
+  KLLM_CHECK(inflight_task_.IsEmpty());
+  assert(planning_task_.workload.GetTokenNum() > 0);
+
+  inflight_task_ = planning_task_;
+  planning_task_.Reset();
+  SetKvCachedTokenNum(forwarding_tokens.size());
+  if (inflight_task_.workload.prefill_token_num > 0) {
+    size_t forwarded_token_num = forwarding_tokens.size();
+    if (forwarded_token_num == inflight_task_.workload.prefill_start_offset) {
+      forwarding_tokens.insert(
+          forwarding_tokens.end(), prefilling_tokens_.begin() + forwarded_token_num,
+          prefilling_tokens_.begin() + forwarded_token_num + inflight_task_.workload.prefill_token_num);
+    } else {
+      // Prefix cache hit
+      forwarding_tokens.clear();
+      forwarding_tokens.insert(forwarding_tokens.end(), prefilling_tokens_.begin(),
+                               prefilling_tokens_.begin() + inflight_task_.workload.prefill_start_offset +
+                                   inflight_task_.workload.prefill_token_num);
+      SetKvCachedTokenNum(inflight_task_.workload.prefill_start_offset);
+    }
+
+  } else {
+    auto merged_draft_tokens = draft_tokens.GetDraftTokens();
+
+    size_t resource_ready_token_num =
+        inflight_task_.workload.generated_token_num + inflight_task_.workload.draft_token_num;
+    KLLM_CHECK(generated_tokens.size() <= resource_ready_token_num);
+    forwarding_tokens.insert(forwarding_tokens.end(), generated_tokens.begin(), generated_tokens.end());
+
+    resource_ready_token_num -= generated_tokens.size();
+    size_t draft_token_num = std::min(resource_ready_token_num, merged_draft_tokens.size());
+    forwarding_tokens.insert(forwarding_tokens.end(), merged_draft_tokens.begin(),
+                             merged_draft_tokens.begin() + draft_token_num);
+
+    // Change inflight_task_ workload to real workload
+    inflight_task_.workload.generated_token_num = generated_tokens.size();
+    inflight_task_.workload.draft_token_num = draft_token_num;
+    inflight_task_.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
+    if (draft_token_num < merged_draft_tokens.size()) {
+      draft_tokens.TruncDraft(draft_token_num);
+    }
+  }
+  sampling_token_num = inflight_task_.workload.sampling_token_num;
+  forwarding_tokens_draft_num = inflight_task_.workload.draft_token_num;
+
+  assert(inflight_task_.workload.GetTokenNum() > 0);
+  assert(forwarding_tokens.size() > kv_cached_token_num);
+}
+
+std::string InferRequest::ScheduleStateToStr() const {
+  std::stringstream ss;
+  ss << " schedule_state={ req_id=" << req_id << ", inflight_task_=" << inflight_task_.workload.ToString()
+     << ", planning_task_=" << planning_task_.workload.ToString()
+     << ", remaining_workload_=" << remaining_workload_.ToString()
+     << ", planning_workload_= " << planning_workload_.ToString()
+     << ", forwarding_tokens.size=" << forwarding_tokens.size() << ", generated_tokens=" << Vector2Str(generated_tokens)
+     << ", accepted_tokens=" << Vector2Str(accepted_tokens)
+     << ", draft_tokens=" << Vector2Str(draft_tokens.GetDraftTokens())
+     << ", output_tokens.size=" << output_tokens.size() << ", is_eos_generated=" << is_eos_generated_ << " }";
+  return ss.str();
+}
+
 }  // namespace ksana_llm

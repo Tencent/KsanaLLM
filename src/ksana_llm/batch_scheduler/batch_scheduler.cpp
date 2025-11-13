@@ -33,9 +33,11 @@
 namespace ksana_llm {
 
 BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
+                               bool always_return_launchable_req,
                                std::vector<std::shared_ptr<ModelInstance>>& model_instances)
     : batch_scheduler_config_(batch_scheduler_config),
       dp_num_(runtime_config.parallel_basic_config.attn_data_parallel_size),
+      always_return_launchable_req_(always_return_launchable_req),
       model_instances_(model_instances) {
   // Config validation.
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_step_token_num >= batch_scheduler_config_.max_token_len,
@@ -76,12 +78,9 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
     }
     dp_waiting_reqs_[i].reserve(batch_scheduler_config_.max_waiting_queue_len);
   }
-  // Need different req for every batch?
-  std::shared_ptr<Environment> env = Singleton<Environment>::GetInstance();
-  ExpertParallelConfig ep_config;
-  env->GetExpertParallelConfig(ep_config);
 
-  if (ep_config.expert_world_size > 1) {
+  // Create mock request to make sure there are always launchable requests.
+  if (always_return_launchable_req_) {
     CreateMockReq(runtime_config, mock_request_group_);
     if (mock_request_group_.size() >= 1) {
       for (int i = 0; i < pp_batch_num_; i++) {
@@ -97,13 +96,9 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   }
 }
 
-BatchScheduler::~BatchScheduler() {
-  threadpool_->Stop();
-}
+BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 
-void BatchScheduler::Stop() {
-  terminating_ = true;
-}
+void BatchScheduler::Stop() { terminating_ = true; }
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
   KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
@@ -149,7 +144,7 @@ bool BatchScheduler::IsIdle(size_t multi_batch_id) {
   for (auto& dp_batch_states : batch_states_) {
     auto& batch_state = dp_batch_states[multi_batch_id];
     std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
-    batch_state_queue_empty = batch_state_queue_empty && batch_state->swapped_queue.empty() &&
+    batch_state_queue_empty = batch_state_queue_empty && batch_state->decoding_queue.empty() &&
                               batch_state->waiting_queue.empty() && batch_state->transfer_queue.empty();
   }
 
@@ -159,19 +154,7 @@ bool BatchScheduler::IsIdle(size_t multi_batch_id) {
 void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
   while (IsIdle(multi_batch_id) && !terminating_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    {
-      std::lock_guard<std::mutex> guard(schedule_mutex_);
-      // Update requests in swapin/swapout pending queue
-      for (size_t i = 0; i < dp_num_; i++) {
-        auto batch_state = batch_states_[i][multi_batch_id];
-        if (batch_state->swapin_pending_requests_.empty() && batch_state->swapout_pending_requests_.empty()) {
-          continue;
-        }
-        schedule_strategies_[i]->SetBatchState(batch_state);
-        schedule_strategies_[i]->UpdateSwapPendingRequests();
-      }
-      ReportTotalState();
-    }
+    ReportTotalState();
   }
 }
 
@@ -195,6 +178,8 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
   }
 
   for (const auto& infer_request : infer_request_group) {
+    infer_request->output_tokens = infer_request->input_tokens;
+    infer_request->ResetPrefillingTokens();
     waiting_reqs_.push_back(infer_request);
   }
   return Status();
@@ -256,7 +241,6 @@ void BatchScheduler::BalanceWaitingReqs() {
     dp_waiting_reqs.clear();
 
     size_t running_size = 0;
-    size_t swapped_size = 0;
     size_t waiting_size = 0;
     for (int j = 0; j < pp_batch_num_; j++) {
       auto& batch_state = batch_states_[i][j];
@@ -264,11 +248,10 @@ void BatchScheduler::BalanceWaitingReqs() {
 
       // Note(TJ): 最好可以使用每个req的tokens总和
       running_size += batch_state->schedule_output->running_reqs.size();
-      swapped_size += batch_state->swapped_queue.size();
       waiting_size += batch_state->waiting_queue.size();
     }
     // 计算负载，根据优先级分配不同权重，数值越低，权重越低
-    workload[i] = running_size * 0.7f + waiting_size + swapped_size * 1.6f;
+    workload[i] = running_size * 0.7f + waiting_size;
   }
 
   balance_reqs_algo_->BalanceReqs(workload, waiting_reqs_with_index, dp_waiting_reqs_);
@@ -288,7 +271,6 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, s
   REPORT_METRIC("batch_scheduler_waiting_size_" + dp_idx_str, batch_state->waiting_queue.size());
   REPORT_METRIC("batch_scheduler_batch_size", batch_size);
   REPORT_METRIC("batch_scheduler_waiting_size", batch_state->waiting_queue.size());
-  REPORT_METRIC("batch_scheduler_swapped_size", batch_state->swapped_queue.size());
 
   if (batch_size > 0) {
     size_t token_num = 0;
@@ -303,17 +285,21 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, s
   }
 }
 
+void BatchScheduler::UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup& generation_output) {
+  std::lock_guard<std::mutex> guard(schedule_mutex_);
+  // Update running requests before workload balance
+  for (size_t i = 0; i < dp_num_; i++) {
+    schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
+    schedule_strategies_[i]->UpdateRunningRequests(generation_output.reqs[i]);
+  }
+}
+
 std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch_id) {
   PROFILE_EVENT_SCOPE(Schedule_, fmt::format("Schedule_{}", multi_batch_id));
   std::lock_guard<std::mutex> guard(schedule_mutex_);
 
   KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
   Singleton<LayerProgressTracker>::GetInstance()->ResetState();
-  // Update running requests before workload balance
-  for (size_t i = 0; i < dp_num_; i++) {
-    schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
-    schedule_strategies_[i]->UpdateRunningRequests();
-  }
 
   BalanceWaitingReqs();
 
@@ -321,8 +307,10 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
 
   std::vector<std::future<void>> futures;
   for (size_t i = 0; i < dp_num_; i++) {
-    futures.push_back(
-        threadpool_->Submit([this, i, multi_batch_id] { schedule_strategies_[i]->Schedule(dp_waiting_reqs_[i]); }));
+    futures.push_back(threadpool_->Submit([this, i, multi_batch_id] {
+      schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
+      schedule_strategies_[i]->Schedule(dp_waiting_reqs_[i]);
+    }));
   }
 
   for (auto& future : futures) {
@@ -341,12 +329,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
     total_dp_waiting_queue_size += dp_waiting_reqs_[i].size();
   }
 
-  // Add mock req when total_running_size == 0.
-  ExpertParallelConfig ep_config;
-  Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
-  KLLM_LOG_DEBUG << "expert_world_size: " << ep_config.expert_world_size
-                 << ", total_running_size: " << total_running_size;
-  if (ep_config.expert_world_size > 1 && total_running_size == 0) {
+  if (always_return_launchable_req_ && total_running_size == 0) {
     for (size_t i = 0; i < dp_num_; i++) {
       auto& batch_state = batch_states_[i][multi_batch_id];
       if (!batch_state->mock_queue.empty()) {
@@ -382,7 +365,6 @@ void BatchScheduler::ReportTotalState() {
 
   size_t total_running_size = 0;
   size_t total_waiting_size = 0;
-  size_t total_swapped_size = 0;
   size_t total_transfer_size = 0;
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
@@ -395,7 +377,6 @@ void BatchScheduler::ReportTotalState() {
         std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
         total_running_size += batch_state->schedule_output->running_reqs.size();
         total_waiting_size += batch_state->waiting_queue.size();
-        total_swapped_size += batch_state->swapped_queue.size();
         total_transfer_size += batch_state->transfer_queue.size();
       }
     }
@@ -411,27 +392,8 @@ void BatchScheduler::ReportTotalState() {
   }
   size_t total_block_num = total_used_blocks_num + total_free_blocks_num;
   KLLM_LOG_INFO << " running_req_num=" << total_running_size << ", waiting_req_num=" << total_waiting_size
-                << ", swapped_req_num=" << total_swapped_size << ", transfer_req_num=" << total_transfer_size
-                << ", free_block_num=" << total_free_blocks_num
+                << ", transfer_req_num=" << total_transfer_size << ", free_block_num=" << total_free_blocks_num
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "%";
-}
-
-void BatchScheduler::NotifyAsyncFinishedRequests() {
-  // Process async finished requests for all strategies
-  for (size_t i = 0; i < dp_num_; i++) {
-    auto continuous_strategy = std::dynamic_pointer_cast<ContinuousBatchingStrategy>(schedule_strategies_[i]);
-    if (continuous_strategy) {
-      continuous_strategy->NotifyAsyncFinishedRequests();
-    }
-  }
-}
-
-void BatchScheduler::NotifyAsyncRecomputedRequests() {
-  for (auto &strategy : schedule_strategies_) {
-    if (auto continuous_batching_strategy = std::dynamic_pointer_cast<ContinuousBatchingStrategy>(strategy)) {
-      continuous_batching_strategy->NotifyAsyncRecomputedRequests();
-    }
-  }
 }
 
 Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,

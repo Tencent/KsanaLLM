@@ -10,8 +10,9 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
-#include <filesystem>
-#include <memory>
+#include <vector>
+#include <cassert>
+
 #include "loguru.hpp"
 
 namespace ksana_llm {

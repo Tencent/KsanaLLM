@@ -17,18 +17,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   virtual ~ContinuousBatchingStrategy() {}
 
   // Update cache manager, process finished and timeout requests.
-  virtual void UpdateRunningRequests() override;
+  virtual void UpdateRunningRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs) override;
 
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) override;
-
-  virtual void UpdateSwapPendingRequests() override;
-
-  // Process delayed request completion notifications
-  void NotifyAsyncFinishedRequests();
-
-  // This is to avoid simultaneous scheduling and Step operations on InferRequest after enabling asynchronous
-  // scheduling.
-  void NotifyAsyncRecomputedRequests();
 
  private:
   // True if request timeout.
@@ -40,54 +31,34 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Determine the number of draft_tokens to generate in the current step based on the scheduling status.
   void DetermineDraftNum(std::shared_ptr<InferRequest> req);
 
+  // In asynchronous mode, inflighting request may be in other queues.
+  void RemoveRequestFromBatchState(const std::shared_ptr<InferRequest> &req);
+
+  void EstimateRequestPlanningWorkload(std::shared_ptr<InferRequest> req);
+
   // Reset the req and cache status, destroy swap or finish req
   // If terminated is true, the request is terminated, and will notify to stop this request.
   // If is_swap_req is true, the request is a swap request, otherwise it is a normal request.
-  void ResetRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req, bool terminated);
+  void ResetRequest(std::shared_ptr<InferRequest> req, Status ret_status, bool terminated);
 
   // Destroy the request and add it to the begining of waiting queue to recompute.
-  std::vector<std::shared_ptr<InferRequest>>::iterator RecomputeRequest(
-      std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req = false);
-
-  Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req, bool is_swap_req);
-
-  void HandleRecomputeRequest(std::shared_ptr<InferRequest> req, bool is_swap_req);
+  void RecomputeRequest(std::shared_ptr<InferRequest> req);
+  void SyncRecomputeRequest(std::shared_ptr<InferRequest> req);
+  Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req);
+  bool ProcessAsyncRecomputeRequest(std::shared_ptr<InferRequest> &req);
 
   // Set the finish status of the request to finished, timeout or aborted.
-  void StopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
-
-  void AsyncStopRequest(std::shared_ptr<InferRequest> req, Status req_status, bool is_swap_req);
-
-  std::vector<std::shared_ptr<InferRequest>>::iterator AsyncRecomputeRequest(
-      std::vector<std::shared_ptr<InferRequest>>::iterator &it, bool is_swap_req = false);
+  void StopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
+  void SyncStopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
+  bool ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req);
 
   // Check the running queue to determine whether it exceeds the max_step_token_num.
   // return [step_token_with_kv_cache, step_token_without_kv_cache]
-  std::pair<size_t, size_t> CheckRunningQueueStepTokens();
-
-  // Calculate how many blocks to be allocated.
-  size_t GetRunningRequestsBlockNeed();
-
-  // Try to allocate request blocks. If failed, try the allocation again after all swapout finished.
-  Status AllocateRequestBlocksWithRetry(std::shared_ptr<InferRequest> req, size_t &total_needed_block_num,
-                                        size_t &step_block_num, bool &allocate_block_succ, bool &skip_swapout_check);
-
-  /**
-   * Processes a request to determine the appropriate number of tokens to split or fuse based on the current
-   * batching strategy configuration. This function adjusts the number of output tokens in the request to match
-   * the calculated split or fuse token count, and updates the shared and unique block counts accordingly.
-   *
-   * The function aims to optimize the processing of requests by dynamically adjusting the number of tokens
-   * to be processed together, based on the configured thresholds and the current state of the request and
-   * batch scheduler.
-   */
-  bool ProcessSplitFuseToken(std::shared_ptr<InferRequest> req, size_t &shared_block_num, size_t &unique_block_num,
-                             size_t &shared_token_num, const size_t step_token_without_kv_cache_num,
-                             const size_t decode_request_num);
+  std::pair<size_t, size_t> CheckRunningQueueStepTokens(const std::vector<std::shared_ptr<InferRequest>> &checking_reqs,
+                                                        std::vector<std::shared_ptr<InferRequest>> &passed_reqs);
 
   // Schedule the running/swapped/waiting queue.
-  void ProcessRunningQueue();
-  void ProcessSwappedQueue();
+  void ProcessDecodingQueue();
   void ProcessWaitingQueue();
   void ProcessTransferQueue();
   /**
@@ -117,13 +88,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   void AddTransferMeta(std::vector<std::shared_ptr<InferRequest>> &queue);
 
  private:
-  // Wait pending swap out/in requests done, and merge these requests.
-  // If blocking is false, the function will return immediately even no request finished.
-  // If early_stop is false, the function return until all requests finished.
-  Status MergePendingSwapinRequests(bool blocking, bool early_stop);
-  Status MergePendingSwapoutRequests(bool blocking, bool early_stop);
-
   size_t GetMaxRequiredTokenNum(const size_t token_num) const;
+
+  void ReportRequestProgressInfo(const std::shared_ptr<InferRequest> req);
 
   friend class ContinuousBatchingStrategyTest;  // for test
   ConnectorConfig connector_config_;
@@ -143,9 +110,6 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Current active dp group id, only ranks where (active_dp_group_id % world_size == rank % world_size)
   // will be scheduled
   size_t active_dp_group_id_ = 0;
-
-  std::vector<std::shared_ptr<InferRequest>> async_destroyed_reqs_;
-  std::vector<std::pair<std::shared_ptr<InferRequest>, bool>> async_recomputed_reqs_;
 };
 
 }  // namespace ksana_llm

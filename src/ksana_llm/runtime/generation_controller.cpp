@@ -43,29 +43,42 @@ void GenerationController::UpdateGenerationState(std::vector<std::shared_ptr<Inf
 
 void GenerationController::UpdateGrammarState(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   for (auto& req : reqs) {
-    if (!req->structured_generator || req->sampling_result_tokens.empty()) {
+    req->generated_tokens.clear();
+    // if no sampling result or is chunked prefill task, don't generate
+    // chunked prefill task has sampling_token_num=1 to avoid empty tensor in LmHead()
+    if (req->sampling_result_tokens.empty() || (req->forwarding_tokens.size() < req->output_tokens.size())) {
       continue;
     }
 
-    if (req->structured_generator->IsTerminated()) {
-      // Note: The request termination should be handled by the caller
-      KLLM_LOG_DEBUG << "Structured generation completed for request " << req->req_id;
-    }
-
     int token_id = req->sampling_result_tokens.front();
-    bool accepted = req->structured_generator->AcceptToken(token_id);
+    if (!req->structured_generator) {
+      req->generated_tokens.push_back(token_id);
+    } else {
+      if (req->structured_generator->IsTerminated()) {
+        // Note: The request termination should be handled by the caller
+        KLLM_LOG_DEBUG << "Structured generation completed for request " << req->req_id;
+      }
 
-    if (!accepted) {
-      // In production, this should rarely happen if the mask was applied correctly
-      KLLM_LOG_WARNING << "Structured constraint rejected token " << token_id << " for request " << req->req_id;
+      int token_id = req->sampling_result_tokens.front();
+      bool accepted = req->structured_generator->AcceptToken(token_id);
+
+      if (!accepted) {
+        // In production, this should rarely happen if the mask was applied correctly
+        KLLM_LOG_WARNING << "Structured constraint rejected token " << token_id << " for request " << req->req_id;
+      }
+      req->generated_tokens.push_back(token_id);
     }
-    req->generated_token = token_id;
   }
 }
 
 void GenerationController::FilterDraftTokens(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   std::vector<std::pair<size_t, size_t>> hit_count;  // hit_num, draft_num
   for (auto& req : reqs) {
+    req->accepted_tokens.clear();
+    if (req->draft_tokens.size() == 0) {
+      continue;
+    }
+
     if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size()) {
       KLLM_LOG_ERROR << fmt::format(
           "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, trie_draft_tokens.size = {}",
@@ -107,6 +120,10 @@ void GenerationController::FilterDraftTokens(std::vector<std::shared_ptr<InferRe
       }
     }
 
+    if (draft_hit_num == 0) {
+      continue;
+    }
+
     req->accepted_tokens.swap(draft_tokens);
     req->accepted_tokens.resize(draft_hit_num);
     // Delete logprobs of tokens that were not accepted.
@@ -114,9 +131,12 @@ void GenerationController::FilterDraftTokens(std::vector<std::shared_ptr<InferRe
     for (size_t i = 0; i < unaccepted_num; ++i) {
       if (!req->logprobs.empty()) req->logprobs.pop_back();
     }
-    req->generated_token = req->sampling_result_tokens[draft_hit_num];  // only kStepGenerateTokenNum(1) token now
+
+    // replace generated_token with draft token's next token
+    req->generated_tokens.clear();
+    req->generated_tokens.push_back(req->sampling_result_tokens[draft_hit_num]);
     req->sampling_result_tokens.clear();
-    req->draft_tokens.clear();
+    // req->draft_tokens.clear();
   }
 
   if (hit_count.empty()) {

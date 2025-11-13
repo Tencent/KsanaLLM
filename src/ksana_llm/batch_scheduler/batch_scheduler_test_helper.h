@@ -507,6 +507,7 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
   std::vector<int> dummy_tokens;
   GenerateFakeTokens(dummy_tokens, input_token_num, req->input_tokens, false, seeds);
   req->output_tokens = req->input_tokens;
+  req->sampling_config.stop_token_ids = {GetFakeEndId()};
 
   // 如果调用方需要，将 ksana_python_input 返回
   if (python_input_out) {
@@ -519,6 +520,10 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
     infer_req->sampling_config.stop_token_ids.push_back(GetFakeEndId());
     infer_req->kv_cache_blocks.resize(tp_num);
     infer_req->block_token_num = block_num;
+
+    KLLM_LOG_DEBUG << "req_id=" << infer_req->req_id << ", input_tokens.size()=" << infer_req->input_tokens.size()
+                   << " " << Vector2Str(infer_req->input_tokens) << ", " << infer_req->ScheduleStateToStr();
+
     infer_req_list.push_back(infer_req);
   }
   return infer_req_list;
@@ -537,53 +542,57 @@ class BatchSchedulerEnvironmentSimulator {
 
   void RunAStep(std::vector<std::shared_ptr<InferRequest>>& scheduled_reqs) {
     for (auto req : scheduled_reqs) {
-      // Note: Not for chunked prefill or speculative decoding
-      KLLM_CHECK_WITH_INFO(req->output_tokens.size() == req->forwarding_tokens.size(),
-                           FormatStr("output_tokens.size=%d is not equal to forwarding_tokens.size=%d.",
-                                     req->output_tokens.size(), req->forwarding_tokens.size()));
+      // Draft token not supported
+      KLLM_CHECK_WITH_INFO(req->draft_tokens.size() == 0,
+                           FormatStr("draft_tokens.size=%d not supported.", req->draft_tokens.size()));
       // Generate kv cache content
       // This operation should be done before generation because kv cache is
       // writen during generating next token
       KLLM_LOG_DEBUG << "RunAStep:" << req;
       // Generate kv cache for not cached tokens
-      for (size_t i = req->kv_cached_token_num; i < req->output_tokens.size(); ++i) {
-        block_allocator_group_->RecordGeneratedToken(req, i, req->output_tokens[i]);
+      for (size_t i = req->kv_cached_token_num; i < req->forwarding_tokens.size(); ++i) {
+        block_allocator_group_->RecordGeneratedToken(req, i, req->forwarding_tokens[i]);
       }
 
       // Generate a token
       int output_token = GetEndId();
       KLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) != req_output_num_map_.end(),
                            FormatStr("Req id %d is not exist in req_output_num_map.", req->req_id));
-      if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(req_output_num_map_[req->req_id] - 1)) {
-        std::vector<int> kv_contents;
-        // Generate next token based on recorded kv cache content
-        // If memory operations break kv cache content, generation results will be wrong
-        block_allocator_group_->CollectKvCacheContent(req, kv_contents);
-        GenerateAToken(kv_contents, output_token,
-                       GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
+      if (req->forwarding_tokens.size() >= req->output_tokens.size()) {
+        // Generate new tokens
+        if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(req_output_num_map_[req->req_id] - 1)) {
+          std::vector<int> kv_contents;
+          // Generate next token based on recorded kv cache content
+          // If memory operations break kv cache content, generation results will be wrong
+          block_allocator_group_->CollectKvCacheContent(req, kv_contents);
+          GenerateAToken(kv_contents, output_token,
+                         GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
 
-        std::ostringstream ss;
-        ss << "GenerateToken " << *req << ", new_generate_token:" << output_token
-           << ", kv_contents size: " << kv_contents.size() << ", kv not equal {";
-        for (size_t i = 0; i < kv_contents.size(); i++) {
-          EXPECT_EQ(req->forwarding_tokens[i], kv_contents[i]);
-          if (req->forwarding_tokens[i] != kv_contents[i]) {
-            int block_offset = i / block_allocator_group_->block_token_num_;
-            int offset_in_block = i % block_allocator_group_->block_token_num_;
-            auto& block_list = req->kv_cache_blocks[0];
-            int block_idx = block_list[block_offset];
-            ss << "kv_cache_not_equal token idx:" << i << ": tokens(" << req->output_tokens[i] << "), fwd("
-               << req->forwarding_tokens[i] << ") vs cache(" << kv_contents[i] << "), block_offset:" << block_offset
-               << ", offset_in_block:" << offset_in_block << ", block_idx:" << block_idx << ", ";
-            std::cout << ss.str() << std::endl;
+          std::ostringstream ss;
+          ss << "GenerateToken " << *req << ", new_generate_token:" << output_token
+             << ", kv_contents size: " << kv_contents.size() << ", kv not equal {";
+          for (size_t i = 0; i < kv_contents.size(); i++) {
+            EXPECT_EQ(req->forwarding_tokens[i], kv_contents[i]);
+            if (req->forwarding_tokens[i] != kv_contents[i]) {
+              int block_offset = i / block_allocator_group_->block_token_num_;
+              int offset_in_block = i % block_allocator_group_->block_token_num_;
+              auto& block_list = req->kv_cache_blocks[0];
+              int block_idx = block_list[block_offset];
+              ss << "kv_cache_not_equal token idx:" << i << ": tokens(" << req->output_tokens[i] << "), fwd("
+                 << req->forwarding_tokens[i] << ") vs cache(" << kv_contents[i] << "), block_offset:" << block_offset
+                 << ", offset_in_block:" << offset_in_block << ", block_idx:" << block_idx << ", ";
+              std::cout << ss.str() << std::endl;
+            }
           }
+          ss << "} ";
+          KLLM_LOG_DEBUG << ss.str();
         }
-        ss << "} ";
-        KLLM_LOG_DEBUG << ss.str();
+        req->generated_tokens = {output_token};
+      } else {
+        // Chunked prefilling, no generation.
+        req->generated_tokens.clear();
       }
       req->sampling_result_tokens.clear();
-      req->sampling_result_tokens.emplace_back(output_token);
-      req->generated_token = output_token;
     }
     // Assumption: A step is slower than swapout
     std::this_thread::sleep_for(std::chrono::microseconds(2));
@@ -625,7 +634,12 @@ class BatchSchedulerEnvironmentSimulator {
         std::cerr << "check size fail " << *req << std::endl;
       }
       EXPECT_EQ(expect_output_tokens.size(), req->input_tokens.size() + expected_generate_output_token_num);
-      for (size_t i = 0; i < req->output_tokens.size(); i++) {
+      size_t check_num = req->output_tokens.size();
+      if (expect_output_tokens.size() < req->output_tokens.size()) {
+        check_num = expect_output_tokens.size() + 1;
+        KLLM_LOG_DEBUG << "output_tokens.size()=" << req->output_tokens.size() << ", set check_num=" << check_num;
+      }
+      for (size_t i = 0; i < check_num; i++) {
         EXPECT_EQ(expect_output_tokens[i], req->output_tokens[i]);
         if (expect_output_tokens[i] != req->output_tokens[i]) {
           std::cout << "check token fail req " << *req << ", index = " << i << std::endl;

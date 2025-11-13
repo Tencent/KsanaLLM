@@ -47,8 +47,10 @@ class CacheManagerInterface {
 
   // Check the shared and unique block num of specific request, the token number must be enough for next generation.
   // The unique_block_num will always large than 0.
+  // check_token_num is the token number need to check. It is always equal or less than input_token_ids.size().
+  // check_token_num is less than input_token_ids.size() during chunked prefilling.
   virtual Status GetRequestPrefixBlockNumber(int64_t req_id, const std::vector<int>& input_token_ids,
-                                             size_t& shared_block_num, size_t& unique_block_num,
+                                             size_t check_token_num, size_t& shared_block_num, size_t& unique_block_num,
                                              size_t& shared_token_num) = 0;
 
   // Allocate new blocks for request, called only when req is running.
