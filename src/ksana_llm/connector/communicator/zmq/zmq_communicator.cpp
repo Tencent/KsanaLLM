@@ -51,22 +51,16 @@ void ZmqCommunicator::Shutdown() {
 
 Status ZmqCommunicator::Initialize() {
   // Get port number
-  int coordinator_port = config_.coordinator_port;
-  if (coordinator_port < 0) {
-    return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid coordinator port: " + std::to_string(coordinator_port));
+  std::string coordinator_addr = config_.coordinator_addr;
+  if (coordinator_addr.empty()) {
+    return Status(RetCode::RET_INVALID_ARGUMENT, "Invalid coordinator address: " + coordinator_addr);
   }
   running_ = true;
   // Start ZeroMQ socket and bind to port
   // Use raw pointer to avoid automatic context termination during shutdown
   zmq_ctx_ = std::make_unique<zmq::context_t>(1);
   socket_ = std::make_unique<zmq::socket_t>(*zmq_ctx_, zmq::socket_type::rep);
-  std::string interface;
-  std::string ip;
-  Status status = GetAvailableInterfaceAndIP(interface, ip);
-  if (!status.OK() || ip.empty()) {
-    return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Failed to get available IP address");
-  }
-  std::string bind_addr = "tcp://" + ip + ":" + std::to_string(coordinator_port);
+  std::string bind_addr = "tcp://" + coordinator_addr;
   socket_->bind(bind_addr);
   KLLM_LOG_INFO << "ZeroMQ REP socket bound to " << bind_addr;
   recv_thread_ = std::thread(&ZmqCommunicator::ReceiveLoop, this);

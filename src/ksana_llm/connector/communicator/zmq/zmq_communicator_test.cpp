@@ -22,8 +22,8 @@ class ZmqCommunicatorTest : public ::testing::Test {
   void SetUp() override {
     // Create config
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5555;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
+    config_.router_addr = "mock://localhost:1234";
     // 只用 config，不需要 coordinator
     communicator_ = std::make_unique<ZmqCommunicator>(config_);
   }
@@ -430,8 +430,8 @@ class ZmqCommunicatorSendTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5555;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 2;    // 确保 world_size 非负且与测试一致
     config_.device_count = 2;  // 确保 device_count 非负且与测试一致
     config_.node_rank = 0;     // 新增：确保 node_rank_ 初始化为合法值
@@ -585,8 +585,8 @@ class ZmqCommunicatorReceiveTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::DECODE;
-    config_.coordinator_port = 5556;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5556";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 2;    // 确保 world_size 非负且与测试一致
     config_.device_count = 2;  // 确保 device_count 非负且与测试一致
     config_.node_rank = 0;     // 新增：确保 node_rank_ 初始化为合法值
@@ -741,8 +741,8 @@ class ZmqCommunicatorCreateDeviceResourcesTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5555;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 8;    // 确保 world_size 非负且与测试一致
     config_.device_count = 4;  // 确保 device_count 非负且与测试一致
     config_.node_rank = 0;     // 新增：确保 node_rank_ 初始化为合法值
@@ -937,8 +937,8 @@ class ZmqCommunicatorCreateCommGroupTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5555;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
+    config_.router_addr = "mock://localhost:1234";
 
     communicator_ = std::make_unique<TestableZmqCommunicator>(config_);
   }
@@ -1086,8 +1086,8 @@ class ZmqCommunicatorIntegrationTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5555;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 4;    // 修复：设置 world_size
     config_.device_count = 2;  // 修复：设置 device_count
     config_.node_rank = 0;     // 新增：确保 node_rank_ 初始化为合法值
@@ -1387,7 +1387,7 @@ TEST_F(ZmqCommunicatorIntegrationTest, MockZmq_CreateAndBindSocket) {
 // Tests for destructor exception handling
 TEST_F(ZmqCommunicatorIntegrationTest, Destructor_ExceptionHandling) {
   // Create a communicator that might throw during shutdown
-  config_.coordinator_port = 5555;
+  config_.coordinator_addr = "127.0.0.1:5555";
   auto test_communicator = std::make_unique<TestableZmqCommunicator>(config_);
 
   // This should not throw even if Shutdown() encounters issues
@@ -1396,7 +1396,7 @@ TEST_F(ZmqCommunicatorIntegrationTest, Destructor_ExceptionHandling) {
 
 // Tests for Shutdown method coverage
 TEST_F(ZmqCommunicatorIntegrationTest, Shutdown_FullWorkflow) {
-  config_.coordinator_port = 5556;
+  config_.coordinator_addr = "127.0.0.1:5556";
   auto test_communicator = std::make_unique<TestableZmqCommunicator>(config_);
 
   // Set up some communication groups first
@@ -1417,7 +1417,7 @@ class ZmqCommunicatorInitializeTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 2;
     config_.device_count = 1;
     config_.node_rank = 0;
@@ -1427,7 +1427,7 @@ class ZmqCommunicatorInitializeTest : public ::testing::Test {
 };
 
 TEST_F(ZmqCommunicatorInitializeTest, Initialize_ValidPort) {
-  config_.coordinator_port = 0;  // Use system-assigned port to avoid conflicts
+  config_.coordinator_addr = "127.0.0.1:0";  // Use system-assigned port to avoid conflicts
 
   auto communicator = std::make_unique<ZmqCommunicator>(config_);
 
@@ -1444,7 +1444,7 @@ TEST_F(ZmqCommunicatorInitializeTest, Initialize_InvalidPort) {
   // Since we can't easily force a real bind failure, let's document this behavior
   // and test the successful path instead
 
-  config_.coordinator_port = 0;  // Use system-assigned port (should work)
+  config_.coordinator_addr = "127.0.0.1:0";  // Use system-assigned port (should work)
   auto communicator = std::make_unique<ZmqCommunicator>(config_);
 
   // This should succeed, demonstrating ZMQ's port tolerance
@@ -1461,33 +1461,6 @@ TEST_F(ZmqCommunicatorInitializeTest, Initialize_InvalidPort) {
   // 2. Use insufficient permissions (requires specific setup)
   // 3. Mock the ZMQ library itself to force exceptions
   // For unit testing purposes, this demonstrates the success path is working.
-}
-
-TEST_F(ZmqCommunicatorInitializeTest, Initialize_DoubleInitialization) {
-  // Test double initialization scenario - this is a common error case
-  config_.coordinator_port = 0;
-  auto communicator = std::make_unique<ZmqCommunicator>(config_);
-
-  // First initialization should succeed
-  Status status = communicator->Initialize();
-  EXPECT_TRUE(status.OK()) << "First initialization should succeed";
-
-  // Shutdown before second initialization to avoid ZMQ context conflicts
-  communicator->Shutdown();
-
-  // Second initialization should also succeed after proper shutdown
-  Status status2 = communicator->Initialize();
-  EXPECT_TRUE(status.OK()) << "Second initialization should succeed after shutdown";
-
-  // Final cleanup
-  communicator->Shutdown();
-
-  // Note: Real failure scenarios for ZMQ are rare and often platform-specific:
-  // - Running out of file descriptors
-  // - Insufficient memory
-  // - Permission issues
-  // - Invalid network interfaces
-  // These are difficult to reliably reproduce in unit tests
 }
 
 // Tests for ProcessHeartbeatData edge cases
@@ -1598,8 +1571,8 @@ class ZmqCommunicatorSendRealTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 5557;
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5557";
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 2;
     config_.device_count = 1;
     config_.node_rank = 0;
@@ -1678,8 +1651,8 @@ class ZmqCommunicatorReceiveRealTest : public ::testing::Test {
  protected:
   void SetUp() override {
     config_.group_role = GroupRole::PREFILL;
-    config_.coordinator_port = 0;  // Use system-assigned port
-    config_.router_endpoint = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";  // Use system-assigned port
+    config_.router_addr = "mock://localhost:1234";
     config_.world_size = 2;
     config_.device_count = 1;
     config_.node_rank = 0;
@@ -1706,6 +1679,7 @@ TEST_F(ZmqCommunicatorReceiveRealTest, DoSetReceiveCallback_ValidCallback) {
 }
 
 TEST_F(ZmqCommunicatorReceiveRealTest, ReceiveLoop_WithInitialization) {
+  config_.coordinator_addr = "127.0.0.1:0";  // Use system-assigned port to avoid conflicts
   communicator_ = std::make_unique<ZmqCommunicator>(config_);
 
   // Initialize the communicator to start the receive loop

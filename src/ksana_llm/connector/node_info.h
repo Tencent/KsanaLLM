@@ -47,11 +47,11 @@ struct KVNodeInfo {
   /** @brief Host address with port for inference (e.g. "127.0.0.1:8080") */
   std::string inference_addr = "127.0.0.1:8080";
 
-  /** @brief Port for coordinator service */
-  int coordinator_port = 13579;
+  /** @brief Address for coordinator service */
+  std::string coordinator_addr = "127.0.0.1:13579";
 
-  /** @brief Group name that this node belongs to */
-  std::string group_name;
+  /** @brief Cluster name that this node belongs to */
+  std::string cluster_name;
 
   /** @brief Role of this node (prefill or decode) */
   std::string group_role;

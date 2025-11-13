@@ -50,7 +50,7 @@ class ContinuousBatchingTest : public testing::Test {
       auto env = Singleton<Environment>::GetInstance();
       ConnectorConfig connector_config;
       connector_config.group_role = GroupRole::DECODE;
-      connector_config.router_endpoint = "127.0.0.1:13579";
+      connector_config.router_addr = "127.0.0.1:13579";
       env->SetConnectorConfigs(connector_config);
     }
     RuntimeConfig runtime_config;
@@ -104,7 +104,7 @@ class ContinuousBatchingTest : public testing::Test {
       auto env = Singleton<Environment>::GetInstance();
       ConnectorConfig connector_config;
       connector_config.group_role = GroupRole::NONE;
-      connector_config.router_endpoint = "127.0.0.1:13579";
+      connector_config.router_addr = "127.0.0.1:13579";
       env->SetConnectorConfigs(connector_config);
       BlockManagerConfig block_manager_config;
       env->SetBlockManagerConfig(block_manager_config);

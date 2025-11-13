@@ -459,7 +459,7 @@ class ScheduleConfigParser {
 
   Status GetConnectorConfigs(ConnectorConfig &connector_config) const {
     // 检查connector_config_是否已初始化 - group_role
-    if (connector_config_.group_role == GroupRole::NONE || connector_config_.router_endpoint.empty()) {
+    if (connector_config_.group_role == GroupRole::NONE || connector_config_.router_addr.empty()) {
       return Status(RET_CONFIG_NOT_FOUND, "Connector config is not initialized.");
     }
     connector_config = connector_config_;

@@ -175,7 +175,7 @@ Status NcclCommunicator::ProcessHeartbeatData(
           continue;
         }
       } else {
-        // 非主节点或非prefill角色不处理空ID组
+        // TODO(shawnding): 判断非主节点忽然变空需要清理历史链接。
         continue;
       }
     }

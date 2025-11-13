@@ -13,10 +13,8 @@ DefaultCoordinator::DefaultCoordinator(const ConnectorConfig& config, std::share
 }
 
 Status DefaultCoordinator::RegisterNode() {
-  const char* coordinator_port = std::getenv("KSANA_COORDINATOR_PORT");
-  node_info_.coordinator_port = coordinator_port ? std::stoi(coordinator_port) : config_.coordinator_port;
-
-  node_info_.group_name = config_.group_name;
+  node_info_.coordinator_addr = config_.coordinator_addr;
+  node_info_.cluster_name = config_.cluster_name;
   node_info_.group_role = GroupRoleToString(config_.group_role);
   node_info_.node_rank = config_.node_rank;
   node_info_.world_size = config_.world_size;
@@ -29,16 +27,9 @@ Status DefaultCoordinator::RegisterNode() {
   }
 
   if (config_.inference_addr.empty()) {
-    const char* infer_port = std::getenv("KSANA_HTTP_PORT");
-    auto inference_port = infer_port ? std::stoi(infer_port) : config_.inference_port;
-    node_info_.inference_addr = host_ip + ":" + std::to_string(inference_port);
+      KLLM_LOG_ERROR << "Inference address is empty";
   } else {
-    auto sep = config_.inference_addr.rfind(':');
-    if (sep != std::string::npos) {
-      host_ip = config_.inference_addr.substr(0, sep);
-      KLLM_LOG_INFO << "host_ip: " << host_ip << " port: " << config_.inference_addr.substr(sep + 1);
-    }
-    node_info_.inference_addr = config_.inference_addr;
+      node_info_.inference_addr = config_.inference_addr;
   }
   node_info_.devices = DeviceCollector::CollectDeviceInformation(config_.device_count, host_ip);
 

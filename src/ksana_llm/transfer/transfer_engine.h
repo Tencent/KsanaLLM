@@ -168,9 +168,9 @@ class TransferEngine {
   PipelineConfig pipeline_config_;
 
   // 张量并行大小
-  size_t tensor_parallel_size_ = 0;
+  size_t tensor_parallel_size_ = 1;
 
-  size_t attn_data_parallel_size_ = 0;
+  size_t attn_data_parallel_size_ = 1;
 
   // 保护元数据映射的互斥锁
   std::mutex meta_map_mutex_;

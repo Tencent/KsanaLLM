@@ -34,9 +34,8 @@ static ConnectorConfig CreateValidTestConfig() {
   config.node_rank = 0;
   config.world_size = 1;
   config.device_count = 1;
-  config.group_name = "test_group";
-  config.node_name = "test_node";
-  config.router_endpoint = "http://localhost:8000";
+  config.cluster_name = "default_cluster";
+  config.router_addr = "http://localhost:8000";
   return config;
 }
 

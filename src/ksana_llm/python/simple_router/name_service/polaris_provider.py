@@ -1,23 +1,33 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
-"""Polaris Name Service 提供者"""
+from __future__ import annotations
 
 import logging
-from typing import Tuple, Any
-from config import settings
-from polaris.api.consumer import (
-    GetOneInstanceRequest,
-    ServiceCallResult,
-    create_consumer_by_default_config_file,
-)
-from polaris.wrapper import POLARIS_CALL_RET_OK, POLARIS_CALL_RET_ERROR
+from typing import Any, Tuple
+
+import config
 from .name_service import NameServiceProvider
+
+try:  # pragma: no cover - optional dependency
+    from polaris.api.consumer import (
+        GetOneInstanceRequest,
+        ServiceCallResult,
+        create_consumer_by_default_config_file,
+    )
+    from polaris.wrapper import POLARIS_CALL_RET_ERROR, POLARIS_CALL_RET_OK
+except ImportError:  # pragma: no cover - optional dependency not installed
+    GetOneInstanceRequest = None  # type: ignore
+    ServiceCallResult = None  # type: ignore
+    create_consumer_by_default_config_file = None  # type: ignore
+    POLARIS_CALL_RET_ERROR = -1  # type: ignore
+    POLARIS_CALL_RET_OK = 0  # type: ignore
+
 
 logger = logging.getLogger(__name__)
 
 
-def update_polaris_service_call_result(
+def _update_polaris_service_call_result(
     namespace: str,
     prefill_service: str,
     decode_service: str,
@@ -25,8 +35,10 @@ def update_polaris_service_call_result(
     decode_instance: Any,
     prefill_success: bool,
     decode_success: bool,
-):
-    """更新 Polaris 服务调用结果"""
+) -> None:
+    if not create_consumer_by_default_config_file or not ServiceCallResult:
+        return
+
     try:
         consumer_api = create_consumer_by_default_config_file()
 
@@ -51,56 +63,48 @@ def update_polaris_service_call_result(
                 POLARIS_CALL_RET_OK if decode_success else POLARIS_CALL_RET_ERROR
             )
             consumer_api.update_service_call_result(decode_call_result)
-
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(f"Error updating Polaris service call result: {str(e)}")
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Error updating Polaris service call result: %s", exc)
 
 
 class PolarisNameServiceProvider(NameServiceProvider):
-    """Polaris Name Service 提供者"""
+    """Polaris-backed provider."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("polaris")
 
     def get_available_nodes(
-        self, **kwargs
+        self, **kwargs: Any
     ) -> Tuple[Tuple[str, str], Tuple[str, str], Any, Any]:
-        """从 Polaris 获取可用节点并选择一组节点"""
+        if not create_consumer_by_default_config_file or not GetOneInstanceRequest:
+            raise RuntimeError("Polaris SDK is not available")
+
+        settings = config.get_settings()
         namespace = settings.namespace
         prefill_service = settings.prefill_service
         decode_service = settings.decode_service
 
-        nodes = {"prefill": [], "decode": []}
-        prefill_instance = None
-        decode_instance = None
+        consumer_api = create_consumer_by_default_config_file()
 
         try:
-            consumer_api = create_consumer_by_default_config_file()
-
-            # 获取 prefill 节点
             request = GetOneInstanceRequest(
                 namespace=namespace, service=prefill_service
             )
             prefill_instance = consumer_api.get_one_instance(request)
-            prefill_node = "{host}:{port}".format(
-                host=prefill_instance.get_host(), port=prefill_instance.get_port()
+            prefill_node = (
+                f"{prefill_instance.get_host()}:{prefill_instance.get_port()}"
             )
 
-            # 获取 decode 节点
             request = GetOneInstanceRequest(namespace=namespace, service=decode_service)
             decode_instance = consumer_api.get_one_instance(request)
-            decode_node = "{host}:{port}".format(
-                host=decode_instance.get_host(), port=decode_instance.get_port()
-            )
-
-            nodes["prefill"].append((prefill_node, f"{prefill_node}"))
-            nodes["decode"].append((decode_node, f"{decode_node}"))
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error(f"Error getting available nodes from Polaris: {str(e)}")
+            decode_node = f"{decode_instance.get_host()}:{decode_instance.get_port()}"
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error("Error getting available nodes from Polaris: %s", exc)
+            raise RuntimeError("Failed to retrieve nodes from Polaris") from exc
 
         return (
-            (prefill_node, f"{prefill_node}"),
-            (decode_node, f"{decode_node}"),
+            (prefill_node, prefill_node),
+            (decode_node, decode_node),
             prefill_instance,
             decode_instance,
         )
@@ -111,10 +115,10 @@ class PolarisNameServiceProvider(NameServiceProvider):
         decode_instance: Any,
         prefill_success: bool,
         decode_success: bool,
-        **kwargs,
-    ):
-        """更新 Polaris 服务调用结果"""
-        update_polaris_service_call_result(
+        **kwargs: Any,
+    ) -> None:
+        settings = config.get_settings()
+        _update_polaris_service_call_result(
             settings.namespace,
             settings.prefill_service,
             settings.decode_service,
@@ -126,5 +130,4 @@ class PolarisNameServiceProvider(NameServiceProvider):
 
 
 def create_provider() -> NameServiceProvider:
-    """创建 Polaris 提供者"""
     return PolarisNameServiceProvider()

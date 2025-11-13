@@ -18,17 +18,14 @@ struct KVHeartbeatResponse {
   /** @brief Unique identifier for this node */
   std::string node_id;
 
-  /** @brief Name of this node */
-  std::string node_name;
-
   /** @brief Flag indicating if the node is online */
   bool is_online;
 
   /** @brief Flag indicating if the group is ready for communication */
   bool group_ready;
 
-  /** @brief Port for coordinator service */
-  int coordinator_port = 13579;
+  /** @brief Address for coordinator service */
+  std::string coordinator_addr = "localhost:13579";
 
   /** @brief Role of this node (prefill or decode) */
   std::string node_role;

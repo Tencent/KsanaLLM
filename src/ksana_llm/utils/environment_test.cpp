@@ -387,9 +387,9 @@ TEST_F(EnvironmentTest, ConnectorConfigInitialization) {
       file << "  connector:\n";
       file << "    group_role: " << role << "\n";
       if (role != "none" && role != "invalid_role") {
-        file << "    router_endpoint: \"localhost:9090\"\n";
-        file << "    group_name: \"test_group\"\n";
-        file << "    node_name: \"test_node\"\n";
+        file << "    router_addr: \"localhost:9090\"\n";
+        file << "    inference_addr: \"localhost:9091\"\n";
+        file << "    cluster_name: \"default_cluster\"\n";
         file << "    heartbeat_interval_ms: 2000\n";
         if (!comm_type.empty()) {
           file << "    communication_type: " << comm_type << "\n";
@@ -504,9 +504,9 @@ TEST_F(EnvironmentTest, ConnectorConfigInitialization) {
     auto status = test_env.GetConnectorConfigs(connector_config);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(connector_config.group_role, ksana_llm::GroupRole::PREFILL);
-    EXPECT_EQ(connector_config.router_endpoint, "localhost:9090");
-    EXPECT_EQ(connector_config.group_name, "test_group");
-    EXPECT_EQ(connector_config.node_name, "test_node");
+    EXPECT_EQ(connector_config.router_addr, "http://localhost:9090");
+    EXPECT_EQ(connector_config.inference_addr, "localhost:9091");
+    EXPECT_EQ(connector_config.cluster_name, "default_cluster");
     EXPECT_EQ(connector_config.heartbeat_interval_ms, 2000);
     EXPECT_EQ(connector_config.communication_type, ksana_llm::CommunicationType::TCP);  // 默认值
 

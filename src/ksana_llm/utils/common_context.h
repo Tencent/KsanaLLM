@@ -82,8 +82,8 @@ class ContextT {
 
  private:
   bool is_last_layer_ = false;
-  const size_t tensor_parallel_size_{0};
-  const size_t attn_data_parallel_size_{0};
+  const size_t tensor_parallel_size_{1};
+  const size_t attn_data_parallel_size_{1};
   static constexpr int defalt_device_id_{0};
   int driver_version_;
   // if true, only one thread execute context_decode/decode and context_decode decode run in sync

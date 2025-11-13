@@ -455,16 +455,23 @@ void ScheduleConfigParser::InitConnectorConfig(
     // Only continue parsing if the role is not NONE
     if (connector_config_.group_role != GroupRole::NONE) {
       // Parse connector type
-      connector_config_.router_endpoint =
-          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.router_endpoint", "");
-      connector_config_.group_name =
-          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.group_name", "");
-      connector_config_.node_name =
-          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.node_name", "");
+      std::string router_addr =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.router_addr", "");
+      if (!router_addr.empty() &&
+            router_addr.find("://") == std::string::npos &&
+            router_addr.find(':') != std::string::npos) {
+        router_addr = fmt::format("http://{}", router_addr);
+      }
+      connector_config_.inference_addr =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.inference_addr", "");
+      connector_config_.router_addr = std::move(router_addr);
+      connector_config_.coordinator_addr =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.coordinator_addr", "");
+      connector_config_.cluster_name =
+          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.cluster_name", "");
+
       connector_config_.heartbeat_interval_ms =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.heartbeat_interval_ms", 5000);
-      connector_config_.coordinator_port =
-          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.coordinator_port", 1357);
       connector_config_.transfer_batch =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_batch", 1048576);
       connector_config_.connector_waiting_sec =
@@ -477,10 +484,6 @@ void ScheduleConfigParser::InitConnectorConfig(
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_thread_num", 4);
       connector_config_.send_thread_num =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.send_thread_num", 4);
-      connector_config_.inference_addr =
-          yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.inference_addr", "");
-      connector_config_.inference_port =
-          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.inference_port", 8080);
       std::string type_str =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.communication_type", "");
 
@@ -498,17 +501,17 @@ void ScheduleConfigParser::InitConnectorConfig(
 
       // Log the parsed configuration
       KLLM_LOG_INFO << fmt::format(
-          "Connector config parsed: role={}, type={}, router_endpoint={}, group_name={}, "
-          "node_name={}, heartbeat_interval={}ms",
-          role_str, type_str, connector_config_.router_endpoint, connector_config_.group_name,
-          connector_config_.node_name, connector_config_.heartbeat_interval_ms);
+          "Connector config parsed: role={}, type={}, router_addr={}, cluster_name={}, "
+          "inference_addr={}, heartbeat_interval={}ms",
+          role_str, type_str, connector_config_.router_addr, connector_config_.cluster_name,
+          connector_config_.inference_addr, connector_config_.heartbeat_interval_ms);
     }
   } else {
     KLLM_LOG_INFO << "Connector role is set to NONE, skipping connector configuration.";
   }
 
   if (decode_node_benchmark) {
-    connector_config_.router_endpoint = "decode_benchmark";
+    connector_config_.router_addr = "decode_benchmark";
   }
 }
 

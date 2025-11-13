@@ -52,8 +52,8 @@ class CommunicatorManagerTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // Create config
-    config_.router_endpoint = "mock://localhost:1234";
-    config_.coordinator_port = 5555;
+    config_.router_addr = "mock://localhost:1234";
+    config_.coordinator_addr = "127.0.0.1:5555";
     config_.group_role = GroupRole::PREFILL;
     config_.node_rank = 0;
     config_.world_size = 2;

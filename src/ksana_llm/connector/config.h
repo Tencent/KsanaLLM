@@ -54,22 +54,19 @@ inline std::string GroupRoleToString(GroupRole role) {
  * between prefill and decode components in the KsanaLLM framework.
  */
 struct ConnectorConfig {
-  /** @brief Router endpoint URL (e.g., "http://localhost:8000") */
-  std::string router_endpoint;
+  /** @brief Router address (e.g., "http://localhost:8000") */
+  std::string router_addr;
 
   /**
-   * @brief Group name for this connector
+   * @brief Cluster name for this connector
    *
-   * When pipeline parallelism (pp) ≥ 2, all pp nodes form one group;
-   * when pp = 1, each node forms an individual group.
+   * All prefill and decode nodes under the same cluster name will be grouped together
+   * and every prefill node will communicate with decode nodes in the same cluster.
    */
-  std::string group_name;
+  std::string cluster_name;
 
   /** @brief Connector role (prefill, decode, or both) */
   GroupRole group_role = GroupRole::NONE;
-
-  /** @brief Node name (a single node corresponds to one container) */
-  std::string node_name;
 
   /** @brief Type of communication protocol to use */
   CommunicationType communication_type = CommunicationType::NCCL;
@@ -77,9 +74,7 @@ struct ConnectorConfig {
   /** @brief Heartbeat interval in milliseconds */
   int heartbeat_interval_ms = 5000;
 
-  int coordinator_port = 13579; /**< @brief Port for coordinator service */
-
-  int inference_port = 8080; /**< @brief Port for inference service */
+  std::string coordinator_addr = ""; /**< @brief Address for coordinator service */
 
   std::string inference_addr = ""; /**< @brief Inference address (IP:port format) */
 
@@ -115,13 +110,11 @@ struct ConnectorConfig {
    */
   std::string toString() const {
     std::string result = "ConnectorConfig {\n";
-    result += "  router_endpoint: " + router_endpoint + "\n";
-    result += "  group_name: " + group_name + "\n";
-    result += "  node_name: " + node_name + "\n";
+    result += "  router_addr: " + router_addr + "\n";
+    result += "  cluster_name: " + cluster_name + "\n";
     result += "  communication_type: " + CommunicationTypeToString(communication_type) + "\n";
     result += "  heartbeat_interval_ms: " + std::to_string(heartbeat_interval_ms) + "\n";
-    result += "  coordinator_port: " + std::to_string(coordinator_port) + "\n";
-    result += "  inference_port: " + std::to_string(inference_port) + "\n";
+    result += "  coordinator_addr: " + coordinator_addr + "\n";
     result += "  inference_addr: " + inference_addr + "\n";
     result += "  node_rank: " + std::to_string(node_rank) + "\n";
     result += "  device_count: " + std::to_string(device_count) + "\n";

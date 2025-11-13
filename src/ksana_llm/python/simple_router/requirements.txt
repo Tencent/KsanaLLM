@@ -1,7 +1,0 @@
-fastapi==0.110.0
-uvicorn==0.29.0
-pydantic==2.10.6
-python-dotenv==1.0.1
-httpx==0.28.1
-pydantic-settings==2.9.1
-pymysql==1.1.1

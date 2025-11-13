@@ -93,13 +93,18 @@ setting:
   # PD 分离模式下 TransferEngine使用的链接器配置
   connector:
     # router server 地址
-    router_endpoint: "http://localhost:9080"
+    router_addr: "127.0.0.1:9080"
     # 本节点的推理服务地址，用于RouterSever 自动寻址
-    inference_addr: "localhost:8088"
-    # 本节点组名，如果是PP并行，P1 P2 组成一组。
-    group_name: "prefill_group_1"
-    # 本节点名称，例如PP并行中的 P1 or P2
-    node_name: "prefill_node_1"
+    inference_addr: "127.0.0.1:8088"
+    # 用于PD之间的信号传输通讯地址
+    coordinator_addr: "127.0.0.1:65521"
+    # 多P 多D 所在的统一集群名称
+    cluster_name: "default_cluster"
+    # 通讯器类型，支持nccl或zmq
+    communication_type: "nccl"
+    # PD 分离中节点的角色
+    group_role: "prefill" # or "decode"
+
     # 节点心跳上报间隔，用于RouterServer检查节点状态
     heartbeat_interval_ms: 2000
     # 首次创建链接的等待时长
@@ -108,12 +113,6 @@ setting:
     transfer_batch: 1048576
     # 用于传输数据的线程数
     send_thread_num: 6
-    # 通讯器类型，支持nccl或zmq
-    communication_type: "nccl"
-    # PD 分离中节点的角色
-    group_role: "prefill" # or "decode"
-    # 连接器的端口号(zmq 本地bind端口)
-    coordinator_port: 13579
   # 性能统计相关配置
   profiler:
     #metrics_export_url: "http://example.com/v1/metrics"

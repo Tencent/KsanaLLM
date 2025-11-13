@@ -35,7 +35,7 @@ Connector::Connector(const ConnectorConfig& config, int attn_tensor_para_size, i
 
   KLLM_LOG_INFO << "Initialize connector, config: " << config_.toString();
   // 1. 创建 RouterClient
-  auto router_client = std::make_shared<HTTPRouterClient>(config_.router_endpoint);
+  auto router_client = std::make_shared<HTTPRouterClient>(config_.router_addr);
 
   // 2. 创建 Coordinator
   coordinator_ = std::make_shared<DefaultCoordinator>(config_, router_client);

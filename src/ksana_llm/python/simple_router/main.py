@@ -1,113 +1,148 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 #
 # ==============================================================================
-
-"""Main entry point for the KsanaLLM Router service.
-
-This module initializes and starts the FastAPI application that serves as the
-coordination service for distributed NCCL communication between prefill and
-decode nodes.
-"""
-
-import logging
-from contextlib import asynccontextmanager
+from __future__ import annotations
 
 import argparse
+import logging
+from contextlib import asynccontextmanager
+import os
+from typing import Optional, Sequence
+
 import uvicorn
 from fastapi import FastAPI
-
-from api import api_router
-from api.endpoints import generate
-from config import settings
-from db import db
-
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger("comm_coordinator")
+from sqlalchemy.exc import OperationalError
 
 
-def create_default_cluster():
-    """Create the default cluster if it doesn't exist.
+import config as config_module
+from database import Base, get_engine
+from node import router as api_router
 
-    This function checks if the default cluster (as specified in settings)
-    exists, and if not, creates it.
-    """
-    # Get default cluster name from config
-    cluster_name = settings.cluster_name
 
-    # Check if default cluster already exists
-    if not db.storage.get_cluster(cluster_name):
-        try:
-            # Register cluster
-            db.register_cluster(cluster_name)
-            logger.info(f"Created default cluster '{cluster_name}'")
-        except ValueError as e:
-            # If cluster already exists, this is normal
-            logger.info(f"Default cluster already exists: {str(e)}")
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error(f"Error creating default cluster: {str(e)}")
-    else:
-        logger.info(
-            f"Default cluster '{cluster_name}' already exists, no need to create"
-        )
+def _configure_logging() -> logging.Logger:
+    """Initialise the package logger based on configuration."""
+
+    log_format = "%(asctime)s | %(process)d | %(levelname)s | %(name)s | %(message)s"
+    settings = config_module.get_settings()
+    level_name = getattr(settings, "log_level", "INFO") or "INFO"
+    level_value = getattr(logging, level_name.upper(), logging.INFO)
+
+    # Create log directory from config
+    log_dir = os.path.abspath(os.path.expanduser(settings.log_dir))
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "simple_router.log")
+
+    # Configure logging with file handler and console handler
+    logging.basicConfig(
+        level=level_value,
+        format=log_format,
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ],
+        force=True
+    )
+
+    package_logger = logging.getLogger("simple_router")
+    package_logger.setLevel(level_value)
+    return package_logger
+
+
+logger = _configure_logging().getChild("ksana_llm_simple_router")
+
+
+def _init_database() -> None:
+    """Create database tables on startup if needed."""
+
+    engine = get_engine()
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database schema ensured")
+    except OperationalError as exc:
+        message = str(exc).lower()
+        if "already exists" in message:
+            logger.debug("Database schema already exists; skipping creation: %s", exc)
+        else:
+            raise
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    """FastAPI lifespan event handler.
+async def lifespan(app: FastAPI):  # pragma: no cover - exercised at runtime
+    """FastAPI lifespan hook that initialises and later tears down runtime state."""
 
-    This function is called when the application starts and shuts down.
-
-    Args:
-        app: The FastAPI application instance.
-    """
-    # Code to run on startup
-    create_default_cluster()
-    logger.info("Service started, default cluster initialized")
+    _init_database()
+    logger.info("Prefill-decode router service started")
     yield
-    # Code to run on shutdown
-    logger.info("Service shutting down")
+    logger.info("Prefill-decode router service stopping")
 
 
-# Create FastAPI application
 app = FastAPI(
-    title="NCCL Distributed Coordination Service",
-    description="Service for coordinating NCCL distributed training communication groups and nodes",
+    title="Prefill-Decode Router",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# Register API routers
-app.include_router(api_router, prefix=settings.api_prefix)
-app.include_router(generate.raw_router)
+app.include_router(api_router)
+
+__all__ = ["app", "main"]
 
 
-def main():
-    """Start the NCCL Coordination Service.
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Factory for the CLI argument parser."""
 
-    This function initializes and starts the Uvicorn server with the
-    specified configuration.
-    """
-    parser = argparse.ArgumentParser(description="KsanaLLM Router Service")
-    parser.add_argument("--port", type=int, default=9080, help="Port to run the service on")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Run the Prefill-Decode router service",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host interface to bind (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=9080,
+        help="Port to listen on (default: 9080)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=6,
+        help="Number of worker processes to spawn (default: 6)",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a config.ini file to use (overrides default)",
+    )
+    return parser
 
-    logger.info("Starting NCCL Coordination Service...")
 
-    # Start Uvicorn server
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Run the uvicorn worker group with the configured FastAPI app."""
+
+    args = _build_arg_parser().parse_args(argv)
+
+    # Reload settings in the current (master) process before starting workers
+    if args.config:
+        config_path = os.path.abspath(os.path.expanduser(args.config))
+        config_module.reload_settings(config_path)
+    
+    logger.info(
+        "Starting Prefill-Decode router on %s:%s with %s workers",
+        args.host,
+        args.port,
+        args.workers,
+    )
+
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host=args.host,
         port=args.port,
-        workers=1,
-        reload=True,
-        log_level="debug",
-        use_colors=True,
+        workers=args.workers,
     )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()

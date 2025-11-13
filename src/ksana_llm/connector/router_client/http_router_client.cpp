@@ -156,8 +156,8 @@ Status HTTPRouterClient::RegisterNode(const KVNodeInfo& node_info) {
 
   // Populate data according to the updated protocol
   data["inference_addr"] = node_info.inference_addr;
-  data["coordinator_port"] = node_info.coordinator_port;
-  data["group_name"] = node_info.group_name;
+  data["coordinator_addr"] = node_info.coordinator_addr;
+  data["cluster_name"] = node_info.cluster_name;
   data["group_role"] = node_info.group_role;
   data["node_rank"] = node_info.node_rank;
   data["world_size"] = node_info.world_size;
@@ -189,7 +189,7 @@ Status HTTPRouterClient::RegisterNode(const KVNodeInfo& node_info) {
   // Try to send the request and parse the response
   try {
     // Send the registration request
-    std::string response_str = MakeHttpRequest("/api/v1/nodes/", "POST", data);
+    std::string response_str = MakeHttpRequest("/RegisterNode", "POST", data);
 
     // Check if the response is empty or has unexpected format (like HTML)
     if (response_str.empty()) {
@@ -249,7 +249,7 @@ Status HTTPRouterClient::SendHeartbeat(std::string& node_id, KVHeartbeatResponse
 
   try {
     // Send heartbeat request
-    std::string response_str = MakeHttpRequest("/api/v1/nodes/heartbeat", "POST", data);
+    std::string response_str = MakeHttpRequest("/Heartbeat", "POST", data);
 
     nlohmann::json response_json;
     try {
@@ -268,7 +268,6 @@ Status HTTPRouterClient::SendHeartbeat(std::string& node_id, KVHeartbeatResponse
 
     // Fill the response struct with basic data from the JSON
     response.node_id = response_json.value("node_id", "");
-    response.node_name = response_json.value("node_name", "");
     response.is_online = response_json.value("is_online", false);
     response.group_ready = response_json.value("group_ready", false);
     response.node_role = response_json.value("node_role", "");
@@ -279,15 +278,10 @@ Status HTTPRouterClient::SendHeartbeat(std::string& node_id, KVHeartbeatResponse
       response.node_rank = response_json["node_rank"].get<int>();
     }
 
-    if (response_json.contains("coordinator_port")) {
-      int coordinator_port = response_json["coordinator_port"].get<int>();
-      node_info_.coordinator_port = coordinator_port;
-      response.coordinator_port = coordinator_port;
-    }
-
-    // Update node_info_ with information from the heartbeat response
-    if (response_json.contains("node_name")) {
-      KLLM_LOG_INFO << "Node name from heartbeat: " << response_json["node_name"].get<std::string>();
+    if (response_json.contains("coordinator_addr")) {
+      std::string coordinator_addr = response_json["coordinator_addr"].get<std::string>();
+      node_info_.coordinator_addr = coordinator_addr;
+      response.coordinator_addr = coordinator_addr;
     }
 
     if (response_json.contains("node_role")) {
@@ -350,7 +344,7 @@ Status HTTPRouterClient::SendCommId(const std::string& node_id, const std::strin
 
   try {
     // Send request to register the Communication ID
-    std::string response_str = MakeHttpRequest("/api/v1/nodes/registerCommId", "POST", data);
+    std::string response_str = MakeHttpRequest("/RegisterCommId", "POST", data);
 
     // Parse the response
     nlohmann::json response_json = nlohmann::json::parse(response_str);

@@ -46,10 +46,10 @@ class MockRouterClient : public HTTPRouterClient {
     last_json_data_ = json_data;
 
     // For node registration, return a mock response
-    if (path == "/api/v1/nodes/" && method == "POST") {
+    if (path == "/RegisterNode" && method == "POST") {
       nlohmann::json response = {{"node_id", "e39920b3-46a1-43d5-8fef-f458823dc3de"},
                                  {"inference_addr", json_data.value("inference_addr", "0.0.0.0:8080")},
-                                 {"group_name", json_data.value("group_name", "")},
+                                 {"cluster_name", json_data.value("cluster_name", "")},
                                  {"group_role", json_data.value("group_role", "")},
                                  {"node_rank", json_data.value("node_rank", 0)},
                                  {"is_online", true},
@@ -58,7 +58,7 @@ class MockRouterClient : public HTTPRouterClient {
                                  {"last_heartbeat", "2025-04-06T15:16:47.369453"},
                                  {"devices", json_data.value("devices", nlohmann::json::array())},
                                  {"world_size", json_data.value("world_size", 1)},
-                                 {"coordinator_port", json_data.value("coordinator_port", 0)}};
+                                 {"coordinator_addr", json_data.value("coordinator_addr", "localhost:13579")}};
       return response.dump();
     }
 
@@ -109,10 +109,10 @@ TEST_F(RouterClientTest, TestRegisterNode) {
       last_path_ = path;
       last_method_ = method;
       last_json_data_ = json_data;
-      if (path == "/api/v1/nodes/" && method == "POST") {
+      if (path == "/RegisterNode" && method == "POST") {
         nlohmann::json response = {{"node_id", "e39920b3-46a1-43d5-8fef-f458823dc3de"},
                                    {"inference_addr", json_data.value("inference_addr", "0.0.0.0:8088")},
-                                   {"group_name", json_data.value("group_name", "prefill_group_0")},
+                                   {"cluster_name", json_data.value("cluster_name", "default_cluster")},
                                    {"group_role", json_data.value("group_role", "prefill")},
                                    {"node_rank", json_data.value("node_rank", 0)},
                                    {"is_online", true},
@@ -121,7 +121,7 @@ TEST_F(RouterClientTest, TestRegisterNode) {
                                    {"last_heartbeat", "2025-04-06T15:16:47.369453"},
                                    {"devices", json_data.value("devices", nlohmann::json::array())},
                                    {"world_size", json_data.value("world_size", 1)},
-                                   {"coordinator_port", json_data.value("coordinator_port", 0)}};
+                                   {"coordinator_addr", json_data.value("coordinator_addr", "localhost:13579")}};
         return response.dump();
       }
       return "{}";
@@ -132,8 +132,8 @@ TEST_F(RouterClientTest, TestRegisterNode) {
 
   KVNodeInfo node_info;
   node_info.inference_addr = "0.0.0.0:8088";
-  node_info.coordinator_port = 13579;
-  node_info.group_name = "prefill_group_0";
+  node_info.coordinator_addr = "localhost:13579";
+  node_info.cluster_name = "default_cluster";
   node_info.group_role = "prefill";
   node_info.node_rank = 0;
   node_info.world_size = 2;
@@ -144,12 +144,12 @@ TEST_F(RouterClientTest, TestRegisterNode) {
 
   Status status = router_client.RegisterNode(node_info);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(router_client.GetLastPath(), "/api/v1/nodes/");
+  EXPECT_EQ(router_client.GetLastPath(), "/RegisterNode");
   EXPECT_EQ(router_client.GetLastMethod(), "POST");
   auto json_data = router_client.GetLastJsonData();
   EXPECT_EQ(json_data["inference_addr"], "0.0.0.0:8088");
-  EXPECT_EQ(json_data["coordinator_port"], 13579);
-  EXPECT_EQ(json_data["group_name"], "prefill_group_0");
+  EXPECT_EQ(json_data["coordinator_addr"], "localhost:13579");
+  EXPECT_EQ(json_data["cluster_name"], "default_cluster");
   EXPECT_EQ(json_data["group_role"], "prefill");
   EXPECT_EQ(json_data["node_rank"], 0);
   EXPECT_EQ(json_data["world_size"], 2);
@@ -192,7 +192,7 @@ TEST_F(RouterClientTest, TestRegisterNodeError) {
 
   // Create a simple node info
   KVNodeInfo node_info;
-  node_info.group_name = "test-group";
+  node_info.cluster_name = "default_cluster";
 
   // Call RegisterNode
   Status status = router_client.RegisterNode(node_info);
@@ -214,13 +214,12 @@ TEST_F(RouterClientTest, TestSendHeartbeatPrefill) {
       last_path_ = path;
       last_method_ = method;
       last_json_data_ = json_data;
-      if (path == "/api/v1/nodes/heartbeat" && method == "POST") {
+      if (path == "/Heartbeat" && method == "POST") {
         nlohmann::json response = {
             {"node_id", "3b9aadf9-59bd-4f82-aa55-9a6f0ee62c67"},
-            {"node_name", "prefill_group_0_node_rank_0"},
             {"is_online", true},
             {"group_ready", true},
-            {"coordinator_port", 13579},
+            {"coordinator_addr", "localhost:13579"},
             {"node_role", "prefill"},
             {"timestamp", "2025-05-16T21:19:07.560885"},
             {"comm_group_to_address",
@@ -249,15 +248,13 @@ TEST_F(RouterClientTest, TestSendHeartbeatPrefill) {
   std::string node_id;
   Status status = router_client.SendHeartbeat(node_id, response);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(router_client.last_path_, "/api/v1/nodes/heartbeat");
+  EXPECT_EQ(router_client.last_path_, "/Heartbeat");
   EXPECT_EQ(router_client.last_method_, "POST");
   EXPECT_EQ(response.node_id, "3b9aadf9-59bd-4f82-aa55-9a6f0ee62c67");
-  EXPECT_EQ(response.node_name, "prefill_group_0_node_rank_0");
   EXPECT_TRUE(response.is_online);
   EXPECT_TRUE(response.group_ready);
-  EXPECT_EQ(response.coordinator_port, 13579);
+  EXPECT_EQ(response.coordinator_addr, "localhost:13579");
   EXPECT_EQ(response.node_role, "prefill");
-  EXPECT_EQ(response.timestamp, "2025-05-16T21:19:07.560885");
 
   // Check comm_group_to_address for prefill_group_0__decode_group_0
   const auto& addr0 = response.comm_group_to_address["prefill_group_0__decode_group_0"];
@@ -309,13 +306,12 @@ TEST_F(RouterClientTest, TestSendHeartbeatDecode) {
       last_path_ = path;
       last_method_ = method;
       last_json_data_ = json_data;
-      if (path == "/api/v1/nodes/heartbeat" && method == "POST") {
+      if (path == "/Heartbeat" && method == "POST") {
         nlohmann::json response = {
             {"node_id", "d3c9aadf9-59bd-4f82-aa55-9a6f0ee62c68"},
-            {"node_name", "decode_group_1_node_rank_0"},
             {"is_online", true},
             {"group_ready", true},
-            {"coordinator_port", 13580},
+            {"coordinator_addr", "localhost:13580"},
             {"node_role", "decode"},
             {"timestamp", "2025-05-16T22:19:07.560885"},
             {"comm_group_to_address",
@@ -342,15 +338,13 @@ TEST_F(RouterClientTest, TestSendHeartbeatDecode) {
   std::string node_id;
   Status status = router_client.SendHeartbeat(node_id, response);
   EXPECT_TRUE(status.OK());
-  EXPECT_EQ(router_client.last_path_, "/api/v1/nodes/heartbeat");
+  EXPECT_EQ(router_client.last_path_, "/Heartbeat");
   EXPECT_EQ(router_client.last_method_, "POST");
   EXPECT_EQ(response.node_id, "d3c9aadf9-59bd-4f82-aa55-9a6f0ee62c68");
-  EXPECT_EQ(response.node_name, "decode_group_1_node_rank_0");
   EXPECT_TRUE(response.is_online);
   EXPECT_TRUE(response.group_ready);
-  EXPECT_EQ(response.coordinator_port, 13580);
+  EXPECT_EQ(response.coordinator_addr, "localhost:13580");
   EXPECT_EQ(response.node_role, "decode");
-  EXPECT_EQ(response.timestamp, "2025-05-16T22:19:07.560885");
 
   // Check comm_group_to_address for prefill_group_1__decode_group_1
   const auto& addr0 = response.comm_group_to_address["prefill_group_1__decode_group_1"];
@@ -432,7 +426,7 @@ TEST_F(RouterClientTest, TestSendCommId) {
       last_method_ = method;
       last_json_data_ = json_data;
 
-      if (path == "/api/v1/nodes/registerCommId" && method == "POST") {
+      if (path == "/RegisterCommId" && method == "POST") {
         // Validate the required fields exist in the request
         if (!json_data.contains("node_id") || !json_data.contains("comm_key") || !json_data.contains("comm_id")) {
           return R"({"detail": "Missing required fields in request"})";
@@ -467,7 +461,7 @@ TEST_F(RouterClientTest, TestSendCommId) {
   EXPECT_TRUE(status.OK()) << "SendCommId failed with status: " << status.GetMessage();
 
   // Verify the HTTP request
-  EXPECT_EQ(router_client.last_path_, "/api/v1/nodes/registerCommId");
+  EXPECT_EQ(router_client.last_path_, "/RegisterCommId");
   EXPECT_EQ(router_client.last_method_, "POST");
 
   // Verify the JSON request payload
@@ -491,7 +485,7 @@ TEST_F(RouterClientTest, TestSendCommIdError) {
 
     std::string MakeHttpRequest(const std::string& path, const std::string& method,
                                 const nlohmann::json& json_data) override {
-      if (path == "/api/v1/nodes/registerCommId") {
+      if (path == "/RegisterCommId") {
         // Simulate a server error response
         nlohmann::json error_response = {{"detail", "通信组 'invalid_key' 不存在"}};
         return error_response.dump();
@@ -532,7 +526,7 @@ TEST_F(RouterClientTest, TestSendCommIdMismatch) {
 
     std::string MakeHttpRequest(const std::string& path, const std::string& method,
                                 const nlohmann::json& json_data) override {
-      if (path == "/api/v1/nodes/registerCommId") {
+      if (path == "/RegisterCommId") {
         // Return a response with a different Comm ID to trigger the mismatch check
         nlohmann::json response = {{"status", "OK"}, {"comm_id", "different-comm-id-should-cause-error"}};
         return response.dump();

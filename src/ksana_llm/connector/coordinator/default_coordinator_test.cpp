@@ -17,7 +17,7 @@ class MockRouterClient : public RouterClient {
     // Initialize default node info for testing
     node_info_.node_id = "test_node_id";
     node_info_.inference_addr = "127.0.0.1:8080";
-    node_info_.group_name = "test_group";
+    node_info_.cluster_name = "default_cluster";
     node_info_.group_role = "prefill";
     node_info_.node_rank = 0;
     node_info_.is_online = true;
@@ -117,7 +117,7 @@ class TestCoordinator : public DefaultCoordinator {
 class CoordinatorTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    config_.group_name = "test_group";
+    config_.cluster_name = "default_cluster";
     config_.group_role = GroupRole::PREFILL;
     // Set a lower heartbeat interval for faster tests
     config_.heartbeat_interval_ms = 10;
@@ -183,7 +183,7 @@ TEST_F(CoordinatorTest, RegisterNode) {
   ASSERT_TRUE(status.OK()) << "Initialize失败: " << status.GetMessage();
 
   // 检查 node_info_ 是否被正确赋值
-  EXPECT_EQ(coordinator_->node_info().group_name, config_.group_name);
+  EXPECT_EQ(coordinator_->node_info().cluster_name, config_.cluster_name);
   EXPECT_EQ(coordinator_->node_info().group_role, GroupRoleToString(config_.group_role));
   EXPECT_EQ(coordinator_->node_info().node_rank, 0);
   EXPECT_EQ(coordinator_->node_info().world_size, 1);
