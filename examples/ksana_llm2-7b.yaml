@@ -48,8 +48,8 @@ setting:
     min_flexible_cache_num: 0
     # 是否开启投机解码。开启后每个Step将生成一定数量的draft_tokens，成功预测的情况下可提高处理速度
     enable_speculative_decoding: true
-    # 是否开启MTP模块，开启后将使用MTP模块加速推理
-    enable_mtp_module: true
+    # MTP层数。如果模型中只有1层MTP但mtp_step_num大于1，将复用第一层的参数
+    mtp_step_num: 1
   block_manager:
     # 单个block可处理的最大token个数
     block_token_num: 16

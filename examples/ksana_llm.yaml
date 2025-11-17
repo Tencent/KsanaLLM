@@ -61,10 +61,22 @@ setting:
     min_flexible_cache_num: 0
     # 是否开启投机解码。开启后每个Step将生成一定数量的draft_tokens，成功预测的情况下可提高处理速度
     enable_speculative_decoding: false
-    # 是否开启MTP模块，开启后将使用MTP模块加速推理
-    enable_mtp_module: false
+    # MTP层数。如果模型中只有1层MTP但mtp_step_num大于1，将复用第一层的参数
+    mtp_step_num: 1
     # 是否使用Xgrammar作为约束解码后端，开启后则进行特定格式的约束解码
     enable_xgrammar: false
+    attention_dp_lb_config:
+      # 是否启用ADP Balance策略，当attn_data_para_size > 1时可开启
+      enable_balance: false
+      # QPS阈值，当此时的qps低于min_qps_for_waiting才做prefill请求累积
+      # 默认-1表示所有QPS都使用累积
+      min_qps_for_waiting: -1
+      # 超时迭代数，等待条件不满足时的最大等待轮数，超时后强制执行prefill
+      # 如果启用自适应：低QPS时增加到200，高QPS时减少到50
+      max_waiting_steps: 50
+      # 超时时间（毫秒），超过此时间强制执行prefill
+      # 如果启用自适应：低QPS时增加到1500ms，高QPS时减少到700ms
+      max_waiting_time_in_ms: 1000
     # 是否开启async模块，开启后将使用异步调度减少GPU空泡
     enable_async: false
   # 显存块相关配置
@@ -76,7 +88,7 @@ setting:
     # block部分的显存占比，<0表示使用所有剩余显存
     block_device_memory_ratio: -1.0
     # block部分在host上的预分配大小，相比device上的倍数
-    block_host_memory_factor: 0.0
+    block_host_memory_factor: 1.0
     # 动态可复用内存，占全量预分配时内存开销的最大比例
     dynamic_reusable_memory_ratio: 0.5
 

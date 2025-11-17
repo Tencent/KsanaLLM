@@ -108,9 +108,7 @@ void Wrapper::InitConfig() {
                                                       combine_config_param[2], combine_config_param[3]);
 }
 
-void Wrapper::SetNumSMs(int new_num_sms) {
-  num_sms_ = new_num_sms;
-}
+void Wrapper::SetNumSMs(int new_num_sms) { num_sms_ = new_num_sms; }
 
 void Wrapper::InitHiddenBuffers() {
   for (size_t i = 0; i < hidden_buffer_.size(); ++i) {
@@ -292,6 +290,8 @@ void Wrapper::Dispatch() {
     auto fp8_options = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(torch::kCUDA);
     x_ = torch::from_blob(x_fp8_ptr, {shared_data_->recv_token_num[local_rank_], shared_data_->hidden_size},
                           fp8_options);
+  } else {
+    x_scales_ = std::nullopt;
   }
   auto topk_ids_int32 = torch::from_blob(
       topk_ids_ptr, {shared_data_->recv_token_num[local_rank_], shared_data_->num_topk}, int32_options);

@@ -3,7 +3,6 @@
 
 import argparse
 import csv
-import deep_gemm_kernel_generator
 import os
 import logging
 import subprocess
@@ -49,8 +48,6 @@ def read_csv_file(file_path):
 if __name__ == "__main__":
     args = args_config()
     csv_file_path = args.input_file
-    # setting DeepGEMM kernel generation dir
-    os.environ['DG_CACHE_DIR'] = os.getcwd()
 
     is_cublas_algo_searcher_avaliable = check_cublas_algo_searcher_avaliable(
         args.generator_bin_path)
@@ -67,12 +64,6 @@ if __name__ == "__main__":
         input_a_transop = row['input_a_transop']
         input_b_transop = row['input_b_transop']
         op_type = int(row['op_type'])
-
-        # NOTE(karlluo): DeepGEMM only support Hopper, check first
-        if deep_gemm_kernel_generator.is_deep_gemm_available:
-            logging.info(f"Generating DeepGEMM on shape m,n,k = {m},{n},{k}")
-            deep_gemm_kernel_generator.generate_deep_gemm_kernel(
-                m, n, k, input_dtype, output_dtype, op_type, args.output_file)
 
         if is_cublas_algo_searcher_avaliable and op_type == 0:
             logging.info(f"Generating cuBlas on shape m,n,k = {m},{n},{k}")

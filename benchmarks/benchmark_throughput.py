@@ -24,6 +24,7 @@ from tqdm.asyncio import tqdm
 from transformers import AutoTokenizer
 from longbench_reader import LongBenchV2Dataset
 
+
 # (prompt len, output len, input token num, output token num,
 #  request latency, first token latency, inter token latencies)
 REQUEST_LATENCY: List[Tuple[int, int, int, int, float, float, List[float]]] = []
@@ -56,6 +57,9 @@ PROMPT_AFFIX_DICT = {
     "chatglm":
     "<|system|>\nYou are a large language model trained by Zhipu.AI. Follow the user's instructions carefully."
     " Respond using markdown.\n<|user|>\n%s\n<|assistant|>\n",
+    "kimi_k2":
+    "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user"
+    "<|im_middle|>%s<|im_end|><|im_assistant|>assistant<|im_middle|>",
     "hunyuan_large":
     "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>",
     "empty":
@@ -285,7 +289,7 @@ def args_config():
                         choices=[
                             'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi',
                             'chatglm', 'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1',
-                            'hunyuan_large'
+                            'hunyuan_large', 'kimi_k2'
                         ],
                         help="serving model type, used to add prefixes and suffixes"
                              " to the prompt.")
@@ -397,6 +401,22 @@ def args_config():
                         action='store_true',
                         help="Whether to show only decode token throughput,"
                             " which will override the default total token throughput")
+    parser.add_argument('--enable_diff_check',
+                        action='store_true',
+                        help="Enable automatic diff checking between two benchmark runs")
+    parser.add_argument('--diff_rouge_threshold',
+                        type=float,
+                        default=0.5,
+                        help='ROUGE-W threshold below which detailed results are printed (default: 0.5)')
+    parser.add_argument('--diff_mismatch_threshold',
+                        type=int,
+                        default=None,
+                        help='First mismatch position threshold below which detailed results are printed. '
+                             'If not specified, mismatch position filtering is disabled.')
+    parser.add_argument('--diff_output_file',
+                        type=str,
+                        default="comparison_results.txt",
+                        help='Output file path for diff results.')
     args = parser.parse_args()
     if "," in args.host:
         args.host = args.host.split(",")
@@ -406,6 +426,11 @@ def args_config():
         args.port = args.port.split(",")
     else:
         args.port = [args.port]
+        
+    if args.enable_diff_check and args.repeat_num_iters < 2:
+        print("Note: When --enable_diff_check is set and --repeat_num_iters is less than 2, "
+              "--repeat_num_iters is set to 2.")
+        args.repeat_num_iters = 2
     return args
 
 
@@ -555,6 +580,7 @@ def construct_request_data(tokenizer: Union[None, AutoTokenizer], prompt: str,
             "stream": args.stream
         }
     elif args.backend == "sglang":
+        prompt = PROMPT_AFFIX_DICT[args.model_type].replace("%s", prompt)
         data = {
             "text": prompt,
             "sampling_params": {
@@ -1152,12 +1178,20 @@ def main(args: argparse.Namespace):
         REQUEST_LATENCY.clear()
 
         # Record the start time of the benchmark
+        all_result_list = []
         benchmark_start_time = time.perf_counter()
         for iter in range(args.repeat_num_iters):
             print(f"Start profile iteration {iter} with request rate {metrics.request_rate:.3f}")
-            result_list = run_benchmark(args, api_url, inputs, tokenizer)
+            all_result_list.append(run_benchmark(args, api_url, inputs, tokenizer))
         # Record the end time of the benchmark
         benchmark_end_time = time.perf_counter()
+        
+        if args.enable_diff_check:
+            from check_diff import check_diff
+            check_diff(all_result_list[-2], all_result_list[-1], args.diff_rouge_threshold,
+                       args.diff_mismatch_threshold, args.diff_output_file)
+        
+        
 
         # Calculate the total benchmark time
         metrics.total_latency = (
@@ -1241,6 +1275,7 @@ def main(args: argparse.Namespace):
         REQUEST_LATENCY.clear()
 
     if args.output_csv is not None:
+        result_list = all_result_list[-1]
         with open(args.output_csv, "w", newline='') as fs:
             writer = csv.writer(fs)
             for idx in range(len(result_list)):
