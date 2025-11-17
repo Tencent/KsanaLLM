@@ -20,16 +20,11 @@ set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler --genera
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
 set(SM_SETS 80 86 89 90 90a)
-set(IS_SUPPORT_DEEPGEMM "FALSE")
 
 # check if custom define SM
 if(NOT DEFINED SM)
   foreach(SM_NUM IN LISTS SM_SETS)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
-
-    if(SM_NUM VERSION_GREATER_EQUAL "90")
-      set(IS_SUPPORT_DEEPGEMM "TRUE")
-    endif()
 
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
@@ -44,10 +39,6 @@ elseif("${SM}" MATCHES ",")
   foreach(SM_NUM IN LISTS SM_LIST)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
 
-    if(SM_NUM VERSION_GREATER_EQUAL "90")
-      set(IS_SUPPORT_DEEPGEMM "TRUE")
-    endif()
-
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
     string(REGEX MATCHALL "[0-9]" SUB_VER_NUM "${SM_NUM}")
@@ -55,10 +46,6 @@ elseif("${SM}" MATCHES ",")
     list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   endforeach()
 else()
-  if(SM VERSION_GREATER_EQUAL "90")
-    set(IS_SUPPORT_DEEPGEMM "TRUE")
-  endif()
-
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM},code=sm_${SM}")
   list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
   message(STATUS "Assign GPU architecture (sm=${SM})")

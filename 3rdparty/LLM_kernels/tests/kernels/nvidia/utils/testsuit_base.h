@@ -495,6 +495,27 @@ class NvidiaTestSuitBase : public testing::Test {
     }
     return failures <= tol_failures;
   }
+
+  void PrintGemmBenchmarkResult(int m, int k, int n, double exec_time_ms) {
+    double flops = 2.0 * m * n * k;
+    double tflops = (flops * 1e-12) / (exec_time_ms * 1e-3);
+
+    std::stringstream ss;
+
+    // Set fixed decimal places
+    ss << std::fixed << std::setprecision(6);
+
+    // Matrix size - use fixed width
+    ss << "Matrix size: " << std::setw(5) << m << " x " << std::setw(5) << k << " x " << std::setw(5) << n << ", ";
+
+    // Execution time - right-aligned, fixed width
+    ss << "Execution time: " << std::setw(10) << exec_time_ms << " ms, ";
+
+    // Performance - right-aligned, fixed width
+    ss << "Performance: " << std::setw(12) << tflops << " TFLOPS" << std::endl;
+
+    std::cout << ss.str();
+  }
 };
 
 }  // namespace test

@@ -66,15 +66,10 @@ message(STATUS "CMAKE_CUDA_FLAGS_RELEASE: ${CMAKE_CUDA_FLAGS_RELEASE}")
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
 set(SM_SETS 80 86 89 90 90a)
-set(IS_SUPPORT_DEEPGEMM "FALSE")
 
 # check if custom define SM
 if(NOT DEFINED SM)
   foreach(SM_NUM IN LISTS SM_SETS)
-    if(SM_NUM VERSION_GREATER_EQUAL "90")
-      set(IS_SUPPORT_DEEPGEMM "TRUE")
-    endif()
-
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
@@ -88,10 +83,6 @@ elseif("${SM}" MATCHES ",")
   string(REPLACE "," ";" SM_LIST ${SM})
 
   foreach(SM_NUM IN LISTS SM_LIST)
-    if(SM_NUM VERSION_GREATER_EQUAL "90")
-      set(IS_SUPPORT_DEEPGEMM "TRUE")
-    endif()
-
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM_NUM},code=sm_${SM_NUM}")
     list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message(STATUS "Assign GPU architecture (sm=${SM_NUM})")
@@ -100,10 +91,6 @@ elseif("${SM}" MATCHES ",")
     list(APPEND TORCH_CUDA_ARCH_LIST ${SM_ARCH_VER})
   endforeach()
 else()
-  if(SM VERSION_GREATER_EQUAL "90")
-    set(IS_SUPPORT_DEEPGEMM "TRUE")
-  endif()
-
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode arch=compute_${SM},code=sm_${SM}")
   list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM})
   message(STATUS "Assign GPU architecture (sm=${SM})")
@@ -156,31 +143,6 @@ target_compile_definitions(cutlass_c4x INTERFACE
     CUTLASS_MINOR_VERSION=${CUTLASS_C4X_MINOR_VERSION}
     CUTLASS_PATCH_VERSION=${CUTLASS_C4X_PATCH_VERSION}
 )
-
-# setting deep gemm
-if(GIT_FOUND)
-  message(STATUS "IS_SUPPORT_DEEPGEMM ${IS_SUPPORT_DEEPGEMM}")
-
-  if(IS_SUPPORT_DEEPGEMM STREQUAL "TRUE")
-    message(STATUS "Running submodule update to fetch DeepGEMM")
-    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive 3rdparty/DeepGEMM
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      RESULT_VARIABLE GIT_SUBMOD_RESULT)
-
-    if(NOT GIT_SUBMOD_RESULT EQUAL "0")
-      message(FATAL_ERROR "git submodule update --init --recursive 3rdparty/DeepGEMM failed with ${GIT_SUBMOD_RESULT}, please checkout DeepGEMM submodule")
-    endif()
-
-    execute_process(COMMAND python3 -m pip install --upgrade --force-reinstall --ignore-installed .
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/DeepGEMM
-      RESULT_VARIABLE DEEPGEMM_INSTALL_RESULT)
-
-    if(NOT DEEPGEMM_INSTALL_RESULT EQUAL "0")
-      message(FATAL_ERROR "python -m pip install --upgrade --force-reinstall --ignore-installed -e . under DeepGEMM failed with ${DEEPGEMM_INSTALL_RESULT}, please checkout DeepGEMM install problem")
-    endif()
-    message(STATUS "Prepare DeepGEMM success")
-  endif()
-endif()
 
 set(CUDA_INC_DIRS
   ${CUDA_PATH}/include

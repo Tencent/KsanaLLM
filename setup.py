@@ -10,7 +10,7 @@ import re
 import subprocess
 from distutils.file_util import copy_file
 
-from setuptools import setup, Extension, find_packages
+from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext as build_ext_orig
 
 
@@ -160,7 +160,12 @@ class BuildExt(build_ext_orig):
         # Ensure the dependencies library directory exists
         deps_lib.mkdir(parents=True, exist_ok=True)
 
-        # List of target libraries to copy
+        # Create package directories
+        package_lib_dir = extdir.parent / "ksana_llm" / "lib"
+        package_lib_dir.mkdir(parents=True, exist_ok=True)
+        package_root_dir = extdir.parent / "ksana_llm"
+
+        # List of target libraries to copy (unified list)
         target_libs = ["libtorch_serving.so", "libloguru.so"]
 
         # Include endpoint libraries that are enabled
@@ -173,19 +178,24 @@ class BuildExt(build_ext_orig):
         if tbb_so.exists():
             target_libs.append("libtbb.so.12")
 
-        # Copy libraries to both the local development directory and the package directory
+        # Copy libraries to both local development and package directories
         for target_lib in target_libs:
             if target_lib == "libtbb.so.12":
                 src_lib = tbb_so
             else:
                 src_lib = build_temp_lib / target_lib
-            dst_lib_deps = deps_lib / target_lib
-            dst_lib_ext = extdir.parent / target_lib
+            if not src_lib.exists():
+                continue
 
             # Copy to the dependencies library directory for local development
+            dst_lib_deps = deps_lib / target_lib
             copy_file(str(src_lib), str(dst_lib_deps))
-            # Copy to the package directory for inclusion in the wheel
-            copy_file(str(src_lib), str(dst_lib_ext))
+            # Copy to package directory: pybind11 module to root, others to lib
+            if target_lib == "libtorch_serving.so":
+                dst_lib_package = package_root_dir / target_lib  # libtorch_serving.so in site-packages/ksana_llm
+            else:
+                dst_lib_package = package_lib_dir / target_lib   # other libs in /ksana_llm/lib/
+            copy_file(str(src_lib), str(dst_lib_package))
 
     def copy_python_files_and_dirs(self, extdir, cwd, implemented_endpoints, endpoint_status):
         """
@@ -231,18 +241,11 @@ class BuildExt(build_ext_orig):
             dst_dir = extdir.parent / "ksana_llm"
             copy_file(str(src_file), str(dst_dir))
 
-
-        # List of generate deepgemm optimize kernels files to copy into the package
-        deepgemm_need_files = [
-            "deep_gemm_kernel_generator.py",
-            "cuda_data_type_enum.py",
-        ]
-
-        # Copy each required deepgemm optimize kernel file
-        for need_file in deepgemm_need_files:
-            src_file = cwd / "3rdparty" / "LLM_kernels" / "tools" / "search_best_gemm_algo" / need_file
-            dst_dir = extdir.parent / "ksana_llm"
-            copy_file(str(src_file), str(dst_dir))
+        # Copy trt deepgemm package
+        src_dir = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
+                    "others" / "tensorrt-llm" / "dev" / "deep_gemm")
+        dst_dir = extdir.parent / "ksana_llm" / "deep_gemm"
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
         # Copy triton cubin kernels
         if 'KSANA_TRITON_KERNEL_PATH' in os.environ:
@@ -253,6 +256,7 @@ class BuildExt(build_ext_orig):
         dst_dir = extdir.parent / "ksana_llm" / "triton_kernel_files"
         shutil.copytree(triton_kernel_dir, dst_dir, dirs_exist_ok=True)
 
+
 # Setup configuration for the ksana_llm package
 setup(
     name="ksana_llm",
@@ -262,10 +266,21 @@ setup(
     description="Ksana LLM inference server",
     platforms="python3",
     url="https://xxx/KsanaLLM/",
-    packages=find_packages("src/ksana_llm/python"),
+    packages=["ksana_llm"],
     package_dir={
         "": "src/ksana_llm/python",
     },
+    package_data={
+        'ksana_llm': [
+            'libtorch_serving.so',
+            'lib*.so*',
+            'lib/*.so*',
+            'triton_kernel_files/**/*',
+            'rpc_config/**/*',
+            'triton_backend/**/*',
+        ],
+    },
+    include_package_data=True,
     ext_modules=[CMakeExtension("ksana_llm")],
     python_requires=">=3",
     install_requires=open("requirements.txt").readlines(),
