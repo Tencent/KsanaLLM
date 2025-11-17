@@ -4,39 +4,33 @@
 #pragma once
 
 #include <atomic>
-#include <future>
 #include <memory>
-#include <mutex>
 #include <queue>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "ksana_llm/models/base/base_model.h"
 #include "ksana_llm/runtime/forward_request.h"
-#include "ksana_llm/runtime/infer_stage.h"
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
+#include "ksana_llm/utils/waiter.h"
 
 namespace ksana_llm {
 
 // Task structure for worker thread
 struct WorkerTask {
   enum class TaskType { kForward, kSampling, kStop };
-
   TaskType type;
-  std::promise<Status> promise;
-
+  std::shared_ptr<WaitGroup> wg;
   size_t multi_batch_id = DEFAULT_MULTI_BATCH_ID;
 
   // Forward task parameters
   std::shared_ptr<BaseModel> model;
   std::shared_ptr<BaseWeight> weight;
-  InferStage stage;
   std::vector<ForwardRequest*>* forward_reqs;
   bool epilogue;
   RunMode run_mode;
@@ -49,7 +43,7 @@ struct WorkerTask {
 // The worker executed on every device.
 class Worker {
  public:
-  Worker(int rank, size_t pp_batch_num, std::shared_ptr<Context> context)
+  Worker(const int rank, const size_t pp_batch_num, std::shared_ptr<Context> context)
       : rank_(rank), pp_batch_num_(pp_batch_num), context_(context), running_(true) {
     // Create pp_batch_num worker threads
     worker_threads_.reserve(pp_batch_num_);
@@ -60,36 +54,50 @@ class Worker {
 
   ~Worker() {
     // Signal all threads to stop and wait for them
-    {
-      std::lock_guard<std::mutex> lock(task_mutex_);
-      for (size_t i = 0; i < pp_batch_num_; ++i) {
-        WorkerTask stop_task;
-        stop_task.type = WorkerTask::TaskType::kStop;
-        task_queue_.push(std::move(stop_task));
-      }
-      task_cv_.notify_all();  // Notify all threads
+    for (size_t i = 0; i < pp_batch_num_; ++i) {
+      WorkerTask stop_task;
+      stop_task.type = WorkerTask::TaskType::kStop;
+      AddTask(std::move(stop_task));
     }
 
     // Join all worker threads
     for (auto& thread : worker_threads_) {
-      if (thread.joinable()) {
-        thread.join();
-      }
+      thread.join();
     }
   }
 
-  // The async forward and sampling.
-  std::future<Status> ForwardAsync(size_t multi_batch_id, std::shared_ptr<BaseModel> model,
-                                   std::shared_ptr<BaseWeight> weight, InferStage stage,
-                                   std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
-                                   RunMode run_mode = RunMode::kMain);
+  void AddTask(WorkerTask&& task) {
+    while (queue_lock_.test_and_set(std::memory_order_acquire)) {
+      __builtin_ia32_pause();
+    }
+    task_queue_.emplace(std::move(task));
+    queue_lock_.clear(std::memory_order_release);
+  }
+
+  bool GetTask(WorkerTask& task) {
+    while (queue_lock_.test_and_set(std::memory_order_acquire)) {
+      __builtin_ia32_pause();
+    }
+
+    const bool has_task = !task_queue_.empty();
+    if (has_task) {
+      task = std::move(task_queue_.front());
+      task_queue_.pop();
+    }
+
+    queue_lock_.clear(std::memory_order_release);
+    return has_task;
+  }
+
+  void ForwardAsync(size_t multi_batch_id, std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
+                    std::vector<ForwardRequest*>& forward_reqs, bool epilogue, std::shared_ptr<WaitGroup> wg,
+                    RunMode run_mode = RunMode::kMain);
 
   Status Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                 InferStage stage, std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
-                 RunMode run_mode = RunMode::kMain);
+                 std::vector<ForwardRequest*>& forward_reqs, bool epilogue, RunMode run_mode = RunMode::kMain);
 
-  std::future<Status> SamplingAsync(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
-                                    std::vector<SamplingRequest>& sampling_reqs);
+  void SamplingAsync(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
+                     std::vector<SamplingRequest>& sampling_reqs, std::shared_ptr<WaitGroup> wg);
 
   Status Sampling(size_t multi_batch_id, std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs);
 
@@ -98,10 +106,10 @@ class Worker {
   void ThreadLoop();
 
   // Current worker rank.
-  int rank_;
+  const int rank_;
 
   // Number of parallel threads to use
-  size_t pp_batch_num_;
+  const size_t pp_batch_num_;
 
   // GPU related context
   std::shared_ptr<Context> context_ = nullptr;
@@ -110,27 +118,22 @@ class Worker {
   std::vector<std::thread> worker_threads_;
   std::atomic<bool> running_;
 
-  // Task queue
+  // Task queue with spinlock for high-performance consumption
   std::queue<WorkerTask> task_queue_;
-  std::mutex task_mutex_;
-  std::condition_variable task_cv_;
+  std::atomic_flag queue_lock_ = ATOMIC_FLAG_INIT;
 };
 
 // The worker group that used to manager multiple workers.
 class WorkerGroup {
  public:
-  WorkerGroup(size_t tensor_parallel_size, size_t pp_batch_num, std::shared_ptr<Context> context);
-  ~WorkerGroup();
+  WorkerGroup(const size_t tensor_parallel_size, const size_t pp_batch_num, std::shared_ptr<Context> context);
 
   // Get worker of specified rank.
-  std::shared_ptr<Worker> GetWorker(int rank);
+  std::shared_ptr<Worker> GetWorker(const int rank) const { return workers_[rank]; }
 
  private:
   // The inner workers.
   std::vector<std::shared_ptr<Worker>> workers_;
-
-  // The parallel size.
-  size_t tensor_parallel_size_;
 };
 
 }  // namespace ksana_llm

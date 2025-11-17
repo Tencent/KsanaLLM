@@ -19,8 +19,7 @@ void ScheduleProcessor::Initialize(std::shared_ptr<BatchSchedulerInterface> batc
   if (enable_async_) {
     planning_sched_results_.resize(max_pp_batch_num_);
     for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
-      async_sched_threads_.push_back(
-          std::unique_ptr<std::thread>(new std::thread(&ScheduleProcessor::AsyncScheduleThread, this, multi_batch_id)));
+      async_sched_threads_.emplace_back(&ScheduleProcessor::AsyncScheduleThread, this, multi_batch_id);
     }
   }
 
@@ -179,12 +178,8 @@ void ScheduleProcessor::Stop() {
   terminated_ = true;
 
   // Stop async threads
-  if (enable_async_) {
-    for (auto& thread : async_sched_threads_) {
-      if (thread->joinable()) {
-        thread->join();
-      }
-    }
+  for (auto& thread : async_sched_threads_) {
+    thread.join();
   }
   KLLM_LOG_INFO << "ScheduleProcessor stopped";
 }

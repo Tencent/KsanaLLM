@@ -248,7 +248,7 @@ class Compiler {
                  uint32_t const block_k, uint32_t const num_groups, uint32_t const num_stages,
                  uint32_t const num_tma_multicast, deep_gemm::GemmType const gemm_type, bool swapAB = false,
                  int thread_id = 0) {
-    int sm_version = llm_kernels::nvidia::tensorrt_llm::dev::common::getSMVersion();
+    static const int sm_version = llm_kernels::nvidia::tensorrt_llm::dev::common::getSMVersion();
     if (sm_version != 90) {
       KLLM_KERNEL_THROW(
           "DeepGEMM only supports Hopper (SM90) architectures, but current device compute "
@@ -260,8 +260,7 @@ class Compiler {
     std::string name = std::string(swapAB ? "gemm_swapAB_" : "gemm_") + std::to_string(shape_n) + "_" +
                        std::to_string(shape_k) + "_" + std::to_string(block_m) + "_" + std::to_string(block_n) + "_" +
                        std::to_string(block_k) + "_" + std::to_string(num_groups) + "_" + std::to_string(num_stages) +
-                       std::to_string(num_groups) + "_" + std::to_string(num_stages) + "_" +
-                       std::to_string(num_tma_multicast) + "_" + gemm_type_to_string(gemm_type);
+                       "_" + std::to_string(num_tma_multicast) + "_" + gemm_type_to_string(gemm_type);
     std::filesystem::path path = getCacheDir() / name;
 
     // Check runtime cache or file system hit using thread-local cache

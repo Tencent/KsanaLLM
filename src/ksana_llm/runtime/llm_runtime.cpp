@@ -116,59 +116,20 @@ void LlmRuntime::DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_p
   }
 }
 
-Status LlmRuntime::RunSerially(size_t multi_batch_id,
-                               std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs, bool epilogue,
-                               RunMode run_mode) {
-  PROFILE_EVENT_SCOPE(RunSerially_, fmt::format("RunSerially_{}_{}", multi_batch_id, epilogue));
-  Status result_status;
-  for (auto& [model_inst, reqs] : grouped_reqs) {
-#ifdef ENABLE_CUDA
-    auto inst_results =
-        model_inst->ForwardAsync(multi_batch_id, worker_group_, InferStage::kDecode, reqs, epilogue, run_mode);
-    for (auto& worker_result : inst_results) {
-      if (const Status status = worker_result.get(); !status.OK()) {
-        result_status = status;
-      }
-    }
-#else
-    for (const auto& stage : {InferStage::kContext, InferStage::kDecode}) {
-      std::vector<ForwardRequest*> stage_reqs;
-      stage_reqs.reserve(reqs.size());
-      for (const auto& req : reqs) {
-        if (req->infer_stage == stage) {
-          stage_reqs.emplace_back(req);
-        }
-      }
-      if (stage_reqs.empty()) {
-        continue;
-      }
-      auto inst_results =
-          model_inst->ForwardAsync(multi_batch_id, worker_group_, InferStage::kDecode, stage_reqs, epilogue, run_mode);
-      for (auto& worker_result : inst_results) {
-        if (const Status status = worker_result.get(); !status.OK()) {
-          result_status = status;
-        }
-      }
-    }
-#endif
-  }
-  return result_status;
-}
-
-Status LlmRuntime::Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                           bool epilogue, RunMode run_mode) {
+void LlmRuntime::Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
+                         bool epilogue, RunMode run_mode) {
   PROFILE_EVENT_SCOPE(Forward_, fmt::format("Forward_{}_{}", multi_batch_id, epilogue));
-  // context decode and decode run serially in single thread
-  if (context_->IsRunContextDecodeAndDecodeSerially()) {
-    // Wait all instances done and check status.
-    return RunSerially(multi_batch_id, grouped_reqs, epilogue, run_mode);
-  }
 
-  std::vector<std::vector<std::future<Status>>> results;
+  // this wg only indicates completion the worker threads have finished, the device may not synchronized.
+  auto wg = std::make_shared<WaitGroup>(0, true);
+  // context decode and decode run serially in single thread
+  const bool run_serially = context_->IsRunContextDecodeAndDecodeSerially();
   for (auto& [model_inst, reqs] : grouped_reqs) {
 #ifdef ENABLE_CUDA
-    results.emplace_back(
-        model_inst->ForwardAsync(multi_batch_id, worker_group_, InferStage::kDecode, reqs, epilogue, run_mode));
+    model_inst->ForwardAsync(multi_batch_id, worker_group_, reqs, epilogue, wg, run_mode);
+    if (run_serially) {
+      wg->Wait();
+    }
 #else
     for (const auto& stage : {InferStage::kContext, InferStage::kDecode}) {
       std::vector<ForwardRequest*> stage_reqs;
@@ -181,22 +142,14 @@ Status LlmRuntime::Forward(size_t multi_batch_id, std::map<ModelInstance*, std::
       if (stage_reqs.empty()) {
         continue;
       }
-      results.emplace_back(
-          model_inst->ForwardAsync(multi_batch_id, worker_group_, stage, stage_reqs, epilogue, run_mode));
+      model_inst->ForwardAsync(multi_batch_id, worker_group_, stage_reqs, epilogue, wg, run_mode);
+      if (run_serially) {
+        wg->Wait();
+      }
     }
 #endif
   }
-
-  // Wait all instances done and check status.
-  Status result_status;
-  for (auto& inst_results : results) {
-    for (auto& worker_result : inst_results) {
-      if (const Status status = worker_result.get(); !status.OK()) {
-        result_status = status;
-      }
-    }
-  }
-  return result_status;
+  wg->Wait();
 }
 
 void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
@@ -235,15 +188,9 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
   }
 }
 
-Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                            std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
-  if (reqs.empty()) {
-    return Status();
-  }
-
+void LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                          std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
-
-  Status result_status;
 
   // Take the shortcut when all sampling are greedy
   if (int* output_tokens_ptr = reqs.front()->model_instance->GetOutputTokensPtr(multi_batch_id).front();
@@ -254,24 +201,11 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
           output_tokens_ptr + sampling_req.logits_offset + sampling_req.sampling_token_num);
     }
   } else {
-    std::vector<std::future<Status>> results(context_->GetTensorParallelSize());
+    auto wg = std::make_shared<WaitGroup>(context_->GetTensorParallelSize(), true);
     for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-      results[worker_id] =
-          worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs);
+      worker_group_->GetWorker(worker_id)->SamplingAsync(multi_batch_id, samplers_[worker_id], sampling_reqs, wg);
     }
-
-    // Wait all instances done and check status.
-    for (auto& result : results) {
-      try {
-        const Status status = result.get();
-        if (!status.OK()) {
-          result_status = status;
-        }
-      } catch (const std::exception& e) {
-        KLLM_LOG_FATAL << "Exception in sampling, info: " << e.what();
-        result_status = Status(RET_RUNTIME_FAILED, "Failed to sampling.");
-      }
-    }
+    wg->Wait();
   }
 
   threadpool_.Submit([reqs]() mutable {
@@ -287,17 +221,15 @@ Status LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<I
       }
     });
   });
-
-  return result_status;
 }
 
-void LlmRuntime::PrepareMtpInfo(const std::vector<std::shared_ptr<InferRequest>>& reqs, WaitGroup& wg) {
+std::shared_ptr<WaitGroup> LlmRuntime::PrepareMtpInfoAsync(const std::vector<std::shared_ptr<InferRequest>>& reqs) {
   if (mtp_step_num_ == 0 || !context_->IsChief()) {
-    wg.Done();
-    return;
+    return std::make_shared<WaitGroup>();
   }
 
-  threadpool_.Submit([&]() {
+  auto wg = std::make_shared<WaitGroup>(1);
+  threadpool_.Submit([&, wg]() {
     mtp_prepared_data_.clear();
     mtp_prepared_data_.reserve(reqs.size());
     for (size_t i = 0; i < reqs.size(); ++i) {
@@ -309,8 +241,9 @@ void LlmRuntime::PrepareMtpInfo(const std::vector<std::shared_ptr<InferRequest>>
       prepare_data.infer_req = req.get();
       prepare_data.order_pos = i;
     }
-    wg.Done();
+    wg->Done();
   });
+  return wg;
 }
 
 Status LlmRuntime::MtpForward(const size_t multi_batch_id,
@@ -453,7 +386,6 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
     model_instance->AllocResources(schedule_output->multi_batch_id);
   }
   // Inference forward.
-  time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
   if (epilogue && !context_->IsStandalone()) {
     multi_batch_controller_->NotifyAnotherBatchCanRun(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "wait to recv cur_multi_batch_id=" << schedule_output->multi_batch_id;
@@ -465,20 +397,15 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
     multi_batch_controller_->WaitUntilCurrentBatchCanRun(schedule_output->multi_batch_id);
   }
 
-  // Prepare MTP
-  WaitGroup mtp_prepare_wg(1);
-  PrepareMtpInfo(schedule_output->running_reqs, mtp_prepare_wg);
+  auto mtp_prepare_wg = PrepareMtpInfoAsync(schedule_output->running_reqs);
   Forward(schedule_output->multi_batch_id, grouped_reqs, epilogue, RunMode::kMain);
-  time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  KLLM_LOG_MAIN << "LlmRuntime Forward multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue
-                << ", time cost=" << end_time_ms - start_time_ms << "ms";
 
   // Sampling only in standalone mode or epilogue=true in distributed mode
   if (context_->IsStandalone() || epilogue) {
     PROFILE_EVENT_SCOPE(SamplingAndMTP_, fmt::format("SamplingAndMTP_{}", schedule_output->multi_batch_id));
     Sampling(schedule_output->multi_batch_id, schedule_output->running_reqs, sampling_reqs);
     generation_controller_->UpdateGenerationState(schedule_output->running_reqs);
-    mtp_prepare_wg.Wait();
+    mtp_prepare_wg->Wait();
     MtpForward(schedule_output->multi_batch_id, grouped_reqs, sampling_reqs, schedule_output->running_reqs, epilogue);
     GenerateDraftToken(schedule_output->running_reqs);
     TransferGeneratedToken(schedule_output->running_reqs);
@@ -489,6 +416,7 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
     multi_batch_controller_->NotifyCurrentBatchIsFinish(schedule_output->multi_batch_id);
     KLLM_LOG_MAIN << "finish multi_batch_id=" << schedule_output->multi_batch_id << ", epilogue=" << epilogue;
   }
+
   KLLM_LOG_DEBUG << "Leave llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                  << ", epilogue=" << epilogue;
   return Status();

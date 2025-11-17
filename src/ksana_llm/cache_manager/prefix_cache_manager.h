@@ -71,7 +71,7 @@ struct PrefixCachedRequest {
   int64_t req_id;
 
   // The request state, waiting or running or finished.
-  RequestState req_state = RequestState::REQUEST_STATE_WAITING;
+  RequestState req_state = RequestState::kWaiting;
 
   // Used to update filled cached block, increased only if one block is full.
   size_t shared_block_num = 0;

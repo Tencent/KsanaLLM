@@ -42,21 +42,4 @@ void Waiter::Stop() {
   cv_.notify_all();
 }
 
-void WaitGroup::Done(int64_t n) {
-  std::lock_guard<std::mutex> guard(mutex_);
-  count_ -= n;
-  if (count_ <= 0) {
-    cond_.notify_all();
-  }
-}
-
-void WaitGroup::Wait() {
-  if (count_ == 0) {
-    return;
-  }
-
-  std::unique_lock<std::mutex> lock(mutex_);
-  cond_.wait(lock, [&]() { return count_ == 0; });
-}
-
 }  // namespace ksana_llm

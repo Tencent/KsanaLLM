@@ -130,17 +130,23 @@ inline bool is_tma_multicast_legal(int n, int block_n, int num_tma_multicast, in
   return (n % (block_n * num_tma_multicast) == 0) && num_sms % num_tma_multicast == 0;
 }
 
+template <int start, int end, int step>
+constexpr auto generate_sequence() {
+  constexpr size_t count = (end - start) / step + 1;
+  std::array<int, count> result{};
+  for (size_t i = 0; i < count; ++i) {
+    result[i] = start + static_cast<int>(i) * step;
+  }
+  return result;
+}
+
 inline GemmConfig get_best_gemm_config(uint32_t shape_m, uint32_t shape_n, uint32_t shape_k, int num_groups,
-                                int num_device_sms, bool is_grouped_contiguous = false, bool swap_ab = false) {
+                                       int num_device_sms, bool is_grouped_contiguous = false, bool swap_ab = false) {
   // Choose candidate block sizes
-  std::vector<int> block_ms;
-  block_ms.push_back((!is_grouped_contiguous && shape_m <= 64) ? 64 : 128);
+  const std::vector<int> block_ms{(!is_grouped_contiguous && shape_m <= 64) ? 64 : 128};
 
   // Candidate block sizes for N dimension
-  std::vector<int> block_ns;
-  for (int i = 16; i <= 128; i += 8) {
-    block_ns.push_back(i);
-  }
+  constexpr auto block_ns = generate_sequence<16, 128, 8>();
 
   // Lambda functions for calculating waves and utilization
   auto fix_wave_saturate = [num_device_sms](int x) -> int { return x == 0 ? num_device_sms : x; };
@@ -187,12 +193,8 @@ inline GemmConfig get_best_gemm_config(uint32_t shape_m, uint32_t shape_n, uint3
   int best_smem_size = 0;
   constexpr int sm90_capacity = 232448;
 
-  std::vector<int> stage_candidates;
-  if (128 % best_block_n != 0) {
-    stage_candidates = {6, 5, 4};
-  } else {
-    stage_candidates = {8, 7, 6, 5, 4};
-  }
+  const std::vector<int> stage_candidates =
+      (128 % best_block_n != 0) ? std::vector<int>{6, 5, 4} : std::vector<int>{8, 7, 6, 5, 4};
 
   for (int num_stages : stage_candidates) {
     int smem_size = get_smem_size(num_stages, shape_k, best_block_m, best_block_n, 128, swap_ab);

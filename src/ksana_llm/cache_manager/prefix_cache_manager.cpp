@@ -483,10 +483,10 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   }
 
   // The matched prefix blocks could not be free for waiting request.
-  std::vector<PrefixCachedBlock*> reserved_blocks = (cached_request->req_state == RequestState::REQUEST_STATE_WAITING ||
-                                                     cached_request->req_state == RequestState::REQUEST_STATE_RUNNING)
-                                                        ? cached_request->cached_blocks
-                                                        : std::vector<PrefixCachedBlock*>();
+  std::vector<PrefixCachedBlock*> reserved_blocks =
+      (cached_request->req_state == RequestState::kWaiting || cached_request->req_state == RequestState::kRunning)
+          ? cached_request->cached_blocks
+          : std::vector<PrefixCachedBlock*>();
 
   // Reuse some unreferenced blocks.
   size_t free_block_num = 0;
@@ -499,7 +499,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   // I donot want to check req block size here, because caller should guard this.
   const size_t req_block_num = req_block_ids[0].size();
   if (req_block_num == 0) {
-    cached_request->req_state = RequestState::REQUEST_STATE_RUNNING;
+    cached_request->req_state = RequestState::kRunning;
   }
 
   // The prefix cache may be invalid. Refer to cached_request for the authoritative data and clean up the invalid parts.
@@ -542,50 +542,38 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
 }
 
 void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
-  auto it = cached_requests_.find(req_id);
+  const auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_LOG_ERROR << "DestroyFinishedRequest req " << req_id << " not exists.";
     return;
   }
 
-  PrefixCachedRequest* cached_request = it->second.get();
-
+  PrefixCachedRequest& cached_request = *it->second.get();
   // If not waiting, remove request from associated cache blocks.
-  if (cached_request->req_state != RequestState::REQUEST_STATE_WAITING) {
-    size_t delete_count = 0;
-    for (size_t i = 0; i < cached_request->cached_blocks.size(); ++i) {
-      PrefixCachedBlock* cached_block = cached_request->cached_blocks[i];
-
+  if (cached_request.req_state != RequestState::kWaiting) {
+    for (const auto cached_block : cached_request.cached_blocks) {
       // Move unfilled block to free list if existed.
       if (!cached_block->is_shareable) {
         ResetCachedBlock(cached_block);
         free_cached_blocks_.push(cached_block);
-        ++delete_count;  // the not shareable block must at the end
         continue;
       }
 
-      std::unordered_map<int, std::pair<int, PrefixCachedRequest*>>* request_ptr = nullptr;
-      if (cached_request->req_state == RequestState::REQUEST_STATE_RUNNING ||
-          cached_request->req_state == RequestState::REQUEST_STATE_FINISHED) {
-        request_ptr = &cached_block->active_requests;
-      } else {
-        request_ptr = &cached_block->inactive_requests;
-      }
-
-      if (request_ptr->find(cached_request->req_id) != request_ptr->end()) {
-        request_ptr->erase(cached_request->req_id);
-      }
+      auto& request =
+          (cached_request.req_state == RequestState::kRunning || cached_request.req_state == RequestState::kFinished)
+              ? cached_block->active_requests
+              : cached_block->inactive_requests;
+      request.erase(cached_request.req_id);
 
       // Make reusable if no request left.
       if (cached_block->active_requests.empty() && cached_block->inactive_requests.empty()) {
         reusable_cached_blocks_.insert(cached_block);
       }
     }
-    cached_request->cached_blocks.resize(cached_request->cached_blocks.size() - delete_count);
   }
 
   // Remove blocks from request.
-  cached_request->cached_blocks.erase(cached_request->cached_blocks.begin(), cached_request->cached_blocks.end());
+  cached_request.cached_blocks.clear();
   cached_requests_.erase(it);
   KLLM_LOG_DEBUG << "DestroyFinishedRequest req " << req_id << " removed from cached requests.";
 }
@@ -750,8 +738,8 @@ Status PrefixCacheManager::UpdateCachedRequestState(int64_t req_id, RequestState
   }
 
   // Only swap out/in should call this.
-  if (req_state == RequestState::REQUEST_STATE_RUNNING) {
-    if (it->second->req_state == RequestState::REQUEST_STATE_SWAPPED) {
+  if (req_state == RequestState::kRunning) {
+    if (it->second->req_state == RequestState::kSwapped) {
       it->second->req_state = req_state;
       for (PrefixCachedBlock* cb : it->second->cached_blocks) {
         // For shareable block, update request state from inactive to active.
@@ -765,8 +753,8 @@ Status PrefixCacheManager::UpdateCachedRequestState(int64_t req_id, RequestState
   }
 
   // Remove request from all blocks before swapped.
-  if (req_state == RequestState::REQUEST_STATE_SWAPPED) {
-    if (it->second->req_state == RequestState::REQUEST_STATE_RUNNING) {
+  if (req_state == RequestState::kSwapped) {
+    if (it->second->req_state == RequestState::kRunning) {
       it->second->req_state = req_state;
       for (PrefixCachedBlock* cb : it->second->cached_blocks) {
         // For shareable block, update request state from active to inactive.
@@ -882,7 +870,7 @@ Status PrefixCacheManager::SwapoutRequestAsync(int64_t req_id, size_t& swapped_b
   }
 
   // Update request state from all associated blocks.
-  UpdateCachedRequestState(req_id, RequestState::REQUEST_STATE_SWAPPED);
+  UpdateCachedRequestState(req_id, RequestState::kSwapped);
 
   for (PrefixCachedBlock* cb : dev_swapout_blocks) {
     // If block is already filled, remove from parent's children list
@@ -1065,7 +1053,7 @@ Status PrefixCacheManager::MergeSwapinRequest(int64_t req_id, std::vector<std::v
   }
 
   // Update to running state.
-  UpdateCachedRequestState(req_id, RequestState::REQUEST_STATE_RUNNING);
+  UpdateCachedRequestState(req_id, RequestState::kRunning);
 
   return Status();
 }

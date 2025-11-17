@@ -155,28 +155,24 @@ std::vector<int*> ModelInstance::GetOutputTokensPtr(size_t multi_batch_id) {
 }
 
 std::vector<Status> ModelInstance::Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
-                                           InferStage stage, std::vector<ForwardRequest*>& forward_reqs,
-                                           bool epilogue) {
+                                           std::vector<ForwardRequest*>& forward_reqs, bool epilogue) {
   std::vector<Status> results(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     results[worker_id] = worker_group->GetWorker(worker_id)->Forward(
-        multi_batch_id, models_[worker_id], weight_instance_->GetWeight(worker_id), stage, forward_reqs, epilogue);
+        multi_batch_id, models_[worker_id], weight_instance_->GetWeight(worker_id), forward_reqs, epilogue);
   }
   return results;
 }
 
-std::vector<std::future<Status>> ModelInstance::ForwardAsync(size_t multi_batch_id,
-                                                             std::shared_ptr<WorkerGroup> worker_group,
-                                                             InferStage stage,
-                                                             std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
-                                                             RunMode run_mode) {
-  std::vector<std::future<Status>> results(context_->GetTensorParallelSize());
+void ModelInstance::ForwardAsync(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
+                                 std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
+                                 std::shared_ptr<WaitGroup> wg, RunMode run_mode) {
+  wg->Add(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results[worker_id] = worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
-                                                                          weight_instance_->GetWeight(worker_id), stage,
-                                                                          forward_reqs, epilogue, run_mode);
+    worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
+                                                     weight_instance_->GetWeight(worker_id), forward_reqs, epilogue, wg,
+                                                     run_mode);
   }
-  return results;
 }
 
 Status ModelInstance::AllocResources(size_t multi_batch_id) {

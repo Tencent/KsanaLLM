@@ -58,26 +58,43 @@ class Waiter {
 // Note: Maybe use Latch insteaded in c++20.
 class WaitGroup {
  public:
-  WaitGroup() : count_(0) {}
+  explicit WaitGroup(const int64_t n = 0, const bool spin = false) : count_(n), spin_(spin) {}
 
-  explicit WaitGroup(const int64_t n) : count_(n) {}
+  void Add(const int64_t n = 1) { count_.fetch_add(n, std::memory_order_release); }
 
-  void Add(const int64_t n = 1) { count_ += n; }
+  void Done(const int64_t n = 1) {
+    if (spin_) {
+      count_.fetch_sub(n, std::memory_order_release);
+      return;
+    }
 
-  void Done(const int64_t n = 1);
+    std::lock_guard<std::mutex> guard(mutex_);
+    count_.fetch_sub(n, std::memory_order_release);
+    if (count_.load(std::memory_order_acquire) == 0) {
+      cond_.notify_all();
+    }
+  }
 
-  int64_t Count() const { return count_; }
+  int64_t Count() const { return count_.load(std::memory_order_acquire); }
 
-  void Wait();
+  void Wait() {
+    if (count_.load(std::memory_order_acquire) == 0) {
+      return;
+    }
 
-  // Return true if successed, false for timeout.
-  template <typename Rep, typename Period>
-  bool WaitFor(const std::chrono::duration<Rep, Period>& timeout) {
+    if (spin_) {
+      while (count_.load(std::memory_order_acquire) != 0) {
+        __builtin_ia32_pause();
+      }
+      return;
+    }
+
     std::unique_lock<std::mutex> lock(mutex_);
-    return cond_.wait_for(lock, timeout, [&]() { return count_ == 0; });
+    cond_.wait(lock, [&]() { return count_.load(std::memory_order_acquire) == 0; });
   }
 
  private:
+  const bool spin_ = false;
   std::atomic_int64_t count_ = 0;
   std::mutex mutex_;
   std::condition_variable cond_;

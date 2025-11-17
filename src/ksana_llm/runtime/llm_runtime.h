@@ -118,19 +118,15 @@ class LlmRuntime {
   void DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs,
                                        std::vector<SamplingRequest> &sampling_reqs);
 
-  virtual Status Forward(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-                         bool epilogue, RunMode run_mode = RunMode::kMain);
+  virtual void Forward(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
+                       bool epilogue, RunMode run_mode = RunMode::kMain);
 
  private:
   // Execute the sampling.
-  virtual Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                          std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
+  virtual void Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                        std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
 
-  // Run multi-token and single-token serially in single thread.
-  Status RunSerially(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-                     bool epilogue, RunMode run_mode);
-
-  void PrepareMtpInfo(const std::vector<std::shared_ptr<InferRequest>> &reqs, WaitGroup &wg);
+  std::shared_ptr<WaitGroup> PrepareMtpInfoAsync(const std::vector<std::shared_ptr<InferRequest>> &reqs);
   Status MtpForward(const size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
                     std::vector<SamplingRequest> &sampling_reqs, std::vector<std::shared_ptr<InferRequest>> &reqs,
                     const bool epilogue);

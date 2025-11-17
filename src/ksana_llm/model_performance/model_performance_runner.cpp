@@ -193,6 +193,7 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   // warmup
   for (size_t i = 0; i < profile_config.warmup_round; ++i) {
     llm_runtime_->Forward(multi_batch_id_, grouped_reqs, false);
+    StreamSynchronize(context_->GetComputeStreams()[device_id]);
   }
 
   // Sleep 100 ms to make nsys results easier to be analyzed
@@ -202,13 +203,9 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
   EventRecord(start, context_->GetComputeStreams()[device_id]);
 
   g_profile_layer_forwarding_round = profile_config.layer_forward_round;
-  Status result_status = Status();
   for (size_t i = 0; i < profile_config.profile_round; ++i) {
-    result_status = llm_runtime_->Forward(multi_batch_id_, grouped_reqs, false);
-    if (!result_status.OK()) {
-      KLLM_LOG_ERROR << "Forward error. Msg: " << result_status.GetMessage();
-      return result_status;
-    }
+    llm_runtime_->Forward(multi_batch_id_, grouped_reqs, false);
+    StreamSynchronize(context_->GetComputeStreams()[device_id]);
   }
   g_profile_layer_forwarding_round = 1;
 
@@ -218,7 +215,7 @@ Status ModelPerformanceRunner::RunPerformanceForward(const PerfProfileConfig& pr
 
   result.config_id = profile_config.config_id;
   result.time_cost_ms = milliseconds;
-  return result_status;
+  return Status();
 }
 
 void ModelPerformanceRunner::ResetInferRequests() {

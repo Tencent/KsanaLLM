@@ -366,15 +366,14 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
   const size_t max_logits_num =
       batch_schedule_config_.max_batch_size * batch_schedule_config_.max_decode_tokens_per_req;
 
-  for (size_t req_index = 0; req_index < sampling_reqs.size(); ++req_index) {
-    const auto& sampling_req = sampling_reqs[req_index];
-    SamplingConfig* sampling_config = sampling_req.sampling_config;
+  for (const auto& sampling_req : sampling_reqs) {
+    SamplingConfig* const sampling_config = sampling_req.sampling_config;
     STATUS_CHECK_RETURN(sampling_config->VerifyArgs());
     sampling_device_parameter.logits_softmax |= sampling_req.logits_custom_length > 0;
     sampling_device_parameter.do_sampling |= sampling_req.logits_custom_length == 0;
     // In cases of logits_custom_length and speculative decoding, a single request may correspond to multiple logits
     sampling_device_parameter.bs += sampling_req.sampling_token_num;
-    float* logits = sampling_req.logits_buf[rank_];
+    float* const logits = sampling_req.logits_buf[rank_];
     if (device_logits != logits && device_logits != nullptr) {
       return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
     }
@@ -434,6 +433,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
 
 Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
   if (rank_ != 0) {
+    StreamSynchronize(context_->GetComputeStreams()[rank_]);
     return Status();
   }
   PROFILE_EVENT_SCOPE(Sampling_, fmt::format("Sampling_{}_{}", multi_batch_id, rank_), rank_);

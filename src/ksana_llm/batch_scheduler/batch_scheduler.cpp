@@ -399,7 +399,7 @@ void BatchScheduler::ReportTotalState() {
     total_free_blocks_num += cache_manager->GetUsableBlockNumber();
   }
   size_t total_block_num = total_used_blocks_num + total_free_blocks_num;
-  KLLM_LOG_INFO << " running_req_num=" << total_running_size << ", waiting_req_num=" << total_waiting_size
+  KLLM_LOG_INFO << "running_req_num=" << total_running_size << ", waiting_req_num=" << total_waiting_size
                 << ", transfer_req_num=" << total_transfer_size << ", free_block_num=" << total_free_blocks_num
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "%";
 }

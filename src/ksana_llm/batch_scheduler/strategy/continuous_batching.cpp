@@ -193,7 +193,7 @@ void ContinuousBatchingStrategy::SyncStopRequest(std::shared_ptr<InferRequest> r
                                                  RequestState req_state) {
   ResetRequest(req, ret_status, true);
   // Record finish req_id
-  if (req_state == RequestState::REQUEST_STATE_RUNNING) {
+  if (req_state == RequestState::kRunning) {
     if (req->attn_dp_group_id >= batch_state_->schedule_output->finish_req_ids.size()) {
       size_t needed_push_size = req->attn_dp_group_id - batch_state_->schedule_output->finish_req_ids.size() + 1;
       for (size_t idx = 0; idx < needed_push_size; ++idx) {
@@ -399,7 +399,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }
 
-      StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
+      StopRequest(req, Status(RET_SUCCESS), RequestState::kRunning);
 
       // Put mock request back to mock_queue.
       if (req->is_mock_req) {
@@ -414,7 +414,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
       REPORT_COUNTER("forward_req_timeout_num", static_cast<size_t>(1));
       KLLM_LOG_ERROR << "req timeout in running:" << req;
 
-      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."), RequestState::REQUEST_STATE_RUNNING);
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."), RequestState::kRunning);
       RemoveRequestFromBatchState(req);
       continue;
     }
@@ -423,7 +423,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     if (req->aborted) {
       KLLM_LOG_WARNING << "req aborted in running: " << req->req_id;
 
-      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in running."), RequestState::REQUEST_STATE_RUNNING);
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in running."), RequestState::kRunning);
       RemoveRequestFromBatchState(req);
       REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
       continue;
@@ -461,7 +461,7 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
   for (auto req : passed_reqs) {
     KLLM_CHECK(req->GetPlanningWorkload().prefill_token_num == 0);  // Decoding requests only
     const size_t max_required_token_num = GetMaxRequiredTokenNum(req->GetPlanningSequenceLen());
-    size_t req_step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
+    const size_t req_step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
     size_t forwarded_token_num = req->GetPlanningSequenceLen() - req->GetPlanningQueryLen();
 
     Status status = cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
@@ -590,7 +590,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     if (CheckRequestTimeout(req)) {
       KLLM_LOG_SCHEDULER << "req timeout in waiting:" << req;
 
-      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), RequestState::REQUEST_STATE_WAITING);
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), RequestState::kWaiting);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }
@@ -598,7 +598,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     // Check abort.
     if (req->aborted) {
       KLLM_LOG_SCHEDULER << "req aborted in waiting:" << req;
-      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in waiting."), RequestState::REQUEST_STATE_WAITING);
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in waiting."), RequestState::kWaiting);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }

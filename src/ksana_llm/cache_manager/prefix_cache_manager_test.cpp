@@ -129,7 +129,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   // Check request state.
   EXPECT_EQ(cache_manager->cached_requests_.size(), 1);
   EXPECT_EQ(cache_manager->cached_requests_[req_id]->shared_block_num, shared_block_num);
-  EXPECT_EQ(cache_manager->cached_requests_[req_id]->req_state, RequestState::REQUEST_STATE_WAITING);
+  EXPECT_EQ(cache_manager->cached_requests_[req_id]->req_state, RequestState::kWaiting);
   EXPECT_EQ(cache_manager->cached_requests_[req_id]->cached_blocks.size(), shared_block_num);
 
   // No shared block, all unqiue block.
@@ -140,8 +140,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(cache_manager->root_cached_block_->children.size(), 0);
 
   // Allocate request block.
-  std::vector<std::vector<int>> req_block_ids;
-  req_block_ids.resize(tensor_para_size);
+  std::vector<std::vector<int>> req_block_ids(tensor_para_size);
   Status status = cache_manager->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids);
   EXPECT_TRUE(status.OK());
 
@@ -314,8 +313,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(shared_block_num_2, 2);
   EXPECT_EQ(unique_block_num_2, ((54 + block_token_num - 1) / block_token_num) - 2);
 
-  std::vector<std::vector<int>> req_block_ids_2;
-  req_block_ids_2.resize(tensor_para_size);
+  std::vector<std::vector<int>> req_block_ids_2(tensor_para_size);
   status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num_2, req_block_ids_2);
   EXPECT_TRUE(status.OK());
 
@@ -351,8 +349,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_EQ(shared_block_num_5, 2);
   EXPECT_EQ(unique_block_num_5, ((54 + block_token_num - 1) / block_token_num) - 2);
 
-  std::vector<std::vector<int>> req_block_ids_3;
-  req_block_ids_3.resize(tensor_para_size);
+  std::vector<std::vector<int>> req_block_ids_3(tensor_para_size);
   status = cache_manager->AllocateRequestBlocks(req_id_3, unique_block_num_3, req_block_ids_3);
   EXPECT_TRUE(status.OK());
 
@@ -470,8 +467,7 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   cache_manager->GetRequestPrefixBlockNumber(req_id_4, output_token_ids_4, output_token_ids_4.size(),
                                              shared_block_num_4, unique_block_num_4, shared_token_num_4);
 
-  std::vector<std::vector<int>> req_block_ids_4;
-  req_block_ids_4.resize(tensor_para_size);
+  std::vector<std::vector<int>> req_block_ids_4(tensor_para_size);
   status = cache_manager->AllocateRequestBlocks(req_id_4, unique_block_num_4, req_block_ids_4);
   EXPECT_TRUE(status.OK());
 
@@ -556,6 +552,25 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   for (auto& req_block_tp : req_block_ids_6) {
     EXPECT_EQ(req_block_tp.size(), 7);
   }
+  cache_manager->DestroyFinishedRequest(req_id_6);
+
+  // test unique_block > 1
+  const size_t before_usable_block = cache_manager->GetUsableBlockNumber();
+  std::vector<int> output_token_ids_7;
+  faked_token_generator->GeneratePromptTokens({std::make_pair(1, 36)}, output_token_ids_7);
+
+  constexpr int64_t req_id_7 = 7;
+  size_t shared_token_num_7 = 0;
+  size_t shared_block_num_7 = 0;
+  size_t unique_block_num_7 = 0;
+  cache_manager->GetRequestPrefixBlockNumber(req_id_7, output_token_ids_7, output_token_ids_7.size(),
+                                             shared_block_num_7, unique_block_num_7, shared_token_num_7);
+  unique_block_num_7 += 2;  // add some extra unique block
+  std::vector<std::vector<int>> req_block_ids_7(tensor_para_size);
+  status = cache_manager->AllocateRequestBlocks(req_id_7, unique_block_num_7, req_block_ids_7);
+  EXPECT_TRUE(status.OK());
+  cache_manager->DestroyFinishedRequest(req_id_7);
+  EXPECT_EQ(cache_manager->GetUsableBlockNumber(), before_usable_block);
 }
 
 TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
@@ -661,8 +676,7 @@ TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
   int64_t invalid_id = 999;
 
   // Allocate request block.
-  std::vector<std::vector<int>> req_block_ids;
-  req_block_ids.resize(tensor_para_size);
+  std::vector<std::vector<int>> req_block_ids(tensor_para_size);
   size_t unique_block_num;
   Status status = cache_manager->AllocateRequestBlocks(invalid_id, unique_block_num, req_block_ids);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
@@ -671,7 +685,7 @@ TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
   status = cache_manager->UpdateRequestTokens(invalid_id, output_token_ids, 0, req_block_ids);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 
-  status = cache_manager->UpdateCachedRequestState(invalid_id, RequestState::REQUEST_STATE_WAITING);
+  status = cache_manager->UpdateCachedRequestState(invalid_id, RequestState::kWaiting);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 
   status = cache_manager->GetRequestFreeableBlockNum(invalid_id, unique_block_num);

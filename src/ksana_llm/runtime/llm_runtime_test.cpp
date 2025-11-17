@@ -21,16 +21,13 @@ class MockTransferEngine : public TransferEngine {
 class LlmRuntimeMock : public LlmRuntime {
   using LlmRuntime::LlmRuntime;
 
-  Status Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                 bool epilogue, RunMode run_mode = RunMode::kMain) override {
-    return Status();
-  }
-  Status Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                  std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler = true) override {
+  void Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
+               bool epilogue, RunMode run_mode = RunMode::kMain) override {}
+  void Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler = true) override {
     for (auto& req : sampling_reqs) {
       req.sampling_result_tokens->emplace_back(kMockSamplingToken);
     }
-    return Status();
   }
 
  public:
@@ -286,15 +283,13 @@ TEST_F(LlmRuntimeTest, PrepareMtpInfoTest) {
   req2->forwarding_tokens = {3, 4, 5, 6};
   reqs.emplace_back(req2);
 
-  WaitGroup wg(1);
-  llm_runtime_->PrepareMtpInfo(reqs, wg);
-  wg.Wait();
+  auto wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  wg->Wait();
   EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 0);
 
   *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 1;
-  wg.Add(1);
-  llm_runtime_->PrepareMtpInfo(reqs, wg);
-  wg.Wait();
+  wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  wg->Wait();
   EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 2);
 
   auto& prepare_1 = llm_runtime_->mtp_prepared_data_[101];
@@ -339,9 +334,8 @@ TEST_F(LlmRuntimeTest, MtpForwardTest) {
 
   *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 2;
 
-  WaitGroup wg(1);
-  llm_runtime_->PrepareMtpInfo(reqs, wg);
-  wg.Wait();
+  auto wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  wg->Wait();
 
   std::vector<int> samp_res1, samp_res2;
   std::vector<SamplingRequest> sampling_reqs(reqs.size());

@@ -57,7 +57,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
 
   size_t device_total, device_free;
-  Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
+  const Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
   if (status.OK()) {
     size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
     max_block_num =
@@ -1335,6 +1335,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest*>& forward_req
   std::vector<size_t> logits_idx_list(total_sampling_token_num_);
   size_t logits_idx_list_idx = 0;
   std::vector<size_t> dp_prefill_q_offset(1, 0);
+  dp_prefill_q_offset.reserve(dp_multi_token_request_num + 1);
   std::vector<size_t> dp_input_ids_lens(attn_dp_group_size_, 0);
 
   auto process_func = [&](const ForwardRequest& req) {

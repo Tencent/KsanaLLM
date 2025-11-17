@@ -147,7 +147,7 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }
 
-      StopRequest(req, Status(RET_SUCCESS), RequestState::REQUEST_STATE_RUNNING);
+      StopRequest(req, Status(RET_SUCCESS), RequestState::kRunning);
 
       it = batch_state_->transfer_queue.erase(it);
     } else {

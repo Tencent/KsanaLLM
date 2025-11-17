@@ -215,6 +215,7 @@ class DeepSeekV3Test : public testing::Test {
       KLLM_LOG_INFO << "LayerProgressTracker : device_id: " << device_id << " , layer_index: " << layer_index;
     });
     EXPECT_TRUE(deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false).OK());
+    StreamSynchronize(context->GetComputeStreams()[device_id]);
     Singleton<LayerProgressTracker>::GetInstance()->Cleanup();
 
     auto forward_1 = std::make_unique<ForwardRequest>(*forward);
@@ -223,11 +224,13 @@ class DeepSeekV3Test : public testing::Test {
     // warmup
     for (int i = 0; i < rounds; ++i) {
       deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      StreamSynchronize(context->GetComputeStreams()[device_id]);
     }
     // test performance
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
       deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      StreamSynchronize(context->GetComputeStreams()[device_id]);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -250,7 +253,7 @@ class DeepSeekV3Test : public testing::Test {
     sample_req.sampling_result_tokens = &generated_tokens0;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = std::vector<float*>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
+    sample_req.logits_buf = std::vector<float *>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
     SamplingConfig sample_config;
     sample_config.num_beams = 1;
     sample_config.topk = 1;
@@ -264,7 +267,7 @@ class DeepSeekV3Test : public testing::Test {
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;
     decode_sample_req.logits_offset = forward_reqs[1]->logits_offset;
-    decode_sample_req.logits_buf = std::vector<float*>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
+    decode_sample_req.logits_buf = std::vector<float *>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
 
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -321,6 +324,7 @@ class DeepSeekV3Test : public testing::Test {
     }
     for (int i = 0; i < rounds; ++i) {
       deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, multi_forward_reqs, false);
+      StreamSynchronize(context->GetComputeStreams()[device_id]);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
@@ -353,6 +357,7 @@ class DeepSeekV3Test : public testing::Test {
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
       deepseek_v3->Forward(multi_batch_id, deepseek_v3_weight, forward_reqs, false, RunMode::kNextN);
+      StreamSynchronize(context->GetComputeStreams()[device_id]);
     }
     EventRecord(stop, context->GetComputeStreams()[device_id]);
     EventSynchronize(stop);
