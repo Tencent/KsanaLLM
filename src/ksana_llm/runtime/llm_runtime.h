@@ -16,7 +16,6 @@
 #include "ksana_llm/runtime/worker.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/transfer/transfer_engine.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/status.h"
 
@@ -27,11 +26,7 @@ class LlmRuntime {
  public:
   LlmRuntime(const BatchSchedulerConfig &batch_scheduler_config, const RuntimeConfig &runtime_config,
              std::shared_ptr<Context> context);
-  ~LlmRuntime() {
-    if (threadpool_) {
-      threadpool_->Stop();
-    }
-  }
+  ~LlmRuntime() { threadpool_.Stop(); }
 
   // Set cache manager, used to operate the kv cache block.
   void SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers);
@@ -59,7 +54,6 @@ class LlmRuntime {
     PROFILE_EVENT_SCOPE(ReorderInferRequests, "ReorderInferRequests");
     // Due to the different calculation logic used for multi-token and single-token in the Attention layer,
     // the requests are first sorted to utilize contiguous space for accelerated inference.
-    // Sort the infer_reqs list based on the number of tokens that need to be calculated for the KV cache.
     std::sort(reqs.begin(), reqs.end(), [this](const auto &a, const auto &b) {
       // For dp case, the order is: [group1_prefill, group1_decode, group2_prefill, group2_decode, ...]
       // NOTE: prefill may appear after decode (if they are in different dp groups)
@@ -79,24 +73,20 @@ class LlmRuntime {
       const size_t a_token_num = get_vec_size(a->forwarding_tokens) - a->kv_cached_token_num;
       const size_t b_token_num = get_vec_size(b->forwarding_tokens) - b->kv_cached_token_num;
 
-      const static size_t decode_threshold_len = IsAbsorbWeightsEnabled() && IsAbsorbWeightsEnabled() ? 2 : 1;
+      const bool is_a_decode = a_token_num <= GetDecodeTokenNumThreshold() && a->kv_cached_token_num > 0;
+      const bool is_b_decode = b_token_num <= GetDecodeTokenNumThreshold() && b->kv_cached_token_num > 0;
 
-      const bool is_a_decode = a_token_num <= decode_threshold_len && a->kv_cached_token_num != 0;
-      const bool is_b_decode = b_token_num <= decode_threshold_len && b->kv_cached_token_num != 0;
-
-      // Both prefill or decode, the a_token_num or b_token_num may be zero.
       if (is_a_decode == is_b_decode) {
-        if (a->attn_dp_group_id != b->attn_dp_group_id) {
-          return a->attn_dp_group_id < b->attn_dp_group_id;
-        } else {
-          if (a_token_num != b_token_num) {
-            return a_token_num > b_token_num;
-          }
-          if (a->kv_cached_token_num != b->kv_cached_token_num) {
-            return a->kv_cached_token_num < b->kv_cached_token_num;
-          }
-          return a->req_id < b->req_id;
+        // Both prefill or decode, sort the infer_reqs list based on a_token_num and b_token_num,
+        // i.e., the number of tokens that need to be calculated for the KV cache.
+        // NOTE: a_token_num or b_token_num may be zero
+        if (a_token_num != b_token_num) {
+          return a_token_num > b_token_num;
         }
+        if (a->kv_cached_token_num != b->kv_cached_token_num) {
+          return a->kv_cached_token_num < b->kv_cached_token_num;
+        }
+        return a->req_id < b->req_id;
       } else {
         // One is prefill, another is decode, prefill before decode
         return !is_a_decode;

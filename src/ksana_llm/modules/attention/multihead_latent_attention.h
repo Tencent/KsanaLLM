@@ -5,7 +5,6 @@
 
 #include "ksana_llm/models/common/common_model.h"
 #include "ksana_llm/models/common/common_weight.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/utils.h"
@@ -103,8 +102,6 @@ class MultiHeadLatentAttention {
   inline static size_t kv_lora_rank_ = 0;
   inline static size_t q_lora_rank_ = 0;
   inline static size_t head_num_per_atp_ = 0;
-
-  AbsorbWeightsType absorb_type_ = AbsorbWeightsType::kAbsorbDisabled;
 };
 
 }  // namespace ksana_llm

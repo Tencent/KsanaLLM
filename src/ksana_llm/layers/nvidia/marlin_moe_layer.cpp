@@ -37,10 +37,10 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-size_t MarlinMoeLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
+size_t MarlinMoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 template <typename T>
-size_t MarlinMoeLayer::GetWorkSpaceSizeT() {
+size_t MarlinMoeLayer::GetWorkspaceSizeT() {
   max_gating_size_ = sizeof(float) * max_token_num_ * expert_num_;
   max_ws_bytes_ = max_gating_size_;
   max_ws_bytes_ += InvokeGetFusedMarlinMoeWorkspaceSize(max_token_num_, expert_inter_size_, expert_hidden_size_,

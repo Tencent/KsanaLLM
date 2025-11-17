@@ -5,10 +5,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <string>
-#include <vector>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <cassert>
@@ -34,7 +35,6 @@ enum Level {
 };
 
 extern std::vector<std::string> g_detail_levels;
-
 
 // Get log level from environment, this function called only once.
 static std::vector<std::string> GetLogLevels() {
@@ -94,9 +94,8 @@ inline void InitLoguru(bool force = false) {
   const std::vector<std::string> input_log_levels = GetLogLevels();
   loguru::Verbosity verbosity = loguru::Verbosity_INVALID;
   // 1. check if have debug
-  bool has_debug = std::any_of(input_log_levels.begin(), input_log_levels.end(), [](const std::string& str) {
-    return str == "DEBUG";
-  });
+  bool has_debug = std::any_of(input_log_levels.begin(), input_log_levels.end(),
+                               [](const std::string& str) { return str == "DEBUG"; });
   if (has_debug) {
     verbosity = loguru::Verbosity_MAX;
   }
@@ -201,5 +200,20 @@ inline uint64_t GetCurrentTimeInMs() {
   } while (0)
 
 #define KLLM_THROW(info) ThrowRuntimeError(__FILE__, __LINE__, info)
+
+// Logger with fixed time intervals
+class IntervalLogger {
+ public:
+  explicit IntervalLogger(const uint64_t interval_ms);
+
+  // Whether logging should be performed at the current time
+  bool ShouldLog();
+
+ private:
+  // Time interval between logs in milliseconds
+  const uint64_t interval_ms_;
+  // Timestamp of the last log in milliseconds since epoch
+  uint64_t last_time_ms_;
+};
 
 }  // namespace ksana_llm

@@ -7,7 +7,6 @@
 #include <filesystem>
 
 #include "ksana_llm/models/quant/quant_weight.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/singleton.h"
 #include "test.h"
 

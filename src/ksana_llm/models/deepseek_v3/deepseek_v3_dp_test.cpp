@@ -7,10 +7,11 @@
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
+#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
-#include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -55,14 +56,15 @@ class DeepSeekV3DPTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / yaml_path;
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_path);
-    BatchSchedulerConfig batch_scheduler_config;
-    env->GetBatchSchedulerConfig(batch_scheduler_config);
-    batch_scheduler_config.enable_mtp_module = true;
-    env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
+    BatchSchedulerConfig batch_scheduler_config;
+    env->GetBatchSchedulerConfig(batch_scheduler_config);
+    batch_scheduler_config.mtp_step_num = model_config.num_nextn_predict_layers;
+    env->SetBatchSchedulerConfig(batch_scheduler_config);
 
     KLLM_LOG_INFO << "model_config.quant_config.method: " << model_config.quant_config.method;
     AttnBackendConfig attn_backend_config;
@@ -137,57 +139,32 @@ class DeepSeekV3DPTest : public testing::Test {
     std::vector<std::vector<float>> input_refit_embedding;
     embedding_slice.pos = input_refit_pos;
     embedding_slice.embeddings = input_refit_embedding;
-    forward.input_refit_embedding = &embedding_slice;
+    forward->input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
     int use_block_num = (input_ids.size() + runtime_config.attn_backend_config.block_token_num - 1) /
                         runtime_config.attn_backend_config.block_token_num;
     block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
-    forward.kv_cache_ptrs.resize(1);  // device num in dp group.
-    block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+    forward->kv_cache_ptrs.resize(1);  // device num in dp group.
+    block_allocator_groups[dp_group_id]->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward->kv_cache_ptrs[0]);
 
-    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer + model_config.num_nextn_predict_layers, {block_ids},
-                                       forward.atb_kv_cache_base_blk_ids, cache_managers[dp_group_id]);
+    forward->atb_kv_cache_base_blk_ids.assign(1, {});
+    AppendFlatKVCacheBlkIds(model_config.num_layer + model_config.num_nextn_predict_layers, {block_ids},
+                            forward->atb_kv_cache_base_blk_ids, cache_managers[dp_group_id]);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
-      Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
+      Memset(forward->kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
     }
 
     return forward;
   }
 
-  void MakeDecodeForwardRequest(ForwardRequest &forward_req, int new_token) {
-    forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size();
-    forward_req.forwarding_tokens->push_back(new_token);
-    forward_req.infer_stage = InferStage::STATE_DECODE;
+  void MakeDecodeForwardRequest(std::unique_ptr<ForwardRequest> &forward_req, int new_token) {
+    forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size();
+    forward_req->forwarding_tokens->emplace_back(new_token);
+    forward_req->infer_stage = InferStage::kDecode;
   }
 
-  SamplingRequest CreateSamplingRequest(ForwardRequest &forward_req,
-                                        std::vector<std::vector<std::pair<int, float>>> &logprobs,
-                                        std::vector<int> &generated_tokens, NgramDict &ngram_dict,
-                                        SamplingConfig &sample_config) {
-    SamplingRequest sample_req;
-    sample_req.req_id = forward_req.req_id;
-    sample_req.input_tokens = forward_req.forwarding_tokens;
-    sample_req.sampling_token_num = 1;
-    sample_req.logits_offset = forward_req.logits_offset;
-    sample_req.sampling_result_tokens = &generated_tokens;
-    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
-    sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = forward_req.logits_buf;
-    sample_req.model_config = &model_config;
-    sample_config.num_beams = 1;
-    sample_config.topk = 1;
-    sample_config.topp = 0;
-    sample_config.temperature = 0;
-    sample_config.repetition_penalty = 1;
-    sample_config.no_repeat_ngram_size = 0;
-    sample_config.encoder_no_repeat_ngram_size = 0;
-    sample_req.sampling_config = &sample_config;
-
-    return sample_req;
-  }
-
-  void ExecuteForward(std::vector<ForwardRequest> &forward_reqs) {
+  void ExecuteForward(std::vector<ForwardRequest *> &forward_reqs) {
     std::vector<std::thread> forward_threads;
     for (int device_id : {0, 1}) {
       forward_threads.emplace_back([&, this, device_id]() {
@@ -218,21 +195,17 @@ class DeepSeekV3DPTest : public testing::Test {
 
     // dp group 0
     std::vector<int> input_ids0 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward0 =
-        CreateContextForwardRequest(0, 0, input_ids0, flexible_cached_copy_tasks, embedding_slice);
+    auto forward0 = CreateContextForwardRequest(0, 0, input_ids0, flexible_cached_copy_tasks, embedding_slice);
 
     std::vector<int> input_ids2 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward2 =
-        CreateContextForwardRequest(2, 0, input_ids2, flexible_cached_copy_tasks, embedding_slice);
+    auto forward2 = CreateContextForwardRequest(2, 0, input_ids2, flexible_cached_copy_tasks, embedding_slice);
 
     // dp group 1
     std::vector<int> input_ids1 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward1 =
-        CreateContextForwardRequest(1, 1, input_ids1, flexible_cached_copy_tasks, embedding_slice);
+    auto forward1 = CreateContextForwardRequest(1, 1, input_ids1, flexible_cached_copy_tasks, embedding_slice);
 
     std::vector<int> input_ids3 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward3 =
-        CreateContextForwardRequest(3, 1, input_ids3, flexible_cached_copy_tasks, embedding_slice);
+    auto forward3 = CreateContextForwardRequest(3, 1, input_ids3, flexible_cached_copy_tasks, embedding_slice);
 
     auto hash_fn = [](float *dev_logist_ptr, size_t dim_size) -> size_t {
       float *host_ptr = reinterpret_cast<float *>(malloc(dim_size * sizeof(float)));
@@ -246,7 +219,8 @@ class DeepSeekV3DPTest : public testing::Test {
     };
 
     // Execute forward, sorted by (forwarding_token_size, dp_group_id)
-    std::vector<ForwardRequest> context_forward_reqs = {forward0, forward2, forward1, forward3};
+    std::vector<ForwardRequest *> context_forward_reqs = {forward0.get(), forward2.get(), forward1.get(),
+                                                          forward3.get()};
     ExecuteForward(context_forward_reqs);
 
     // Chdck data hash.
@@ -264,7 +238,7 @@ class DeepSeekV3DPTest : public testing::Test {
     MakeDecodeForwardRequest(forward1, 24588);
 
     // Execute forward
-    std::vector<ForwardRequest> decode_forward_reqs = {forward0, forward1};
+    std::vector<ForwardRequest *> decode_forward_reqs = {forward0.get(), forward1.get()};
     ExecuteForward(decode_forward_reqs);
 
     // Check data hash.
@@ -275,19 +249,17 @@ class DeepSeekV3DPTest : public testing::Test {
     // ///////////////////////// Mixed of context and decode ///////////////////
     // dp group 0
     std::vector<int> input_ids4 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward4 =
-        CreateContextForwardRequest(4, 0, input_ids4, flexible_cached_copy_tasks, embedding_slice);
+    auto forward4 = CreateContextForwardRequest(4, 0, input_ids4, flexible_cached_copy_tasks, embedding_slice);
 
     // dp group 1
     std::vector<int> input_ids5 = {100000, 100000, 5726, 25, 207, 31104, 8672, 2224, 185, 185, 77398, 25};
-    ForwardRequest forward5 =
-        CreateContextForwardRequest(5, 1, input_ids5, flexible_cached_copy_tasks, embedding_slice);
+    auto forward5 = CreateContextForwardRequest(5, 1, input_ids5, flexible_cached_copy_tasks, embedding_slice);
 
     MakeDecodeForwardRequest(forward2, 24588);
     MakeDecodeForwardRequest(forward3, 24588);
 
     // Execute forward: [dp0_prefill, dp0_decode, dp1_prefill, dp1_decode]
-    std::vector<ForwardRequest> mixed_forward_reqs = {forward4, forward2, forward5, forward3};
+    std::vector<ForwardRequest *> mixed_forward_reqs = {forward4.get(), forward2.get(), forward5.get(), forward3.get()};
     ExecuteForward(mixed_forward_reqs);
 
     // Check data hash.

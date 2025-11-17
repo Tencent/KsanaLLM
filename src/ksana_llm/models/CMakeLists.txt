@@ -22,7 +22,8 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/internlmxcomposer2/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_large/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/*.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/new_deepseek_v3/*.cpp)
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/new_deepseek_v3/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_turbo/*.cpp)
 
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 
@@ -57,6 +58,9 @@ if(WITH_STANDALONE_TEST)
   cpp_test(llama_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/llama_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS} ${TORCH_LIBRARIES})
   cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   if(WITH_CUDA)
+    cpp_test(hunyuan_turbo_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_turbo/hunyuan_turbo_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    cpp_test(qwen_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/qwen/qwen_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
     if(DEFINED SM AND "${SM}" STREQUAL "90a")
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(deepseek_v3_dp_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_dp_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

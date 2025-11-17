@@ -52,6 +52,15 @@ class TaskManager {
   using GroupDevKey =
       std::pair<std::string, std::pair<int, int>>;  ///< (group_key, (src_device_idx, dst_device_idx)) pair
 
+  // The stage of a task in the pipeline
+  struct TaskStage {
+      std::time_t start_time = ProfileTimer::GetCurrentTime();
+
+    // If Decode confirms this task, transfer it to DecodeNode and set decode_confirmed to 1.
+    // If Prefill produces this task first and Decode does not confirm it, decode_confirmed remains 0.
+      std::atomic<int> decode_confirmed = 0;
+  };
+
   /**
    * @brief Task shard containing all data structures for a subset of req_ids
    */
@@ -60,8 +69,7 @@ class TaskManager {
     tbb::concurrent_hash_map<TaskKey, std::shared_ptr<TransferTask>, TaskKey::HashCompare> request_map;
 
     // Promise synchronization maps
-    tbb::concurrent_hash_map<TaskKey, std::time_t, TaskKey::HashCompare> prefill_pending_tasks;
-    tbb::concurrent_hash_map<TaskKey, std::time_t, TaskKey::HashCompare> decode_confirmed_tasks;
+    tbb::concurrent_hash_map<TaskKey, TaskStage, TaskKey::HashCompare> decode_confirmed_tasks;
 
     TaskShard() = default;
     TaskShard(const TaskShard&) = delete;
@@ -181,23 +189,23 @@ class TaskManager {
   //=============================================================================
 
   /**
-   * @brief Register confirmed tasks from decode phase
+   * @brief Register a receive callback function for received tasks from decode phase
    * @param task_keys Vector of TaskKeys confirmed by decode phase
    */
   void RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_keys);
 
   /**
-   * @brief Add a task to the prefill pending queue
-   * @param task_key TaskKey to add to pending queue
+   * @brief Add a task to the unconfirmed queue
+   * @param task_key TaskKey to add to unconfirmed queue
    */
-  void AddPrefillPendingTask(const TaskKey& task_key);
+  void AddUnconfirmedTask(const TaskKey& task_key);
 
   /**
-   * @brief Try to activate a pending task
+   * @brief Try to activate a unconfirmed task
    * @param task_key TaskKey to try to activate
    * @return true if task was activated, false if it needs to wait
    */
-  bool TryActivatePendingTask(TaskKey& task_key);
+  bool TryActivateUnconfirmedTask(TaskKey& task_key);
 
   //=============================================================================
   // Batch Operations and Utilities
@@ -229,7 +237,7 @@ class TaskManager {
    * @brief Clean up expired tasks using parallel processing
    * @param timeout_seconds Age threshold for task expiration
    */
-  void CleanupExpiredTasks(int timeout_seconds = TASK_MANAGER_DEFAULT_EXPIRE_SECONDS);
+  void CleanupExpiredTasks(int timeout_seconds);
 
   /**
    * @brief Shutdown the task manager and clean up all resources
@@ -248,6 +256,8 @@ class TaskManager {
 
   // Notification system (public for direct access)
   std::shared_ptr<Waiter> notification_waiter_;  ///< Notifies when new tasks are available
+
+  tbb::concurrent_priority_queue<TaskKey> usage_tasks_;
 
  private:
   //=============================================================================

@@ -27,18 +27,28 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
     text. This parser extracts the reasoning content from the model output.
     """
 
-    start_token_id: int
-    end_token_id: int
+    # Token ID映射：将字符串token转换为对应的token ID用于高效处理
+    start_token_id: int  # "<think>"对应的token ID
+    end_token_id: int    # "</think>"对应的token ID
 
-    start_token: str = "<think>"
-    end_token: str = "</think>"
-    # why not we use end_token directly?
-    # because end_token may appear in output lonely.
-    special_end_id: int = 201  # Special end token ID for DeepSeek R1
+    # 推理标记的字符串表示
+    start_token: str = "<think>"   # 推理开始标记
+    end_token: str = "</think>"    # 推理结束标记
     
-    # State management for pending end token confirmation
-    _pending_end_token: bool = False
-    _pending_end_content: str = ""
+    # 特殊结束确认机制：
+    # 因为模型在推理过程中可能会生成"</think>"作为推理内容的一部分，
+    # 这会导致误判推理结束。因此需要特殊的确认机制。
+    end_confirmation_token_id: int = 201  # 特殊结束token ID (通常是换行符\n的token ID)
+                                         # 只有当</think>后紧跟此token时，才确认推理真正结束
+
+    # 延迟确认状态管理：
+    # 当遇到</think>时，不立即确认推理结束，而是等待下一个token来确认
+    _awaiting_end_confirmation: bool = False    # 标记是否有待确认的</think>token
+    _pending_reasoning_content: str = ""      # 暂存待确认的推理内容，如果确认失败需要作为推理内容输出
+
+    # 推理状态缓存：
+    # 一旦确认推理结束，缓存此状态避免重复计算
+    _reasoning_ended: bool = False      # 标记推理是否已经确认结束，用于性能优化
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase):
         super().__init__(tokenizer)
@@ -56,28 +66,52 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 "tokens in the tokenizer!")
         
         # Initialize state management
-        self._pending_end_token = False
-        self._pending_end_content = ""
+        self._awaiting_end_confirmation = False
+        self._pending_reasoning_content = ""
+        self._reasoning_ended = False
 
     def is_reasoning_end(self, input_ids: list[int]) -> bool:
         """
-        Check if reasoning has ended by looking for </think> followed by special_end_id (201).
-        Only confirms reasoning end when </think> is immediately followed by 201.
+        判断推理是否真正结束
+        
+        核心逻辑：只有当</think>后紧跟end_confirmation_token_id(201)时，才确认推理结束
+        
+        Args:
+            input_ids: 当前的token ID序列
+            
+        Returns:
+            bool: True表示推理已确认结束，False表示推理仍在进行或未确认结束
+            
+        状态管理：
+        - 使用_reasoning_ended缓存结果，避免重复计算
+        - 一旦确认推理结束，后续调用直接返回True
         """
+        # If reasoning has already been confirmed as ended, return True immediately
+        if self._reasoning_ended:
+            return True
+            
         if self.end_token_id not in input_ids:
             return False
         
         # Find all occurrences of end_token_id
         for i, token_id in enumerate(input_ids):
             if token_id == self.end_token_id:
-                if i + 1 < len(input_ids) and input_ids[i + 1] == self.special_end_id:
+                if i + 1 < len(input_ids) and input_ids[i + 1] == self.end_confirmation_token_id:
+                    # Cache the result to avoid future expensive computations
+                    self._reasoning_ended = True
                     return True
         
         return False
 
     def extract_content_ids(self, input_ids: list[int]) -> list[int]:
         """
-        Extract the content after the end tokens
+        提取结束token之后的内容token IDs
+        
+        Args:
+            input_ids: 输入的token ID序列
+            
+        Returns:
+            list[int]: 结束token之后的token ID列表
         """
         if self.end_token_id not in input_ids[:-1]:
             return []
@@ -102,7 +136,7 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
         - 'xyz' goes to content
         
         Enhanced logic to handle delayed confirmation of </think> tokens.
-        Only confirms reasoning end when </think> is followed by special_end_id (201).
+        Only confirms reasoning end when </think> is followed by end_confirmation_token_id (201).
         """
         # Skip single special tokens
         if len(delta_token_ids) == 1 and (delta_token_ids[0] in [
@@ -111,17 +145,18 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
             return None
 
         # Handle pending end token confirmation first
-        if self._pending_end_token:
-            if len(delta_token_ids) > 0 and delta_token_ids[0] == self.special_end_id:
+        if self._awaiting_end_confirmation:
+            if len(delta_token_ids) > 0 and delta_token_ids[0] == self.end_confirmation_token_id:
                 # Confirmed: previous </think> was real end of reasoning
-                self._pending_end_token = False
-                pending_content = self._pending_end_content
-                self._pending_end_content = ""
+                self._awaiting_end_confirmation = False
+                self._reasoning_ended = True  # Mark reasoning as ended
+                pending_content = self._pending_reasoning_content
+                self._pending_reasoning_content = ""
                 
-                # Extract remaining content after special_end_id
+                # Extract remaining content after end_confirmation_token_id
                 remaining_content = ""
                 if len(delta_token_ids) > 1:
-                    # Decode remaining tokens after special_end_id
+                    # Decode remaining tokens after end_confirmation_token_id
                     remaining_tokens = delta_token_ids[1:]
                     remaining_content = self.model_tokenizer.decode(remaining_tokens, skip_special_tokens=False)
                 
@@ -132,9 +167,9 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
             else:
                 # Not confirmed: previous </think> was model output during reasoning,
                 # treat as reasoning_content since reasoning hasn't ended yet
-                self._pending_end_token = False
-                combined_reasoning = self._pending_end_content + self.end_token + delta_text
-                self._pending_end_content = ""
+                self._awaiting_end_confirmation = False
+                combined_reasoning = self._pending_reasoning_content + self.end_token + delta_text
+                self._pending_reasoning_content = ""
                 return DeltaMessage(reasoning_content=combined_reasoning)
 
         # Check if <think> is present in previous or delta.
@@ -150,8 +185,9 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 
                 # If there are more tokens after </think>, judge if it's real end of think.
                 if end_token_index + 1 < len(delta_token_ids):
-                    if delta_token_ids[end_token_index + 1] == self.special_end_id:
+                    if delta_token_ids[end_token_index + 1] == self.end_confirmation_token_id:
                         # Confirmed end of reasoning
+                        self._reasoning_ended = True  # Mark reasoning as ended
                         reasoning_content = delta_text[:end_index]
                         content = delta_text[end_index + len(self.end_token):]
                         return DeltaMessage(
@@ -164,8 +200,8 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 else:
                     # </think> is at the end, need to wait for next token to confirm
                     reasoning_content = delta_text[:end_index]
-                    self._pending_end_token = True
-                    self._pending_end_content = reasoning_content
+                    self._awaiting_end_confirmation = True
+                    self._pending_reasoning_content = reasoning_content
                     return None  # Temporarily not handle. Wait for next token
                     
             elif self.end_token_id in previous_token_ids:
@@ -189,10 +225,11 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 end_index = delta_text.find(self.end_token)
                 end_token_index = delta_token_ids.index(self.end_token_id)
                 
-                # Check if special_end_id follows immediately after </think>
+                # Check if end_confirmation_token_id follows immediately after </think>
                 if end_token_index + 1 < len(delta_token_ids):
-                    if delta_token_ids[end_token_index + 1] == self.special_end_id:
+                    if delta_token_ids[end_token_index + 1] == self.end_confirmation_token_id:
                         # Confirmed end of reasoning
+                        self._reasoning_ended = True  # Mark reasoning as ended
                         reasoning_content = delta_text[start_index + len(self.start_token):end_index]
                         content = delta_text[end_index + len(self.end_token):]
                         return DeltaMessage(
@@ -206,8 +243,8 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 else:
                     # </think> is at the end, need to wait for confirmation
                     reasoning_content = delta_text[start_index + len(self.start_token):end_index]
-                    self._pending_end_token = True
-                    self._pending_end_content = reasoning_content
+                    self._awaiting_end_confirmation = True
+                    self._pending_reasoning_content = reasoning_content
                     return None  # Wait for next token
             else:
                 # <think> in delta, no </think> in delta,
@@ -226,10 +263,11 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 end_index = delta_text.find(self.end_token)
                 end_token_index = delta_token_ids.index(self.end_token_id)
                 
-                # Check if special_end_id follows immediately
+                # Check if end_confirmation_token_id follows immediately
                 if end_token_index + 1 < len(delta_token_ids):
-                    if delta_token_ids[end_token_index + 1] == self.special_end_id:
+                    if delta_token_ids[end_token_index + 1] == self.end_confirmation_token_id:
                         # Confirmed end of reasoning
+                        self._reasoning_ended = True  # Mark reasoning as ended
                         reasoning_content = delta_text[:end_index]
                         content = delta_text[end_index + len(self.end_token):]
                         return DeltaMessage(
@@ -244,8 +282,8 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 else:
                     # </think> is at the end, need to wait for confirmation
                     reasoning_content = delta_text[:end_index]
-                    self._pending_end_token = True
-                    self._pending_end_content = reasoning_content
+                    self._awaiting_end_confirmation = True
+                    self._pending_reasoning_content = reasoning_content
                     return None  # Wait for next token
                     
             elif self.end_token_id in previous_token_ids:

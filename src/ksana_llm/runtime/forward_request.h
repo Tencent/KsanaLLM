@@ -10,16 +10,14 @@
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/runtime/infer_stage.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/request.h"
 
 namespace ksana_llm {
 
 // The classified types of forward requests
 enum class ForwardRequestType : uint8_t {
-  kFlash = 0,       // arbitrary input length, use flash attention
-  kPageSingle = 1,  // input length of 1, use paged attention
-  kPageDual = 2,    // input length of 2, use paged attention
+  kFlash = 0,  // variable input length, use flash attention
+  kPage = 1,   // fixed input length (`[1, decode_token_num_threshold]`), use paged attention
 };
 
 // The information used for forward.
@@ -28,7 +26,7 @@ struct ForwardRequest {
   int64_t req_id;
 
   // The infer stage, context decode or decode.
-  InferStage infer_stage = InferStage::STAGE_CONTEXT;
+  InferStage infer_stage = InferStage::kContext;
 
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
@@ -68,9 +66,6 @@ struct ForwardRequest {
   // The output logits offset.
   size_t logits_offset = 0;
 
-  // The accepted hidden states for mtp input
-  Tensor* accepted_hidden_states_ptr = nullptr;
-
   // The kv cache addresses, for every device.
   std::vector<std::vector<void*>> kv_cache_ptrs;
 
@@ -99,9 +94,6 @@ struct ForwardRequest {
 
   // The sampling config.
   SamplingConfig* sampling_config = nullptr;
-
-  // The arrive time.
-  uint64_t timestamp_in_ms;
 
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx;
 
@@ -151,12 +143,17 @@ struct ForwardRequest {
   std::vector<std::vector<int32_t>> atb_kv_cache_base_blk_ids;
 #endif
 
-  // Get the request type, flash for prefill, page_single/page_dual for decode
+  // Actual input length during model forward pass, excluding cached length
+  size_t GetInputIdsLength() const {
+    // Due to flexible cache, during context phase, `prefix_cache_len` of this forward request is increased by
+    // `flexible_cache_len`, potentially exceed `kv_cached_token_num`; so the maximum of the two is taken here
+    return forwarding_tokens->size() - std::max(kv_cached_token_num, prefix_cache_len);
+  }
+
+  // Get the request type, flash for prefill, page for decode
   ForwardRequestType GetType() const {
-    if (const size_t input_ids_len = forwarding_tokens->size() - kv_cached_token_num; input_ids_len == 1) {
-      return ForwardRequestType::kPageSingle;
-    } else if (input_ids_len == 2 && kv_cached_token_num > 0 && IsAbsorbWeightsEnabled()) {
-      return ForwardRequestType::kPageDual;
+    if (GetInputIdsLength() <= GetDecodeTokenNumThreshold() && kv_cached_token_num > 0) {
+      return ForwardRequestType::kPage;
     } else {
       return ForwardRequestType::kFlash;
     }

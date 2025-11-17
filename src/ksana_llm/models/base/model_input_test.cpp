@@ -63,6 +63,7 @@ class ModelInputTest : public testing::Test {
     }
 
     // Initialize the model input object.
+    model_config.use_mla = true;
     model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context);
 
     // Initialize the random seed with 0.
@@ -105,12 +106,14 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
     input_refit_emb_ptr.clear();
     input_refit_pos_pair.clear();
 
-    std::vector<ForwardRequest> forward_reqs;
+    std::vector<ForwardRequest*> forward_reqs;
+    std::vector<std::unique_ptr<ForwardRequest>> forward_reqs_unique;
 
     // Reserve memory to avoid memory address being moved.
     std::vector<std::vector<int>> output_tokens;
     std::vector<EmbeddingSlice> embedding_slices;
     forward_reqs.reserve(batch_size);
+    forward_reqs_unique.reserve(batch_size);
     output_tokens.reserve(batch_size);
     embedding_slices.reserve(batch_size);
 
@@ -118,10 +121,10 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
 
     // Construct input refit embeddings.
     for (int i = 0; i < batch_size; i++) {
-      ForwardRequest forward_req;
+      auto& forward_req = forward_reqs_unique.emplace_back(std::make_unique<ForwardRequest>());
       const size_t output_tokens_size = std::rand() % 4096 + 10;
       output_tokens.emplace_back(output_tokens_size);
-      forward_req.forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
+      forward_req->forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
       EmbeddingSlice embedding_slice;
       const int input_refit_size = std::rand() % 3 + 1;
       for (int j = 0; j < input_refit_size; j++) {
@@ -133,8 +136,8 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
         input_refit_pos_pair.emplace_back(pos_offset + embedding_start_pos, embedding_size);
       }
       embedding_slices.push_back(std::move(embedding_slice));
-      forward_req.input_refit_embedding = &embedding_slices.back();
-      forward_reqs.push_back(std::move(forward_req));
+      forward_req->input_refit_embedding = &embedding_slices.back();
+      forward_reqs.emplace_back(forward_req.get());
       pos_offset += output_tokens_size;
     }
 
@@ -147,8 +150,8 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
     // Construct input refit embedding tensors.
     input_refit_emb_ptr.clear();
     for (int i = 0; i < batch_size; i++) {
-      ForwardRequest& forward_req = forward_reqs[i];
-      auto& embedding_slice = forward_req.input_refit_embedding;
+      auto& forward_req = forward_reqs[i];
+      auto& embedding_slice = forward_req->input_refit_embedding;
       embedding_slice->embedding_tensors.reserve(embedding_slice->embeddings.size());
       for (const auto& embedding : embedding_slice->embeddings) {
         torch::Tensor embedding_tensor = torch::randn(static_cast<int64_t>(embedding.size()), torch::kFloat32);
@@ -169,7 +172,7 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
     VerifyPrepareInputRefit();
 
     // Construct bad input.
-    forward_reqs[0].input_refit_embedding->embedding_tensors.clear();
+    forward_reqs[0]->input_refit_embedding->embedding_tensors.clear();
     EXPECT_THROW(
         try { model_input->PrepareInputRefit(forward_reqs); } catch (const std::runtime_error& e) {
           EXPECT_NE(strstr(e.what(),
@@ -185,8 +188,9 @@ TEST_F(ModelInputTest, PrepareInputRefitTest) {
 TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   model_input->model_config_.type = "minicpm";
   model_input->cutoff_layer = 123;
-  std::vector<ForwardRequest> forward_reqs_null(1);
-  forward_reqs_null[0].request_target = nullptr;
+  auto forward_req = std::make_unique<ForwardRequest>();
+  std::vector<ForwardRequest*> forward_reqs_null{forward_req.get()};
+  forward_reqs_null[0]->request_target = nullptr;
   model_input->PrepareCutoffLayer(forward_reqs_null);
   EXPECT_EQ(model_input->cutoff_layer, 123);
 
@@ -195,9 +199,9 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   target_desc_empty.cutoff_layer.clear();
   std::map<std::string, ksana_llm::TargetDescribe> targets_empty = {{"lm_head", target_desc_empty}};
   auto req_targets_empty = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets_empty);
-  ForwardRequest req_empty;
-  req_empty.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets_empty.get());
-  std::vector<ForwardRequest> forward_reqs_empty = {req_empty};
+  auto req_empty = std::make_unique<ForwardRequest>();
+  req_empty->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets_empty.get());
+  std::vector<ForwardRequest*> forward_reqs_empty = {req_empty.get()};
   model_input->model_config_.num_layer = 42;
   model_input->PrepareCutoffLayer(forward_reqs_empty);
   EXPECT_EQ(model_input->cutoff_layer, 42);
@@ -207,9 +211,9 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   target_desc.cutoff_layer = {3, 7, 5};
   std::map<std::string, ksana_llm::TargetDescribe> targets = {{"lm_head", target_desc}};
   auto req_targets = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets);
-  ForwardRequest req;
-  req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets.get());
-  std::vector<ForwardRequest> forward_reqs = {req};
+  auto req = std::make_unique<ForwardRequest>();
+  req->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets.get());
+  std::vector<ForwardRequest*> forward_reqs = {req.get()};
   model_input->PrepareCutoffLayer(forward_reqs);
   EXPECT_EQ(model_input->cutoff_layer, 7);
 }
@@ -221,11 +225,12 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   sampling_config1.max_new_tokens = 1;
   sampling_config2.max_new_tokens = 2;
   // Construct forward requests as test input.
-  ForwardRequest forward_req1, forward_req2;
-  forward_req1.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
-  forward_req2.forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
-  forward_req1.sampling_config = &sampling_config1;
-  forward_req2.sampling_config = &sampling_config2;
+  auto forward_req1 = std::make_unique<ForwardRequest>();
+  auto forward_req2 = std::make_unique<ForwardRequest>();
+  forward_req1->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
+  forward_req2->forwarding_tokens = std::make_shared<std::vector<int>>(forwarding_tokens);
+  forward_req1->sampling_config = &sampling_config1;
+  forward_req2->sampling_config = &sampling_config2;
 
   const auto& env = Singleton<Environment>::GetInstance();
   CacheManagerConfig cache_manager_config;
@@ -236,12 +241,12 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   env->GetRuntimeConfig(runtime_config);
   EXPECT_FALSE(runtime_config.enable_prefix_caching);
   EXPECT_FALSE(runtime_config.enable_flexible_caching);
-  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareInputInfo({forward_req1.get()});
   model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_FALSE(model_input->use_cache);
 
   // Test case 2: All the caching is disabled but some requests require more than one token.
-  model_input->PrepareInputInfo({forward_req1, forward_req2});
+  model_input->PrepareInputInfo({forward_req1.get(), forward_req2.get()});
   model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 
@@ -254,7 +259,7 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   EXPECT_FALSE(runtime_config.enable_flexible_caching);
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareInputInfo({forward_req1.get()});
   model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 
@@ -268,7 +273,7 @@ TEST_F(ModelInputTest, PrepareUseCacheTest) {
   EXPECT_TRUE(runtime_config.enable_flexible_caching);
 
   model_input->runtime_config_ = runtime_config;  // TODO(robertyuan): ugly, maybe bad test
-  model_input->PrepareInputInfo({forward_req1});
+  model_input->PrepareInputInfo({forward_req1.get()});
   model_input->PrepareUseCache(model_input->flash_input);
   EXPECT_TRUE(model_input->use_cache);
 }
@@ -378,42 +383,47 @@ TEST_F(ModelInputTest, PrepareFlashRotaryMlaFlexibleCacheTest) {
 
 #ifdef ENABLE_CUDA
 TEST_F(ModelInputTest, PrepareFlashMlaTest) {
-  // 测试用例1: 当model_config_.mla_config.kv_lora_rank为0时，PrepareFlashMla应该直接返回
-  model_input->model_config_.mla_config.kv_lora_rank = 0;
+  model_input->page_inputs.clear();
+  auto& page_input = model_input->page_inputs.emplace_back();
+  page_input.q_seq_len = 1;
+  // Init shared_tensors in page_input
+  page_input.input_length = model_input->input_length;
+  model_input->num_splits.shape = {0};
+
+  // 测试用例1: 当model_config_.use_mla为false时，PrepareFlashMla应该直接返回
+  model_input->model_config_.use_mla = false;
   model_input->single_token_request_num = 5;
-  model_input->PrepareFlashMla(model_input->page_single_input);
+  model_input->PrepareFlashMla(page_input);
   // 由于方法直接返回，没有明确的状态变化可以验证，这里我们只是确保方法不会崩溃
 
-  // 测试用例2: 当single_token_request_num为0时，PrepareFlashMla应该直接返回
-  model_input->model_config_.mla_config.kv_lora_rank = 10;
-  model_input->single_token_request_num = 0;
-  model_input->PrepareFlashMla(model_input->page_single_input);
+  // 测试用例2: 当page_input.dp_reqs为空时，PrepareFlashMla应该直接返回
+  model_input->model_config_.use_mla = true;
+  model_input->PrepareFlashMla(page_input);
   // 同样，这里我们只是确保方法不会崩溃
 
   // 测试用例3: 当所有条件满足时，PrepareFlashMla应该执行相应操作
   // 准备测试数据
-  model_input->model_config_.mla_config.kv_lora_rank = 512;
-  model_input->single_token_request_num = 4;
+  model_input->model_config_.use_mla = true;
   model_input->model_config_.head_num = 16;
   model_input->runtime_config_.parallel_basic_config.tensor_parallel_size = 1;
+  page_input.dp_reqs.resize(4);
 
   // 创建输入长度张量
   std::vector<int> input_lengths = {0, 20, 30, 40, 50};
-  MemcpyAsync(model_input->page_single_input.input_length.GetPtr<void>(), input_lengths.data(),
-              input_lengths.size() * sizeof(int), MEMCPY_HOST_TO_DEVICE,
-              model_input->context_->GetH2DStreams()[model_input->rank_]);
+  MemcpyAsync(page_input.input_length.GetPtr<void>(), input_lengths.data(), input_lengths.size() * sizeof(int),
+              MEMCPY_HOST_TO_DEVICE, model_input->context_->GetH2DStreams()[model_input->rank_]);
 
   // 执行PrepareFlashMla
-  model_input->PrepareFlashMla(model_input->page_single_input);
+  model_input->PrepareFlashMla(page_input);
 
   // 从GPU复制数据回CPU并打印
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-  GetNumSmParts(flash_mla_workspace_map, 16, 1, 0, 0);
+  GetNumSmParts(flash_mla_workspace_map, 16, 1, 0);
   if (flash_mla_workspace_map.num_sm_parts > 1) {
     int num_splits_cpu;
 
-    MemcpyAsync(&num_splits_cpu, model_input->page_single_input.num_splits.GetPtr<void>(), sizeof(int),
-                MEMCPY_DEVICE_TO_HOST, model_input->context_->GetH2DStreams()[model_input->rank_]);
+    MemcpyAsync(&num_splits_cpu, page_input.num_splits.GetPtr<void>(), sizeof(int), MEMCPY_DEVICE_TO_HOST,
+                model_input->context_->GetH2DStreams()[model_input->rank_]);
 
     // 同步流以确保复制完成
     StreamSynchronize(model_input->context_->GetH2DStreams()[model_input->rank_]);
@@ -432,13 +442,16 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   constexpr size_t kReqNum = 10;
   constexpr size_t kMaxReqLen = 1024;
 
-  std::vector<ForwardRequest> forward_reqs(kReqNum);
+  std::vector<std::unique_ptr<ForwardRequest>> forward_unique_ptrs;
+  std::vector<ForwardRequest*> forward_reqs(kReqNum);
   std::vector<std::vector<int>> req_tokens(kReqNum);
   for (size_t i = 0; i < kReqNum; ++i) {
+    forward_unique_ptrs.emplace_back(std::make_unique<ForwardRequest>());
+    forward_reqs[i] = forward_unique_ptrs.back().get();
     req_tokens[i].resize(RandomNum(0, kMaxReqLen));
-    forward_reqs[i].forwarding_tokens = std::make_shared<std::vector<int>>(req_tokens[i]);
-    forward_reqs[i].kv_cached_token_num = RandomNum(0, req_tokens[i].size());
-    forward_reqs[i].req_id = i;
+    forward_reqs[i]->forwarding_tokens = std::make_shared<std::vector<int>>(req_tokens[i]);
+    forward_reqs[i]->kv_cached_token_num = RandomNum(0, req_tokens[i].size());
+    forward_reqs[i]->req_id = i;
   }
 
   model_input->mtp_req_id_to_pos_.clear();
@@ -447,8 +460,8 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
   EXPECT_EQ(model_input->mtp_req_id_to_pos_.size(), forward_reqs.size());
   size_t total_len = 0;
   for (size_t i = 0; i < forward_reqs.size(); ++i) {
-    EXPECT_EQ(total_len, model_input->mtp_req_id_to_pos_[forward_reqs[i].req_id]);
-    total_len += forward_reqs[i].forwarding_tokens->size() - forward_reqs[i].kv_cached_token_num;
+    EXPECT_EQ(total_len, model_input->mtp_req_id_to_pos_[forward_reqs[i]->req_id]);
+    total_len += forward_reqs[i]->forwarding_tokens->size() - forward_reqs[i]->kv_cached_token_num;
   }
 
   model_input->PrepareNextNGatherIdx(forward_reqs, RunMode::kNextN);
@@ -460,7 +473,7 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
          MEMCPY_DEVICE_TO_HOST);
   size_t result_i = 0, counter_i = 0;
   for (size_t i = 0; i < forward_reqs.size(); ++i) {
-    const auto& req = forward_reqs[i];
+    const auto& req = *forward_reqs[i];
     for (size_t token_i = 0; token_i < req.forwarding_tokens->size(); ++token_i) {
       if (token_i < static_cast<size_t>(req.kv_cached_token_num)) {
         continue;
@@ -478,7 +491,7 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
   model_input->model_config_.rope_scaling_factor_config.mrope_section = std::vector<int>{16, 24, 24};
   model_input->CreateVLTensors();
 
-  auto VerifyPrepareMRopePos = [&](const std::vector<ForwardRequest>& forward_reqs,
+  auto VerifyPrepareMRopePos = [&](const std::vector<ForwardRequest*>& forward_reqs,
                                    const std::vector<int64_t>& expected_mrotary_embedding_pos,
                                    const std::vector<int64_t>& expected_offsets) {
     EXPECT_EQ(model_input->dp_mrotary_embedding_pos.shape.size(), 2);
@@ -487,7 +500,7 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
     // Verify the offsets.
     EXPECT_EQ(expected_offsets.size(), forward_reqs.size());
     for (size_t i = 0; i < forward_reqs.size(); i++) {
-      EXPECT_EQ(*forward_reqs[i].mrotary_embedding_pos_offset, expected_offsets[i]);
+      EXPECT_EQ(*forward_reqs[i]->mrotary_embedding_pos_offset, expected_offsets[i]);
     }
 
     // Verify the mrotary_embedding_pos tensor.
@@ -505,7 +518,8 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
 
   // Test for each selected batch size.
   for (const int batch_size : {1, 3, 4}) {
-    std::vector<ForwardRequest> forward_reqs;
+    std::vector<ForwardRequest*> forward_reqs;
+    std::vector<std::unique_ptr<ForwardRequest>> forward_reqs_unique;
     std::vector<std::vector<int>> output_tokens;
     std::vector<EmbeddingSlice> embedding_slices;
     std::vector<int64_t> mrotary_offsets;
@@ -521,21 +535,21 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
 
     // Create a mix of plain text and visual inputs
     for (int i = 0; i < batch_size; i++) {
-      ForwardRequest forward_req;
+      auto& forward_req = forward_reqs_unique.emplace_back(std::make_unique<ForwardRequest>());
       const size_t token_size = 10 + i * 5;
       output_tokens.emplace_back(token_size);
-      forward_req.forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
+      forward_req->forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens.back());
       EmbeddingSlice embedding_slice;
       embedding_slices.push_back(std::move(embedding_slice));
-      forward_req.input_refit_embedding = &embedding_slices.back();
+      forward_req->input_refit_embedding = &embedding_slices.back();
       mrotary_offsets.push_back(0);
-      forward_req.mrotary_embedding_pos_offset = &mrotary_offsets.back();
+      forward_req->mrotary_embedding_pos_offset = &mrotary_offsets.back();
 
       // Alternate between plain text and visual input
       if (i % 2 == 0) {
         // Plain text input (empty additional_tensors)
         // For plain text, the function creates positions where each triplet is [i, i, i]
-        int64_t list_size = forward_req.forwarding_tokens->size() * 3;
+        int64_t list_size = forward_req->forwarding_tokens->size() * 3;
         for (int64_t j = 0; j < list_size; j += 3) {
           expected_mrotary_embedding_pos.push_back(j);
           expected_mrotary_embedding_pos.push_back(j);
@@ -556,13 +570,13 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
         // Add tensors to additional_tensors
         {
           py::gil_scoped_acquire acquire;
-          forward_req.input_refit_embedding->additional_tensors.push_back(
+          forward_req->input_refit_embedding->additional_tensors.push_back(
               py::reinterpret_steal<py::object>(THPVariable_Wrap(pos_tensor)));
-          forward_req.input_refit_embedding->additional_tensors.push_back(
+          forward_req->input_refit_embedding->additional_tensors.push_back(
               py::reinterpret_steal<py::object>(THPVariable_Wrap(offset_tensor)));
         }
       }
-      forward_reqs.push_back(std::move(forward_req));
+      forward_reqs.push_back(forward_req.get());
     }
 
     // Parse MRopePos.
@@ -574,21 +588,22 @@ TEST_F(ModelInputTest, PrepareMRopePosTest) {
 
   // Construct bad input.
   {
-    std::vector<ForwardRequest> forward_reqs(1);
+    auto forward_req = std::make_unique<ForwardRequest>();
+    std::vector<ForwardRequest*> forward_reqs{forward_req.get()};
     std::vector<std::vector<int>> output_tokens(1, std::vector<int>(10));
     std::vector<EmbeddingSlice> embedding_slices(1);
     std::vector<int64_t> mrotary_offsets(1, 0);
 
-    forward_reqs[0].forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens[0]);
-    forward_reqs[0].input_refit_embedding = &embedding_slices[0];
-    forward_reqs[0].mrotary_embedding_pos_offset = &mrotary_offsets[0];
+    forward_reqs[0]->forwarding_tokens = std::make_shared<std::vector<int>>(output_tokens[0]);
+    forward_reqs[0]->input_refit_embedding = &embedding_slices[0];
+    forward_reqs[0]->mrotary_embedding_pos_offset = &mrotary_offsets[0];
 
     {
       torch::Tensor pos_tensor = torch::randint(0, 100, {30}, torch::kInt64);
       {
         py::gil_scoped_acquire acquire;
-        forward_reqs[0].input_refit_embedding->additional_tensors.clear();
-        forward_reqs[0].input_refit_embedding->additional_tensors.push_back(
+        forward_reqs[0]->input_refit_embedding->additional_tensors.clear();
+        forward_reqs[0]->input_refit_embedding->additional_tensors.push_back(
             py::reinterpret_steal<py::object>(THPVariable_Wrap(pos_tensor)));
       }
 

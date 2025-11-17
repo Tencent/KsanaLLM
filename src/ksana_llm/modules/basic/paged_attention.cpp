@@ -3,8 +3,8 @@
 ==============================================================================*/
 
 #include "ksana_llm/modules/basic/paged_attention.h"
+
 #include "ksana_llm/layers/paged_attention_layer.h"
-#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -65,8 +65,9 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& paged_buffer_tensors,
                                Tensor& kv_cache_buffer_tensor, const AttentionForwardContext& forward_context,
                                Tensor query_layernorm_weight, Tensor key_layernorm_weight) {
-  // normal page attention only has one input (page_single_input)
-  auto& input_info = model_input->page_single_input;
+  // normal page attention only has one input
+  // It must be placed at the end of `page_inputs`, since they are sorted in descending order by token number
+  auto& input_info = model_input->page_inputs.back();
 
 #ifdef ENABLE_CUDA
   STATUS_CHECK_RETURN(paged_attention_layer_->Forward(
@@ -76,7 +77,7 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
        query_layernorm_weight,                                 /* for use_qk_norm */
        key_layernorm_weight,                                   /* for use_qk_norm */
        // blocked_multi_token_forwarding_kv
-       input_info.layer_kv_cache_ptr, input_info.block_table},
+       model_input->layer_kv_cache_ptr, input_info.block_table},
       hidden_buffer_tensors_1));
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #elif defined(ENABLE_ACL)

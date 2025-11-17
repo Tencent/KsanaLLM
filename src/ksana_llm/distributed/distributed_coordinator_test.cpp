@@ -137,10 +137,10 @@ class DistributedCoordinatorTest : public testing::Test {
     setenv("USE_TCP_DATA_CHANNEL", "1", 1);
     master_distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
         master_context_, master_packet_creation_fn, master_schedule_output_pool_, master_hidden_unit_buffer_pool_,
-        nullptr, master_env_);
+        master_env_);
     worker_distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
         worker_context_, worker_packet_creation_fn, worker_schedule_output_pool_, worker_hidden_unit_buffer_pool_,
-        nullptr, worker_env_);
+        worker_env_);
   }
 
   void TearDown() override {
@@ -163,8 +163,6 @@ class DistributedCoordinatorTest : public testing::Test {
 
   HiddenUnitBufferPool* master_hidden_unit_buffer_pool_ = nullptr;
   HiddenUnitBufferPool* worker_hidden_unit_buffer_pool_ = nullptr;
-  ExpertParallelHiddenUnitBufferPool* master_ep_hidden_unit_buffer_pool_ = nullptr;
-  ExpertParallelHiddenUnitBufferPool* worker_ep_hidden_unit_buffer_pool_ = nullptr;
 
   // The schedule output pool.
   ScheduleOutputPool* master_schedule_output_pool_ = nullptr;
@@ -247,9 +245,6 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
   master_ep_config.expert_node_rank = 0;
   master_ep_config.expert_para_size = 1;
   master_ep_config.global_expert_para_size = 2;
-#ifdef ENABLE_CUDA
-  master_ep_config.nccl_unique_ids.resize(2);
-#endif
   master_env_->SetExpertParallelConfig(master_ep_config);
 
   worker_env_->GetExpertParallelConfig(worker_ep_config);
@@ -259,9 +254,6 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
   worker_ep_config.expert_node_rank = 1;
   worker_ep_config.expert_para_size = 1;
   worker_ep_config.global_expert_para_size = 2;
-#ifdef ENABLE_CUDA
-  worker_ep_config.nccl_unique_ids.resize(2);
-#endif
   worker_env_->SetExpertParallelConfig(worker_ep_config);
 
   RuntimeConfig master_runtime_config;
@@ -279,41 +271,21 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
   Singleton<Environment>::GetInstance()->SetExpertParallelConfig(worker_ep_config);
   worker_context_ = std::make_shared<Context>(worker_tp_para, worker_attn_data_parallel_size, max_multi_batch_num);
 
-  master_ep_hidden_unit_buffer_pool_ = new ExpertParallelHiddenUnitBufferPool();
-  // worker_ep_hidden_unit_buffer_pool_ = new ExpertParallelHiddenUnitBufferPool();
-  InitializeExpertHiddenUnitBufferPool();
-  worker_ep_hidden_unit_buffer_pool_ = GetExpertHiddenUnitBufferPool();
-  GetExpertHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
-
   // The packet creation function.
   auto master_packet_creation_fn = [&](PacketType packet_type, size_t body_size) -> Packet* {
-    if (packet_type == PacketType::DATA_REQ_HIDDEN_UNIT) {
-      Packet* packet = master_ep_hidden_unit_buffer_pool_->GetHostBuffer();
-      packet->size = master_ep_hidden_unit_buffer_pool_->GetHostPacketSize(packet);
-      packet->type = packet_type;
-      return packet;
-    }
-
     return GetPacketObject(packet_type, body_size);
   };
 
   auto worker_packet_creation_fn = [&](PacketType packet_type, size_t body_size) -> Packet* {
-    if (packet_type == PacketType::DATA_REQ_HIDDEN_UNIT) {
-      Packet* packet = worker_ep_hidden_unit_buffer_pool_->GetHostBuffer();
-      packet->size = worker_ep_hidden_unit_buffer_pool_->GetHostPacketSize(packet);
-      packet->type = packet_type;
-      return packet;
-    }
-
     return GetPacketObject(packet_type, body_size);
   };
 
   master_distributed_coordinator_ =
       std::make_shared<DistributedCoordinator>(master_context_, master_packet_creation_fn, master_schedule_output_pool_,
-                                               nullptr, master_ep_hidden_unit_buffer_pool_, master_env_);
+                                               nullptr, master_env_);
   worker_distributed_coordinator_ =
       std::make_shared<DistributedCoordinator>(worker_context_, worker_packet_creation_fn, worker_schedule_output_pool_,
-                                               nullptr, worker_ep_hidden_unit_buffer_pool_, worker_env_);
+                                               nullptr, worker_env_);
 
   // Check context.
   EXPECT_TRUE(master_context_->IsExpertParallelChief() == true);
@@ -323,7 +295,7 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
   // master node.
   auto master_fn = [&]() {
     master_distributed_coordinator_->InitializeCluster();
-    master_distributed_coordinator_->SynchronizeExpertParallelExperts();
+    master_distributed_coordinator_->ExpertParallelBarrier();
     master_distributed_coordinator_->DestroyCluster();
   };
   std::thread master_thread = std::thread(master_fn);
@@ -331,7 +303,7 @@ TEST_F(DistributedCoordinatorTest, TestDistributedCoordinatorForEP) {
   // worker node.
   auto worker_fn = [&]() {
     worker_distributed_coordinator_->InitializeCluster();
-    worker_distributed_coordinator_->SynchronizeExpertParallelExperts();
+    worker_distributed_coordinator_->ExpertParallelBarrier();
     worker_distributed_coordinator_->DestroyCluster();
   };
   std::thread worker_thread = std::thread(worker_fn);

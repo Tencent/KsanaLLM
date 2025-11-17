@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <string>
 #include "gflags/gflags.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "test.h"
 
 namespace ksana_llm {
@@ -405,6 +404,9 @@ TEST_F(EnvironmentTest, ConnectorConfigInitialization) {
       file << "    max_token_len: 4096\n";
       file << "    max_step_tokens: 4096\n";
       file << "    max_batch_size: 32\n";
+      file << "    enable_auto_prefix_cache: true\n";
+      file << "    split_fuse_token_num: 256\n";
+
       file << "  block_manager:\n";
       file << "    block_token_num: 16\n";
       file << "    reserved_device_memory_ratio: 0.01\n";
@@ -810,6 +812,43 @@ TEST_F(EnvironmentTest, ConnectorConfigInitialization) {
     auto status = test_env.GetConnectorConfigs(connector_config);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(connector_config.communication_type, ksana_llm::CommunicationType::ZMQ);
+
+    try {
+      // 获取YAML文件的基本路径信息
+      std::filesystem::path yaml_file_path(yaml_path);
+      std::filesystem::path temp_dir = yaml_file_path.parent_path();
+      std::string role = "prefill";
+      std::filesystem::path model_dir = temp_dir / ("ksana_test_model_dir_" + role);
+
+      // 清理临时文件和目录
+      if (std::filesystem::exists(yaml_path)) {
+        std::filesystem::remove(yaml_path);
+      }
+
+      if (std::filesystem::exists(model_dir)) {
+        std::filesystem::remove_all(model_dir);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Exception during cleanup: " << e.what() << std::endl;
+    }
+  }
+
+  // 测试11：自动解决split fuse参数冲突的情况。支持split fuse后移除此单测
+  {
+    std::string yaml_path = create_temp_yaml("prefill");
+    ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+    // 设置测试配置文件路径
+    FLAGS_config_file_test = yaml_path;
+
+    Environment test_env;
+    ASSERT_TRUE(test_env.ParseConfig(yaml_path).OK());
+
+    ConnectorConfig connector_config;
+    EXPECT_TRUE(test_env.GetConnectorConfigs(connector_config).OK());
+    BatchSchedulerConfig batch_scheduluer_config;
+    EXPECT_TRUE(test_env.GetBatchSchedulerConfig(batch_scheduluer_config).OK());
+    EXPECT_EQ(batch_scheduluer_config.split_fuse_token_num, 0);
 
     try {
       // 获取YAML文件的基本路径信息

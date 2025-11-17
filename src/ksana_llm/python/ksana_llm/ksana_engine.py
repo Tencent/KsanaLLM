@@ -8,13 +8,19 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 import libtorch_serving
 from transformers import GenerationConfig, PreTrainedTokenizerFast
-
+from utilize.logger import get_logger
 from .arg_utils import EngineArgs
 from .ksana_plugin import KsanaPlugin, PluginConfig
 from .processor_op_base import TokenizerProcessorOpBase
 
+
+logger = get_logger(__name__)
+
 # Adjust the max_workers to a reasonable number based on the number of CPUs
-model_executor = ThreadPoolExecutor(max_workers=256)
+# Give threads a readable name for easier debugging.
+model_executor = ThreadPoolExecutor(
+    max_workers=1024, thread_name_prefix="ksana-engine"
+)
 
 
 @dataclass
@@ -75,15 +81,10 @@ class PyAsyncStreamingIterator:
                 self._ksana_python_input, ksana_python_output
             )
             return ksana_python_output
-        elif status.GetCode() == libtorch_serving.RetCode.RET_STOP_ITERATION:
+        else:
             # If the iteration has finished, raise a StopAsyncIteration exception
             raise StopAsyncIteration(
                 f"Iterator finished, ret code {status.GetCode()}, message {status.GetMessage()}."
-            )
-        else:
-            # If an error occurred during iteration, raise a RuntimeError exception
-            raise RuntimeError(
-                f"Iterator error, ret code {status.GetCode()}, message {status.GetMessage()}."
             )
 
 
@@ -266,7 +267,10 @@ class KsanaLLMEngine:
         # Set input tokens to the ksana_python_input
         if input_tokens is not None:
             ksana_python_input.input_tokens = input_tokens
-
+            if(request_dict.get("debug_mode", False)):
+                logger.info(f"[DEBUG] Input tokens: {input_tokens}")
+                decoded_text = self.pre_post_processor.decode(input_tokens, is_stream_generate=False)
+                logger.info(f"[DEBUG] Input tokens decoded: {decoded_text}")
         # Set the generation parameters to the ksana_python_input sampling_config
         sampling_config = ksana_python_input.sampling_config
 

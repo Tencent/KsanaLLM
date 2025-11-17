@@ -20,15 +20,15 @@ Status Fp8MatMulLayer::Init(const std::vector<std::any>& parameters, const Runti
   return Status();
 }
 
-size_t Fp8MatMulLayer::GetWorkSpaceSize(const int m, const int k) {
+size_t Fp8MatMulLayer::GetWorkspaceSize(const int m, const int k) {
   size_t input_size = m * k * GetTypeSize(TYPE_FP8_E4M3);
   size_t scale_size = GetTypeSize(TYPE_FP32);
   size_t workspace_size = input_size + scale_size + cublas_workspace_size_;
   return workspace_size;
 }
 
-size_t Fp8MatMulLayer::GetWorkSpaceSize() {
-  size_t workspace_size = GetWorkSpaceSize(max_m_, max_k_);
+size_t Fp8MatMulLayer::GetWorkspaceSize() {
+  size_t workspace_size = GetWorkspaceSize(max_m_, max_k_);
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for Fp8MatMulLayer", rank_, workspace_size);
   return workspace_size;
 }
@@ -43,7 +43,7 @@ Status Fp8MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::v
   int k = input_tensors[0].shape[1];
   int n = input_tensors[1].shape[0];
   const T* input = static_cast<const T*>(input_tensors[0].GetPtr<void>());
-  size_t workspace_size = GetWorkSpaceSize(m, k);
+  size_t workspace_size = GetWorkspaceSize(m, k);
   if (workspace_size > workspace_buffer_->GetTotalBytes()) {
     KLLM_THROW(fmt::format("workspace size {} > buffer size {}", workspace_size, workspace_buffer_->GetTotalBytes()));
   }

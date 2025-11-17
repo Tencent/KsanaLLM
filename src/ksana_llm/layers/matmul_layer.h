@@ -18,7 +18,7 @@ class MatMulLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-  virtual size_t GetWorkSpaceSize() override;
+  virtual size_t GetWorkspaceSize() override;
 
  private:
   template <typename T>

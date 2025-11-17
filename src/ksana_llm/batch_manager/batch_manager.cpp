@@ -84,7 +84,7 @@ Status BatchManager::Enqueue(std::shared_ptr<Request> &req) {
     infer_req->block_checksums.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
     infer_req->block_token_num = runtime_config_.attn_backend_config.block_token_num;
     infer_req->model_instance = model_instance;
-    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 0;
     infer_req->kv_cached_token_num = 0;
   }

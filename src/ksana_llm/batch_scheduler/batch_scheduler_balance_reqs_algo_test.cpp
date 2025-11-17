@@ -261,4 +261,121 @@ TEST_F(BalanceReqsTest, BalanceForwardEmptyTest) {
   EXPECT_TRUE(test_batch_scheduler_->IsIdle(multi_batch_id));
 }
 
+// 测试 BalanceADPRequests 函数的基本功能
+TEST_F(BalanceReqsTest, BalanceADPRequestsBasicTest) {
+  KLLM_LOG_INFO << "BalanceReqsTest: BalanceADPRequestsBasicTest";
+
+  // 启用 ADP 负载均衡配置
+  batch_scheduler_config_.attention_dp_lb_config.enable_balance = true;
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_steps = 5;
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_time_in_ms = 100;
+  batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting = 10.0;
+
+  // 设置多 DP 环境进行 ADP 负载均衡测试
+  int dp_num = 4;
+  CommonSetUp(dp_num);
+
+  // 创建测试用的推理请求
+  auto CreateTestInferRequest = [&](int req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
+    std::shared_ptr<Request> req;
+    int expect_output_tokens = 10;
+    auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});
+    auto infer_req = infer_req_group[0];
+    infer_req->infer_stage = InferStage::kContext;
+    infer_req->step = 0;
+    infer_req->kv_cached_token_num = 0;
+    infer_req->req_id = req_id;
+
+    return infer_req;
+  };
+
+  // 创建一些等待的请求，token 数量不同以测试负载均衡
+  std::vector<std::shared_ptr<InferRequest>> waiting_requests;
+  waiting_requests.push_back(CreateTestInferRequest(1, 100));  // 100 tokens
+  waiting_requests.push_back(CreateTestInferRequest(2, 200));  // 200 tokens
+  waiting_requests.push_back(CreateTestInferRequest(3, 50));   // 50 tokens
+  waiting_requests.push_back(CreateTestInferRequest(4, 150));  // 150 tokens
+
+  // 添加到等待队列
+  test_batch_scheduler_->AddToWaitingReqs(waiting_requests);
+
+  // 调用 BalanceADPRequests
+  test_batch_scheduler_->BalanceADPRequests(0);
+
+  // 验证请求已经被分配到不同的 DP 节点
+  size_t total_distributed = 0;
+  for (size_t i = 0; i < static_cast<size_t>(dp_num); ++i) {
+    total_distributed += test_batch_scheduler_->dp_waiting_reqs_[i].size();
+  }
+
+  EXPECT_EQ(total_distributed, waiting_requests.size());
+  KLLM_LOG_INFO << "BalanceADPRequestsBasicTest: Successfully distributed " << total_distributed
+                << " requests to DP nodes";
+}
+
+// 测试 BalanceADPRequests 的超时机制
+TEST_F(BalanceReqsTest, BalanceADPRequestsTimeoutTest) {
+  KLLM_LOG_INFO << "BalanceReqsTest: BalanceADPRequestsTimeoutTest";
+
+  // 启用 ADP 负载均衡配置，设置较短的超时时间用于测试
+  batch_scheduler_config_.attention_dp_lb_config.enable_balance = true;
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_steps = 2;
+  batch_scheduler_config_.attention_dp_lb_config.max_waiting_time_in_ms = 50;
+  batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting = 10.0;
+
+  // 设置多 DP 环境
+  int dp_num = 4;
+  CommonSetUp(dp_num);
+
+  // 创建测试用的推理请求
+  auto CreateTestInferRequest = [&](int req_id, int input_token_num) -> std::shared_ptr<InferRequest> {
+    std::shared_ptr<Request> req;
+    int expect_output_tokens = 10;
+    auto infer_req_group = env_simulator_->InitRequest(req_id, input_token_num, expect_output_tokens, req, {{0, 42}});
+    auto infer_req = infer_req_group[0];
+    infer_req->infer_stage = InferStage::kContext;
+    infer_req->step = 0;
+    infer_req->kv_cached_token_num = 0;
+    infer_req->req_id = req_id;
+
+    return infer_req;
+  };
+
+  // 为所有 DP 节点添加运行中的请求，模拟所有节点都有生成请求的情况
+  for (int i = 0; i < dp_num; ++i) {
+    auto running_req = CreateTestInferRequest(300 + i, 50);
+    auto& batch_state = test_batch_scheduler_->batch_states_[i][0];
+    std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
+    batch_state->schedule_output->running_reqs.push_back(running_req);
+  }
+
+  // 创建等待的请求（数量少于 DP 节点数）
+  std::vector<std::shared_ptr<InferRequest>> waiting_requests;
+  waiting_requests.push_back(CreateTestInferRequest(1, 100));
+
+  test_batch_scheduler_->AddToWaitingReqs(waiting_requests);
+
+  // 第一次调用 - 应该开始等待
+  test_batch_scheduler_->BalanceADPRequests(0);
+
+  // 验证请求被保存回等待队列（因为所有节点都有生成请求且等待请求数量不足）
+  size_t initial_waiting_size = test_batch_scheduler_->waiting_reqs_.size();
+  EXPECT_GT(initial_waiting_size, 0);
+
+  // 等待一段时间超过超时时间
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+
+  // 第二次调用 - 应该触发超时，分配请求
+  test_batch_scheduler_->BalanceADPRequests(0);
+
+  // 验证请求被分配（由于超时）
+  size_t total_distributed = 0;
+  for (size_t i = 0; i < static_cast<size_t>(dp_num); ++i) {
+    total_distributed += test_batch_scheduler_->dp_waiting_reqs_[i].size();
+  }
+
+  EXPECT_EQ(total_distributed, 1);
+  KLLM_LOG_INFO << "BalanceADPRequestsTimeoutTest: Timeout mechanism works correctly, distributed " << total_distributed
+                << " requests";
+}
 }  // namespace ksana_llm

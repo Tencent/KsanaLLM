@@ -62,9 +62,9 @@ struct TaskKey {
       : req_id(0),
         block_idx(0),
         layer_idx(0),
-        hash_device_id(0),
         tensor_size(0),
         is_skipped_task(false),
+        hash_device_id(0),
         start_time_us(0) {}
 
   TaskKey(int req, int block, int layer, int hash_device_id, int tsize = 0,
@@ -109,7 +109,8 @@ struct TaskKey {
         << ", tensor_size=" << tensor_size << ", gen token=" << tokens[0] << ", draft token=" << tokens[1]
         << ", is_skipped_task=" << is_skipped_task << ", hash_device_id=" << hash_device_id
         << ", decode_device_id=" << decode_device_id << ", decode_device_offset=" << decode_device_offset
-        << ", prefill_device_id=" << prefill_device_id << ", prefill_device_offset=" << prefill_device_offset;
+        << ", prefill_device_id=" << prefill_device_id << ", prefill_device_offset=" << prefill_device_offset
+        << ", start_time_us=" << start_time_us;
     return oss.str();
   }
 

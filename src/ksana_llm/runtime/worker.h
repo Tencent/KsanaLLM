@@ -37,7 +37,7 @@ struct WorkerTask {
   std::shared_ptr<BaseModel> model;
   std::shared_ptr<BaseWeight> weight;
   InferStage stage;
-  std::vector<ForwardRequest>* forward_reqs;
+  std::vector<ForwardRequest*>* forward_reqs;
   bool epilogue;
   RunMode run_mode;
 
@@ -81,11 +81,11 @@ class Worker {
   // The async forward and sampling.
   std::future<Status> ForwardAsync(size_t multi_batch_id, std::shared_ptr<BaseModel> model,
                                    std::shared_ptr<BaseWeight> weight, InferStage stage,
-                                   std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                                   std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
                                    RunMode run_mode = RunMode::kMain);
 
   Status Forward(size_t multi_batch_id, std::shared_ptr<BaseModel> model, std::shared_ptr<BaseWeight> weight,
-                 InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                 InferStage stage, std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
                  RunMode run_mode = RunMode::kMain);
 
   std::future<Status> SamplingAsync(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,

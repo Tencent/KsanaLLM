@@ -5,8 +5,8 @@
 #include "ksana_llm/runtime/llm_runtime.h"
 
 #include <algorithm>
-#include <execution>
 #include <atomic>
+#include <execution>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -20,7 +20,6 @@
 #include "ksana_llm/runtime/model_instance.h"
 #include "ksana_llm/runtime/sampling_request.h"
 #include "ksana_llm/samplers/sampler.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/status.h"
 
@@ -28,15 +27,16 @@ namespace ksana_llm {
 
 LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const RuntimeConfig& runtime_config,
                        std::shared_ptr<Context> context)
-    : context_(context) {
+    : mtp_step_num_(batch_scheduler_config.mtp_step_num), context_(context), threadpool_(4) {
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(),
                                                 batch_scheduler_config.max_pp_batch_num, context_);
 
+  samplers_.resize(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    samplers_.push_back(std::make_shared<Sampler>(batch_scheduler_config, worker_id, context_));
+    samplers_[worker_id] = std::make_shared<Sampler>(batch_scheduler_config, worker_id, context_);
   }
-  threadpool_ = std::make_shared<ThreadPool>(2);
-  threadpool_->Start();
+
+  threadpool_.Start();
 }
 
 void LlmRuntime::SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers) {
@@ -161,8 +161,7 @@ Status LlmRuntime::Forward(size_t multi_batch_id, std::map<ModelInstance*, std::
   // context decode and decode run serially in single thread
   if (context_->IsRunContextDecodeAndDecodeSerially()) {
     // Wait all instances done and check status.
-    auto ret = RunSerially(multi_batch_id, grouped_reqs, epilogue, run_mode);
-    return ret;
+    return RunSerially(multi_batch_id, grouped_reqs, epilogue, run_mode);
   }
 
   std::vector<std::vector<std::future<Status>>> results;
@@ -217,16 +216,12 @@ void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::sh
     sampling_req.last_step_token_num = req->last_step_token_num;
     sampling_req.sampling_result_tokens = &(req->sampling_result_tokens);
     sampling_req.sampling_result_tokens->clear();
-    sampling_req.response = &(req_ptr->response);
-    sampling_req.request_target =
-        std::make_shared<const std::map<std::string, TargetDescribe>>(req_ptr->request_target);
-    sampling_req.logprobs =
-        std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>>(req_ptr, &req_ptr->logprobs);
-    sampling_req.logits_offset = req_ptr->logits_offset;
-    sampling_req.logits_buf = req_ptr->model_instance->GetLogitsPtr(multi_batch_id);
-    sampling_req.sampling_config = &(req_ptr->sampling_config);
-    sampling_req.req_group = &(req_ptr->req_group);
-    sampling_req.req_ctx = req_ptr->req_ctx;
+    sampling_req.response = &(req->response);
+    sampling_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req->request_target);
+    sampling_req.logprobs = std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>>(req, &req->logprobs);
+    sampling_req.logits_offset = req->logits_offset;
+    sampling_req.logits_buf = req->model_instance->GetLogitsPtr(multi_batch_id);
+    sampling_req.sampling_config = &(req->sampling_config);
     if (sampling_req.sampling_config->num_beams > 1) {
       sampling_req.sampling_config->logprobs_num =
           std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);
@@ -387,6 +382,7 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
   return Status();
 }
 
+// Speculative decoding, generate draft token with trie
 void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& reqs) {
   if (draft_generator_ == nullptr) {
     return;
@@ -408,6 +404,10 @@ void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& 
 
 void LlmRuntime::TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest>>& reqs,
                                         std::shared_ptr<TransferEngine> transfer_engine) {
+  if (transfer_engine->GetGroupRole() != GroupRole::PREFILL) {
+    return;
+  }
+
   std::vector<std::tuple<std::string, int, std::vector<int>>> reqs_transfer_tokens;
   for (auto& req : reqs) {
     std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();

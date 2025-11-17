@@ -68,7 +68,7 @@ inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromInferReqs(
   batch_info.multi_batch_id = multi_batch_id;
   batch_info.req_info_list.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); i++) {
-    auto& req = reqs[i];
+    const auto& req = reqs[i];
     auto& req_info = batch_info.req_info_list[i];
     req_info.req_id = req->req_id;
     req_info.forwarding_token_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
@@ -77,13 +77,13 @@ inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromInferReqs(
   return batch_info;
 }
 
-inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromForwardingReqs(const std::vector<ForwardRequest>& reqs,
-                                                                          size_t multi_batch_id) {
+inline BatchRequestSchedInfo BuildBatchRequestSchedInfoFromForwardingReqs(
+    const std::vector<ForwardRequest*>& reqs, size_t multi_batch_id) {
   BatchRequestSchedInfo batch_info;
   batch_info.multi_batch_id = multi_batch_id;
   batch_info.req_info_list.resize(reqs.size());
   for (size_t i = 0; i < reqs.size(); i++) {
-    auto& req = reqs[i];
+    const auto& req = *reqs[i];
     auto& req_info = batch_info.req_info_list[i];
     req_info.req_id = req.req_id;
     req_info.forwarding_token_num = req.forwarding_tokens->size() - req.kv_cached_token_num;

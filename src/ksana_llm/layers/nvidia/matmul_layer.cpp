@@ -20,7 +20,7 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-size_t MatMulLayer::GetWorkSpaceSize() {
+size_t MatMulLayer::GetWorkspaceSize() {
   if (context_->ext->GetGPUGemmAlgoHelper().IsInit() || std::getenv("MATMUL_LAYER_USE_WORKSPACE")) {
     cublas_workspace_size_ = llm_kernels::nvidia::GetCublasWorkspaceSize();
   }

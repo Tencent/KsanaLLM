@@ -182,7 +182,6 @@ class CommonMoeWeightTest : public testing::Test {
       //         [0.5 , 0.51, 0.52, 0.53, 0.54],
       //         [0.55, 0.56, 0.57, 0.58, 0.59]]])
       auto up_gate_data = GetFP16DeviceData(up_gate_tensor.GetPtr<void>(), up_gate_tensor.shape);
-      size_t up_gate_element_size = up_gate_data.size();
       for (size_t i = 0; i < num_experts; ++i) {
         for (size_t j = 0; j < moe_inter_size; ++j) {
           for (size_t k = 0; k < hidden_units; ++k) {
@@ -408,7 +407,6 @@ class CommonMoeWeightTest : public testing::Test {
       //         [0.2 , 0.21, 0.22, 0.23, 0.24],
       //         [0.25, 0.26, 0.27, 0.28, 0.29]]])
       auto up_gate_data = GetFP16DeviceData(up_gate_tensor_rank_0.GetPtr<void>(), up_gate_tensor_rank_0.shape);
-      size_t up_gate_element_size = up_gate_data.size();
       for (size_t j = 0; j < moe_inter_size; ++j) {
         for (size_t k = 0; k < hidden_units; ++k) {
           size_t idx = j * hidden_units + k;
@@ -463,7 +461,6 @@ class CommonMoeWeightTest : public testing::Test {
       //         [0.5 , 0.51, 0.52, 0.53, 0.54],
       //         [0.55, 0.56, 0.57, 0.58, 0.59]]])
       auto up_gate_data = GetFP16DeviceData(up_gate_tensor_rank_1.GetPtr<void>(), up_gate_tensor_rank_1.shape);
-      size_t up_gate_element_size = up_gate_data.size();
       for (size_t j = 0; j < moe_inter_size; ++j) {
         for (size_t k = 0; k < hidden_units; ++k) {
           size_t idx = j * hidden_units + k;

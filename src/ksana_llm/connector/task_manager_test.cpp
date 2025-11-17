@@ -746,14 +746,14 @@ TEST_F(TaskManagerBasicTest, CircularIndexDistribution) {
 // Promise-based同步测试
 //=============================================================================
 
-TEST_F(TaskManagerPromiseTest, AddPrefillPendingTask) {
+TEST_F(TaskManagerPromiseTest, AddUnconfirmedTask) {
   TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
 
   // 添加等待确认的任务
-  task_manager_->AddPrefillPendingTask(key);
+  task_manager_->AddUnconfirmedTask(key);
 
   // 尝试激活应该失败，因为还没有decode确认
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_FALSE(activated);
 }
 
@@ -761,34 +761,34 @@ TEST_F(TaskManagerPromiseTest, RegisterDecodeConfirmedTasks) {
   TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
 
   // 先添加等待确认的任务
-  task_manager_->AddPrefillPendingTask(key);
+  task_manager_->AddUnconfirmedTask(key);
 
   // 注册decode确认的任务
   std::vector<TaskKey> confirmed_keys = {key};
   task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
 
   // 现在激活应该成功
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_TRUE(activated);
 }
 
-TEST_F(TaskManagerPromiseTest, RegisterDecodeConfirmedTasksWithoutPending) {
+TEST_F(TaskManagerPromiseTest, RegisterDecodeConfirmedTasksWithoutUnconfirmed) {
   TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
 
-  // 直接注册decode确认的任务（没有预先的pending任务）
+  // 直接注册decode确认的任务（没有预先的unconfirmed任务）
   std::vector<TaskKey> confirmed_keys = {key};
   task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
 
   // 尝试激活应该成功
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_TRUE(activated);
 }
 
-TEST_F(TaskManagerPromiseTest, TryActivatePendingTaskNotConfirmed) {
+TEST_F(TaskManagerPromiseTest, TryActivateUnconfirmedTaskNotConfirmed) {
   TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
 
   // 尝试激活未确认的任务
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_FALSE(activated);
 }
 
@@ -806,7 +806,7 @@ TEST_F(TaskManagerPromiseTest, RegisterDecodeConfirmedTasksWithSkippingFlag) {
   EXPECT_FALSE(key.GetIsSkippedTaskFlag());
 
   // 尝试激活应该成功，且key的跳过标志应该被设置为true
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_TRUE(activated);
   EXPECT_TRUE(key.GetIsSkippedTaskFlag());
 
@@ -820,7 +820,7 @@ TEST_F(TaskManagerPromiseTest, CleanupExpiredTasks) {
   TaskKey key2 = CreateTaskKey(2, 0, 0, 0, 200);
 
   // 添加一些pending和confirmed任务
-  task_manager_->AddPrefillPendingTask(key1);
+  task_manager_->AddUnconfirmedTask(key1);
   std::vector<TaskKey> confirmed_keys = {key2};
   task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
 
@@ -828,8 +828,8 @@ TEST_F(TaskManagerPromiseTest, CleanupExpiredTasks) {
   task_manager_->CleanupExpiredTasks(0);
 
   // 验证任务被清理后的行为
-  bool activated1 = task_manager_->TryActivatePendingTask(key1);
-  bool activated2 = task_manager_->TryActivatePendingTask(key2);
+  bool activated1 = task_manager_->TryActivateUnconfirmedTask(key1);
+  bool activated2 = task_manager_->TryActivateUnconfirmedTask(key2);
 
   // 由于任务已过期被清理，激活应该失败
   EXPECT_FALSE(activated1);
@@ -839,8 +839,8 @@ TEST_F(TaskManagerPromiseTest, CleanupExpiredTasks) {
 TEST_F(TaskManagerPromiseTest, CleanupNonExpiredTasks) {
   TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
 
-  // 添加pending任务
-  task_manager_->AddPrefillPendingTask(key);
+  // 添加unconfirmed任务
+  task_manager_->AddUnconfirmedTask(key);
 
   // 使用很长的超时时间，任务不应该被清理
   task_manager_->CleanupExpiredTasks(3600);  // 1小时
@@ -850,7 +850,7 @@ TEST_F(TaskManagerPromiseTest, CleanupNonExpiredTasks) {
   task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
 
   // 任务应该仍然能够被激活
-  bool activated = task_manager_->TryActivatePendingTask(key);
+  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
   EXPECT_TRUE(activated);
 }
 
@@ -886,10 +886,10 @@ TEST_F(TaskManagerPromiseTest, ConcurrentTaskOperations) {
     }
   });
 
-  // 线程3: 添加pending任务
+  // 线程3: 添加unconfirmed任务
   threads.emplace_back([this, &all_keys]() {
     for (size_t i = 0; i < all_keys.size() / 2; ++i) {
-      task_manager_->AddPrefillPendingTask(all_keys[i]);
+      task_manager_->AddUnconfirmedTask(all_keys[i]);
     }
   });
 
@@ -983,7 +983,7 @@ TEST_F(TaskManagerBasicTest, Shutdown) {
   AddTasksToManager(keys);
 
   // 添加一些promise任务
-  task_manager_->AddPrefillPendingTask(keys[0]);
+  task_manager_->AddUnconfirmedTask(keys[0]);
   task_manager_->RegisterDecodeConfirmedTasks({keys[1]});
 
   EXPECT_EQ(task_manager_->GetTaskCount(), 5);

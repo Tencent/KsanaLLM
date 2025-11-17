@@ -53,17 +53,11 @@ struct SamplingRequest {
   // Store token and their corresponding float probability values.
   std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>> logprobs;
 
-  // Beam Search Group
-  std::vector<std::shared_ptr<InferRequest>>* req_group = nullptr;
-
-  // Model config
-  const ModelConfig* model_config = nullptr;
-
   // The no_reapete_ngram sampling map
   NgramDict* ngram_dict = nullptr;
 
-  // Grammar matcher for constrained generation, defaults to nullptr (no grammar constraints)
-  std::shared_ptr<GrammarMatcherWrapper> grammar_matcher;
+  // Structured generator for constrained generation, defaults to nullptr (no constraints)
+  std::shared_ptr<StructuredGeneratorInterface> structured_generator;
 
   // Flag to control whether to apply structured constraints during sampling
   // Used in MTP mode to disable constraints for draft token generation

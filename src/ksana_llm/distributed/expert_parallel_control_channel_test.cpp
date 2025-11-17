@@ -176,11 +176,6 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     expert_parallel_config.expert_world_size = 2;
     expert_parallel_config.global_expert_para_size = 2;
     expert_parallel_config.expert_para_size = 1;
-#ifdef ENABLE_CUDA
-    expert_parallel_config.nccl_unique_ids.resize(2);
-    memset(expert_parallel_config.nccl_unique_ids[0].data(), 1, 128);
-    memset(expert_parallel_config.nccl_unique_ids[0].data(), 2, 128);
-#endif
     master_env_->SetExpertParallelConfig(expert_parallel_config);
 
     Singleton<Environment>::GetInstance()->SetExpertParallelConfig(expert_parallel_config);
@@ -191,11 +186,8 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     // Wait all workers connected.
     ctrl_channel_master_->Barrier();
 
-    // synchronize expert parallel info.
-    ctrl_channel_master_->SynchronizeExpertParallelExperts();
-
     // synchronize deepep meta info.
-    SetExpertParallelDeepepWrapper(g_master_mock_deepep_wrapper);
+    ctrl_channel_master_->SetExpertParallelDeepepWrapper(g_master_mock_deepep_wrapper);
     ctrl_channel_master_->SynchronizeNvshmemUniqueId();
 
     // 验证master节点的结果
@@ -225,9 +217,6 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     expert_parallel_config.expert_world_size = 2;
     expert_parallel_config.global_expert_para_size = 2;
     expert_parallel_config.expert_para_size = 1;
-#ifdef ENABLE_CUDA
-    expert_parallel_config.nccl_unique_ids.resize(2);
-#endif
     worker_env_->SetExpertParallelConfig(expert_parallel_config);
 
     Singleton<Environment>::GetInstance()->SetExpertParallelConfig(expert_parallel_config);
@@ -241,10 +230,7 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
     // Wait all workers connected.
     ctrl_channel_worker_->Barrier();
 
-    // Wait layer result.
-    ctrl_channel_worker_->SynchronizeExpertParallelExperts();
-
-    SetExpertParallelDeepepWrapper(g_worker_mock_deepep_wrapper);
+    ctrl_channel_worker_->SetExpertParallelDeepepWrapper(g_worker_mock_deepep_wrapper);
     ctrl_channel_worker_->SynchronizeNvshmemUniqueId();
     // 验证worker节点的结果
     uint8_t* nvshmem_unique_id = g_worker_mock_deepep_wrapper->GetNvshmemUniqueId();
@@ -273,10 +259,4 @@ TEST_F(ExpertParallelControlChannelTest, TestControlChannel) {
   worker_env_->GetExpertParallelConfig(worker_config);
   ExpertParallelConfig master_config;
   master_env_->GetExpertParallelConfig(master_config);
-
-#ifdef ENABLE_CUDA
-  // Check block num result.
-  EXPECT_EQ(worker_config.nccl_unique_ids[0], master_config.nccl_unique_ids[0]);
-  EXPECT_EQ(worker_config.nccl_unique_ids[1], master_config.nccl_unique_ids[1]);
-#endif
 }

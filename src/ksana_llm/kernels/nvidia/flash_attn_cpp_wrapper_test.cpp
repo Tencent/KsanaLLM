@@ -274,15 +274,16 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
     int num_heads;
     int num_kv_heads;
     int head_size;
+    int head_size_v;
     bool is_causal;
     std::string description;
   };
   std::vector<TestConfig> test_configs = {
-      {1, 128, 32, 32, 128, true, "小批次_短序列_因果注意力"},
-      {1, 256, 32, 32, 128, true, "小批次_短序列_因果注意力"},
-      {1, 512, 32, 32, 128, true, "小批次_短序列_因果注意力"},
-      {1, 1024, 32, 32, 128, true, "小批次_短序列_因果注意力"},
-      {1, 2048, 32, 32, 128, true, "小批次_短序列_因果注意力"},
+      {1, 128, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 256, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 512, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 1024, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 2048, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
   };
 
   int success_count = 0;
@@ -293,7 +294,8 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
       std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
       std::cout << "batch_size=" << config.batch_size << ", seq_len=" << config.seq_len
                 << ", num_heads=" << config.num_heads << ", num_kv_heads=" << config.num_kv_heads
-                << ", head_size=" << config.head_size << ", is_causal=" << config.is_causal << std::endl;
+                << ", head_size=" << config.head_size << ", head_size_v=" << config.head_size_v
+                << ", is_causal=" << config.is_causal << std::endl;
     }
 
     try {
@@ -303,7 +305,7 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
       torch::manual_seed(42);
       auto q_tensor = torch::randn({total_tokens, config.num_heads, config.head_size}, options);
       auto k_tensor = torch::randn({total_tokens, config.num_kv_heads, config.head_size}, options);
-      auto v_tensor = torch::randn({total_tokens, config.num_kv_heads, config.head_size}, options);
+      auto v_tensor = torch::randn({total_tokens, config.num_kv_heads, config.head_size_v}, options);
 
       auto cu_seqlens = CreateCuSeqlens(config.batch_size, config.seq_len);
 
@@ -383,7 +385,7 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
       ASSERT_EQ(output_tensor.dim(), 3) << "输出张量应该是3维的";
       ASSERT_EQ(output_tensor.size(0), total_tokens) << "输出张量第一维应该等于总token数";
       ASSERT_EQ(output_tensor.size(1), config.num_heads) << "输出张量第二维应该等于头数";
-      ASSERT_EQ(output_tensor.size(2), config.head_size) << "输出张量第三维应该等于头大小";
+      ASSERT_EQ(output_tensor.size(2), config.head_size_v) << "输出张量第三维应该等于头大小";
 
       // 检查输出是否包含有效数值
       bool has_nan = torch::any(torch::isnan(output_tensor)).item<bool>();
@@ -397,6 +399,175 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
 
       if (isPrint) {
         std::cout << "✅ FA3 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
+        std::cout << "   输出形状: " << output_tensor.sizes() << std::endl;
+        std::cout << "   输出最大绝对值: " << output_abs_max << std::endl;
+      }
+      success_count++;
+    } catch (const std::exception& e) {
+      if (isPrint) {
+        std::cerr << "测试配置 " << config.description << " 执行失败: " << e.what() << std::endl;
+      }
+    }
+  }
+
+  // 验证至少有一些测试成功
+  EXPECT_GT(success_count, 0) << "至少应该有一个测试配置成功";
+}
+
+TEST_F(DirectFlashAttnComparisonTest, TestFA3WithFP8) {
+  // 检查 FA3 函数指针是否可用
+  if (!ksana_llm::FlashAttentionBackend::mha_fwd_fa3_) {
+    GTEST_SKIP() << "FA3 function not available";
+  }
+
+  // 控制调试输出的参数
+  const bool isPrint = false;  // 设置为 true 可以启用详细的调试输出
+
+  // 测试参数配置
+  struct TestConfig {
+    int batch_size;
+    int seq_len;
+    int num_heads;
+    int num_kv_heads;
+    int head_size;
+    int head_size_v;
+    bool is_causal;
+    std::string description;
+  };
+  std::vector<TestConfig> test_configs = {
+      {1, 128, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 256, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 512, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 1024, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 2048, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+  };
+
+  int success_count = 0;
+  int total_count = test_configs.size();
+
+  for (const auto& config : test_configs) {
+    if (isPrint) {
+      std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
+      std::cout << "batch_size=" << config.batch_size << ", seq_len=" << config.seq_len
+                << ", num_heads=" << config.num_heads << ", num_kv_heads=" << config.num_kv_heads
+                << ", head_size=" << config.head_size << ", head_size_v=" << config.head_size_v
+                << ", is_causal=" << config.is_causal << std::endl;
+    }
+
+    try {
+      int total_tokens = config.batch_size * config.seq_len;
+      float attn_scale = 1.0f / std::sqrt(static_cast<float>(config.head_size));
+      auto options = torch::TensorOptions().dtype(torch::kFloat16).device(device_);
+      auto scale_options = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
+      torch::manual_seed(42);
+      // torch::randn not support torch::kFloat8_e4m3fn directly
+      auto q_tensor =
+          torch::randn({total_tokens, config.num_heads, config.head_size}, options).to(torch::kFloat8_e4m3fn);
+      auto k_tensor =
+          torch::randn({total_tokens, config.num_kv_heads, config.head_size}, options).to(torch::kFloat8_e4m3fn);
+      auto v_tensor =
+          torch::randn({total_tokens, config.num_kv_heads, config.head_size_v}, options).to(torch::kFloat8_e4m3fn);
+      auto q_descale = 0.5f * torch::ones({config.batch_size, config.num_heads}, scale_options);
+      auto k_descale = 0.5f * torch::ones({config.batch_size, config.num_heads}, scale_options);
+      auto v_descale = 0.5f * torch::ones({config.batch_size, config.num_heads}, scale_options);
+      std::cout << "create tensor finished" << std::endl;
+
+      auto cu_seqlens = CreateCuSeqlens(config.batch_size, config.seq_len);
+
+      auto q_contiguous = q_tensor.contiguous();
+      auto k_contiguous = k_tensor.contiguous();
+      auto v_contiguous = v_tensor.contiguous();
+      auto q_descale_contiguous = q_descale.contiguous();
+      auto k_descale_contiguous = k_descale.contiguous();
+      auto v_descale_contiguous = v_descale.contiguous();
+      auto q_tmp_tensor = torch::reshape(q_contiguous, {total_tokens, config.num_heads, config.head_size});
+      std::optional<at::Tensor> k_new_ = std::nullopt;
+      std::optional<at::Tensor> v_new_ = std::nullopt;
+      std::optional<at::Tensor> q_v_ = std::nullopt;
+      std::optional<at::Tensor> out_ = std::nullopt;
+      std::optional<at::Tensor> cu_seqlens_q_ = cu_seqlens;
+      std::optional<at::Tensor> cu_seqlens_k_ = cu_seqlens;
+      std::optional<at::Tensor> cu_seqlens_k_new_ = std::nullopt;
+      std::optional<at::Tensor> seqused_q_ = std::nullopt;
+      std::optional<at::Tensor> seqused_k_ = std::nullopt;
+      std::optional<int64_t> max_seqlen_q_ = static_cast<int64_t>(config.seq_len);
+      std::optional<int64_t> max_seqlen_k_ = static_cast<int64_t>(config.seq_len);
+      std::optional<at::Tensor> page_table_ = std::nullopt;
+      std::optional<at::Tensor> kv_batch_idx_ = std::nullopt;
+      std::optional<at::Tensor> leftpad_k_ = std::nullopt;
+      std::optional<at::Tensor> rotary_cos_ = std::nullopt;
+      std::optional<at::Tensor> rotary_sin_ = std::nullopt;
+      std::optional<at::Tensor> seqlens_rotary_ = std::nullopt;
+      std::optional<at::Tensor> q_descale_ = q_descale_contiguous;
+      std::optional<at::Tensor> k_descale_ = k_descale_contiguous;
+      std::optional<at::Tensor> v_descale_ = v_descale_contiguous;
+      std::optional<double> softmax_scale_opt = std::optional<double>(static_cast<double>(attn_scale));
+      int64_t window_size_left = -1;
+      int64_t window_size_right = -1;
+      int64_t attention_chunk = 0;
+      double softcap_val = 0.0;
+      bool is_rotary_interleaved = false;
+      std::optional<at::Tensor> scheduler_metadata_ = std::nullopt;
+      int64_t num_splits = 0;
+      std::optional<bool> pack_gqa_ = std::nullopt;
+      int64_t sm_margin = 0;
+      std::cout << "prepare params finished" << std::endl;
+      // 1. 调用FA3（计时）
+      at::Tensor fa3_output;
+      double fa3_avg_ms = 0.0;
+      const int warmup_iters = 2;
+      const int bench_iters = 5;
+      std::vector<at::Tensor> fa3_result;
+      try {
+        // warmup
+        for (int i = 0; i < warmup_iters; ++i) {
+          (void)mha_fwd_fa3(q_tmp_tensor, k_contiguous, v_contiguous, k_new_, v_new_, q_v_, out_, cu_seqlens_q_,
+                            cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_, max_seqlen_k_,
+                            page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_,
+                            q_descale_, k_descale_, v_descale_, softmax_scale_opt, config.is_causal, window_size_left,
+                            window_size_right, attention_chunk, softcap_val, is_rotary_interleaved, scheduler_metadata_,
+                            num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < bench_iters; ++i) {
+          fa3_result = mha_fwd_fa3(q_tmp_tensor, k_contiguous, v_contiguous, k_new_, v_new_, q_v_, out_, cu_seqlens_q_,
+                                   cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_,
+                                   max_seqlen_k_, page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_,
+                                   seqlens_rotary_, q_descale_, k_descale_, v_descale_, softmax_scale_opt,
+                                   config.is_causal, window_size_left, window_size_right, attention_chunk, softcap_val,
+                                   is_rotary_interleaved, scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        fa3_avg_ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / bench_iters;
+        fa3_output = fa3_result[0];
+      } catch (const std::exception& e) {
+        if (isPrint) {
+          std::cerr << "FA3调用失败: " << e.what() << std::endl;
+        }
+        continue;
+      }
+      // 验证 FA3 输出
+      ASSERT_FALSE(fa3_result.empty()) << "FA3 应该返回非空结果";
+      auto output_tensor = fa3_result[0];
+      ASSERT_EQ(output_tensor.dim(), 3) << "输出张量应该是3维的";
+      ASSERT_EQ(output_tensor.size(0), total_tokens) << "输出张量第一维应该等于总token数";
+      ASSERT_EQ(output_tensor.size(1), config.num_heads) << "输出张量第二维应该等于头数";
+      ASSERT_EQ(output_tensor.size(2), config.head_size_v) << "输出张量第三维应该等于头大小";
+
+      // 检查输出是否包含有效数值
+      bool has_nan = torch::any(torch::isnan(output_tensor)).item<bool>();
+      bool has_inf = torch::any(torch::isinf(output_tensor)).item<bool>();
+      ASSERT_FALSE(has_nan) << "输出不应包含 NaN 值";
+      ASSERT_FALSE(has_inf) << "输出不应包含 Inf 值";
+
+      // 检查输出范围是否合理
+      auto output_abs_max = torch::max(torch::abs(output_tensor)).item<float>();
+      ASSERT_LT(output_abs_max, 100.0f) << "输出值的绝对值应该在合理范围内";
+
+      if (isPrint) {
+        std::cout << "✅ FA3 FP8 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
         std::cout << "   输出形状: " << output_tensor.sizes() << std::endl;
         std::cout << "   输出最大绝对值: " << output_abs_max << std::endl;
       }
@@ -742,6 +913,205 @@ TEST_F(DirectFlashAttnComparisonTest, CompareFA3WithVllmFA2) {
   if (isPrint) {
     std::cout << "=== FA3 与 VLLM FA2 对比测试完成 ===" << std::endl;
   }
+}
+
+TEST_F(DirectFlashAttnComparisonTest, CompareFA3FP16AndFP8) {
+  // 检查 FA3 函数指针是否可用
+  if (!ksana_llm::FlashAttentionBackend::mha_fwd_fa3_) {
+    GTEST_SKIP() << "FA3 function not available";
+  }
+
+  // 控制调试输出的参数
+  const bool isPrint = false;  // 设置为 true 可以启用详细的调试输出
+
+  // 测试参数配置
+  struct TestConfig {
+    int batch_size;
+    int seq_len;
+    int num_heads;
+    int num_kv_heads;
+    int head_size;
+    int head_size_v;
+    bool is_causal;
+    std::string description;
+  };
+  std::vector<TestConfig> test_configs = {
+      {1, 128, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 256, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 512, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 1024, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+      {1, 2048, 32, 32, 128, 128, true, "小批次_短序列_因果注意力"},
+  };
+
+  int success_count = 0;
+  int total_count = test_configs.size();
+
+  for (const auto& config : test_configs) {
+    if (isPrint) {
+      std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
+      std::cout << "batch_size=" << config.batch_size << ", seq_len=" << config.seq_len
+                << ", num_heads=" << config.num_heads << ", num_kv_heads=" << config.num_kv_heads
+                << ", head_size=" << config.head_size << ", head_size_v=" << config.head_size_v
+                << ", is_causal=" << config.is_causal << std::endl;
+    }
+
+    try {
+      int total_tokens = config.batch_size * config.seq_len;
+      float attn_scale = 1.0f / std::sqrt(static_cast<float>(config.head_size));
+      auto options = torch::TensorOptions().dtype(torch::kFloat16).device(device_);
+      auto scale_options = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
+      torch::manual_seed(42);
+      // torch::randn not support torch::kFloat8_e4m3fn directly
+      auto q_tensor = torch::randn({total_tokens, config.num_heads, config.head_size}, options);
+      auto k_tensor = torch::randn({total_tokens, config.num_kv_heads, config.head_size}, options);
+      auto v_tensor = torch::randn({total_tokens, config.num_kv_heads, config.head_size_v}, options);
+      auto q_quant_tensor = q_tensor.to(torch::kFloat8_e4m3fn);
+      auto k_quant_tensor = k_tensor.to(torch::kFloat8_e4m3fn);
+      auto v_quant_tensor = v_tensor.to(torch::kFloat8_e4m3fn);
+      std::cout << "create tensor finished" << std::endl;
+
+      auto cu_seqlens = CreateCuSeqlens(config.batch_size, config.seq_len);
+
+      auto q_contiguous = q_tensor.contiguous();
+      auto k_contiguous = k_tensor.contiguous();
+      auto v_contiguous = v_tensor.contiguous();
+      auto q_tmp_tensor = torch::reshape(q_contiguous, {total_tokens, config.num_heads, config.head_size});
+
+      auto q_quant_contiguous = q_quant_tensor.contiguous();
+      auto k_quant_contiguous = k_quant_tensor.contiguous();
+      auto v_quant_contiguous = v_quant_tensor.contiguous();
+      auto q_quant_tmp_tensor = torch::reshape(q_quant_contiguous, {total_tokens, config.num_heads, config.head_size});
+
+      std::optional<at::Tensor> k_new_ = std::nullopt;
+      std::optional<at::Tensor> v_new_ = std::nullopt;
+      std::optional<at::Tensor> q_v_ = std::nullopt;
+      std::optional<at::Tensor> out_ = std::nullopt;
+      std::optional<at::Tensor> cu_seqlens_q_ = cu_seqlens;
+      std::optional<at::Tensor> cu_seqlens_k_ = cu_seqlens;
+      std::optional<at::Tensor> cu_seqlens_k_new_ = std::nullopt;
+      std::optional<at::Tensor> seqused_q_ = std::nullopt;
+      std::optional<at::Tensor> seqused_k_ = std::nullopt;
+      std::optional<int64_t> max_seqlen_q_ = static_cast<int64_t>(config.seq_len);
+      std::optional<int64_t> max_seqlen_k_ = static_cast<int64_t>(config.seq_len);
+      std::optional<at::Tensor> page_table_ = std::nullopt;
+      std::optional<at::Tensor> kv_batch_idx_ = std::nullopt;
+      std::optional<at::Tensor> leftpad_k_ = std::nullopt;
+      std::optional<at::Tensor> rotary_cos_ = std::nullopt;
+      std::optional<at::Tensor> rotary_sin_ = std::nullopt;
+      std::optional<at::Tensor> seqlens_rotary_ = std::nullopt;
+      std::optional<at::Tensor> q_descale_ = std::nullopt;
+      std::optional<at::Tensor> k_descale_ = std::nullopt;
+      std::optional<at::Tensor> v_descale_ = std::nullopt;
+      std::optional<double> softmax_scale_opt = std::optional<double>(static_cast<double>(attn_scale));
+      int64_t window_size_left = -1;
+      int64_t window_size_right = -1;
+      int64_t attention_chunk = 0;
+      double softcap_val = 0.0;
+      bool is_rotary_interleaved = false;
+      std::optional<at::Tensor> scheduler_metadata_ = std::nullopt;
+      int64_t num_splits = 0;
+      std::optional<bool> pack_gqa_ = std::nullopt;
+      int64_t sm_margin = 0;
+      std::cout << "prepare params finished" << std::endl;
+      // 1. 调用FA3（计时）
+      at::Tensor fa3_output;
+      at::Tensor fa3_fp8_output;
+      double fa3_avg_ms = 0.0;
+      double fa3_fp8_avg_ms = 0.0;
+      const int warmup_iters = 2;
+      const int bench_iters = 5;
+      std::vector<at::Tensor> fa3_result;
+      std::vector<at::Tensor> fa3_fp8_result;
+      try {
+        // warmup
+        for (int i = 0; i < warmup_iters; ++i) {
+          (void)mha_fwd_fa3(q_tmp_tensor, k_contiguous, v_contiguous, k_new_, v_new_, q_v_, out_, cu_seqlens_q_,
+                            cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_, max_seqlen_k_,
+                            page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_,
+                            q_descale_, k_descale_, v_descale_, softmax_scale_opt, config.is_causal, window_size_left,
+                            window_size_right, attention_chunk, softcap_val, is_rotary_interleaved, scheduler_metadata_,
+                            num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < bench_iters; ++i) {
+          fa3_result = mha_fwd_fa3(q_tmp_tensor, k_contiguous, v_contiguous, k_new_, v_new_, q_v_, out_, cu_seqlens_q_,
+                                   cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_,
+                                   max_seqlen_k_, page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_,
+                                   seqlens_rotary_, q_descale_, k_descale_, v_descale_, softmax_scale_opt,
+                                   config.is_causal, window_size_left, window_size_right, attention_chunk, softcap_val,
+                                   is_rotary_interleaved, scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        fa3_avg_ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / bench_iters;
+        fa3_output = fa3_result[0];
+
+        // warmup
+        for (int i = 0; i < warmup_iters; ++i) {
+          (void)mha_fwd_fa3(q_quant_tmp_tensor, k_quant_contiguous, v_quant_contiguous, k_new_, v_new_, q_v_, out_,
+                            cu_seqlens_q_, cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_,
+                            max_seqlen_k_, page_table_, kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_,
+                            seqlens_rotary_, q_descale_, k_descale_, v_descale_, softmax_scale_opt, config.is_causal,
+                            window_size_left, window_size_right, attention_chunk, softcap_val, is_rotary_interleaved,
+                            scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto fp8_t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < bench_iters; ++i) {
+          fa3_fp8_result = mha_fwd_fa3(
+              q_quant_tmp_tensor, k_quant_contiguous, v_quant_contiguous, k_new_, v_new_, q_v_, out_, cu_seqlens_q_,
+              cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_, max_seqlen_q_, max_seqlen_k_, page_table_,
+              kv_batch_idx_, leftpad_k_, rotary_cos_, rotary_sin_, seqlens_rotary_, q_descale_, k_descale_, v_descale_,
+              softmax_scale_opt, config.is_causal, window_size_left, window_size_right, attention_chunk, softcap_val,
+              is_rotary_interleaved, scheduler_metadata_, num_splits, pack_gqa_, sm_margin);
+        }
+        cudaDeviceSynchronize();
+        auto fp8_t1 = std::chrono::high_resolution_clock::now();
+        fa3_fp8_avg_ms = std::chrono::duration<double, std::milli>(fp8_t1 - fp8_t0).count() / bench_iters;
+        fa3_fp8_output = fa3_fp8_result[0];
+      } catch (const std::exception& e) {
+        if (isPrint) {
+          std::cerr << "FA3调用失败: " << e.what() << std::endl;
+        }
+        continue;
+      }
+
+      // 对比输出
+      auto comparison_result =
+          CompareTensorOutputs(fa3_output, fa3_fp8_output, "FA3输出", "FA3 FP8输出", 0.99, 0.2, 0.01, isPrint);
+
+      // 4. 性能对比
+      double speedup_ratio = fa3_fp8_avg_ms / fa3_avg_ms;
+
+      if (isPrint) {
+        std::cout << "\n=== 性能对比结果 ===" << std::endl;
+        std::cout << "FA3 平均耗时: " << std::fixed << std::setprecision(3) << fa3_avg_ms << " ms" << std::endl;
+        std::cout << "FA3 FP8 平均耗时: " << std::fixed << std::setprecision(3) << fa3_fp8_avg_ms << " ms" << std::endl;
+        std::cout << "加速比 (FA3 FP8/FA3): " << std::fixed << std::setprecision(2) << speedup_ratio << "x"
+                  << std::endl;
+
+        if (comparison_result.comparison_passed) {
+          std::cout << "✅ FA3 FP16 与 FP8 输出对比通过" << std::endl;
+        } else {
+          std::cout << "⚠️ FA3 FP16 与 FP8 输出存在差异，但这可能是正常的实现差异" << std::endl;
+        }
+      }
+
+      // 验证性能和精度结果
+      EXPECT_GT(fa3_avg_ms, 0.0) << "FA3 执行时间应该大于0";
+      EXPECT_GT(fa3_fp8_avg_ms, 0.0) << "FA3 FP8 执行时间应该大于0";
+      EXPECT_GT(comparison_result.cosine_similarity, 0.95) << "余弦相似度应该较高";
+      success_count++;
+    } catch (const std::exception& e) {
+      if (isPrint) {
+        std::cerr << "测试配置 " << config.description << " 执行失败: " << e.what() << std::endl;
+      }
+    }
+  }
+
+  // 验证至少有一些测试成功
+  EXPECT_GT(success_count, 0) << "至少应该有一个测试配置成功";
 }
 
 // 测试 FA2V26 函数调用

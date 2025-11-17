@@ -29,6 +29,7 @@
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/layers/silu_mul_layer.h"
 #include "ksana_llm/models/common_moe/moe_config.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/search_status.h"
@@ -86,6 +87,7 @@ class LayerTest : public testing::Test {
     runtime_config.inter_data_type = model_config.weight_data_type;
     runtime_config.w4afp8_moe_backend = W4AFP8_MOE_BACKEND::Default;
 
+    AttentionBackendManager::GetInstance()->Initialize();
     Singleton<Environment>::GetInstance()->SetBlockManagerConfig(block_manager_config);
     context_ = std::make_shared<Context>(1, 1, 1);
   }
@@ -315,14 +317,6 @@ TEST_F(LayerTest, AddLayerTest) {
 
   constexpr int kDeviceRank = 0;
   using dtype = half_float::half;
-
-#  ifdef ENABLE_CUDA
-  using device_type = half;
-#  endif
-#  ifdef ENABLE_ACL
-  using device_type = aclFloat16;
-#  endif
-
   // 初始化tensor
   Tensor input, bias_a, bias_b;
   std::vector<Tensor> output(1);
@@ -1264,7 +1258,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
                      {expert_num, expert_hidden_size / 16, 2 * expert_inter_size * (num_bits / 2)}, kDeviceRank);
   inputs[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
                      {expert_num, expert_inter_size / 16, expert_hidden_size * (num_bits / 2)}, kDeviceRank);
-  for (int i = 0; i < inputs.size(); ++i) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
     torch::Tensor tensor = torch::from_blob(inputs[i].GetPtr<void>(),
                                             {std::vector<int64_t>(inputs[i].shape.begin(), inputs[i].shape.end())},
                                             options.dtype(GetTorchTypeFromDataType(inputs[i].dtype)));
@@ -1282,7 +1276,7 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
                      {expert_num, expert_hidden_size / group_size, expert_inter_size * 2}, kDeviceRank);
   scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
                      {expert_num, expert_inter_size / group_size, expert_hidden_size}, kDeviceRank);
-  for (int i = 0; i < scales.size(); ++i) {
+  for (size_t i = 0; i < scales.size(); ++i) {
     torch::Tensor tensor = torch::from_blob(scales[i].GetPtr<void>(),
                                             {std::vector<int64_t>(scales[i].shape.begin(), scales[i].shape.end())},
                                             options.dtype(GetTorchTypeFromDataType(scales[i].dtype)));
@@ -1295,7 +1289,8 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
 
   // initialize output tensor
   std::vector<Tensor> outputs(1);
-  outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {num_tokens, expert_hidden_size}, kDeviceRank);
+  outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {static_cast<size_t>(num_tokens), expert_hidden_size},
+                      kDeviceRank);
 
   // run moe_layer
   std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
@@ -1658,10 +1653,8 @@ TEST_F(LayerTest, MoeLayerTest) {
     torch::Tensor w2_weight = torch::empty({static_cast<int64_t>(expert_num), static_cast<int64_t>(expert_hidden_size),
                                             static_cast<int64_t>(expert_inter_size / 2)},
                                            int8_option);
-    torch::Tensor fc13_act_scale =
-        torch::empty({static_cast<int64_t>(1), static_cast<int64_t>(expert_hidden_size)}, dtype_option);
-    torch::Tensor fc2_act_scale =
-        torch::empty({static_cast<int64_t>(1), static_cast<int64_t>(expert_inter_size)}, dtype_option);
+    torch::Tensor fc13_act_scale = torch::empty({static_cast<int64_t>(1)}, dtype_option);
+    torch::Tensor fc2_act_scale = torch::empty({static_cast<int64_t>(1)}, dtype_option);
     torch::Tensor fc13_weight_scale = torch::empty(
         {static_cast<int64_t>(expert_num), static_cast<int64_t>(expert_hidden_size / (128 * interleave[0])),
          static_cast<int64_t>(expert_inter_size * 2 * interleave[0])},
@@ -1734,7 +1727,7 @@ TEST_F(LayerTest, MoeLayerTest) {
     std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
     CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
     cutlass_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
-    size_t workspace_size = cutlass_moe_layer.GetWorkSpaceSize();
+    size_t workspace_size = cutlass_moe_layer.GetWorkspaceSize();
     KLLM_LOG_INFO << fmt::format("CutlassMoeLayer WorkSpaceSize: {}", workspace_size);
     cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
     cutlass_moe_layer.Preprocess(new_model_config, new_runtime_config);
@@ -1767,12 +1760,8 @@ TEST_F(LayerTest, MoeLayerTest) {
     inputs[2].scales = &scales[0];
     inputs[3].scales = &scales[1];
     std::vector<Tensor> input_scales(2);
-    input_scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
-                             {static_cast<size_t>(fc13_act_scale.size(0)), static_cast<size_t>(fc13_act_scale.size(1))},
-                             kDeviceRank, fc13_act_scale.data_ptr());
-    input_scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
-                             {static_cast<size_t>(fc2_act_scale.size(0)), static_cast<size_t>(fc2_act_scale.size(1))},
-                             kDeviceRank, fc2_act_scale.data_ptr());
+    input_scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {1}, kDeviceRank, fc13_act_scale.data_ptr());
+    input_scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {1}, kDeviceRank, fc2_act_scale.data_ptr());
     inputs[2].input_scales = &input_scales[0];
     inputs[3].input_scales = &input_scales[1];
     std::vector<Tensor> alpha(2);
@@ -1830,7 +1819,7 @@ TEST_F(LayerTest, MoeLayerTest) {
     std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
     MoeLayer moe_layer = MoeLayer();
     moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
-    size_t workspace_size = moe_layer.GetWorkSpaceSize();
+    size_t workspace_size = moe_layer.GetWorkspaceSize();
     KLLM_LOG_INFO << fmt::format("MoeLayer WorkSpaceSize: {}", workspace_size);
     Tensor workspace_buffer = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
     std::shared_ptr<Tensor> workspace_buffer_ptr = std::make_shared<Tensor>(workspace_buffer);

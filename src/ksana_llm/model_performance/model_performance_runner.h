@@ -58,8 +58,6 @@ class ModelPerformanceRunner {
 
   uint32_t GetAttnDpNum() { return attn_dp_worker_num_; }
 
-  size_t GetDecodeTokenNumThreshold() const { return decode_token_num_threshold_; }
-
  private:
   void InitEnvs(const std::string& config_path, const PerfProfileConfig& max_config, int16_t lower_layer_idx,
                 int16_t upper_layer_idx);
@@ -93,10 +91,6 @@ class ModelPerformanceRunner {
   uint32_t attn_dp_worker_num_ = 0;
 
   size_t multi_batch_id_ = DEFAULT_MULTI_BATCH_ID;
-
-  // Threshold for determining decode vs prefill requests
-  // input_ids <= decode_token_num_threshold_ will be regarded as decode (use page attention), default is 1
-  size_t decode_token_num_threshold_ = 1;
 
   // requests
   std::shared_ptr<KsanaPythonInput> ksana_python_input_;

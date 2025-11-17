@@ -199,8 +199,7 @@ int main(int argc, char* argv[]) {
           total_requests += req.request_num;
           total_sequence_len += req.sequence_len * req.request_num;
 
-          // Use consistent logic with ModelPerformanceRunner's decode_token_num_threshold_
-          if (req.forwarding_token_num <= model_performance_runner->GetDecodeTokenNumThreshold()) {
+          if (req.forwarding_token_num <= GetDecodeTokenNumThreshold()) {
             decode_requests += req.request_num;
             decode_total_seq_len += req.sequence_len * req.request_num;
             decode_total_forwarding_tokens += req.forwarding_token_num * req.request_num;

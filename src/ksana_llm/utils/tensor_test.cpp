@@ -99,7 +99,7 @@ TEST(TensorTest, CommonTest) {
   }
 
   // Check tensor checker.
-  setenv("ENABLE_MEMORY_CHECK", "1", 1);
+  MemoryChecker::enabled_ = true;
 
   Tensor tensor_tmp(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {1024}, RANK);
   MemoryChecker::AddMemoryBlock("test", RANK, tensor_tmp.GetPtr<void>(), 256, tensor_tmp.GetPtr<uint8_t>() + 768, 256,

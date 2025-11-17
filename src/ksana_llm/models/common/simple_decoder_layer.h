@@ -13,6 +13,7 @@
 #include "ksana_llm/modules/basic/layernorm.h"
 #include "ksana_llm/modules/basic/fuse_pre_attention_add_norm.h"
 #include "ksana_llm/modules/basic/fuse_post_attention_add_norm.h"
+#include "ksana_llm/modules/basic/all_reduce_fused_norm_add.h"
 
 namespace ksana_llm {
 
@@ -40,6 +41,8 @@ class SimpleDecoderLayer {
   std::shared_ptr<Add> adds_;
   std::shared_ptr<FusePreAttentionAddNorm> pre_attention_add_norm_;
   std::shared_ptr<FusePostAttentionAddNorm> post_attention_add_norm_;
+  std::shared_ptr<FusedAllReduceNormAdd> fused_all_reduce_norm_add_pre_attn_;
+  std::shared_ptr<FusedAllReduceNormAdd> fused_all_reduce_norm_add_post_attn_;
 
   bool need_add_residual_before_attn_ = false;
   bool need_add_residual_after_mlp_ = true;

@@ -9,11 +9,16 @@ import sys
 sys.path.append(os.path.abspath("./lib"))
 
 try:
-    from ksana_llm import openaiapi, utilize
+    from ksana_llm import openaiapi, utilize, libtorch_serving
     sys.modules['openaiapi'] = openaiapi
     sys.modules['utilize'] = utilize
+    sys.modules['libtorch_serving'] = libtorch_serving
 except ImportError:
-    pass
+    try:
+        import openaiapi
+        import utilize
+    except ImportError:
+        print(f"Warning: Failed to import optional modules, please check")
 
 
 from .ksana_engine import KsanaLLMEngine

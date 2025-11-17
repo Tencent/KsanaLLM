@@ -30,13 +30,10 @@ void ContinuousBatchingStrategy::AddTransferMeta(std::vector<std::shared_ptr<Inf
 
     // 如果该请求尚未添加传输元数据，则添加
     if (!transfer_engine->GetTransferMeta(req->kv_comm_request_id)) {
-      std::vector<std::vector<void*>> block_ptrs = req->GetBlockPtrs();
+      std::vector<std::vector<void*>> block_ptrs(req->kv_cache_blocks.size());
+      req->UpdateBlockPtrs(block_ptrs);
       std::vector<int> kv_occupied_devices = req->GetKVOccupiedDevices();
-      // block_token_num应该能整除kv_cached_token_num，在为kv_cached_token_num赋值时应保证这点
-      if (req->kv_cached_token_num % req->block_token_num != 0) {
-        KLLM_THROW(fmt::format("block_token_num: {} should be able to divide kv_cached_token_num: {}",
-                               req->block_token_num, req->kv_cached_token_num));
-      }
+      // block_token_num只保留能整除kv_cached_token_num的部分，因为传输时以block为单位传输
       size_t shared_block_num = req->kv_cached_token_num / req->block_token_num;
       transfer_engine->AddTransferMeta(req->kv_comm_group_key, req->kv_comm_request_id, shared_block_num, block_ptrs,
                                        kv_occupied_devices);

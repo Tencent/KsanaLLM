@@ -116,10 +116,15 @@ struct BatchSchedulerConfig {
   size_t transfer_layer_chunk_size = 1;
 
   bool enable_speculative_decoding = false;
-  bool enable_mtp_module = false;
+
+  size_t mtp_step_num = 0;
+
   bool enable_async = false;
 
   bool enable_xgrammar = false;
+
+  // ADP Balance Strategy configuration
+  AttentionDPGroupBalanceConfig attention_dp_lb_config;
 };
 
 struct AllocatorConfig {
@@ -244,44 +249,6 @@ struct ExpertParallelConfig {
   size_t expert_tensor_para_size = 1;
   // expert_global_para_size = expert_para_size * expert_world_size;
   size_t global_expert_para_size = 1;
-
-  size_t local_num_experts = 1;
-
-  // I.E. expert_para_size = 4, the local_expert_rank = {0, 1, 2, 3}
-  // tensor_para_size = 8, expert_para_size = 4, device_id = 0,1,2,3...,7
-  // local_expert_rank = device_id % expert_para_size
-  // When to init?
-  size_t local_expert_rank = 0;
-
-  // Node info of every node.
-  std::string data_host;
-  uint16_t data_port;
-
-  // The downstream data port for data transfer.
-  std::string downstream_host;
-  uint16_t downstream_port;
-
-  // The data port for data transfer of other expert nodes.
-  std::vector<std::string> expert_node_host;
-  std::vector<uint16_t> expert_node_port;
-
-  // Store <expert_id, ep_node_rank>.
-  std::map<uint32_t, uint32_t> expert_route_table;
-  std::vector<uint32_t> local_expert_rank_route;
-  // Expert_id on the current node.
-  std::vector<uint32_t> local_experts;
-
-  bool enable_expert_para;
-  bool use_tcp = false;
-
-  // The nccl unique_id.  [node_rank][nccl_id]
-#ifdef ENABLE_CUDA
-  std::vector<std::array<char, sizeof(ncclUniqueId)> > nccl_unique_ids;
-  char nccl_unique_id[sizeof(ncclUniqueId)];
-#endif
-
-  // Fix later @xingjinglu
-  DistributedCommunicationType expert_para_comm_type = DistributedCommunicationType::DEFAULT;
 };
 
 // The config of KV cache
@@ -359,7 +326,7 @@ struct RuntimeConfig {
   size_t max_seq_len;         // The max token number of a sequence
   size_t max_step_token_num;  //  The max token number of step
 
-  bool enable_mtp_module = false;
+  size_t mtp_step_num = 0;
   bool enable_speculative_decoding = false;
   bool enable_async = false;
 
@@ -379,7 +346,7 @@ class ScheduleConfigParser {
   ScheduleConfigParser();
 
   // Parse environment from YAML reader.
-  Status ParseScheduleConfig(YamlReader &yaml_reader, ModelConfig &model_config);
+  Status ParseScheduleConfig(YamlReader &yaml_reader, const ModelConfig &model_config);
 
   void Reset();
 

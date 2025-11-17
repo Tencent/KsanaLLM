@@ -29,15 +29,28 @@ DEFINE_int32(port, 8080, "HTTP service port, default is 8080");
 
 namespace ksana_llm {
 
-Environment::Environment() {
-  // Initialize attention backend manager using singleton pattern.
-  auto attention_manager = AttentionBackendManager::GetInstance();
-  if (attention_manager->Initialize()) {
-    KLLM_LOG_INFO << "Attention backend initialized.";
-  } else {
-    KLLM_LOG_ERROR << "Failed to initialize attention backend.";
+size_t GetDecodeTokenNumThreshold() {
+  static size_t decode_token_num_threshold = 0;
+  if (decode_token_num_threshold == 0) {
+    const auto env = Singleton<Environment>::GetInstance();
+    ModelConfig model_config;
+    KLLM_CHECK_WITH_INFO(env->GetModelConfig(model_config).OK(), "Failed to get the model config!");
+    if (model_config.use_mla) {
+      RuntimeConfig runtime_config;
+      KLLM_CHECK_WITH_INFO(env->GetRuntimeConfig(runtime_config).OK(), "Failed to get the runtime config!");
+      // For DeepSeek, the threshold is set to the number of MTP layers plus one,
+      // corresponding to the number of tokens during the validation phase.
+      // In the future, prefix caching and speculative decoding may also need to be considered
+      decode_token_num_threshold = runtime_config.mtp_step_num + 1;
+    } else {
+      // Set to one by default
+      decode_token_num_threshold = 1;
+    }
   }
+  return decode_token_num_threshold;
 }
+
+Environment::Environment() {}
 
 void Environment::Reset() {
   model_config_initialized_ = false;

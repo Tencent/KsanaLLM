@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -74,7 +75,6 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // report the state of all instance
   void ReportTotalState();
-
 
   // ADP Balance related methods
   void BalanceADPRequests(size_t multi_batch_id);

@@ -15,7 +15,6 @@
 #include "ksana_llm/models/base/model_format.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_loader.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
@@ -35,12 +34,10 @@ NewDeepSeekV3WeightLoader::NewDeepSeekV3WeightLoader(std::shared_ptr<BaseModelCo
   // Initialize pipeline config, for distributed mode.
   env->GetPipelineConfig(pipeline_config_);
   env->GetRuntimeConfig(runtime_config_);
+  env->GetBatchSchedulerConfig(batch_scheduler_config_);
   weights_to_permute_.resize(runtime_config_.parallel_basic_config.tensor_parallel_size);
 
-  std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
-      std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);
-
-  InitWeightLoaderImpl(new_deepseek_v3_config);
+  InitWeightLoaderImpl(std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_));
 }
 
 NewDeepSeekV3WeightLoader::~NewDeepSeekV3WeightLoader() {}
@@ -49,10 +46,10 @@ Status NewDeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& we
   std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq"};
   std::vector<std::string> master_only_list = {"model.embed_tokens.weight", "lm_head.weight"};
 
-  int lower_layer_idx = pipeline_config_.lower_layer_idx;
-  int upper_layer_idx = pipeline_config_.upper_layer_idx;
-  int lower_nextn_layer_idx = pipeline_config_.lower_nextn_layer_idx;
-  int upper_nextn_layer_idx = pipeline_config_.upper_nextn_layer_idx;
+  const int lower_layer_idx = pipeline_config_.lower_layer_idx;
+  const int upper_layer_idx = pipeline_config_.upper_layer_idx;
+  const int lower_nextn_layer_idx = pipeline_config_.lower_nextn_layer_idx;
+  const int upper_nextn_layer_idx = pipeline_config_.upper_nextn_layer_idx;
 
   for (auto it = weight_names.begin(); it != weight_names.end();) {
     if (CheckWeightNameMatched(*it, skip_list, false)) {
@@ -62,7 +59,7 @@ Status NewDeepSeekV3WeightLoader::FilterWeightNames(std::vector<std::string>& we
 
     // Skip some layers in distributed mode.
     if (lower_layer_idx >= 0 && upper_layer_idx >= 0) {
-      int layer_idx = GetLayerIdxFromName(*it);
+      const int layer_idx = GetLayerIdxFromName(*it);
       if (layer_idx >= 0 && ((layer_idx < lower_layer_idx || layer_idx > upper_layer_idx) &&
                              (layer_idx < lower_nextn_layer_idx || layer_idx > upper_nextn_layer_idx))) {
         weight_names.erase(it);
@@ -161,14 +158,14 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config =
       std::dynamic_pointer_cast<NewDeepSeekV3Config>(model_config_);
 
-  int32_t layer_idx = -1, expert_idx = -1;
-  size_t num_experts = new_deepseek_v3_config->moe_config.num_experts;
-  bool use_vllm_moe = new_deepseek_v3_config->moe_config.use_vllm_moe;
+  const size_t num_experts = new_deepseek_v3_config->moe_config.num_experts;
+  const bool use_vllm_moe = new_deepseek_v3_config->moe_config.use_vllm_moe;
   // moe combines tensor parallel and moe parallel
-  ExpertParallelConfig& expert_parallel_config = new_deepseek_v3_config->expert_parallel_config;
-  size_t expert_node_rank = expert_parallel_config.expert_node_rank;
-  size_t global_expert_para_size = expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
-  size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
+  const ExpertParallelConfig& expert_parallel_config = new_deepseek_v3_config->expert_parallel_config;
+  const size_t expert_node_rank = expert_parallel_config.expert_node_rank;
+  const size_t global_expert_para_size =
+      expert_parallel_config.expert_world_size * expert_parallel_config.expert_para_size;
+  const size_t num_experts_per_rank = DivRoundUp(num_experts, global_expert_para_size);
   // init expert map
   const size_t rank_expert_offset = expert_node_rank * expert_parallel_config.expert_para_size * num_experts_per_rank;
   const size_t expert_offset = (global_expert_para_size > 1)
@@ -190,26 +187,28 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
   KLLM_LOG_INFO << fmt::format("In rank {} node_rank {}, valid experts is [{}, {})", dev_rank, expert_node_rank,
                                expert_start_id, expert_end_id);
 
-  size_t moe_inter_size_per_rank =
+  const size_t moe_inter_size_per_rank =
       DivRoundUp(new_deepseek_v3_config->moe_config.moe_inter_size, new_deepseek_v3_config->moe_tensor_para_size);
-  size_t hidden_units = new_deepseek_v3_config->hidden_units;
+  const size_t hidden_units = new_deepseek_v3_config->hidden_units;
   std::vector<size_t> up_gate_experts_shape = {num_experts_per_rank,
                                                /* up & gate*/ moe_inter_size_per_rank * 2, hidden_units};
   std::vector<size_t> down_experts_shape = {num_experts_per_rank, hidden_units, moe_inter_size_per_rank};
 
-  size_t attn_tp_size = context_->GetAttentionTensorParallelSize();
-  size_t attn_dev_rank = dev_rank % attn_tp_size;
-  size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
-  size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
-  size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
-  size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
-  size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
-  size_t head_num = new_deepseek_v3_config->head_num;
-  size_t head_num_tp = static_cast<size_t>(DivRoundUp(new_deepseek_v3_config->head_num, attn_tp_size));
+  const size_t attn_tp_size = context_->GetAttentionTensorParallelSize();
+  const size_t attn_dev_rank = dev_rank % attn_tp_size;
+  const size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
+  const size_t qk_rope_head_dim = new_deepseek_v3_config->mla_config.qk_rope_head_dim;
+  const size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
+  const size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;
+  const size_t q_lora_rank = new_deepseek_v3_config->mla_config.q_lora_rank;
+  const size_t head_num = new_deepseek_v3_config->head_num;
+  const size_t head_num_tp = static_cast<size_t>(DivRoundUp(new_deepseek_v3_config->head_num, attn_tp_size));
 
   if (new_deepseek_v3_config->model_format == ModelFormat::GGUF) {
     return Status(RET_INVALID_ARGUMENT, "Not support GGUF format yet.");
   }
+
+  int32_t layer_idx = -1, expert_idx = -1;
 
   // Dequant GPTQ weight
   std::unordered_map<std::string, Tensor> host_gptq_weights;
@@ -474,20 +473,17 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 
           device_model_weights[v_head_name] = v_head_permute;
 
-          if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
-            // Copy kv_b_nope_proj to w_uk_t
-            Tensor w_uk_t_tensor = kv_b_nope_tensor;
-            w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, kv_b_nope_tensor.shape[1]};
-            std::string w_uk_t_name =
-                kv_b_nope_name.substr(0, kv_b_nope_name.find_first_of('_')) + "_attn.w_uk_t.weight";
-            device_model_weights[w_uk_t_name] = w_uk_t_tensor;
+          // Copy kv_b_nope_proj to w_uk_t
+          Tensor w_uk_t_tensor = kv_b_nope_tensor;
+          w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, kv_b_nope_tensor.shape[1]};
+          std::string w_uk_t_name = kv_b_nope_name.substr(0, kv_b_nope_name.find_first_of('_')) + "_attn.w_uk_t.weight";
+          device_model_weights[w_uk_t_name] = w_uk_t_tensor;
 
-            // Permute vhead_weight_name to w_uv
-            v_head_tensor.shape = {head_num_tp, v_head_dim, v_head_shape[1]};
-            weight_impl_->PermuteWeight(v_head_tensor, {0, 2, 1}, dev_rank);
-            std::string w_uv_name = v_head_name.substr(0, v_head_name.find_first_of('_')) + "_attn.w_uv.weight";
-            device_model_weights[w_uv_name] = v_head_tensor;
-          }
+          // Permute vhead_weight_name to w_uv
+          v_head_tensor.shape = {head_num_tp, v_head_dim, v_head_shape[1]};
+          weight_impl_->PermuteWeight(v_head_tensor, {0, 2, 1}, dev_rank);
+          std::string w_uv_name = v_head_name.substr(0, v_head_name.find_first_of('_')) + "_attn.w_uv.weight";
+          device_model_weights[w_uv_name] = v_head_tensor;
         } else {
           // For fp8 blockwise quant, do not split the weights initially, split them after dequantization later.
           std::vector<size_t> kv_b_proj_shape = {

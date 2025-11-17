@@ -28,7 +28,6 @@ TaskManager::TaskManager(int circular_bucket_num, int bucket_size_hint, int circ
 
     // Set initial bucket size for hash maps
     shard->request_map.rehash(bucket_size_hint / circular_bucket_num_);
-    shard->prefill_pending_tasks.rehash(bucket_size_hint / circular_bucket_num_);
     shard->decode_confirmed_tasks.rehash(bucket_size_hint / circular_bucket_num_);
 
     shards_.push_back(std::move(shard));
@@ -48,6 +47,7 @@ std::shared_ptr<TaskManager> TaskManager::GetInstance(int circular_bucket_num, i
 
 void TaskManager::PutProcessingBuffer(const TaskKey& task_key) {
   processing_buffer_.push(task_key);
+  usage_tasks_.push(task_key);
 
   if (notification_waiter_) {
     notification_waiter_->Notify();
@@ -78,6 +78,7 @@ std::vector<TaskKey> TaskManager::GetProcessingBufferBatch(int batch_size) {
   for (int i = 0; i < batch_size; ++i) {
     TaskKey task_key;
     if (processing_buffer_.try_pop(task_key)) {
+      KLLM_LOG_DEBUG << "GetProcessingBufferBatch got task_key: " << task_key.ToString();
       batch.push_back(task_key);
     } else {
       break;  // No more tasks available
@@ -132,7 +133,7 @@ std::vector<std::shared_ptr<TransferTask>> TaskManager::GetTasksBatch(const std:
           const auto& key = keys[i];
           const auto& shard = GetShard(key.req_id);
           typename decltype(shard.request_map)::const_accessor accessor;
-
+          KLLM_LOG_DEBUG << "GetTasksBatch fetching task_key in parallel_for: " << key.ToString();
           if (shard.request_map.find(accessor, key)) {
             results[i] = accessor->second;
           } else {
@@ -144,6 +145,7 @@ std::vector<std::shared_ptr<TransferTask>> TaskManager::GetTasksBatch(const std:
   } else {
     // Sequential retrieval for smaller batches
     for (const auto& key : keys) {
+      KLLM_LOG_DEBUG << "GetTasksBatch fetching task_key: " << key.ToString();
       results.push_back(GetTask(key));
     }
   }
@@ -195,13 +197,12 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
     return;
   }
 
-  const auto now = ProfileTimer::GetCurrentTime();
-
   // Group tasks by shard for better cache locality
   std::vector<std::vector<TaskKey>> shard_tasks(circular_bucket_num_);
   for (const auto& task_key : task_keys) {
     size_t shard_idx = GetShardIndex(task_key.req_id);
     shard_tasks[shard_idx].push_back(task_key);
+    KLLM_LOG_DEBUG << "RegisterDecodeConfirmedTasks grouped task_key: " << task_key.ToString();
   }
   auto cur_us = ProfileTimer::GetCurrentTimeInUs();
   // Process each shard's tasks in parallel
@@ -221,12 +222,26 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
                               TaskKey actual_key = accessor->first;
                               actual_key.decode_device_id = task_key.decode_device_id;
                               actual_key.decode_device_offset = task_key.decode_device_offset;
-                              KLLM_LOG_DEBUG << "prefill_pending_tasks find and update: " << actual_key.ToString();
-                              prefill_accessor.release();
-                              shard.prefill_pending_tasks.erase(task_key);
+                              actual_key.is_skipped_task = task_key.is_skipped_task;
 
-                              // Move to processing buffer
-                              processing_buffer_.push(actual_key);
+                              shard.decode_confirmed_tasks.erase(accessor);
+                              shard.decode_confirmed_tasks.insert(accessor, actual_key);
+
+                              // Restore start_time (or init if absent) and confirm
+                              accessor->second.start_time = (prev_start_time != 0) ?
+                                  prev_start_time : ProfileTimer::GetCurrentTime();
+                              accessor->second.decode_confirmed.store(1, std::memory_order_release);
+
+                              PutProcessingBuffer(actual_key);
+                              KLLM_LOG_DEBUG << "Updated decode into shard.decode_confirmed_tasks (actual key): "
+                                             << actual_key.ToString();
+                            } else {
+                              // New insert: initialize start_time and confirm
+                              accessor->second.start_time = ProfileTimer::GetCurrentTime();
+                              accessor->second.decode_confirmed.store(1, std::memory_order_release);
+                              KLLM_LOG_DEBUG << "Inserting decode into shard.decode_confirmed_tasks (stored key): "
+                                             << accessor->first.ToString();
+                              usage_tasks_.push(task_key);
                             }
                           }
                         }
@@ -239,37 +254,39 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
   }
 }
 
-void TaskManager::AddPrefillPendingTask(const TaskKey& task_key) {
-  const auto now = ProfileTimer::GetCurrentTime();
+void TaskManager::AddUnconfirmedTask(const TaskKey& task_key) {
   auto& shard = GetShard(task_key.req_id);
-
-  typename decltype(shard.prefill_pending_tasks)::accessor accessor;
-  shard.prefill_pending_tasks.insert(accessor, task_key);
-  accessor->second = now;
+  typename decltype(shard.decode_confirmed_tasks)::accessor accessor;
+  KLLM_LOG_DEBUG << "Inserting prefill into shard.decode_confirmed_tasks: " << task_key.ToString();
+  if (!shard.decode_confirmed_tasks.insert(accessor, task_key)) {
+    if (accessor->second.decode_confirmed.load(std::memory_order_acquire) > 0) {
+      PutProcessingBuffer(task_key);
+      KLLM_LOG_DEBUG << "Prefill task_key already confirmed, added to processing buffer: "
+                     << task_key.ToString();
+    }
+  } else {
+    usage_tasks_.push(task_key);
+  }
 }
 
-bool TaskManager::TryActivatePendingTask(TaskKey& task_key) {
+bool TaskManager::TryActivateUnconfirmedTask(TaskKey& task_key) {
   auto& shard = GetShard(task_key.req_id);
 
   // Check if confirmed by decode phase
-  typename decltype(shard.decode_confirmed_tasks)::const_accessor decode_accessor;
+  typename decltype(shard.decode_confirmed_tasks)::const_accessor accessor;
   KLLM_LOG_DEBUG << "Start find prefill Taskkey in decode_confirmed_tasks: " << task_key.ToString();
-  if (shard.decode_confirmed_tasks.find(decode_accessor, task_key)) {
-    const TaskKey& decode_confirmed_task_key = decode_accessor->first;
+  if (shard.decode_confirmed_tasks.find(accessor, task_key)
+          && accessor->second.decode_confirmed.load(std::memory_order_acquire) > 0) {
+    const TaskKey& decode_confirmed_task_key = accessor->first;
     task_key.SetIsSkippedTaskFlag(decode_confirmed_task_key.GetIsSkippedTaskFlag());
     KLLM_LOG_DEBUG << "Assigned skipping flag for task_key: " << task_key.ToString();
     if (task_key.decode_device_id == -1 || task_key.decode_device_offset == -1) {
       KLLM_LOG_DEBUG << "Invalid decode device id need assigned for task_key: " << task_key.ToString();
-      const TaskKey& decode_confirmed_task_key = decode_accessor->first;
-      task_key.decode_device_id = decode_confirmed_task_key.decode_device_id;
-      task_key.decode_device_offset = decode_confirmed_task_key.decode_device_offset;
+      task_key.decode_device_id = accessor->first.decode_device_id;
+      task_key.decode_device_offset = accessor->first.decode_device_offset;
       KLLM_LOG_DEBUG << "Assigned decode device id for task_key: " << task_key.ToString();
     }
-    decode_accessor.release();
-
-    // Remove from both maps
-    shard.prefill_pending_tasks.erase(task_key);
-    shard.decode_confirmed_tasks.erase(task_key);
+    shard.decode_confirmed_tasks.erase(accessor);
 
     // Set the skipped task as completed
     if (task_key.GetIsSkippedTaskFlag()) {
@@ -296,7 +313,7 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is
   for (size_t i = 0; i < batch.size(); ++i) {
     const auto& task_key = batch[i];
     auto task = tasks[i];
-
+    KLLM_LOG_DEBUG << "Grouping task_key: " << task_key.ToString();
     if (!task) {
       KLLM_LOG_ERROR << "Skipping task_key without corresponding task: " << task_key.ToString();
       continue;
@@ -330,43 +347,24 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is
 //=============================================================================
 
 void TaskManager::CleanupExpiredTasks(int timeout_seconds) {
-  const auto now = ProfileTimer::GetCurrentTime();
-  const std::time_t timeout_threshold = timeout_seconds;
+  // Snapshot current time in seconds to keep comparisons consistent
+  const auto now_sec = ProfileTimer::GetCurrentTime();
 
-  task_arena_.execute([&]() {
-    tbb::parallel_for(
-        tbb::blocked_range<size_t>(0, circular_bucket_num_), [&](const tbb::blocked_range<size_t>& range) {
-          for (size_t shard_idx = range.begin(); shard_idx != range.end(); ++shard_idx) {
-            auto& shard = *shards_[shard_idx];
-
-            // Cleanup prefill pending tasks (erase by key, increment before erase)
-            for (auto it = shard.prefill_pending_tasks.begin(); it != shard.prefill_pending_tasks.end();) {
-              if (now - it->second >= timeout_threshold) {
-                auto key = it->first;
-                ++it;
-                shard.prefill_pending_tasks.erase(key);
-                KLLM_LOG_DEBUG << "Cleanup expired prefill pending task key: " << key.ToString();
-              } else {
-                ++it;
-              }
-            }
-
-            // Cleanup decode confirmed tasks (erase by key, increment before erase)
-            for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end();) {
-              if (now - it->second >= timeout_threshold) {
-                auto key = it->first;
-                ++it;
-                shard.decode_confirmed_tasks.erase(key);
-                KLLM_LOG_DEBUG << "Cleanup expired decode confirmed task key: " << key.ToString();
-              } else {
-                ++it;
-              }
-            }
-          }
-        });
-  });
-
-  KLLM_LOG_DEBUG << "Cleaned up expired tasks with timeout " << timeout_seconds << " seconds";
+  // Rebuild usage_tasks_ without expired entries (concurrent_vector has no erase)
+  TaskKey key;
+  while (usage_tasks_.try_pop(key)) {
+    if (key.start_time_us > 0
+        && (now_sec - (key.start_time_us / 1000000)) >= timeout_seconds) {
+      auto& shard = GetShard(key.req_id);
+      if (shard.decode_confirmed_tasks.erase(key) || shard.request_map.erase(key)) {
+        KLLM_LOG_INFO << "Cleaned up expired task: " << key.ToString()
+                      << ", timeout: " << timeout_seconds
+                      << " seconds and now: " << now_sec;
+      } else {
+        usage_tasks_.push(key);
+      }
+    }
+  }
 }
 
 void TaskManager::Shutdown() {
@@ -383,16 +381,17 @@ void TaskManager::Shutdown() {
   for (size_t shard_idx = 0; shard_idx < shards_.size(); ++shard_idx) {
     auto& shard = *shards_[shard_idx];
     shard.request_map.clear();
-    shard.prefill_pending_tasks.clear();
     shard.decode_confirmed_tasks.clear();
   }
   TaskKey dummy;
   while (processing_buffer_.try_pop(dummy)) {
     // Empty the queue
   }
+  while (usage_tasks_.try_pop(dummy)) {
+    // Empty the queue
+  }
   KLLM_LOG_INFO << "TaskManager shutdown completed";
 }
 
 void TaskManager::SetNotificationWaiter(std::shared_ptr<Waiter> waiter) { notification_waiter_ = waiter; }
-
 }  // namespace ksana_llm

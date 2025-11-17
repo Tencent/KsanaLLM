@@ -5,12 +5,12 @@
 
 namespace ksana_llm {
 
-enum InferStage {
+enum class InferStage {
   // The context decode stage.
-  STAGE_CONTEXT,
+  kContext,
 
   // The decode stage.
-  STATE_DECODE,
+  kDecode,
 };
 
 }  // namespace ksana_llm

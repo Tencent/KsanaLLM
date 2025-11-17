@@ -3,8 +3,7 @@
 ==============================================================================*/
 
 #include <torch/torch.h>
-
-#include <stdlib.h>
+#include <cstdlib>
 #include <filesystem>
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
@@ -12,9 +11,9 @@
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #include "ksana_llm/models/base/model_weight.h"
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
-#include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/samplers/sampler.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
@@ -163,7 +162,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
   }
 
   Status CommonAttention(const int layer_idx, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         const bool is_multi_token_forward, const std::vector<ForwardRequest>& forward_reqs) {
+                         const bool is_multi_token_forward, const std::vector<ForwardRequest*>& forward_reqs) {
     forwarding_context_->model_input_->ParseFromRequests(forward_reqs);
 
     // Set shape and type of hidden unit.
@@ -175,11 +174,10 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {
         forwarding_context_->model_input_->multi_token_request_num,
         forwarding_context_->model_input_->multi_token_request_max_tokens,
-        forwarding_context_->model_input_->flash_input.kv_cache_block_num,
+        forwarding_context_->model_input_->context_kv_cache_block_num,
         forwarding_context_->model_input_->single_token_request_num,
         forwarding_context_->model_input_->single_token_request_max_tokens,
-        forwarding_context_->model_input_->page_single_input.kv_cache_block_num +
-            forwarding_context_->model_input_->page_dual_input.kv_cache_block_num,
+        forwarding_context_->model_input_->decode_kv_cache_block_num,
         forwarding_context_->model_input_->dp_max_forwarding_tokens,
         forwarding_context_->model_input_->dp_multi_token_request_num,
         forwarding_context_->model_input_->dp_multi_token_request_max_tokens,
@@ -247,14 +245,10 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
         }
       }
     } else {
-      if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
-        if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
-          output = {550, 936.5, 365.75, -46.7188, -75.625, -563.5};
-        } else {
-          output = {559.5, 935.5, 366.25, -55.0312, -76.1875, -564};
-        }
+      if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
+        output = {548, 940, 362, -45.75, -75.5, -564};
       } else {
-        output = {595, 399.5, -819.5, 777, -749.5, 1127};
+        output = {559.5, 935.5, 366.25, -55.0312, -76.1875, -564};
       }
     }
 
@@ -353,9 +347,6 @@ class MlaTest : public testing::Test {
 
     const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     test_name = test_info->name();
-    if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
-      SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
-    }
 
     context_ = std::make_shared<Context>(1, 1, 1);
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
@@ -364,6 +355,7 @@ class MlaTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/ksana_llm_deepseekv2.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, std::filesystem::absolute(parent_path / "../../../../examples/deepseekv2/").string());
 
@@ -421,12 +413,7 @@ class MlaTest : public testing::Test {
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
   }
 
-  void TearDown() override {
-    loguru::g_stderr_verbosity = origin_stderr_verbosity;
-    if (test_name.find("ForwardNewAbsorbWithFlashMla") != std::string::npos) {
-      SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
-    }
-  }
+  void TearDown() override { loguru::g_stderr_verbosity = origin_stderr_verbosity; }
 
  protected:
   int origin_stderr_verbosity = loguru::Verbosity_MAX;
@@ -452,12 +439,12 @@ class MlaTest : public testing::Test {
 
     // ContextDecode
     SamplingConfig sampling_config;
-    ForwardRequest forward;
-    forward.attn_dp_group_id = 0;
-    forward.cache_manager = cache_manager;
+    auto forward = std::make_unique<ForwardRequest>();
+    forward->attn_dp_group_id = 0;
+    forward->cache_manager = cache_manager;
     std::vector<int> input_ids = {233, 1681};
-    forward.forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
-    forward.sampling_config = &sampling_config;
+    forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
+    forward->sampling_config = &sampling_config;
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
     forward->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     std::vector<int> input_refit_pos;
@@ -465,17 +452,15 @@ class MlaTest : public testing::Test {
     EmbeddingSlice embedding_slice;
     embedding_slice.pos = input_refit_pos;
     embedding_slice.embeddings = input_refit_embedding;
-    forward.input_refit_embedding = &embedding_slice;
+    forward->input_refit_embedding = &embedding_slice;
     std::vector<int> block_ids;
     block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(1, block_ids);
-    forward.kv_cache_ptrs.resize(1);
-    block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+    forward->kv_cache_ptrs.resize(1);
+    block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward->kv_cache_ptrs[0]);
 #if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
     // for rank_0
-    forward.atb_kv_cache_base_blk_ids.clear();
-    forward.atb_kv_cache_base_blk_ids.resize(1);
-    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward.atb_kv_cache_base_blk_ids,
-                                       cache_manager);
+    forward->atb_kv_cache_base_blk_ids.assign(1, {});
+    AppendFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward->atb_kv_cache_base_blk_ids, cache_manager);
 #endif
     test_mla_model->CommonAttention(0, bs1, true, {forward.get()});
 
@@ -519,7 +504,7 @@ bool IsHopperSupported() {
 #endif
 }
 
-TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
+TEST_F(MlaTest, ForwardWithFlashMlaTest) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
@@ -539,28 +524,7 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaTest) {
   return;
 }
 
-TEST_F(MlaTest, ForwardTest) {
-#ifdef ENABLE_TOPS
-  GTEST_SKIP_("ZiXiao not support this test temporary.");
-#endif
-
-  // 运行时检测 GPU 架构，只有在 Hopper 架构时才运行测试
-  if (!IsHopperSupported()) {
-    GTEST_SKIP_("Test requires FA3 support or Hopper architecture (SM >= 9.0)");
-    return;
-  }
-
-  // fp16 forward
-  model_config.is_quant = false;
-  model_config.weight_data_type = TYPE_FP16;
-  runtime_config.inter_data_type = model_config.weight_data_type;
-  model_config.quant_config.method = QUANT_NONE;
-  std::cout << "Test TYPE_FP16 weight_data_type forward." << std::endl;
-  TestMlaForward<float16>();
-  return;
-}
-
-TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
+TEST_F(MlaTest, ForwardWithFlashMlaKvFP8Test) {
 #ifdef ENABLE_TOPS
   GTEST_SKIP_("ZiXiao not support this test temporary.");
 #endif
@@ -570,9 +534,9 @@ TEST_F(MlaTest, ForwardNewAbsorbWithFlashMlaKvFP8Test) {
     GTEST_SKIP_("Test requires FA3 support or Hopper architecture (SM >= 9.0)");
     return;
   }
-  // fp16 forward
+  // bf16 forward, FA3 only supports BF16 output for FP8 input
   model_config.is_quant = false;
-  model_config.weight_data_type = TYPE_FP16;
+  model_config.weight_data_type = TYPE_BF16;
   runtime_config.inter_data_type = model_config.weight_data_type;
   model_config.quant_config.method = QUANT_NONE;
   std::cout << "Test TYPE_BF16 weight_data_type forward." << std::endl;

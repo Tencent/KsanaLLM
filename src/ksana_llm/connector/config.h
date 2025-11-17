@@ -84,6 +84,7 @@ struct ConnectorConfig {
   int transfer_batch = 1048576;    /**< @brief Batch size for transfer */
   int send_thread_num = 4;         /**< @brief Number of threads for sending tasks */
   int connector_waiting_sec = 3;   /**< @brief Timeout for connector operations in milliseconds */
+  int task_expire_sec = 300;       /**< @brief Expiration time for tasks in seconds */
   int circular_bucket_size = 8192; /**< @brief Size of the circular buffer for task keys */
   int circular_bucket_num = 4;     /**< @brief Number of buckets for task management, used for circular buffer */
   int circular_thread_num = 4;     /**< @brief Number of threads for TBB task arena, used for parallel operations */
@@ -120,6 +121,7 @@ struct ConnectorConfig {
     result += "  device_count: " + std::to_string(device_count) + "\n";
     result += "  group_role: " + GroupRoleToString(group_role) + "\n";
     result += "  connector_waiting_sec: " + std::to_string(connector_waiting_sec) + "\n";
+    result += "  task_expire_sec: " + std::to_string(task_expire_sec) + "\n";
     result += "  send_thread_num: " + std::to_string(send_thread_num) + "\n";
     result += "  world_size: " + std::to_string(world_size) + "\n";
     result += "  transfer_batch: " + std::to_string(transfer_batch) + "\n";

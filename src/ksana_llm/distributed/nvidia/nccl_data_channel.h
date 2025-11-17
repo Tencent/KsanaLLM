@@ -4,7 +4,6 @@
 #pragma once
 
 #include <thread>
-#include "ksana_llm/data_hub/expert_parallel_hidden_unit_buffer.h"
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
 
 #include "ksana_llm/distributed/data_channel_interface.h"

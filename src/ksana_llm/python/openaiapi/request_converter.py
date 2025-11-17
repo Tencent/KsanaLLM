@@ -18,6 +18,7 @@ from openaiapi.openai_protocol import (
     ChatCompletionResponseStreamChoice, DeltaMessage,
     CompletionResponse, CompletionResponseChoice, CompletionLogProbs,
     CompletionStreamResponse, CompletionResponseStreamChoice,
+    ChatCompletionToolsParam, ChatCompletionNamedToolChoiceParam,
     EmbeddingResponse, EmbeddingResponseData,
     UsageInfo,
     ChoiceLogprobs, ChatCompletionTokenLogprob, TopLogprob
@@ -225,6 +226,7 @@ class RequestConverter:
         if config["num_return_sequences"] > config["num_beams"]:
             config["num_return_sequences"] = config["num_beams"]
 
+        json_tool = self._get_guided_json_from_tool(request)
         # handle response_format
         # Notice: If response_format is not Null, enable_structured_output is always True
         if hasattr(request, 'response_format') and request.response_format:
@@ -235,10 +237,88 @@ class RequestConverter:
                 config["json_schema"] = self.convert_json_schema2str(schema_)
             elif(request.response_format.type == "json_object"):
                 config["json_schema"] = '{"type": "object"}'
+        elif json_tool is not None:
+            config["enable_structured_output"] = True
+            config["json_schema"] = self.convert_json_schema2str(json_tool)
+
         if hasattr(request, 'enable_structured_output') and request.enable_structured_output:
             config["enable_structured_output"] = request.enable_structured_output
         return config
-    
+
+    def _get_guided_json_from_tool(
+            self, request) -> Optional[Union[str, dict, BaseModel]]:
+        # user has chosen to not use any tool
+        if request.tool_choice == "none" or request.tools is None:
+            return None
+
+        # user has chosen to use a named tool
+        if type(request.tool_choice) is ChatCompletionNamedToolChoiceParam:
+            tool_name = request.tool_choice.function.name
+            tools = {tool.function.name: tool.function for tool in request.tools}
+            if tool_name not in tools:
+                raise ValueError(
+                    f"Tool '{tool_name}' has not been passed in `tools`.")
+            tool = tools[tool_name]
+            return tool.parameters
+
+        if request.tool_choice == "required":
+            # Pydantic schema generation cannot be used since the JSON schema
+            # has to be constructed for a specific instantiation of a tool list
+            # so that parameters of a function are correctly generated
+            # based on the chosen function name
+            def get_tool_schema(tool: ChatCompletionToolsParam) -> dict:
+                return {
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "enum": [tool.function.name]
+                        },
+                        # parameters are always generated as '{}' in the final
+                        # output if they are missing from the request
+                        # (i.e. are None or '{}') so the schema is
+                        # updated to produce an empty object in that case
+                        "parameters": tool.function.parameters
+                        if tool.function.parameters else {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    "required": ["name", "parameters"]
+                }
+
+            def get_tool_schema_defs(
+                    tools: list[ChatCompletionToolsParam]) -> dict:
+                all_defs = dict[str, dict[str, Any]]()
+                for tool in tools:
+                    if tool.function.parameters is None:
+                        continue
+                    defs = tool.function.parameters.pop("$defs", {})
+                    for def_name, def_schema in defs.items():
+                        if def_name in all_defs and all_defs[
+                                def_name] != def_schema:
+                            raise ValueError(
+                                f"Tool definition '{def_name}' has "
+                                "multiple schemas, which is not "
+                                "supported.")
+                        else:
+                            all_defs[def_name] = def_schema
+                return all_defs
+
+            json_schema = {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "anyOf": [get_tool_schema(tool) for tool in request.tools]
+                }
+            }
+            json_schema_defs = get_tool_schema_defs(request.tools)
+            if json_schema_defs:
+                json_schema["$defs"] = json_schema_defs
+            return json_schema
+
+        return None
+
     def _handle_chat_input(
         self,
         request: ChatCompletionRequest,
@@ -360,6 +440,7 @@ class RequestConverter:
             'model_type': (None, 'model_type'),
             'use_chat_template': (None, 'use_chat_template'),
             'input_tokens': (None, 'input_tokens'),
+            'debug_mode': (None, 'debug_mode'),
             
             'do_sample': ('sampling_config', 'do_sample'),
             'max_tokens': ('sampling_config', 'max_new_tokens'),

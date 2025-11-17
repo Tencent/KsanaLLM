@@ -9,7 +9,7 @@ namespace ksana_llm {
 CommonAttention::CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, LayerCreationContext& creation_context,
                                  ModelCreationConfig& model_creation_config)
     : layer_idx_(layer_idx) {
-  std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+  const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   attn_o_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.o_proj.weight", creation_context,
                                            model_creation_config.attn_config.model_config.quant_config.backend);
 
@@ -21,7 +21,7 @@ CommonAttention::CommonAttention(int layer_idx, bool is_neox, bool use_qk_norm, 
   }
 
   model_creation_config.attn_config.idx = layer_idx - creation_context.pipeline_config.lower_layer_idx;
-  if (layer_idx >= model_creation_config.attn_config.model_config.num_layer) {
+  if (layer_idx >= static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
     model_creation_config.attn_config.idx = creation_context.pipeline_config.upper_layer_idx -
                                             creation_context.pipeline_config.lower_layer_idx + layer_idx -
                                             model_creation_config.attn_config.model_config.num_layer + 1;

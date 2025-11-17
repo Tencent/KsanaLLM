@@ -7,7 +7,6 @@
 #include <regex>
 
 #include "ksana_llm/runtime/threadpool.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/safetensors_file_saver.h"
 #include "ksana_llm/utils/safetensors_file_tensor_loader.h"
@@ -17,7 +16,7 @@ namespace ksana_llm {
 
 BaseWeight::BaseWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        std::shared_ptr<Context> context)
-    : context_(context), model_config_(model_config), runtime_config_(runtime_config), rank_(rank) {
+    : rank_(rank), context_(context), model_config_(model_config), runtime_config_(runtime_config) {
   Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config_);
   tensor_manager_ = std::make_shared<TensorManager>(rank, weights_map_);
 
@@ -38,7 +37,7 @@ BaseWeight::BaseWeight(const ModelConfig& model_config, const RuntimeConfig& run
   // extract dense and moe layer idx
   const std::vector<size_t>& moe_layers = model_config_.moe_config.moe_layers;
   for (const auto idx : required_layer_idx_.all) {
-    if (model_config_.is_moe && idx >= model_config_.moe_config.first_k_dense_replace &&
+    if (model_config_.is_moe && idx >= static_cast<int>(model_config_.moe_config.first_k_dense_replace) &&
         (moe_layers.empty() || std::find(moe_layers.begin(), moe_layers.end(), idx) != moe_layers.end())) {
       required_layer_idx_.moe.emplace(idx);
     } else {
@@ -146,9 +145,6 @@ std::string BaseWeight::GetCacheFolder() {
   }
   std::string model_info = fmt::format("/cached_model_{}/tp{}", GetTypeString(model_config_.weight_data_type),
                                        runtime_config_.parallel_basic_config.tensor_parallel_size);
-  if (GetAbsorbWeightsType() != AbsorbWeightsType::kAbsorbDisabled) {
-    model_info += fmt::format("/absorb_{}", GetAbsorbWeightsType());
-  }
   std::string model_index = fmt::format("/tp_rank_{}", rank_);
   std::string model_cache_path = base_path + model_info + model_index;
   KLLM_LOG_INFO << fmt::format("using cache folder: {}", model_cache_path);

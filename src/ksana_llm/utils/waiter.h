@@ -60,9 +60,11 @@ class WaitGroup {
  public:
   WaitGroup() : count_(0) {}
 
-  void Add(int64_t n = 1) { count_ += n; }
+  explicit WaitGroup(const int64_t n) : count_(n) {}
 
-  void Done(int64_t n = 1);
+  void Add(const int64_t n = 1) { count_ += n; }
+
+  void Done(const int64_t n = 1);
 
   int64_t Count() const { return count_; }
 

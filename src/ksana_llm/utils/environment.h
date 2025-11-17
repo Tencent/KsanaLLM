@@ -18,7 +18,12 @@
 #include "ksana_llm/utils/yaml_reader.h"
 
 namespace ksana_llm {
+
 constexpr size_t kStepGenerateTokenNum = 1;  // The number of tokens that the model generated at each step
+
+// Threshold for determining decode vs prefill requests
+// `input_ids_len <= decode_token_num_threshold` will regard as decode (use page attention), default is 1
+size_t GetDecodeTokenNumThreshold();
 
 // The endpoint type.
 enum class EndpointType { LOCAL, RPC };

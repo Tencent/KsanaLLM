@@ -9,6 +9,7 @@ list(FILTER service_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "service_SRCS: ${service_SRCS}")
 
 add_library(service STATIC ${service_SRCS})
+target_link_libraries(service PUBLIC Boost::dll)
 
 # for test
 file(GLOB_RECURSE service_test_SRCS

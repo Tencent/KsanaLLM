@@ -31,7 +31,7 @@ class BaseModel {
 
   // Forward model.
   virtual Status Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                         std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                         std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
                          RunMode run_mode = RunMode::kMain) = 0;
 
   // Manage resources for different multi_batch_id because Forward is invoked multiple times to serve a multi_batch_id

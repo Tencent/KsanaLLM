@@ -63,8 +63,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     max_block_num =
         std::min(max_block_num, (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size);
   }
-  KLLM_LOG_INFO << "max_block_num " << max_block_num;
-
   // For prefix caching, the token will be used multiple times, reset it to max possible value.
   if (runtime_config.enable_prefix_caching) {
     max_block_num = (max_token_num * max_batch_size) / runtime_config_.attn_backend_config.block_token_num;
@@ -77,11 +75,8 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   dp_input_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
   dp_prefill_q_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
   dp_prefill_q_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
-  dp_flexible_rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-  dp_flexible_rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
   input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
   dp_input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
-  dp_flexible_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
 
   env->GetBatchSchedulerConfig(batch_scheduler_config_);
   const size_t max_logits_tokens = max_batch_size * batch_scheduler_config_.max_decode_tokens_per_req;
@@ -129,10 +124,10 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
       GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, /*num_heads_k*/ 1, rank_);
       const size_t tile_scheduler_metadata_tensor_num =
           flash_mla_workspace_map.num_sm_parts * llm_kernels::nvidia::TileSchedulerMetaDataSize;
-      info.tile_scheduler_metadata =
-          Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {tile_scheduler_metadata_tensor_num}, rank_);
-      info.num_splits = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1}, rank_);
+      tile_scheduler_metadatas.emplace_back(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+                                            std::vector<size_t>{tile_scheduler_metadata_tensor_num}, rank_);
     }
+  }
 #endif
 
   cpu_input_refit_tensor.pos_pair_tensor =
@@ -169,6 +164,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&input_ids_event, EVENT_DISABLE_TIMING);
+
 #if defined(ENABLE_ACL)
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
@@ -260,30 +256,38 @@ void ModelInput::PrepareInputInfo(const std::vector<ForwardRequest*>& forward_re
 
   // Reset the input_infos
   flash_input.Reset();
-  page_single_input.Reset();
-  page_dual_input.Reset();
+  page_inputs.clear();
 
+  multi_token_request_num = 0;
+  dp_multi_token_request_num = 0;
+  single_token_request_num = 0;
+  dp_single_token_request_num = 0;
   for (const auto& req : forward_reqs) {
-    // select input_info type
-    input_info* target_input = nullptr;
-    switch (req.GetType()) {
-      case ForwardRequestType::kPageSingle:
-        target_input = &page_single_input;
-        break;
-      case ForwardRequestType::kPageDual:
-        target_input = &page_dual_input;
-        break;
-      default:  // ForwardRequestType::kFlash
-        target_input = &flash_input;
-    }
-    target_input->reqs.emplace_back(const_cast<ForwardRequest*>(&req));
-    if (req.attn_dp_group_id == attn_dp_group_id_) {
-      target_input->dp_reqs.emplace_back(const_cast<ForwardRequest*>(&req));
+    if (req->GetType() == ForwardRequestType::kFlash) {
+      ++multi_token_request_num;
+      if (req->attn_dp_group_id == attn_dp_group_id_) {
+        ++dp_multi_token_request_num;
+        flash_input.dp_reqs.emplace_back(const_cast<ForwardRequest*>(req));
+      }
+    } else {  // req->GetType() == ForwardRequestType::kPage
+      ++single_token_request_num;
+      if (req->attn_dp_group_id == attn_dp_group_id_) {
+        ++dp_single_token_request_num;
+        if (const size_t input_ids_len = req->GetInputIdsLength();
+            page_inputs.empty() || page_inputs.back().q_seq_len != input_ids_len) {
+          // `page_inputs.back().q_seq_len` should be greater than `input_ids_len`,
+          // since requests in the same dp group are sorted in descending order by their token numbers
+          page_inputs.emplace_back().q_seq_len = input_ids_len;
+        }
+        auto& page_input = page_inputs.back();
+        page_input.dp_reqs.emplace_back(const_cast<ForwardRequest*>(req));
+      }
     }
   }
+  dp_batch_size = dp_single_token_request_num + dp_multi_token_request_num;
 }
 
-void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+void ModelInput::ParseFromRequests(const std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode) {
   // NOTE(karlluo): check batch size
   PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
   batch_size = forward_reqs.size();
@@ -305,8 +309,9 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   dp_context_tokens = 0;
   dp_decode_tokens = 0;
   dp_total_prefix_len = 0;
-  dp_multi_token_request_total_seq_len = 0;
   total_sampling_token_num_ = 0;
+  context_kv_cache_block_num = 0;
+  decode_kv_cache_block_num = 0;
   for (const auto& req : forward_reqs) {
     if (req->attn_dp_group_id == attn_dp_group_id_) {
       if (req->GetType() == ForwardRequestType::kFlash) {
@@ -319,7 +324,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
         decode_kv_cache_block_num += req->kv_cache_ptrs[attn_dp_rank_id_].size();
       }
     }
-    total_sampling_token_num_ += req.sampling_token_num;
+    total_sampling_token_num_ += req->sampling_token_num;
   }
 
   KLLM_LOG_DEBUG << fmt::format(
@@ -341,8 +346,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareUseGreedy(forward_reqs);
 
   PreparePrefill();
-  PrepareDualDecode();
-  PrepareSingleDecode();
+  PrepareDecode();
 
 #ifdef ENABLE_CUDA
   PrepareCudagraphParams(forward_reqs);
@@ -483,23 +487,23 @@ void ModelInput::ExecuteChecksumVerification(const std::vector<ForwardRequest*>&
 }
 
 // TODO(ttsybyweng): VL_Model :Prepare moved into each Model Class
-void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest*>& forward_reqs) {
   if (model_config_.type == "qwen2_vl") {
     PrepareMRopePos(forward_reqs);
   }
 }
 
-void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest*>& forward_reqs) {
   if (model_config_.type != "minicpm") {
     return;
   }
-  for (const ForwardRequest& req : forward_reqs) {
-    if (req.request_target == nullptr) {
+  for (const auto& req : forward_reqs) {
+    if (req->request_target == nullptr) {
       // if request_target is nullptr
       continue;
     }
-    auto it = req.request_target->find("lm_head");
-    if (it != req.request_target->end()) {
+    auto it = req->request_target->find("lm_head");
+    if (it != req->request_target->end()) {
       std::vector<int> cutoff_layers = it->second.cutoff_layer;
       if (cutoff_layers.empty()) {
         cutoff_layer = model_config_.num_layer;
@@ -511,7 +515,7 @@ void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_r
   }
 }
 
-void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest*>& forward_reqs) {
   PROFILE_EVENT_SCOPE(PrepareVLRequest, "PrepareVLRequest", rank_);
   if (model_config_.type == "internlmxcomposer2") {
     is_mask = false;
@@ -535,6 +539,7 @@ void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forwa
   updated_mtp_req_id_to_pos.reserve(forward_reqs.size());
 
   std::vector<size_t> mtp_hidden_gather_idx;
+  mtp_hidden_gather_idx.reserve(forward_reqs.size());
   size_t total_len = 0;
   for (const auto& req : forward_reqs) {
     const size_t input_ids_len = req->GetInputIdsLength();
@@ -553,6 +558,8 @@ void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forwa
     }
   }
 
+  mtp_req_id_to_pos_.swap(updated_mtp_req_id_to_pos);
+
   if (run_mode == RunMode::kMain) {
     return;
   }
@@ -565,10 +572,10 @@ void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forwa
 }
 
 #ifdef ENABLE_CUDA
-void ModelInput::PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareCudagraphParams(const std::vector<ForwardRequest*>& forward_reqs) {
   is_cudagraph_batchsize_matched = false;
   is_cudagraph_capture_request = false;
-  if (forward_reqs[0].is_cudagraph_capture_request) {
+  if (forward_reqs.front()->is_cudagraph_capture_request) {
     is_cudagraph_capture_request = true;
   }
   if (multi_token_request_num == 0 &&
@@ -595,7 +602,7 @@ void ModelInput::PrepareCudagraphParams(const std::vector<ForwardRequest>& forwa
  * After embedding lookup, the input refit embeddings will be placed to their respective intervals according to the
  * above outputs (by `input_refit_layer`).
  */
-void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest*>& forward_reqs) {
   size_t pos_offset = 0;
   size_t cpu_input_refit_pos_pair_idx = 0;
   // Get pointers to the CPU input_refit position pair and CPU input_refit embedding float32 tensors
@@ -604,10 +611,10 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
 
   for (const auto& forward_req : forward_reqs) {
     // Only handle input refit for prefill requests
-    if (forward_req.GetType() == ForwardRequestType::kFlash) {
-      const std::vector<int>& input_refit_pos = (*forward_req.input_refit_embedding).pos;
-      std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req.input_refit_embedding).embeddings;
-      std::vector<py::object>& input_refit_embedding_tensors = (*forward_req.input_refit_embedding).embedding_tensors;
+    if (forward_req->GetType() == ForwardRequestType::kFlash) {
+      const std::vector<int>& input_refit_pos = (*forward_req->input_refit_embedding).pos;
+      std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req->input_refit_embedding).embeddings;
+      std::vector<py::object>& input_refit_embedding_tensors = (*forward_req->input_refit_embedding).embedding_tensors;
       KLLM_CHECK_WITH_INFO(input_refit_pos.size() == input_refit_embeddings.size() ||
                                input_refit_pos.size() == input_refit_embedding_tensors.size(),
                            "`input_refit_pos.size()` should be equal to `input_refit_embeddings.size()` or "
@@ -645,8 +652,7 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
         cpu_input_refit_pos_pair_idx += 2;
       }
     }
-    pos_offset +=
-        forward_req.forwarding_tokens->size() - std::max(forward_req.kv_cached_token_num, forward_req.prefix_cache_len);
+    pos_offset += forward_req->GetInputIdsLength();
   }
 
   cpu_input_refit_tensor.emb_fp32_ptr_tensor.shape = {cpu_input_refit_pos_pair_idx / 2};
@@ -659,59 +665,62 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest>& forward_re
  * Before model inference, copy the position tensor (`additional_tensors[0]`) to the corresponding GPU tensor
  * (`dp_mrotary_embedding_pos`), and record the offset value (`additional_tensors[1]`).
  */
-void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest*>& forward_reqs) {
   int64_t dp_mrotary_embedding_pos_size = 0;
 
-  for (size_t bs_idx = 0; bs_idx < forward_reqs.size(); ++bs_idx) {
+  for (auto& req_ptr : forward_reqs) {
+    auto& req = *req_ptr;
     // qwen2_vl only needs to handle the prefill requests in its dp group
-    if (forward_reqs[bs_idx].GetType() == ForwardRequestType::kFlash &&
-        forward_reqs[bs_idx].attn_dp_group_id == attn_dp_group_id_) {
-      auto& additional_tensors = (*forward_reqs[bs_idx].input_refit_embedding).additional_tensors;
-      // This is a plain text input.
-      if (additional_tensors.empty()) {
-        int64_t list_size = forward_reqs[bs_idx].forwarding_tokens->size() * 3;
-        std::vector<int64_t> dp_mrotary_embedding_pos_list(list_size);
-        for (int64_t i = 0; i < list_size; i += 3) {
-          dp_mrotary_embedding_pos_list[i] = dp_mrotary_embedding_pos_list[i + 1] =
-              dp_mrotary_embedding_pos_list[i + 2] = i;
-        }
-        MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
-                    dp_mrotary_embedding_pos_list.data(), sizeof(int64_t) * list_size, MEMCPY_HOST_TO_DEVICE,
-                    context_->GetD2HStreams()[rank_]);
-        dp_mrotary_embedding_pos_size += list_size;
-        *forward_reqs[bs_idx].mrotary_embedding_pos_offset = 0;
-#ifdef ENABLE_ACL
-        StreamSynchronize(context_->GetD2HStreams()[rank_]);
-#endif
-        continue;
-      }
-      KLLM_CHECK_WITH_INFO(additional_tensors.size() >= 2,
-                           "For visual inputs, additional_tensors should contain at least 2 tensors: position tensor "
-                           "and offset tensor.");
-      // This is a input with visual information.
-      torch::Tensor dp_mrotary_embedding_pos_tensor;
-      {
-        py::gil_scoped_acquire acquire;
-        dp_mrotary_embedding_pos_tensor = THPVariable_Unpack(additional_tensors[0].ptr());
-      }
-      int64_t tensor_size = dp_mrotary_embedding_pos_tensor.numel();
-      MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
-                  dp_mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size, MEMCPY_HOST_TO_DEVICE,
-                  context_->GetD2HStreams()[rank_]);
-      dp_mrotary_embedding_pos_size += tensor_size;
-
-      torch::Tensor dp_mrotary_embedding_pos_offset_tensor = THPVariable_Unpack(additional_tensors[1].ptr());
-      *forward_reqs[bs_idx].mrotary_embedding_pos_offset = dp_mrotary_embedding_pos_offset_tensor.item().toLong();
+    if (req.GetType() != ForwardRequestType::kFlash || req.attn_dp_group_id != attn_dp_group_id_) {
+      continue;
     }
+
+    auto& additional_tensors = req.input_refit_embedding->additional_tensors;
+    // This is a plain text input.
+    if (additional_tensors.empty()) {
+      int64_t list_size = req.forwarding_tokens->size() * 3;
+      std::vector<int64_t> dp_mrotary_embedding_pos_list(list_size);
+      for (int64_t i = 0; i < list_size; i += 3) {
+        dp_mrotary_embedding_pos_list[i] = dp_mrotary_embedding_pos_list[i + 1] = dp_mrotary_embedding_pos_list[i + 2] =
+            i;
+      }
+      MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
+                  dp_mrotary_embedding_pos_list.data(), sizeof(int64_t) * list_size, MEMCPY_HOST_TO_DEVICE,
+                  context_->GetD2HStreams()[rank_]);
+      dp_mrotary_embedding_pos_size += list_size;
+      *req.mrotary_embedding_pos_offset = 0;
+#ifdef ENABLE_ACL
+      StreamSynchronize(context_->GetD2HStreams()[rank_]);
+#endif
+      continue;
+    }
+    KLLM_CHECK_WITH_INFO(additional_tensors.size() >= 2,
+                         "For visual inputs, additional_tensors should contain at least 2 tensors: position tensor "
+                         "and offset tensor.");
+    // This is a input with visual information.
+    torch::Tensor dp_mrotary_embedding_pos_tensor;
+    {
+      py::gil_scoped_acquire acquire;
+      dp_mrotary_embedding_pos_tensor = THPVariable_Unpack(additional_tensors[0].ptr());
+    }
+    int64_t tensor_size = dp_mrotary_embedding_pos_tensor.numel();
+    MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
+                dp_mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size, MEMCPY_HOST_TO_DEVICE,
+                context_->GetD2HStreams()[rank_]);
+    dp_mrotary_embedding_pos_size += tensor_size;
+
+    torch::Tensor dp_mrotary_embedding_pos_offset_tensor = THPVariable_Unpack(additional_tensors[1].ptr());
+    *req.mrotary_embedding_pos_offset = dp_mrotary_embedding_pos_offset_tensor.item().toLong();
   }
+
 #ifdef ENABLE_ACL
   StreamSynchronize(context_->GetD2HStreams()[rank_]);
 #endif
 }
 
 #ifdef ENABLE_ACL
-void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward) {
-  std::shared_ptr<CacheManagerInterface> cache_manager = forward_reqs.front().cache_manager;
+void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest*>& forward_reqs, bool is_multi_token_forward) {
+  std::shared_ptr<CacheManagerInterface> cache_manager = forward_reqs.front()->cache_manager;
   std::shared_ptr<BlockAllocatorInterface> device_allocator =
       cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank_);
 
@@ -747,16 +756,16 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   size_t all_seq_len = 0;
   size_t slot_mapping_dim_1 = is_multi_token_forward ? 0ul : batch_size;
   for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-    seq_len_host.GetPtr<int32_t>()[f_req_idx] = forward_reqs[f_req_idx].forwarding_tokens->size();
+    seq_len_host.GetPtr<int32_t>()[f_req_idx] = forward_reqs[f_req_idx]->forwarding_tokens->size();
     if (is_multi_token_forward) {
-      slot_mapping_dim_1 += forward_reqs[f_req_idx].forwarding_tokens->size();
-      last_token_index_host[f_req_idx] = all_seq_len + forward_reqs[f_req_idx].forwarding_tokens->size() - 1;
+      slot_mapping_dim_1 += forward_reqs[f_req_idx]->forwarding_tokens->size();
+      last_token_index_host[f_req_idx] = all_seq_len + forward_reqs[f_req_idx]->forwarding_tokens->size() - 1;
     } else {
       max_num_blocks_per_query = std::max(max_num_blocks_per_query,
-                                          forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
+                                          forward_reqs[f_req_idx]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
       last_token_index_host[f_req_idx] = f_req_idx;
     }
-    all_seq_len += forward_reqs[f_req_idx].forwarding_tokens->size();
+    all_seq_len += forward_reqs[f_req_idx]->forwarding_tokens->size();
   }
   layers_slot_mapping_host.resize(layer_num_on_node_ * slot_mapping_dim_1, 0);
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
@@ -793,9 +802,9 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
 
   kv_cache_ptrs.clear();
   for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-    if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
-      kv_cache_ptrs.insert(kv_cache_ptrs.end(), forward_reqs[f_req_idx].kv_cache_ptrs[attn_dp_rank_id_].begin(),
-                           forward_reqs[f_req_idx].kv_cache_ptrs[attn_dp_rank_id_].end());
+    if (forward_reqs[f_req_idx]->attn_dp_group_id == attn_dp_group_id_) {
+      kv_cache_ptrs.insert(kv_cache_ptrs.end(), forward_reqs[f_req_idx]->kv_cache_ptrs[attn_dp_rank_id_].begin(),
+                           forward_reqs[f_req_idx]->kv_cache_ptrs[attn_dp_rank_id_].end());
     }
   }
   if (!kv_cache_ptrs.empty()) {
@@ -805,39 +814,39 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   if (is_multi_token_forward) {
     size_t layers_slot_mapping_offset = 0;
     for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-      if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
+      if (forward_reqs[f_req_idx]->attn_dp_group_id == attn_dp_group_id_) {
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
-          for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].forwarding_tokens->size(); ++token_idx) {
+          for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx]->forwarding_tokens->size(); ++token_idx) {
             int32_t inner_block_offset = token_idx % runtime_config_.attn_backend_config.block_token_num;
             layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
                 (forward_reqs[f_req_idx]
-                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_]
-                                               [token_idx / runtime_config_.attn_backend_config.block_token_num] +
+                     ->atb_kv_cache_base_blk_ids[attn_dp_rank_id_]
+                                                [token_idx / runtime_config_.attn_backend_config.block_token_num] +
                  layer_idx) *
                     runtime_config_.attn_backend_config.block_token_num +
                 inner_block_offset;
           }
         }
-        layers_slot_mapping_offset += forward_reqs[f_req_idx].forwarding_tokens->size();
+        layers_slot_mapping_offset += forward_reqs[f_req_idx]->forwarding_tokens->size();
       }
     }
   } else {
     layers_block_table_host.resize(layer_num_on_node_ * batch_size * max_num_blocks_per_query, -1);
     for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-      if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
-        size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size();
+      if (forward_reqs[f_req_idx]->attn_dp_group_id == attn_dp_group_id_) {
+        size_t cur_query_blocks_num = forward_reqs[f_req_idx]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size();
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
           for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
             layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
                                     f_req_idx * max_num_blocks_per_query + base_block_idx] =
-                forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_][base_block_idx] + layer_idx;
+                forward_reqs[f_req_idx]->atb_kv_cache_base_blk_ids[attn_dp_rank_id_][base_block_idx] + layer_idx;
           }
         }
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
           int32_t block_id =
               forward_reqs[f_req_idx]
-                  .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
-                                                               runtime_config_.attn_backend_config.block_token_num];
+                  ->atb_kv_cache_base_blk_ids[attn_dp_rank_id_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
+                                                                runtime_config_.attn_backend_config.block_token_num];
           layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
               (block_id + layer_idx) * runtime_config_.attn_backend_config.block_token_num +
               ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % runtime_config_.attn_backend_config.block_token_num);
@@ -918,7 +927,8 @@ void ModelInput::PrepareInputLength(input_info& input) {
   }
 
   KLLM_LOG_DEBUG << "input_length_host " << input_length_host;
-  input.input_length.shape = {input_length_host.size()};
+  input.input_length = input_length.GetView({input_length_host.size()}, input_length.shape[0]);
+  input_length.shape[0] += input.input_length.GetElementNumber();
   MemcpyAsync(input.input_length.GetPtr<void>(), input_length_host.data(),
               input_length_host.size() * sizeof(decltype(input_length_host)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
@@ -933,10 +943,10 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
   for (size_t i = 0; i < reqs.size(); ++i) {
     kv_cache_offset_host[i + 1] = reqs[i]->kv_cache_ptrs[attn_dp_rank_id_].size() + kv_cache_offset_host[i];
   }
-  info.kv_cache_block_num = kv_cache_offset_host.back();
 
   KLLM_LOG_DEBUG << "kv_cache_offset_host " << kv_cache_offset_host;
-  info.kv_cache_offset.shape = {kv_cache_offset_host.size()};
+  info.kv_cache_offset = kv_cache_offset.GetView({kv_cache_offset_host.size()}, kv_cache_offset.shape[0]);
+  kv_cache_offset.shape[0] += info.kv_cache_offset.GetElementNumber();
   MemcpyAsync(info.kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(),
               kv_cache_offset_host.size() * sizeof(decltype(kv_cache_offset_host)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
@@ -1008,7 +1018,9 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
 
   // prepare mask
   std::vector<int64_t> rotary_mask_host(total_input_len, 1);
-  input.rotary_embedding_mask.shape = {rotary_mask_host.size()};
+  input.rotary_embedding_mask =
+      rotary_embedding_mask.GetView({rotary_mask_host.size()}, rotary_embedding_mask.shape[0]);
+  rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_mask_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
@@ -1024,7 +1036,8 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
     rotary_data_offset += input_len;
   }
   KLLM_LOG_DEBUG << "rotary_pos_host " << rotary_pos_host;
-  input.rotary_embedding_pos.shape = {rotary_pos_host.size()};
+  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_pos_host.size()}, rotary_embedding_pos.shape[0]);
+  rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
               sizeof(decltype(rotary_pos_host)::value_type) * rotary_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
@@ -1062,9 +1075,14 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
     }
   }
 
+  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_pos_host.size()}, rotary_embedding_pos.shape[0]);
+  rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
               sizeof(decltype(rotary_pos_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
+  input.rotary_embedding_mask =
+      rotary_embedding_mask.GetView({rotary_mask_host.size()}, rotary_embedding_mask.shape[0]);
+  rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
               context_->GetD2HStreams()[rank_]);
@@ -1082,8 +1100,9 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
 
     size_t flexible_rotary_idx = 0;
     for (const auto& req : input.dp_reqs) {
-      if (req->flexible_cache_len > 0) {
-        std::fill(rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len - req->flexible_cache_len,
+      const size_t flexible_cache_len = req->flexible_cached_copy_tasks->size();
+      if (flexible_cache_len > 0) {
+        std::fill(rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len - flexible_cache_len,
                   rotary_mask_host.begin() + flexible_rotary_idx + req->prefix_cache_len, 1);
         for (auto& task : *req->flexible_cached_copy_tasks) {
           // Reverse rope information stores src_token_idx_ to clear existing rope information
@@ -1171,7 +1190,8 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
     }
   }
   KLLM_LOG_DEBUG << "block_table_host " << block_table_host;
-  info.block_table.shape = {reqs.size(), max_num_blocks_per_query};
+  info.block_table = block_table.GetView({reqs.size(), max_num_blocks_per_query}, block_table.shape[0]);
+  block_table.shape[0] += info.block_table.GetElementNumber();
   MemcpyAsync(info.block_table.GetPtr<void>(), block_table_host.data(),
               block_table_host.size() * sizeof(decltype(block_table_host)::value_type), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
@@ -1184,51 +1204,28 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
 
 void ModelInput::PrepareFlashMla(input_info& input) {
 #ifdef ENABLE_CUDA
-  if (model_config_.mla_config.kv_lora_rank == 0 || input.dp_reqs.empty()) {
+  if (!model_config_.use_mla || input.dp_reqs.empty()) {
     return;
   }
   PROFILE_EVENT_SCOPE(PrepareFlashMla, "PrepareFlashMla", rank_);
-  Stream stream = context_->GetH2DStreams()[rank_];
-  static const int head_num_per_tp =
-      model_config_.head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-  const int q_len = input.total_dp_input_ids_len / input.dp_reqs.size();
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-  GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, 1, rank_, stream.Get());
+  const size_t head_num_per_tp =
+      model_config_.head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+  GetNumSmParts(flash_mla_workspace_map, input.q_seq_len * head_num_per_tp, 1, rank_);
+  input.tile_scheduler_metadata = tile_scheduler_metadatas[input.q_seq_len - 1];
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
+  const size_t batch_size = input.dp_reqs.size();
+  input.num_splits = num_splits.GetView({batch_size + 1}, num_splits.shape[0]);
+  num_splits.shape[0] += input.num_splits.GetElementNumber();
   flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
-  InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, input.dp_reqs.size(), stream.Get());
+  InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, batch_size,
+                       context_->GetH2DStreams()[rank_].Get());
 #endif
 }
 
-void ModelInput::PrepareSingleDecode() {
-  if (page_single_input.dp_reqs.empty()) {
-    KLLM_LOG_DEBUG << "page_single_input empty";
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareSingleDecode, "PrepareSingleDecode", rank_);
-  PreparePageInput(page_single_input);
-  PrepareKVCacheBlocks(page_single_input);
-  PrepareKVCacheBlockTable(page_single_input);
-  PrepareDecodeRotary(page_single_input);
-  PrepareFlashMla(page_single_input);
-}
-
-void ModelInput::PrepareDualDecode() {
-  if (page_dual_input.dp_reqs.empty()) {
-    KLLM_LOG_DEBUG << "page_dual_input empty";
-    return;
-  }
-  PROFILE_EVENT_SCOPE(PrepareDualDecode, "PrepareDualDecode", rank_);
-  PreparePageInput(page_dual_input);
-  PrepareKVCacheBlocks(page_dual_input);
-  PrepareKVCacheBlockTable(page_dual_input);
-  PrepareDecodeRotary(page_dual_input);
-  PrepareFlashMla(page_dual_input);
-}
-
 void ModelInput::PreparePrefill() {
+  dp_dst_flexible_kv_cache_tensor.shape = {0};
   if (flash_input.dp_reqs.empty()) {
-    KLLM_LOG_DEBUG << "flash_input empty";
     return;
   }
 
@@ -1239,7 +1236,6 @@ void ModelInput::PreparePrefill() {
     PrepareKVCacheBlocks(flash_input);
     PrepareKVCacheBlockTable(flash_input);
   }
-
   PrepareFlashRotary(flash_input);
   PrepareCuSeqLen(flash_input, false);
 }
@@ -1279,8 +1275,9 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
       continue;
     }
 
+    const size_t flexible_cache_len = req->flexible_cached_copy_tasks->size();
     flexible_offset_uint64_cpu.emplace_back(flexible_offset_uint64_cpu.back() + req->prefix_cache_len -
-                                            req->flexible_cache_len);
+                                            flexible_cache_len);
     for (const auto& task : *req->flexible_cached_copy_tasks) {
       dst_flexible_kv_cache_id_cpu.emplace_back(task.dst_block_id_[attn_dp_rank_id_]);
       src_flexible_kv_cache_id_cpu.emplace_back(task.src_block_id_[attn_dp_rank_id_]);
@@ -1322,7 +1319,7 @@ void ModelInput::PrepareFlexibleCache(input_info& input) {
               MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
 }
 
-void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::PrepareInputIds(const std::vector<ForwardRequest*>& forward_reqs) {
   PROFILE_EVENT_SCOPE(PrepareInputIds, "PrepareInputIds", rank_);
   input_ids_cpu.clear();
   input_offset_list_uint64.assign(1, 0);
@@ -1395,7 +1392,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   };
 
   for (const auto& req : forward_reqs) {
-    process_func(req);
+    process_func(*req);
   }
 
   KLLM_LOG_DEBUG << "input_ids_cpu " << input_ids_cpu;

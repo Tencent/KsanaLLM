@@ -104,11 +104,6 @@ Status InferenceEngine::Initialize() {
       GetHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::ALLTOALL);
     }
 
-    if (!context_->IsExpertParallelStandalone()) {
-      InitializeExpertHiddenUnitBufferPool();
-      GetExpertHiddenUnitBufferPool()->SetCommType(DistributedCommunicationType::SCATTER);
-    }
-
     distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
         context_, GetPacketObject, GetScheduleOutputPool(), GetHiddenUnitBufferPool(), env);
 
@@ -147,7 +142,8 @@ Status InferenceEngine::Initialize() {
 
     Singleton<Environment>::GetInstance()->SetPipelineConfig(pipeline_config);
     KLLM_LOG_INFO << "InferenceEngine Set layer range:[" << pipeline_config.lower_layer_idx << ", "
-                  << pipeline_config.upper_layer_idx << "].";
+                  << pipeline_config.upper_layer_idx << "], nextn layer range: ["
+                  << pipeline_config.lower_nextn_layer_idx << ", " << pipeline_config.upper_nextn_layer_idx << "].";
   } else {
     KLLM_LOG_INFO << "Start to synchronize node layers.";
     // Get master_offload_layer_num from environment variable, default is 0
@@ -160,11 +156,6 @@ Status InferenceEngine::Initialize() {
     Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
     KLLM_LOG_INFO << "InferenceEngine Synchronize layer range:[" << pipeline_config.lower_layer_idx << ", "
                   << pipeline_config.upper_layer_idx << "].";
-  }
-
-  // Synchronize info for expert parallel.
-  if (!context_->IsExpertParallelStandalone()) {
-    distributed_coordinator_->SynchronizeExpertParallelExperts();
   }
 
   // Get block manager config of specific layers.
@@ -186,11 +177,6 @@ Status InferenceEngine::Initialize() {
   // Allocate necessary device memory after block manager initialized.
   if (!context_->IsStandalone()) {
     GetHiddenUnitBufferPool()->PreAllocateDeviceBuffer();
-  }
-
-  // Maybe need to set communication type.
-  if (!context_->IsExpertParallelStandalone()) {
-    GetExpertHiddenUnitBufferPool()->PreAllocateDeviceBuffer();
   }
 
   ProfilerConfig profiler_config;
@@ -269,7 +255,7 @@ Status InferenceEngine::Initialize() {
   status = env->GetCacheManagerConfig(cache_manager_config);
 
   BlockAllocatorManagerConfig block_allocator_manager_config;
-  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
+  for (size_t dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     BlockAllocatorGroupConfig dp_group_config;
     dp_group_config.devices = env->GetDataParaGroupDevices(dp_id);
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
@@ -281,7 +267,7 @@ Status InferenceEngine::Initialize() {
 
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
   BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
-  for (int dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
+  for (size_t dp_id = 0; dp_id < attn_data_parallel_size; ++dp_id) {
     std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
         block_allocator_manager.GetBlockAllocatorGroup(dp_id);
     cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group));
@@ -345,9 +331,6 @@ Status InferenceEngine::Initialize() {
     batch_scheduler_->SetCacheManager(cache_managers_[dp_id], dp_id);
   }
 
-  batch_scheduler_->SetLlmRuntime(llm_runtime_);
-  batch_scheduler_->SetMultiBatchController(multi_batch_controller_);
-
   // Create llm runtime
   llm_runtime_ = std::make_shared<LlmRuntime>(batch_scheduler_config, runtime_config, context_);
   llm_runtime_->SetCacheManagers(cache_managers_);
@@ -399,7 +382,7 @@ Status InferenceEngine::InitializeMemoryPool(std::shared_ptr<Environment> env) {
 
   // Only for device memory now.
   size_t tp_size = runtime_config.parallel_basic_config.tensor_parallel_size;
-  for (int rank = 0; rank < tp_size; ++rank) {
+  for (size_t rank = 0; rank < tp_size; ++rank) {
     SetDevice(rank);
 
     void *dev_ptr;
@@ -461,13 +444,13 @@ Status InferenceEngine::DoWarmupRun() {
   }
   RuntimeConfig runtime_config;
   Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
-  size_t max_warmup_input_length = std::min(runtime_config.max_seq_len, (size_t)2048);
+  size_t max_warmup_input_length = std::min(runtime_config.max_seq_len, 2048ul);
   if (std::getenv("MAX_WARMUP_INPUT_LENGTH") != nullptr) {
     max_warmup_input_length = std::stoi(std::getenv("MAX_WARMUP_INPUT_LENGTH"));
   }
   std::vector<int> warmup_input_lengths;
   const size_t warmup_input_length_step = 64;
-  for (int i = warmup_input_length_step; i < max_warmup_input_length; i += warmup_input_length_step) {
+  for (size_t i = warmup_input_length_step; i < max_warmup_input_length; i += warmup_input_length_step) {
     warmup_input_lengths.push_back(i);
   }
 
@@ -536,6 +519,12 @@ Status InferenceEngine::Start() {
       cache_manager->InitializeCachedBlocks();
     }
   }
+
+  // Wait until every expert-parallel rank is ready before allowing the mock request to proceed.
+  if (!context_->IsExpertParallelStandalone()) {
+    distributed_coordinator_->ExpertParallelBarrier();
+  }
+
   // Start batch manager.
   batch_manager_->Start();
 

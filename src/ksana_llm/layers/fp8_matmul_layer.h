@@ -15,9 +15,9 @@ class Fp8MatMulLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-  size_t GetWorkSpaceSize(const int m, const int k);
+  size_t GetWorkspaceSize(const int m, const int k);
 
-  virtual size_t GetWorkSpaceSize() override;
+  virtual size_t GetWorkspaceSize() override;
 
  private:
   template <typename T>

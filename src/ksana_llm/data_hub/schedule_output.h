@@ -52,17 +52,11 @@ struct WorkerInferRequest {
   // Different reqs may have different cache managers.
   std::shared_ptr<CacheManagerInterface> cache_manager;
 
-  // Get addr ptr of blocks.
-  std::vector<std::vector<void*>> GetBlockPtrs() {
-    std::vector<std::vector<void*>> block_ptrs;
-    block_ptrs.reserve(kv_cache_blocks.size());
+  void UpdateBlockPtrs(std::vector<std::vector<void*>>& block_ptrs) {
     for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
-      std::vector<void*> block_ptr(kv_cache_blocks[rank].size());
-      cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
-                                                                                           block_ptr);
-      block_ptrs.emplace_back(std::move(block_ptr));
+      cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->AppendBlockPtrs(kv_cache_blocks[rank],
+                                                                                              block_ptrs[rank]);
     }
-    return block_ptrs;
   }
 
   // current froward request related attention data para group id
@@ -145,7 +139,7 @@ struct ScheduleOutput {
       result += "        req_id:" + std::to_string(req->req_id) + "\n";
       result += "        model_name:" + req->model_name + "\n";
       result += "        forwarding_tokens:" + Vector2Str(req->forwarding_tokens) + "\n";
-      result += "        infer_stage:" + std::to_string(req->infer_stage) + "\n";
+      result += "        infer_stage:" + std::to_string(static_cast<size_t>(req->infer_stage)) + "\n";
       result += "        step:" + std::to_string(req->step) + "\n";
       result += "        kv_cache_blocks:";
       for (auto v : req->kv_cache_blocks) {

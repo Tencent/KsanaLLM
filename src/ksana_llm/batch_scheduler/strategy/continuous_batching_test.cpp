@@ -55,7 +55,7 @@ class ContinuousBatchingTest : public testing::Test {
     }
     RuntimeConfig runtime_config;
     if (test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
-      runtime_config.enable_mtp_module = true;
+      runtime_config.mtp_step_num = 1;
     }
     continuous_batching_strategy_ =
         std::make_shared<ContinuousBatchingStrategyTest>(batch_scheduler_config, runtime_config);

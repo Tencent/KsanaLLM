@@ -3,6 +3,7 @@
 #pragma once
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/moe/cutlass_moe/cutlass_moe_wrapper.h"
+#  include "csrc/kernels/nvidia/moe/expert_map/expert_map.h"
 #endif
 #include "csrc/utils/nvidia/workspace.h"
 #include "ksana_llm/layers/base_layer.h"
@@ -18,13 +19,18 @@ class CutlassMoeLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual size_t GetWorkSpaceSize() override;
+  virtual size_t GetWorkspaceSize() override;
 
   virtual Status Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) override;
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
  private:
+  inline Status ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor, const size_t total_tokens,
+                              const llm_kernels::nvidia::tensorrt_llm::dev::Tensor& fc1_expert_weights_ktensor,
+                              const llm_kernels::nvidia::tensorrt_llm::dev::Tensor& fc2_expert_weights_ktensor,
+                              const std::vector<llm_kernels::nvidia::tensorrt_llm::dev::Tensor>& quant_scales_ktensors);
+
   // 执行 GroupedTopk 计算的辅助函数
   Status ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 

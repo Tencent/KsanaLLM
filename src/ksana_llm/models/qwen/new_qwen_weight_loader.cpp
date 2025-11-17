@@ -15,7 +15,6 @@
 #include "ksana_llm/models/base/model_format.h"
 #include "ksana_llm/models/qwen/new_qwen_config.h"
 #include "ksana_llm/models/qwen/new_qwen_weight_loader.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"

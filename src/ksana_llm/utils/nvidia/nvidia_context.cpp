@@ -29,7 +29,6 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
 
   KLLM_LOG_DEBUG << "Init nvidia memroy pool on GPU " << worker_id;
   CUDA_CHECK(cudaDriverGetVersion(&cuda_driver_version_));
-  bool is_cuda_p2p_access_enable = true;
   if (cuda_driver_version_ >= CUDA_MEMPOOL_MIN_DRIVER_VERSION) {
     int pool_supported_handle_types = 0;
     cudaMemPool_t mempool;
@@ -44,7 +43,7 @@ void NvidiaContextExtension<T>::InitGpuMemoryPool(const int worker_id) {
     CUDA_CHECK(cudaMemPoolSetAttribute(mempool, cudaMemPoolReuseAllowInternalDependencies, &enable));
 
     // Set access_id's accessing to the worker_id's mempool.
-    for (int access_id = 0; access_id < base_ptr_->tensor_parallel_size_; ++access_id) {
+    for (int access_id = 0; access_id < static_cast<int>(base_ptr_->tensor_parallel_size_); ++access_id) {
       if (access_id != worker_id) {
         cudaMemAccessDesc desc = {};
         desc.location.type = cudaMemLocationTypeDevice;
@@ -97,7 +96,7 @@ void NvidiaContextExtension<T>::InitNcclParam() {
     NCCL_CHECK(ncclGroupStart());
     // TODO(karlluo): for single machine multiple xpus, device_num is the world_size
     // for multiple machine, world size should change in future, and the same situation of rank_id
-    for (int worker_id = 0; worker_id < world_size; ++worker_id) {
+    for (size_t worker_id = 0; worker_id < world_size; ++worker_id) {
       CUDA_CHECK(cudaSetDevice(worker_id));
       NCCL_CHECK(ncclCommInitRank(&(nccl_params_[worker_id].nccl_comm), world_size, nccl_uid_, worker_id));
     }
@@ -159,7 +158,7 @@ void NvidiaContextExtension<T>::Initialize() {
 
   is_p2p_enable_ = EnableGpuP2PAccess();
 
-  for (int worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
+  for (size_t worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_; ++worker_id) {
     init_threads.emplace_back([worker_id, this]() {
       KLLM_LOG_DEBUG << "Init nvidia gpu relate handler on worker " << worker_id;
       CUDA_CHECK(cudaSetDevice(worker_id));

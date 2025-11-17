@@ -9,6 +9,7 @@
 #include "ksana_llm/models/common/model_test_helper.h"
 #include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -55,6 +56,7 @@ class ForwardTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto& env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
@@ -151,7 +153,6 @@ class ForwardTest : public testing::Test {
     std::cout << "Test case 1: GATHER_ALL with slice_pos {{0, 1}}" << std::endl;
 
     // 创建 ForwardRequest
-    ForwardRequest forward;
     std::vector<int> input_ids = {1, 529};  // 示例输入 token
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     auto forward = request_builder.CreateForwardRequest(1, input_ids);
@@ -162,14 +163,14 @@ class ForwardTest : public testing::Test {
     target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 logits
     target_describe.token_reduce_mode = GetTokenReduceMode("GATHER_ALL");
     request_target["logits"] = target_describe;
-    forward.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
 
     // 初始化 response 成员变量
     std::map<std::string, PythonTensor> response_map;
-    forward.response = &response_map;
+    forward->response = &response_map;
 
     // 执行 Forward
-    std::vector<ForwardRequest> forward_reqs = {forward};
+    std::vector<ForwardRequest*> forward_reqs = {forward};
     Status status = llama->Forward(multi_batch_id, llama_weight, forward_reqs, false);
     EXPECT_TRUE(status.OK()) << "Forward failed: " << status.GetMessage();
 
@@ -177,12 +178,12 @@ class ForwardTest : public testing::Test {
     std::cout << "Checking ForwardRequest response after Forward..." << std::endl;
 
     // 验证响应
-    EXPECT_EQ(forward.response->size(), 1ul) << "Expected exactly one response entry";
+    EXPECT_EQ(forward->response->size(), 1ul) << "Expected exactly one response entry";
 
     // 检查是否包含 logits 数据
-    EXPECT_TRUE(forward.response->find("logits") != forward.response->end()) << "Response should contain logits data";
+    EXPECT_TRUE(forward->response->find("logits") != forward->response->end()) << "Response should contain logits data";
 
-    const auto& logits_tensor = forward.response->at("logits");
+    const auto& logits_tensor = forward->response->at("logits");
 
     // 验证返回张量的形状
     EXPECT_EQ(logits_tensor.shape.size(), 2ul) << "Logits tensor should have 2 dimensions";
@@ -240,9 +241,9 @@ class ForwardTest : public testing::Test {
     }
 
     // 清理资源
-    if (forward.req_id > 0) {
+    if (forward->req_id > 0) {
       // 清理缓存管理器中的请求
-      cache_manager_->DestroyFinishedRequest(forward.req_id);
+      cache_manager_->DestroyFinishedRequest(forward->req_id);
     }
 
     // 释放所有可重用的缓存块
@@ -271,10 +272,9 @@ class ForwardTest : public testing::Test {
     std::cout << "Test case 1: GATHER_ALL with slice_pos {{0, 1}}" << std::endl;
 
     // 创建 ForwardRequest
-    ForwardRequest forward;
     std::vector<int> input_ids = {1, 529};  // 示例输入 token
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
-    request_builder.CreateForwardRequest(1, forward, input_ids);
+    auto forward = request_builder.CreateForwardRequest(1, input_ids);
 
     // 设置 request_target 参数，使用 GATHER_ALL 模式
     std::map<std::string, ksana_llm::TargetDescribe> request_target;
@@ -282,14 +282,14 @@ class ForwardTest : public testing::Test {
     target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 layernorm
     target_describe.token_reduce_mode = GetTokenReduceMode("GATHER_ALL");
     request_target["layernorm"] = target_describe;
-    forward.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
 
     // 初始化 response 成员变量
     std::map<std::string, PythonTensor> response_map;
-    forward.response = &response_map;
+    forward->response = &response_map;
 
     // 执行 Forward
-    std::vector<ForwardRequest> forward_reqs = {forward};
+    std::vector<ForwardRequest*> forward_reqs = {forward};
     Status status = llama->Forward(multi_batch_id, llama_weight, forward_reqs, false);
     EXPECT_TRUE(status.OK()) << "Forward failed: " << status.GetMessage();
 
@@ -297,13 +297,13 @@ class ForwardTest : public testing::Test {
     std::cout << "Checking ForwardRequest response after Forward..." << std::endl;
 
     // 验证响应
-    EXPECT_EQ(forward.response->size(), 1ul) << "Expected exactly one response entry";
+    EXPECT_EQ(forward->response->size(), 1ul) << "Expected exactly one response entry";
 
     // 检查是否包含 layernorm 数据
-    EXPECT_TRUE(forward.response->find("layernorm") != forward.response->end())
+    EXPECT_TRUE(forward->response->find("layernorm") != forward->response->end())
         << "Response should contain layernorm data";
 
-    const auto& layernorm_tensor = forward.response->at("layernorm");
+    const auto& layernorm_tensor = forward->response->at("layernorm");
 
     // 验证返回张量的形状
     EXPECT_EQ(layernorm_tensor.shape.size(), 2ul) << "Layernorm tensor should have 2 dimensions";
@@ -343,9 +343,9 @@ class ForwardTest : public testing::Test {
     }
 
     // 清理资源
-    if (forward.req_id > 0) {
+    if (forward->req_id > 0) {
       // 清理缓存管理器中的请求
-      cache_manager_->DestroyFinishedRequest(forward.req_id);
+      cache_manager_->DestroyFinishedRequest(forward->req_id);
     }
 
     // 释放所有可重用的缓存块

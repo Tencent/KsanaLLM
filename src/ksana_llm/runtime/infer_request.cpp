@@ -17,7 +17,7 @@
 #include "ksana_llm/utils/tensor.h"
 
 namespace ksana_llm {
-InferRequest::InferRequest(std::shared_ptr<Request> &request, int index)
+InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
     : req_id(request->req_ids[index]),
       model_name(request->model_name),
       logits_custom_length(request->logits_custom_length),
@@ -162,12 +162,9 @@ void InferRequest::NotifyStep() {
 
 void InferRequest::UpdateBlockPtrs(std::vector<std::vector<void *>> &block_ptrs) {
   for (size_t rank = 0; rank < kv_cache_blocks.size(); ++rank) {
-    std::vector<void *> block_ptr(kv_cache_blocks[rank].size());
-    cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->GetBlockPtrs(kv_cache_blocks[rank],
-                                                                                         block_ptr);
-    block_ptrs.emplace_back(std::move(block_ptr));
+    cache_manager->GetBlockAllocatorGroup()->GetDeviceBlockAllocator(rank)->AppendBlockPtrs(kv_cache_blocks[rank],
+                                                                                            block_ptrs[rank]);
   }
-  return block_ptrs;
 }
 
 std::vector<int> InferRequest::GetKVOccupiedDevices() {

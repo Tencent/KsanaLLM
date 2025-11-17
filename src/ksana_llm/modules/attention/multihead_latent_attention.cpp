@@ -17,7 +17,6 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
       mla_buffers_(mla_buffers),
       indexer_buffers_(indexer_buffers) {
   if (creation_context.runtime_config.enable_o_proj_out_of_dp) {
-    // TODO(rockcao): support `o_proj_out_of_dp_` again
     o_proj_out_of_dp_ = true;
     KLLM_LOG_DEBUG << "Enable o_proj_out_of_dp";
   }
@@ -44,8 +43,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
   }
 
   flash_mla_attention_layers_ = std::make_shared<FlashMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
-  paged_mla_attention_layers_ =
-      std::make_shared<PagedMlaAttention>(layer_idx, is_neox, absorb_type_, creation_context, attn_config);
+  paged_mla_attention_layers_ = std::make_shared<PagedMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
 
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
   kv_a_layernorms_ =
@@ -160,9 +158,8 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   // When disable attention dp, `dp_token_offset = 0, dp_context_tokens + dp_decode_tokens = total_tokens`
   const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
   const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
-  const size_t dp_context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
-  const size_t dp_decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
-                                  forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
+  const size_t dp_context_tokens = forwarding_context.GetModelInput()->dp_context_tokens;
+  const size_t dp_decode_tokens = forwarding_context.GetModelInput()->dp_decode_tokens;
   const size_t dp_total_tokens = dp_context_tokens + dp_decode_tokens;
   KLLM_LOG_DEBUG << fmt::format(
       "rank: {}, dp_group_id: {}, dp_token_offset: {}, dp_context_tokens: {}, dp_decode_tokens: {}", rank, dp_group_id,

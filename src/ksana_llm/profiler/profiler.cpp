@@ -48,9 +48,12 @@ Profiler::~Profiler() {
 void Profiler::InitMetrics(const ProfilerConfig& profiler_config) {
   metrics_export_url_ = profiler_config.metrics_export_url;
 
-  for (const auto& kv : profiler_config.resource_attributes) {
-    resource_attributes_[kv.first] = kv.second;
-    data_attributes_[kv.first] = kv.second;
+  // Copy attribute strings into our owned storage first, then let
+  // resource_attributes_ reference these owned strings to avoid dangling views.
+  for (const auto &kv : profiler_config.resource_attributes) {
+    auto &owned = data_attributes_[kv.first];  // creates/gets our owned std::string
+    owned = kv.second;                          // deep copy value into owned storage
+    resource_attributes_[kv.first] = owned;     // OTel may store string_view -> points to our owned string
   }
 
   attributes_view_ =
@@ -86,7 +89,6 @@ void Profiler::InitMetrics(const ProfilerConfig& profiler_config) {
   auto u_provider = opentelemetry::sdk::metrics::MeterProviderFactory::Create(std::move(context));
   std::shared_ptr<opentelemetry::metrics::MeterProvider> provider(std::move(u_provider));
   opentelemetry::metrics::Provider::SetMeterProvider(provider);
-  // provider = opentelemetry::metrics::Provider::GetMeterProvider();
   meter_ = opentelemetry::metrics::Provider::GetMeterProvider()->GetMeter("ksana_inference_metrics", SCOPE_VERSION);
   is_initialized_ = true;
 }

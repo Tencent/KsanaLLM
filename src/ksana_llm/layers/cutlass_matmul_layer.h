@@ -27,7 +27,7 @@ class CutlassMatMulLayer : public BaseLayer {
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
-  virtual size_t GetWorkSpaceSize() override;
+  virtual size_t GetWorkspaceSize() override;
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 
@@ -39,7 +39,7 @@ class CutlassMatMulLayer : public BaseLayer {
                std::shared_ptr<Context> context, int rank);
 
   template <typename T>
-  size_t GetWorkSpaceSizeT();
+  size_t GetWorkspaceSizeT();
 
   template <typename T>
   Status PreprocessT(const ModelConfig& model_config_, const RuntimeConfig& runtime_config);

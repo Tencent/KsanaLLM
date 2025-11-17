@@ -14,9 +14,9 @@
 namespace ksana_llm {
 
 // MOE layer tensor数量常量
-constexpr size_t kA1QTensorIndex = 2;          // a1_q_tensor在output_tensors中的索引
-constexpr size_t kA1ScaleTensorIndex = 3;      // a1_scale_tensor在output_tensors中的索引
-constexpr size_t kWorkspaceTensorIndex = 4;    // workspace_tensor在output_tensors中的索引
+constexpr size_t kA1QTensorIndex = 2;        // a1_q_tensor在output_tensors中的索引
+constexpr size_t kA1ScaleTensorIndex = 3;    // a1_scale_tensor在output_tensors中的索引
+constexpr size_t kWorkspaceTensorIndex = 4;  // workspace_tensor在output_tensors中的索引
 
 Status MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) {
@@ -24,7 +24,7 @@ Status MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConf
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
-size_t MoeLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
+size_t MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 Status MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
@@ -80,6 +80,7 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
                          : compute_dtype_;
   }
 
+  // fp8 blockwise处理
   block_shape_.resize(2);
   if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
     block_shape_ = {128, 128};
@@ -87,7 +88,17 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
     block_shape_ = {0, group_size};
   }
 
-  apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
+  // 计算全局ep_size和ep_rank
+  global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
+                             runtime_config.parallel_basic_config.expert_world_size;
+  size_t global_expert_para_rank_ =
+      context_->GetExpertParallelExpertNodeRank() * runtime_config.parallel_basic_config.expert_parallel_size + rank_;
+
+  // 多机 + DP + EP 才使用deepep
+  // TODO(jinxcwu) 后续需要修改到更高层的配置中，例如context
+  using_deepep_ = runtime_config.parallel_basic_config.expert_world_size > 1 &&
+                  runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
+                  runtime_config.parallel_basic_config.expert_parallel_size > 1;
 
   // Initialize GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
@@ -127,7 +138,7 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
 template <typename T>
-size_t MoeLayer::GetWorkSpaceSizeT() {
+size_t MoeLayer::GetWorkspaceSizeT() {
   GetMoeGemmWorkspaceSize<T, T, T>(max_token_num_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_,
                                    expert_topk_, tp_size_, rank_, use_lora_, max_ws_bytes_,
                                    workspace_info_.workspace_sizes);
@@ -141,11 +152,11 @@ size_t MoeLayer::GetWorkSpaceSizeT() {
     intermediate_cache3_size = AlignAddress(m * expert_topk_ * expert_hidden_size_ * sizeof(T));
     intermediate_cache1_and_cache3_size = std::max(intermediate_cache1_size, intermediate_cache3_size);  // 共享
     if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
-      if (enable_full_shared_expert_) {
+      if (using_deepep_) {
         // 提前传输fp8量化后的数据，空间大小按照max_token_num_计算
         // TODO(zakwang): 优化空间使用，复用已有的空间
         m = std::max(m, max_token_num_);
-        KLLM_LOG_INFO << fmt::format("enable_full_shared_expert_, m = {}", m);
+        KLLM_LOG_INFO << fmt::format("using_deepep_, m = {}", m);
       }
       a1_q_size = AlignAddress(m * expert_hidden_size_ * sizeof(char));
       a2_q_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(char));
@@ -167,7 +178,7 @@ size_t MoeLayer::GetWorkSpaceSizeT() {
   return max_ws_bytes_;
 }
 
-Status MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+Status MoeLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   workspace_buffer_ = workspace_buffer;
   scale_probabilities_size_ = max_token_num_ * expert_num_per_node_ * sizeof(float);
   src_to_dest_map_size_ = expert_topk_ * max_token_num_ * sizeof(int);
@@ -206,7 +217,7 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     e_score_correction_bias_weight_void = input_tensors[5].GetPtr<void>();
   }
 
-  // SetWorkSpaceBuffer只保证空间足够大，不能保证后续地址不发生改变，要写死就只能在Forward中做
+  // SetWorkspaceBuffer只保证空间足够大，不能保证后续地址不发生改变，要写死就只能在Forward中做
   if (set_workspace_buffer_info_) {
     set_workspace_buffer_info_ = false;
 
@@ -255,7 +266,7 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     void* w1_input_alpha = input_tensors[2].input_alpha ? input_tensors[2].input_alpha->GetPtr<void>() : nullptr;
     void* w2_input_alpha = input_tensors[3].input_alpha ? input_tensors[3].input_alpha->GetPtr<void>() : nullptr;
 
-    if (enable_full_shared_expert_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+    if (using_deepep_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
       Tensor workspace_tensor(input_tensors[1].location, TYPE_FP8_E4M3, {num_tokens, hidden_size},
                               input_tensors[1].device_id, workspace_buffer_->GetPtr<void>());
       Tensor a1_q_tensor(input_tensors[1].location, TYPE_FP8_E4M3, {num_tokens, hidden_size},
@@ -316,82 +327,17 @@ Status MoeLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<
     } else if (!using_deepep_) {  // EP但不使用deepep
       expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
                                           context_->GetComputeStreams()[rank_].Get());
-      InvokeFusedMoe<T, true>(input_tensors[0].GetPtr<void>(),              // hidden_states from dispatch
-                              input_tensors[2].GetPtr<void>(),              // w1
-                              input_tensors[3].GetPtr<void>(),              // w2
-                              expert_topk_,                                 // topk
-                              weight_dtype_,                                // weight_dtype
-                              compute_dtype_,                               // compute_dtype
-                              false,                                        // is_marlin
-                              false,                                        // use_triton
-                              w1_scale,                                     // w1_scale
-                              w2_scale,                                     // w2_scale
-                              nullptr,                                      // w1_zp
-                              nullptr,                                      // w2_zp
-                              a1_q_,                                        // a1_q
-                              a2_q_,                                        // a2_q
-                              a1_scale_,                                    // a1_scale
-                              a2_scale_,                                    // a2_scale
-                              block_shape_,                                 // block_shape
-                              topk_weights_ptr_,                            // topk_weights_ptr
-                              topk_ids_ptr_,                                // topk_ids_ptr
-                              routed_scaling_factor_,                       // routed_scaling_factor
-                              output_tensors[0].GetPtr<void>(),             // output_hidden_states
-                              intermediate_cache1_,                         // intermediate_cache1
-                              intermediate_cache2_,                         // intermediate_cache2
-                              intermediate_cache3_,                         // intermediate_cache3
-                              fused_id_buffer_,                             // buffer_of_ids_in_kernel
-                              num_tokens,                                   // num_tokens
-                              expert_num_per_node_,                         // num_experts
-                              expert_hidden_size_,                          // hidden_size
-                              expert_inter_size_,                           // inter_size
-                              global_expert_para_size_,                     // expert_para_size * expert_world_size
-                              dequant_workspace_,                           // dequant_workspace
-                              rank_,                                        // rank
-                              context_->GetComputeStreams()[rank_].Get());  // stream
-    } else {
+      AutoInvoke(std::true_type{}, input_tensors[0].GetPtr<void>(), output_tensors[0].GetPtr<void>(), num_tokens);
+    } else {  // EP使用deepep
       const size_t dispatch_num_tokens = output_tensors[1].shape[0];
       if (dispatch_num_tokens > 0) {
         void* hidden_states_ptr = output_tensors[1].GetPtr<void>();
-        if (enable_full_shared_expert_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+        if (using_deepep_ && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
           // 使用fp8的a1_q，hidden_states设置为nullptr
           hidden_states_ptr = nullptr;
         }
-        InvokeFusedMoe<T, true>(hidden_states_ptr,                            // hidden_states from dispatch
-                                input_tensors[2].GetPtr<void>(),              // w1
-                                input_tensors[3].GetPtr<void>(),              // w2
-                                expert_topk_,                                 // topk
-                                weight_dtype_,                                // weight_dtype
-                                compute_dtype_,                               // compute_dtype
-                                false,                                        // is_marlin
-                                false,                                        // use_triton
-                                w1_scale,                                     // w1_scale
-                                w2_scale,                                     // w2_scale
-                                nullptr,                                      // w1_zp
-                                nullptr,                                      // w2_zp
-                                a1_q_,                                        // a1_q
-                                a2_q_,                                        // a2_q
-                                a1_scale_,                                    // a1_scale
-                                a2_scale_,                                    // a2_scale
-                                block_shape_,                                 // block_shape
-                                topk_weights_ptr_,                            // topk_weights_ptr
-                                topk_ids_ptr_,                                // topk_ids_ptr
-                                routed_scaling_factor_,                       // routed_scaling_factor
-                                output_tensors[1].GetPtr<void>(),             // output_hidden_states
-                                intermediate_cache1_,                         // intermediate_cache1
-                                intermediate_cache2_,                         // intermediate_cache2
-                                intermediate_cache3_,                         // intermediate_cache3
-                                fused_id_buffer_,                             // buffer_of_ids_in_kernel
-                                dispatch_num_tokens,                          // num_tokens
-                                expert_num_per_node_,                         // num_experts
-                                expert_hidden_size_,                          // hidden_size
-                                expert_inter_size_,                           // inter_size
-                                global_expert_para_size_,                     // expert_para_size * expert_world_size
-                                dequant_workspace_,                           // dequant_workspace
-                                rank_,                                        // rank
-                                context_->GetComputeStreams()[rank_].Get());  // stream
+        AutoInvoke(std::true_type{}, hidden_states_ptr, output_tensors[1].GetPtr<void>(), dispatch_num_tokens);
       }
-
       // Combine is an in-place operation
       Combine({output_tensors[1]}, output_tensors);
     }

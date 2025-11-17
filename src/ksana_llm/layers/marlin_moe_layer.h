@@ -22,7 +22,7 @@ class MarlinMoeLayer : public BaseLayer {
 
  private:
   template <typename T>
-  size_t GetWorkSpaceSizeT();
+  size_t GetWorkspaceSizeT();
 
  private:
   MoeScaleNormMode moe_scale_norm_mode_;

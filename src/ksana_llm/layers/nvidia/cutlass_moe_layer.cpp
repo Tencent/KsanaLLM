@@ -18,6 +18,8 @@ namespace ksana_llm {
 using KTensor = llm_kernels::nvidia::tensorrt_llm::dev::Tensor;
 using KScalarType = llm_kernels::nvidia::tensorrt_llm::dev::ScalarType;
 
+#define TRTLLM_CUTLASS_MOE_CHUNK_SIZE ((size_t)(8 * 1024))
+
 static const std::unordered_map<DataType, KScalarType> DataTypeToScalarTypeMap = {
     {DataType::TYPE_INT64, KScalarType::Long},     {DataType::TYPE_FP8_E4M3, KScalarType::Float8_e4m3fn},
     {DataType::TYPE_UINT8, KScalarType::QUInt4x2},  // NOTE(jinxcwu) 特殊配置的，需要注意
@@ -64,13 +66,8 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   group_size_ = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
 
-  // 初始化 GroupedTopkLayer
-  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
-  std::vector<std::any> grouped_topk_params = {
-      static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
-      static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
-      use_e_score_correction_bias_};
-  grouped_topk_layer_->Init(grouped_topk_params, runtime_config, context, rank);
+  // 清空tactic
+  config_map_.clear();
 
   // 强制要求TP=EP
   if (runtime_config.parallel_basic_config.tensor_parallel_size !=
@@ -79,12 +76,27 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   }
 
   // 计算全局ep_size和ep_rank
-  size_t ep_size = runtime_config.parallel_basic_config.expert_parallel_size *
-                   runtime_config.parallel_basic_config.expert_world_size;
-  size_t ep_rank =
+  size_t global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
+                                    runtime_config.parallel_basic_config.expert_world_size;
+  size_t global_expert_para_rank_ =
       context_->GetExpertParallelExpertNodeRank() * runtime_config.parallel_basic_config.expert_parallel_size + rank_;
-  cutlass_moe_wrapper_ =
-      std::make_shared<llm_kernels::nvidia::CutlassMoeWrapper>(1, 0, ep_size, ep_rank, 1, 0, expert_topk_);
+
+  // 多机 + DP + EP 才使用deepep
+  using_deepep_ = runtime_config.parallel_basic_config.expert_world_size > 1 &&
+                  runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
+                  runtime_config.parallel_basic_config.expert_parallel_size > 1;
+
+  // 初始化 GroupedTopkLayer
+  grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
+  std::vector<std::any> grouped_topk_params = {
+      static_cast<int>(expert_topk_),        norm_topk_prob_, static_cast<int>(num_expert_group_),
+      static_cast<int>(expert_groups_topk_), scoring_func_,   routed_scaling_factor_,
+      use_e_score_correction_bias_};
+  grouped_topk_layer_->Init(grouped_topk_params, runtime_config, context, rank);
+
+  // 创建cutlass moe算子
+  cutlass_moe_wrapper_ = std::make_shared<llm_kernels::nvidia::CutlassMoeWrapper>(
+      1, 0, global_expert_para_size_, global_expert_para_rank_, 1, 0, expert_topk_);
   cutlass_moe_wrapper_->Init<T>();
 
   // EPLB data dump is off by default; when enabled, pick up the output directory
@@ -112,9 +124,7 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   return Status();
 }
 
-#define TRTLLM_CUTLASS_MOE_CHUNK_SIZE ((size_t)(8 * 1024))
-
-size_t CutlassMoeLayer::GetWorkSpaceSize() {
+size_t CutlassMoeLayer::GetWorkspaceSize() {
   topk_weights_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(float), 256);
   topk_ids_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(int32_t), 256);
   kernel_workspace_size = RoundUp(
@@ -165,22 +175,22 @@ Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const Runtim
     auto get_gemm_best_tactic = [&](int64_t gemm_idx, size_t warmup_iters, size_t profile_iters) -> int64_t {
       // 获取workspace
       size_t profile_workspace_size = cutlass_moe_wrapper_->GetProfileWorkspace(
-          fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, profile_token, false, false, gemm_idx, -1,
-          true, context_->GetComputeStreams()[rank_].Get());
+          fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, profile_token, gemm_idx, -1, true,
+          context_->GetComputeStreams()[rank_].Get());
       // 开辟workspace
       Tensor profile_workspace = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {profile_workspace_size}, rank_);
       // 设置workspace
       cutlass_moe_wrapper_->SetProfileWorkspace(profile_workspace.GetPtr<void>(), fc1_expert_weights, std::nullopt,
-                                                fc2_expert_weights, std::nullopt, profile_token, false, false, gemm_idx,
-                                                -1, true, context_->GetComputeStreams()[rank_].Get());
+                                                fc2_expert_weights, std::nullopt, profile_token, gemm_idx, -1, true,
+                                                context_->GetComputeStreams()[rank_].Get());
       // 获取最优tactic
       int64_t best_tactic = -1;
       float best_tactic_time = std::numeric_limits<float>::max();
-      int64_t tactic_num = cutlass_moe_wrapper_->GetTacticNum();
+      int64_t tactic_num = cutlass_moe_wrapper_->GetTacticNum(gemm_idx);
       for (int64_t tactic = 0; tactic < tactic_num; tactic++) {
         auto kernel = [&]() {
           cutlass_moe_wrapper_->RunGemmProfile(fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt,
-                                               profile_token, false, false, gemm_idx, tactic, false,
+                                               profile_token, gemm_idx, tactic, false,
                                                context_->GetComputeStreams()[rank_].Get());
         };
         float tactic_time =
@@ -224,10 +234,6 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
     cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
   }
 
-  // 使用 GroupedTopkLayer 计算 topk
-  size_t total_tokens = input_tensors[0].shape[0];
-  ExecuteGroupedTopk(input_tensors, total_tokens);
-
   // 获取并转换权重
   const Tensor& up_gate_experts_weight = input_tensors[2];
   const Tensor& down_experts_weight = input_tensors[3];
@@ -242,31 +248,60 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
   KTensor fc1_alpha_ktensor = TensorToKTensor(*(up_gate_experts_weight.input_alpha));
   KTensor fc2_alpha_ktensor = TensorToKTensor(*(down_experts_weight.input_alpha));
 
+  // 使用 GroupedTopkLayer 计算 topk
+  ExecuteGroupedTopk(input_tensors, output_tensors);
+
+  auto AutoInvoke = [&](auto& input_tensor, auto& output_tensor, int num_tokens) {
+    ProcessChunks(input_tensor, output_tensor, num_tokens, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
+                  {fc1_weight_scales_ktensor, fc2_weight_scales_ktensor, fc1_act_scales_ktensor, fc2_act_scales_ktensor,
+                   fc1_weight_zeros_ktensor, fc2_weight_zeros_ktensor, fc1_alpha_ktensor, fc2_alpha_ktensor});
+  };
+
+  if (using_deepep_) {
+    // LCOV_EXCL_START
+    const size_t dispatch_num_tokens = output_tensors[1].shape[0];
+    if (dispatch_num_tokens > 0) {
+      expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
+                                                 dispatch_num_tokens * expert_topk_,
+                                                 context_->GetComputeStreams()[rank_].Get());
+      AutoInvoke(output_tensors[1], output_tensors[1], dispatch_num_tokens);
+    }
+    // Combine is an in-place operation
+    Combine({output_tensors[1]}, output_tensors);
+    // LCOV_EXCL_STOP
+  } else {
+    output_tensors[0].shape = input_tensors[0].shape;
+    output_tensors[0].dtype = input_tensors[0].dtype;
+    const size_t num_tokens = input_tensors[0].shape[0];
+    AutoInvoke(input_tensors[0], output_tensors[0], num_tokens);
+  }
   output_tensors[0].shape = input_tensors[0].shape;
   output_tensors[0].dtype = input_tensors[0].dtype;
+  return Status();
+}
 
-  // chunk 分块处理
+inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor,
+                                             const size_t total_tokens, const KTensor& fc1_expert_weights_ktensor,
+                                             const KTensor& fc2_expert_weights_ktensor,
+                                             const std::vector<KTensor>& quant_scales_ktensors) {
   for (size_t chunk_token = 0; chunk_token < total_tokens; chunk_token += TRTLLM_CUTLASS_MOE_CHUNK_SIZE) {
     size_t start_token = chunk_token;
     size_t end_token = std::min(chunk_token + TRTLLM_CUTLASS_MOE_CHUNK_SIZE, total_tokens);
     size_t solve_token = end_token - start_token;
 
-    Tensor chunk_input(
-        input_tensors[0].location, input_tensors[0].dtype, {solve_token, input_tensors[0].shape[1]},
-        input_tensors[0].device_id,
-        input_tensors[0].GetPtr<void>() + start_token * input_tensors[0].shape[1] * input_tensors[0].GetDTypeSize());
+    Tensor chunk_input(input_tensor.location, input_tensor.dtype, {solve_token, input_tensor.shape[1]},
+                       input_tensor.device_id,
+                       input_tensor.GetPtr<void>() + start_token * input_tensor.shape[1] * input_tensor.GetDTypeSize());
     Tensor chunk_output(
-        output_tensors[0].location, output_tensors[0].dtype, {solve_token, output_tensors[0].shape[1]},
-        output_tensors[0].device_id,
-        output_tensors[0].GetPtr<void>() + start_token * output_tensors[0].shape[1] * output_tensors[0].GetDTypeSize());
+        output_tensor.location, output_tensor.dtype, {solve_token, output_tensor.shape[1]}, output_tensor.device_id,
+        output_tensor.GetPtr<void>() + start_token * output_tensor.shape[1] * output_tensor.GetDTypeSize());
     KTensor input_ktensor = TensorToKTensor(chunk_input);
     KTensor output_ktensor = TensorToKTensor(chunk_output);
 
-    Tensor chunk_topk_weights(input_tensors[1].location, TYPE_FP32, {solve_token, expert_topk_},
-                              input_tensors[1].device_id,
+    Tensor chunk_topk_weights(input_tensor.location, TYPE_FP32, {solve_token, expert_topk_}, input_tensor.device_id,
                               topk_weights_ptr_ + start_token * expert_topk_ * sizeof(float));
-    Tensor chunk_topk_ids(input_tensors[1].location, TYPE_INT32, {solve_token, expert_topk_},
-                          input_tensors[1].device_id, topk_ids_ptr_ + start_token * expert_topk_ * sizeof(int32_t));
+    Tensor chunk_topk_ids(input_tensor.location, TYPE_INT32, {solve_token, expert_topk_}, input_tensor.device_id,
+                          topk_ids_ptr_ + start_token * expert_topk_ * sizeof(int32_t));
     KTensor token_selected_experts_ktensor = TensorToKTensor(chunk_topk_ids);
     KTensor token_final_scales_ktensor = TensorToKTensor(chunk_topk_weights);
 
@@ -278,21 +313,20 @@ Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::v
         best_config = config_map_[config_map_.size() - 1];
       }
     }
-    cutlass_moe_wrapper_->Forward(
-        output_ktensor, input_ktensor, token_selected_experts_ktensor, token_final_scales_ktensor,
-        fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
-        {fc1_weight_scales_ktensor, fc2_weight_scales_ktensor, fc1_act_scales_ktensor, fc2_act_scales_ktensor,
-         fc1_weight_zeros_ktensor, fc2_weight_zeros_ktensor, fc1_alpha_ktensor, fc2_alpha_ktensor},
-        best_config, context_->GetComputeStreams()[rank_].Get());
+    cutlass_moe_wrapper_->Forward(output_ktensor, input_ktensor, token_selected_experts_ktensor,
+                                  token_final_scales_ktensor, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
+                                  quant_scales_ktensors, best_config, context_->GetComputeStreams()[rank_].Get());
   }
-
   return Status();
 }
 
-Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors, int num_tokens) {
+Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tensors,
+                                           std::vector<Tensor>& output_tensors) {
   // 准备 GroupedTopkLayer 的输入和输出张量
   std::vector<Tensor> grouped_topk_input_tensors;
   std::vector<Tensor> grouped_topk_output_tensors;
+
+  size_t num_tokens = input_tensors[0].shape[0];
 
   // 输入: gating_output
   grouped_topk_input_tensors.push_back(input_tensors[1]);
@@ -303,15 +337,13 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const std::vector<Tensor>& input_tens
   }
 
   // 输出: topk_weights_ptr
-  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32,
-                             {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(input_tensors[1].location, TYPE_FP32, {num_tokens, expert_topk_},
                              input_tensors[1].device_id, topk_weights_ptr_);
   grouped_topk_output_tensors.push_back(topk_weights_tensor);
 
   // 输出: topk_ids_ptr
-  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32,
-                         {static_cast<size_t>(num_tokens), static_cast<size_t>(expert_topk_)},
-                         input_tensors[1].device_id, topk_ids_ptr_);
+  Tensor topk_ids_tensor(input_tensors[1].location, TYPE_INT32, {num_tokens, expert_topk_}, input_tensors[1].device_id,
+                         topk_ids_ptr_);
   grouped_topk_output_tensors.push_back(topk_ids_tensor);
 
   // 调用 GroupedTopkLayer

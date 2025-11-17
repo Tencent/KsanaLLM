@@ -228,10 +228,8 @@ Tensor Tensor::GetView(const std::vector<size_t>& shape, const size_t offset) co
         fmt::format("Check memory {} on device {} error, out of memory bound.", name, device_id));
   }
 
-  Tensor view = *this;
-  view.shape = shape;
-  view.data_ptr = reinterpret_cast<void*>(GetPtr<uint8_t>() + offset * GetDTypeSize());
-  return view;
+  return Tensor(location, dtype, shape, device_id,
+                reinterpret_cast<void*>(GetPtr<uint8_t>() + offset * GetDTypeSize()));
 }
 
 std::string Tensor::GetLocationString() const {
@@ -427,13 +425,12 @@ void Tensor::LoadFromNpyFile(const std::string& file_path) {
 MemoryChecker::MemoryChecker() {}
 
 bool MemoryChecker::Enabled() {
-  static bool enabled = (std::getenv("ENABLE_MEMORY_CHECK") != nullptr);
-  if (enabled && check_memory_map_.empty()) {
+  if (enabled_ && check_memory_map_.empty()) {
     int dev_count;
     GetDeviceCount(&dev_count);
     check_memory_map_.resize(dev_count);
   }
-  return enabled;
+  return enabled_;
 }
 
 void MemoryChecker::AddMemoryBlock(const std::string& name, int rank, void* head_ptr, size_t head_bytes, void* tail_ptr,

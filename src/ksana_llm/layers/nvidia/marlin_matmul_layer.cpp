@@ -31,7 +31,7 @@ Status MarlinMatMulLayer::Init(const std::vector<std::any>& parameters, const Ru
   return Status();
 }
 
-size_t MarlinMatMulLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
+size_t MarlinMatMulLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, input_tensors, output_tensors);
@@ -40,7 +40,7 @@ Status MarlinMatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std:
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
 template <typename T>
-size_t MarlinMatMulLayer::GetWorkSpaceSizeT() {
+size_t MarlinMatMulLayer::GetWorkspaceSizeT() {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     llm_kernels::nvidia::marlin::WorkspaceInfo info = GetMarlinWorkspace<T>(true, is_gptq_desc_, rank_, max_m_, max_k_);
 

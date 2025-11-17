@@ -13,9 +13,9 @@ std::vector<size_t> PermuteLayer<T>::FindPermutation(const std::vector<size_t>& 
                                                      const std::vector<size_t>& output_shape) {
   std::vector<size_t> permutation;
   std::vector<bool> used(input_shape.size(), false);
-  for (int dim_size : output_shape) {
+  for (size_t dim_size : output_shape) {
     bool found = false;
-    for (int i = 0; i < input_shape.size(); ++i) {
+    for (size_t i = 0; i < input_shape.size(); ++i) {
       if (input_shape[i] == dim_size && !used[i]) {
         permutation.push_back(i);
         used[i] = true;

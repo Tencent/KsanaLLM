@@ -15,7 +15,7 @@ Status CutlassMatMulLayer::Init(const std::vector<std::any>& parameters, const R
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
-size_t CutlassMatMulLayer::GetWorkSpaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
+size_t CutlassMatMulLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 Status CutlassMatMulLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
@@ -50,7 +50,7 @@ Status CutlassMatMulLayer::InitT(const std::vector<std::any>& parameters, const 
 }
 
 template <typename T>
-size_t CutlassMatMulLayer::GetWorkSpaceSizeT() {
+size_t CutlassMatMulLayer::GetWorkspaceSizeT() {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     static std::mutex g_mtx;
     std::lock_guard<std::mutex> guard(g_mtx);

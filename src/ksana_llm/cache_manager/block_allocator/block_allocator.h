@@ -4,6 +4,8 @@
 #pragma once
 
 #include <functional>
+#include <shared_mutex>
+
 #include "ksana_llm/cache_manager/block_allocator/block_allocator_interface.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/device_types.h"
@@ -32,6 +34,9 @@ class BlockAllocator : public BlockAllocatorInterface {
 
   // Get memory address of blocked memory.
   virtual Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override;
+
+  // Append new memory address of blocked memory.
+  virtual Status AppendBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override;
 
   // Used for ATB mode, all blocks is part of a whole flatten memory space
   virtual void* GetBlocksBasePtr() override;
@@ -68,7 +73,7 @@ class BlockAllocator : public BlockAllocatorInterface {
   std::unordered_map<int, void*> used_blocks_;
 
   // Make thread-safe.
-  std::mutex mutex_;
+  std::shared_mutex shared_mutex_;
 
   // blocks base pointer used for project kvcache mem to NPU k/vcache mem
   void* blocks_base_ptr_ = nullptr;

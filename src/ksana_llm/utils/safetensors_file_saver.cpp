@@ -17,7 +17,7 @@ namespace ksana_llm {
 
 SafetensorsFileSaver::SafetensorsFileSaver(const std::string& base_file_name, size_t rank,
                                            std::shared_ptr<Context> context, size_t max_file_size_bytes)
-    : base_file_name_(base_file_name), max_file_size_bytes_(max_file_size_bytes), context_(context), rank_(rank) {
+    : base_file_name_(base_file_name), max_file_size_bytes_(max_file_size_bytes), rank_(rank), context_(context) {
   SetDevice(rank_);
 }
 

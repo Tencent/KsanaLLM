@@ -49,9 +49,6 @@ ControlChannel::ControlChannel(const std::string& master_host, uint16_t master_p
     heartbeat_thread_ = std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessHeartbeatLoop, this));
     send_packet_thread_ =
         std::unique_ptr<std::thread>(new std::thread(&ControlChannel::ProcessSendScheduleOutputLoop, this));
-    RuntimeConfig runtime_config;
-    env_->GetRuntimeConfig(runtime_config);
-    enable_mtp_module_ = runtime_config.enable_mtp_module;
   }
 }
 
@@ -560,7 +557,7 @@ std::map<int, std::pair<int, int>> ControlChannel::GenerateLayerDistribution(int
   quotient = num_layer_left / remaining_worker_nodes;
   remainder = num_layer_left % remaining_worker_nodes;
 
-  for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+  for (size_t node_rank = 1; node_rank < world_size_; ++node_rank) {
     int remainder_pad = 0;
     if (remainder > 0) {
       remainder_pad++;
@@ -633,7 +630,7 @@ Status ControlChannel::SynchronizeNodeLayers(size_t master_offload_layer_num) {
                 << pipeline_config.upper_nextn_layer_idx << "].";
 
   // Send to every worker node.
-  for (int node_rank = 1; node_rank < world_size_; ++node_rank) {
+  for (size_t node_rank = 1; node_rank < world_size_; ++node_rank) {
     Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_LAYER, 0);
     if (req_packet == nullptr) {
       throw std::runtime_error("ControlChannel::SynchronizeNodeLayers allocate memory error.");
@@ -813,9 +810,6 @@ Status ControlChannel::HandleServerPacket(NodeInfo* node_info, Packet* packet) {
     case PacketType::CONTROL_RSP_SHUTDOWN: {
       return ProcessShutdownResponse(node_info, packet);
     }
-    case PacketType::CONTROL_RSP_EXPERT_PARALLEL: {
-      return ProcessExpertParallelResponse(node_info, packet);
-    }
     case PacketType::CONTROL_RSP_DEEPEP_META: {
       return ProcessNvshmemUniqueIdResponse(node_info, packet);
     }
@@ -850,9 +844,6 @@ Status ControlChannel::HandleClientPacket(NodeInfo* node_info, Packet* packet) {
     }
     case PacketType::CONTROL_REQ_SHUTDOWN: {
       return ProcessShutdownRequest(node_info, packet);
-    }
-    case PacketType::CONTROL_REQ_EXPERT_PARALLEL: {
-      return ProcessExpertParallelRequest(node_info, packet);
     }
     case PacketType::CONTROL_REQ_DEEPEP_META: {
       return ProcessNvshmemUniqueIdRequest(node_info, packet);

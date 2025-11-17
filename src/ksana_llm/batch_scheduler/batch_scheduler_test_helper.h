@@ -120,6 +120,11 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
     return Status();
   }
 
+  virtual Status AppendBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override {
+    KLLM_LOG_DEBUG << "AppendBlockPtrs should only be invoked in asynchronous mode.";
+    return Status();
+  }
+
   virtual void* GetBlocksBasePtr() override { return nullptr; }
 
   virtual int GetBlocksBaseId() override { return 0; }

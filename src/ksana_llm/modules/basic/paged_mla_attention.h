@@ -12,8 +12,8 @@ namespace ksana_llm {
 class PagedMlaAttention {
  public:
   // Disable a default constructor
-  PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
-                    const LayerCreationContext& creation_context, const AttentionCreationConfig& attn_config);
+  PagedMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
+                    const AttentionCreationConfig& attn_config);
 
   ~PagedMlaAttention() = default;
 

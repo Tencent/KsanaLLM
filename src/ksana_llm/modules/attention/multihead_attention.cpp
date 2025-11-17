@@ -22,7 +22,7 @@ MultiHeadAttention::MultiHeadAttention(int layer_idx, bool is_neox, bool add_qkv
                                        LayerCreationContext& creation_context,
                                        ModelCreationConfig& model_creation_config)
     : add_qkv_bias_(add_qkv_bias) {
-  std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+  const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   attn_qkv_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.query_key_value.weight", creation_context,
                                              model_creation_config.attn_config.model_config.quant_config.backend);

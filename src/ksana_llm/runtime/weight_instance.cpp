@@ -21,6 +21,7 @@
 #include "ksana_llm/models/chatglm/chatglm_weight.h"
 #include "ksana_llm/models/gpt/gpt_weight.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_weight.h"
+#include "ksana_llm/models/hunyuan_turbo/hunyuan_turbo_weight.h"
 #include "ksana_llm/models/internlm2/internlm2_weight.h"
 #include "ksana_llm/models/llama/llama_weight.h"
 #include "ksana_llm/models/llama4/llama4_weight.h"
@@ -29,7 +30,6 @@
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_weight.h"
 #include "ksana_llm/models/qwen3_moe/qwen3_moe_weight.h"
 
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/pytorch_file_tensor_loader.h"
 #include "ksana_llm/utils/safetensors_file_tensor_loader.h"
@@ -65,7 +65,7 @@ template <template <class> class WeightType>
 void CreateWeightInstance(const std::string model_name, ModelConfig& model_config, const RuntimeConfig& runtime_config,
                           std::shared_ptr<Context>& context, std::vector<std::shared_ptr<BaseWeight>>& weights) {
   KLLM_LOG_INFO << "Start to init model instance " << model_name;
-  for (int worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
+  for (size_t worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
     KLLM_LOG_INFO << "Start to create empty model weight on device " << worker_id;
     weights.push_back(CreateModelWeight<WeightType>(worker_id, model_config, runtime_config, context));
   }
@@ -100,6 +100,8 @@ void WeightInstance::CreateWeightInstances() {
              unified_model_type.find("internlm2") != std::string::npos ||
              unified_model_type.find("internlmxcomposer2") != std::string::npos) {
     CreateWeightInstance<Internlm2Weight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
+  } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe == false) {
+    CreateWeightInstance<HunyuanTurboWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
     CreateWeightInstance<HunyuanLargeWeight>(unified_model_type, model_config_, runtime_config_, context_, weights_);
   } else if (unified_model_type.find("minicpm") != std::string::npos) {
@@ -373,8 +375,8 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     }
 
     case ModelArchitecture::ARCH_QWEN: {
-      std::shared_ptr<NewQwenConfig> qwen_model_config = std::dynamic_pointer_cast<NewQwenConfig>(model_config);
-      return !qwen_model_config->is_quant;
+      // Temporarily disable Qwen model support because of a potential bug in the new loader.
+      return false;
     }
     default:
       return false;

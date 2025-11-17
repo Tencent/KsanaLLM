@@ -53,7 +53,7 @@ int MultiBatchController::GetNextRunningBatchId(int cur_multi_batch_id) {
   int current_id = cur_multi_batch_id;
   current_id++;
   int total_cnt = tasks_status_.size();
-  for (size_t i = 0; i < total_cnt; ++i) {
+  for (int i = 0; i < total_cnt; ++i) {
     if (current_id >= total_cnt) {
       current_id = 0;
     }
@@ -69,7 +69,7 @@ void MultiBatchController::NotifyAnotherBatchCanRun(int cur_multi_batch_id) {
   std::unique_lock<std::mutex> lock(multi_batch_status_mtx_);
   bool other_task_has_Standby = false;
   for (size_t i = 0; i < tasks_status_.size(); ++i) {
-    if (i != cur_multi_batch_id && tasks_status_.at(i) == BatchStatus::Standby) {
+    if (i != static_cast<size_t>(cur_multi_batch_id) && tasks_status_.at(i) == BatchStatus::Standby) {
       other_task_has_Standby = true;
       break;
     }
@@ -78,7 +78,7 @@ void MultiBatchController::NotifyAnotherBatchCanRun(int cur_multi_batch_id) {
     next_running_multi_batch_id_ = GetNextRunningBatchId(cur_multi_batch_id);
     tasks_status_.at(cur_multi_batch_id) = BatchStatus::Standby;
     KLLM_LOG_MULTI_BATCH << "stop runing multi_batch_id=" << cur_multi_batch_id
-                       << ", and notify multi_batch_id=" << next_running_multi_batch_id_ << " can run";
+                         << ", and notify multi_batch_id=" << next_running_multi_batch_id_ << " can run";
   } else {
     KLLM_LOG_MULTI_BATCH << "no other batches ready, keep nothing changed multi_batch_id=" << cur_multi_batch_id;
   }

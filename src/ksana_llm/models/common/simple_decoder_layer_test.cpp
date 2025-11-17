@@ -20,6 +20,7 @@
 #include "ksana_llm/models/qwen2_moe/qwen2_moe_model.h"
 #include "ksana_llm/models/qwen3_moe/qwen3_moe_model.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
@@ -119,6 +120,7 @@ class FakeTinyWeightTest : public testing::Test {
     std::filesystem::path model_config_path_relate = parent_path / "../../../../tests/tiny_model_configs";
     std::string model_config_path = std::filesystem::absolute(model_config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_config_path_relate, model_config_filename_);
     STATUS_CHECK_FAILURE(env->GetModelConfig(model_config));
@@ -219,12 +221,11 @@ class FakeTinyWeightTest : public testing::Test {
 
     // ContextDecode
     int hidden_state_len = model_config.head_num * model_config.size_per_head;
-    ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
-    request_builder.CreateForwardRequest(1, forward, input_ids);
+    auto forward = request_builder.CreateForwardRequest(1, input_ids);
 
-    std::vector<ForwardRequest> forward_reqs = {forward};
+    std::vector<ForwardRequest *> forward_reqs = {forward};
     EXPECT_TRUE(fake_model->Forward(forward_reqs).OK());
     std::vector<float> prefill_output_data;
     fake_model->GetOutputToCPU(prefill_output_data);
@@ -236,7 +237,7 @@ class FakeTinyWeightTest : public testing::Test {
                    << ", data= \n"
                    << Vector2Str(prefill_hidden_stat);
 
-    std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
+    std::vector<ForwardRequest *> multi_forward_reqs = {forward, forward};
     EventRecord(start, context_->GetComputeStreams()[rank_]);
     for (int i = 0; i < rounds; ++i) {
       fake_model->Forward(multi_forward_reqs);
@@ -259,11 +260,11 @@ class FakeTinyWeightTest : public testing::Test {
     std::vector<int> sampling_result_tokens = {1};
     EXPECT_LE(0, sampling_result_tokens[0]);
     EXPECT_GT(model_config.vocab_size, sampling_result_tokens[0]);
-    (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
+    (*forward_reqs[0]->forwarding_tokens).emplace_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->infer_stage = InferStage::kDecode;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
     size_t forwarding_token_num = forward_reqs.size();
     // Decode
@@ -344,11 +345,10 @@ class FakeTinyWeightTest : public testing::Test {
     std::shared_ptr<FakeModel<float16>> fake_model = std::make_shared<FakeModel<float16>>(
         gpt, context_, rank_, model_config, runtime_config, pipeline_config_, gpt_weight, false);
     // ContextDecode
-    ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
-    request_builder.CreateForwardRequest(1, forward, input_ids);
-    std::vector<ForwardRequest> forward_reqs = {forward};
+    auto forward = request_builder.CreateForwardRequest(1, input_ids);
+    std::vector<ForwardRequest *> forward_reqs = {forward};
     EXPECT_TRUE(fake_model->Forward(forward_reqs).OK());
     std::vector<float> prefill_output_data;
     fake_model->GetOutputToCPU(prefill_output_data);
@@ -752,7 +752,7 @@ TEST_F(FakeBgeRerankerModelTest, ForwardTest) {
   BgeRerankerMinicpm bge_interface;
   bge_interface.GetModelRunConfig(model_run_config, model_config);
 
-  std::vector<ForwardRequest> empty_forward_reqs;
+  std::vector<ForwardRequest *> empty_forward_reqs;
   Tensor dummy_output;
   bge_model->BgeRerankerUpdateResponse(empty_forward_reqs, dummy_output, "lm_head");
 }

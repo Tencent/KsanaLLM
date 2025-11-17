@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ksana_llm/batch_scheduler/strategy/base_strategy.h"
+#include "ksana_llm/runtime/request_state.h"
 #include "ksana_llm/utils/status.h"
 
 namespace ksana_llm {

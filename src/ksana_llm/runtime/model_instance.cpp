@@ -22,6 +22,7 @@
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_model.h"
 #include "ksana_llm/models/gpt/gpt_model.h"
 #include "ksana_llm/models/hunyuan_large/hunyuan_large_model.h"
+#include "ksana_llm/models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "ksana_llm/models/internlm2/internlm_model.h"
 #include "ksana_llm/models/internlmxcomposer2/internlmxcomposer2_model.h"
 #include "ksana_llm/models/llama/llama_model.h"
@@ -40,8 +41,8 @@ void CreateModelInstance(const std::string model_name, ModelConfig& model_config
   KLLM_LOG_INFO << "Start to init model instance " << model_name;
   for (size_t worker_id = 0; worker_id < context->GetTensorParallelSize(); ++worker_id) {
     KLLM_LOG_INFO << "Start to create model on device " << worker_id;
-    models.push_back(std::make_shared<ModelType>(model_config, runtime_config, worker_id, context,
-                                                 weight_instance->GetWeight(worker_id)));
+    models.emplace_back(std::make_shared<ModelType>(model_config, runtime_config, worker_id, context,
+                                                    weight_instance->GetWeight(worker_id)));
   }
 }
 
@@ -98,6 +99,10 @@ void ModelInstance::Load() {
     type = "internlm2";
     CreateModelInstance<InternlmxComposer2Model>(unified_model_type, model_config_, runtime_config_, context_, models_,
                                                  weight_instance_);
+  } else if (unified_model_type.find("hunyuan") != std::string::npos && !model_config_.is_moe) {
+    type = "hunyuan";
+    CreateModelInstance<HunyuanTurboModel>(unified_model_type, model_config_, runtime_config_, context_, models_,
+                                           weight_instance_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
     type = "hunyuan";
     CreateModelInstance<HunyuanLargeModel>(unified_model_type, model_config_, runtime_config_, context_, models_,
@@ -134,9 +139,9 @@ void ModelInstance::Load() {
 }
 
 std::vector<float*> ModelInstance::GetLogitsPtr(size_t multi_batch_id) {
-  std::vector<float*> results;
-  for (auto& model : models_) {
-    results.push_back(model->GetLogitsPtr(multi_batch_id));
+  std::vector<float*> results(models_.size());
+  for (size_t i = 0; i < models_.size(); ++i) {
+    results[i] = models_[i]->GetLogitsPtr(multi_batch_id);
   }
   return results;
 }
@@ -150,11 +155,12 @@ std::vector<int*> ModelInstance::GetOutputTokensPtr(size_t multi_batch_id) {
 }
 
 std::vector<Status> ModelInstance::Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
-                                           InferStage stage, std::vector<ForwardRequest>& forward_reqs, bool epilogue) {
-  std::vector<Status> results;
+                                           InferStage stage, std::vector<ForwardRequest*>& forward_reqs,
+                                           bool epilogue) {
+  std::vector<Status> results(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group->GetWorker(worker_id)->Forward(
-        multi_batch_id, models_[worker_id], weight_instance_->GetWeight(worker_id), stage, forward_reqs, epilogue));
+    results[worker_id] = worker_group->GetWorker(worker_id)->Forward(
+        multi_batch_id, models_[worker_id], weight_instance_->GetWeight(worker_id), stage, forward_reqs, epilogue);
   }
   return results;
 }
@@ -166,15 +172,14 @@ std::vector<std::future<Status>> ModelInstance::ForwardAsync(size_t multi_batch_
                                                              RunMode run_mode) {
   std::vector<std::future<Status>> results(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
-    results.push_back(worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
-                                                                       weight_instance_->GetWeight(worker_id), stage,
-                                                                       forward_reqs, epilogue, run_mode));
+    results[worker_id] = worker_group->GetWorker(worker_id)->ForwardAsync(multi_batch_id, models_[worker_id],
+                                                                          weight_instance_->GetWeight(worker_id), stage,
+                                                                          forward_reqs, epilogue, run_mode);
   }
   return results;
 }
 
 Status ModelInstance::AllocResources(size_t multi_batch_id) {
-  std::vector<Status> results;
   for (auto& model : models_) {
     Status status = model->AllocResources(multi_batch_id);
     if (!status.OK()) {
@@ -185,7 +190,6 @@ Status ModelInstance::AllocResources(size_t multi_batch_id) {
 }
 
 Status ModelInstance::FreeResources(size_t multi_batch_id) {
-  std::vector<Status> results;
   for (auto& model : models_) {
     Status status = model->FreeResources(multi_batch_id);
     if (!status.OK()) {

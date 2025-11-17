@@ -48,7 +48,6 @@
 #include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/search_status.h"
@@ -196,6 +195,7 @@ GET_TORCH_DATA_TYPE(int32_t, torch::kInt32);
 GET_TORCH_DATA_TYPE(float, torch::kFloat32);
 GET_TORCH_DATA_TYPE(half, torch::kFloat16);
 GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
+GET_TORCH_DATA_TYPE(uint8_t, torch::kUInt8);
 #undef GET_TORCH_DATA_TYPE
 
 DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
@@ -1202,7 +1202,7 @@ template <typename T>
 void InvokeSplit(const T* __restrict__ input, const std::vector<T*>& output_ptrs,
                  std::vector<int>& col_offsets,  // [0, col1, col1+col2, ...]
                  int rows, int cols, int num_outputs, cudaStream_t& stream) {
-  if (output_ptrs.size() != num_outputs || col_offsets.size() != num_outputs + 1) {
+  if (static_cast<int>(output_ptrs.size()) != num_outputs || static_cast<int>(col_offsets.size()) != num_outputs + 1) {
     KLLM_THROW("Invalid input for InvokeSplit");
   }
   llm_kernels::nvidia::InvokeSplit<T>(input, output_ptrs, col_offsets, rows, cols, num_outputs, stream);

@@ -45,12 +45,15 @@ PROMPT_AFFIX_DICT = {
     "empty":
     "%s",
     "hunyuan_large":
-    "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>"
+    "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>",
+    "kimi_k2":
+    "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user"
+    "<|im_middle|>%s<|im_end|><|im_assistant|>assistant<|im_middle|>",
 }
 
 SUPPORTED_MODEL_TYPE = [
     'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm',
-    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1', 'hunyuan_large'
+    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1', 'hunyuan_large', "kimi_k2"
 ]
 
 USER = "user"

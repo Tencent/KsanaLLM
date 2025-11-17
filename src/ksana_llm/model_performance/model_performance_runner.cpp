@@ -13,6 +13,7 @@
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 #include "ksana_llm/runtime/weight_instance.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/yaml_reader.h"
@@ -38,6 +39,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
                                       int16_t lower_layer_idx, int16_t upper_layer_idx) {
   py::initialize_interpreter();
 
+  AttentionBackendManager::GetInstance()->Initialize();
   const auto& env = Singleton<Environment>::GetInstance();
   env->ParseConfig(config_path);
 
@@ -100,7 +102,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
 
   BlockAllocatorManagerConfig block_allocator_manager_config;
   attn_dp_worker_num_ = runtime_config_.parallel_basic_config.attn_data_parallel_size;
-  for (int dp_id = 0; dp_id < static_cast<uint32_t>(attn_dp_worker_num_); ++dp_id) {
+  for (uint32_t dp_id = 0; dp_id < attn_dp_worker_num_; ++dp_id) {
     BlockAllocatorGroupConfig dp_group_config;
     dp_group_config.devices = env->GetDataParaGroupDevices(dp_id);
     dp_group_config.device_block_num = env->GetTotalDeviceBlockNum();
@@ -110,7 +112,7 @@ void ModelPerformanceRunner::InitEnvs(const std::string& config_path, const Perf
   }
   std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
   BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator_, context_);
-  for (int dp_id = 0; dp_id < attn_dp_worker_num_; ++dp_id) {
+  for (uint32_t dp_id = 0; dp_id < attn_dp_worker_num_; ++dp_id) {
     std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group =
         block_allocator_manager.GetBlockAllocatorGroup(dp_id);
     cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group));
@@ -257,10 +259,9 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
 
       // Expand request_num: create multiple InferRequest instances based on request_num
       for (size_t repeat_idx = 0; repeat_idx < req_info.request_num; repeat_idx++) {
-        req_id++;
-        std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(request, 0);
+        ++req_id;
 
-        infer_reqs_.push_back(infer_req);
+        auto& infer_req = infer_reqs_.emplace_back(std::make_shared<InferRequest>(request, 0));
         infer_req->req_id = req_id;
         infer_req->attn_dp_group_id = dp_idx;
         infer_req->kv_cache_blocks.resize(runtime_config_.parallel_basic_config.attn_tensor_parallel_size);
@@ -274,9 +275,9 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
         infer_req->input_tokens = input_ids_map_[req_id];
         std::generate(infer_req->input_tokens.begin(), infer_req->input_tokens.end(), [&]() { return dis(gen); });
 
-        if (req_info.forwarding_token_num <= decode_token_num_threshold_) {
+        if (req_info.forwarding_token_num <= GetDecodeTokenNumThreshold()) {
           // Decode request (forwarding_token_num <= threshold)
-          infer_req->infer_stage = InferStage::STATE_DECODE;
+          infer_req->infer_stage = InferStage::kDecode;
         } else {
           // Prefill request (multi token forwarding)
           infer_req->infer_stage = InferStage::kContext;
@@ -284,8 +285,8 @@ void ModelPerformanceRunner::InitInferRequests(const PerfProfileConfig& profile_
         infer_req->kv_cached_token_num = req_info.sequence_len - req_info.forwarding_token_num;
         infer_req->prefix_cache_len = req_info.sequence_len - req_info.forwarding_token_num;
         infer_req->forwarding_tokens = infer_req->input_tokens;
-        Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
-                                                                        infer_req->kv_cache_blocks);
+        const Status status = infer_req->cache_manager->AllocateRequestBlocks(infer_req->req_id, GetBlockNum(infer_req),
+                                                                              infer_req->kv_cache_blocks);
         if (!status.OK()) {
           KLLM_THROW(fmt::format("AllocateRequestBlocks failed. status: {}", status.ToString()));
         }
@@ -302,12 +303,12 @@ void ModelPerformanceRunner::CheckRequests() const {
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_batch_size >= infer_reqs_.size(),
                        fmt::format("max_batch_size {} should not less than number of requests {}",
                                    batch_scheduler_config.max_batch_size, infer_reqs_.size()));
-  size_t step_tokens = std::accumulate(infer_reqs_.begin(), infer_reqs_.end(), size_t{0},
-                                       [](size_t acc, std::shared_ptr<InferRequest> req) {
-                                         return acc + (req->infer_stage == InferStage::STAGE_CONTEXT
-                                                           ? (req->forwarding_tokens.size() - req->kv_cached_token_num)
-                                                           : 1);
-                                       });
+  const size_t step_tokens = std::accumulate(
+      infer_reqs_.begin(), infer_reqs_.end(), size_t{0}, [](size_t acc, std::shared_ptr<InferRequest> req) {
+        return acc + (req->infer_stage == InferStage::kContext
+                          ? (req->forwarding_tokens.size() - req->kv_cached_token_num)
+                          : 1);
+      });
   KLLM_CHECK_WITH_INFO(batch_scheduler_config.max_step_token_num >= step_tokens,
                        fmt::format("max_step_token_num {} should not less than step_tokens {}",
                                    batch_scheduler_config.max_step_token_num, step_tokens));

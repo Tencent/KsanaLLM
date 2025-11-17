@@ -15,7 +15,7 @@ Status Fp8MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return MoeLayer::Init(parameters, runtime_config, context, rank);
 }
 
-size_t Fp8MoeLayer::GetWorkSpaceSize() { DISPATCH_BY_2_DTYPE(inter_data_type_, GetWorkSpaceSizeT); }
+size_t Fp8MoeLayer::GetWorkspaceSize() { DISPATCH_BY_2_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 Status Fp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   DISPATCH_BY_2_DTYPE(inter_data_type_, PreprocessT, model_config, runtime_config);
@@ -26,7 +26,7 @@ Status Fp8MoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vecto
 }
 
 template <typename T>
-size_t Fp8MoeLayer::GetWorkSpaceSizeT() {
+size_t Fp8MoeLayer::GetWorkspaceSizeT() {
   GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_per_node_, this->expert_hidden_size_,
                                      this->expert_inter_size_, this->expert_topk_, this->tp_size_, this->rank_,
                                      this->use_lora_, this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
@@ -36,7 +36,7 @@ size_t Fp8MoeLayer::GetWorkSpaceSizeT() {
   return this->max_ws_bytes_;
 }
 
-Status Fp8MoeLayer::SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+Status Fp8MoeLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   this->workspace_buffer_ = workspace_buffer;
   this->scale_probabilities_size_ = this->max_token_num_ * this->expert_num_per_node_ * sizeof(float);
   this->src_to_dest_map_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);

@@ -51,6 +51,10 @@ void WaitGroup::Done(int64_t n) {
 }
 
 void WaitGroup::Wait() {
+  if (count_ == 0) {
+    return;
+  }
+
   std::unique_lock<std::mutex> lock(mutex_);
   cond_.wait(lock, [&]() { return count_ == 0; });
 }

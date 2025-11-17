@@ -43,7 +43,6 @@
 #include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/search_status.h"
@@ -161,18 +160,19 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
   if (use_cache) {
-    if (enable_blocked_multi_token_forwarding_kv)
+    if (enable_blocked_multi_token_forwarding_kv) {
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
           v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
           reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
           k_scale, v_scale, stream));
-    else
+    } else {
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
           v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(flexible_offset_uint64_ptr),
           reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
           k_scale, v_scale, stream));
+    }
   }
 
   // 统一通过 InvokeMhaVarlenFwd 调用，去掉 flash-attn 版本宏判断

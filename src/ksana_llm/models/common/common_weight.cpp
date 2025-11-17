@@ -100,12 +100,12 @@ bool CommonWeight<T>::ShouldUseFusedGateUpWeights() {
                  [](unsigned char c) { return std::tolower(c); });
   for (const auto& type : enabled_type_list) {
     if (unified_model_type.find(type) != std::string::npos) {
-      KLLM_LOG_INFO << "using fused gate up weights for " << unified_model_type;
+      KLLM_LOG_DEBUG << "using fused gate up weights for " << unified_model_type;
       return true;
     }
   }
   if (unified_model_type.find("hunyuan") != std::string::npos && !model_config_.is_moe) {
-    KLLM_LOG_INFO << "using fused gate up weights for hunyuan-turbo";
+    KLLM_LOG_DEBUG << "using fused gate up weights for hunyuan-turbo";
     return true;
   }
 #endif
@@ -556,7 +556,7 @@ Status CommonWeight<T>::PermuteQKVWeight(Tensor& last_qkv_tensor, Tensor& q_in_t
     last_qkv_tensor = qkv_weight_tensor;
     TransLayout(t, context_->GetMemoryManageStreams()[rank_]);
     weights_map_[qkv_name] = t;
-    KLLM_LOG_INFO << fmt::format("weights_map[{}] = new Tensor({})", qkv_name, Vector2Str<size_t>(t.shape));
+    KLLM_LOG_DEBUG << fmt::format("weights_map[{}] = new Tensor({})", qkv_name, Vector2Str<size_t>(t.shape));
   }
   return Status();
 }

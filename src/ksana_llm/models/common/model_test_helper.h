@@ -13,6 +13,8 @@
 #include "ksana_llm/models/base/fake_weight_for_test.h"
 #include "ksana_llm/models/common/model_interface.h"
 #include "ksana_llm/runtime/llm_runtime.h"
+#include "ksana_llm/runtime/weight_instance.h"
+
 namespace ksana_llm {
 
 template <typename T>
@@ -48,7 +50,7 @@ class FakeModel {
     // Flash Attention requires the input shape to match the actual token length.
     // When dealing with prefix_cache or speculative decoding, it is necessary to
     // first fill in the missing parts
-    int layer_num_on_node = model_config.num_layer / runtime_config.parallel_basic_config.tensor_parallel_size;
+    const int layer_num_on_node = model_config.num_layer / runtime_config.parallel_basic_config.tensor_parallel_size;
 
     ModelRunConfig model_run_config;
     model_->GetModelRunConfig(model_run_config, model_config);
@@ -70,7 +72,7 @@ class FakeModel {
 
   ~FakeModel() {}
 
-  Status Forward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode = RunMode::kMain) {
+  Status Forward(std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode = RunMode::kMain) {
     forwarding_context_.UpdateBeforeForward(forward_reqs, run_mode);
     LookupEmbedding();
     model_->Forward(buffers_.local_residual_buffer_tensors_, forwarding_context_);
@@ -93,17 +95,17 @@ class FakeModel {
  protected:
   virtual void FakeEmbeddingResults(std::vector<int>& input_ids_cpu, std::vector<float>& residual_buffer_vector,
                                     size_t head_num, size_t size_per_head) {
-    size_t input_ids_num = input_ids_cpu.size();
+    const size_t input_ids_num = input_ids_cpu.size();
     // Fake embedding output
-    float token_id_step = 0.001;
-    float head_emb_step = 0.01;
+    constexpr float token_id_step = 0.001;
+    constexpr float head_emb_step = 0.01;
     residual_buffer_vector.resize(input_ids_num * head_num * size_per_head);
-    for (size_t idx = 0; idx < input_ids_num; idx++) {
-      size_t idx_offset = idx * head_num * size_per_head;
-      float token_id_value = input_ids_cpu[idx] * token_id_step;
-      for (size_t head_idx = 0; head_idx < head_num; head_idx++) {
-        size_t head_offset = head_idx * size_per_head;
-        for (size_t emb_idx = 0; emb_idx < size_per_head; emb_idx++) {
+    for (size_t idx = 0; idx < input_ids_num; ++idx) {
+      const size_t idx_offset = idx * head_num * size_per_head;
+      const float token_id_value = input_ids_cpu[idx] * token_id_step;
+      for (size_t head_idx = 0; head_idx < head_num; ++head_idx) {
+        const size_t head_offset = head_idx * size_per_head;
+        for (size_t emb_idx = 0; emb_idx < size_per_head; ++emb_idx) {
           residual_buffer_vector[idx_offset + head_offset + emb_idx] = token_id_value + emb_idx * head_emb_step;
         }
       }
@@ -112,18 +114,17 @@ class FakeModel {
 
  private:
   Status LookupEmbedding() {
-    std::vector<int> input_ids_cpu;
-    std::vector<float> residual_buffer_vector;
     Tensor& input_ids = forwarding_context_.model_input_->input_ids;
-    size_t input_ids_num = input_ids.GetElementNumber();
+    const size_t input_ids_num = input_ids.GetElementNumber();
     KLLM_LOG_INFO << "input_ids_num " << input_ids_num;
 
     // Fetch input ids from device
-    input_ids_cpu.resize(input_ids_num);
+    std::vector<int> input_ids_cpu(input_ids_num);
     MemcpyAsync(input_ids_cpu.data(), input_ids.GetPtr<void>(), input_ids_cpu.size() * sizeof(int),
                 MEMCPY_DEVICE_TO_HOST, context_->GetD2HStreams()[rank_]);
     DeviceSynchronize();
 
+    std::vector<float> residual_buffer_vector;
     FakeEmbeddingResults(input_ids_cpu, residual_buffer_vector, head_num_, size_per_head_);
 
     Tensor& gpu_tensor = buffers_.local_residual_buffer_tensors_[0];
@@ -169,7 +170,7 @@ class ForwardRequestBuilderForTest {
   }
   ~ForwardRequestBuilderForTest() { Destroy(); }
 
-  void CreateForwardRequest(int req_id, ForwardRequest& forward_req, const std::vector<int>& input_ids) {
+  ForwardRequest* CreateForwardRequest(int req_id, const std::vector<int>& input_ids) {
     KLLM_CHECK_WITH_INFO(reqs_.find(req_id) == reqs_.end(), FormatStr("req_id: {} exists ", req_id));
 
     // fake KsanaPythonInput and req_ctx to create Request
@@ -182,12 +183,15 @@ class ForwardRequestBuilderForTest {
         std::unordered_map<std::string, std::string>{{"key1", "value1"}, {"key2", "value2"}});
 
     std::shared_ptr<Request> req = std::make_shared<Request>(ksana_python_input, req_ctx);
+    reqs_[req_id] = req;
+
     req->req_id = req_id;
     req->input_tokens = input_ids;
 
-    reqs_[req_id] = req;
     std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, 0);
-    infer_req->infer_stage = InferStage::STAGE_CONTEXT;  // This should be no need
+    infer_reqs_[req_id] = infer_req;
+
+    infer_req->infer_stage = InferStage::kContext;  // This should be no need
     infer_req->cache_manager = cache_manager_;
 
     // Idealy, forward() related to these two variables.
@@ -222,8 +226,7 @@ class ForwardRequestBuilderForTest {
     for (const auto& pair : infer_reqs_) {
       auto& infer_req = pair.second;
       // release blocks
-      for (int rank = 0; rank < tensor_para_size_; ++rank) {
-        std::vector<int> block_ids;
+      for (size_t rank = 0; rank < tensor_para_size_; ++rank) {
         SetDevice(rank);
         KLLM_CHECK_WITH_INFO(cache_manager_->GetBlockAllocatorGroup()
                                  ->GetDeviceBlockAllocator(rank)

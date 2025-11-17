@@ -234,7 +234,6 @@ std::vector<at::Tensor> mha_fwd_fa3(
     bool is_rotary_interleaved,  // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
     std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
     int64_t num_splits, std::optional<bool> pack_gqa_, int64_t sm_margin) {
-  KLLM_LOG_DEBUG << "FlashAttention 3 is used";
   // Call FA3 backend function and convert tuple to vector for compatibility
   auto result_tuple = ksana_llm::FlashAttentionBackend::mha_fwd_fa3_(
       q, k, v, k_new_, v_new_, q_v_, out_, cu_seqlens_q_, cu_seqlens_k_, cu_seqlens_k_new_, seqused_q_, seqused_k_,

@@ -27,7 +27,7 @@ void MoE::Init(const std::string& up_gate_proj_weight_name, const std::string& d
       creation_context.weight_type, creation_context.input_type, creation_context.output_type, layer_idx_,
       {moe_scale_norm_mode});
 
-  moe_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspace(moe_layer_->GetWorkSpaceSize()));
+  moe_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspace(moe_layer_->GetWorkspaceSize()));
   moe_layer_->Preprocess(creation_context.model_config, creation_context.runtime_config);
 
   up_gate_proj_weight_ = creation_context.base_weight->GetModelWeights(up_gate_proj_weight_name);

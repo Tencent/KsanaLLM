@@ -67,7 +67,6 @@ class Profiler {
 
  private:
   // Members
-
   std::string metrics_export_url_;
   bool is_initialized_ = false;
   uint64_t export_interval_millis_ = 60000;

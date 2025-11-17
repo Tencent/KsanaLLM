@@ -28,7 +28,8 @@
 
 namespace ksana_llm {
 
-#define DEFAULT_TRANSFER_CONFIG_SIZE 35
+inline constexpr const char kDeviceSignal[] = "DEVICE_SIGNAL";
+constexpr size_t kDeviceSignalPrefixLen = sizeof(kDeviceSignal) - 1;
 
 class TaskManager;       // forward declare
 class ZmqCommunicator;   // forward declare
@@ -185,6 +186,8 @@ class TaskDispatcher {
 
   /** @brief Monitor thread */
   std::thread decode_process_thread_;
+
+  std::thread clean_task_thread_;
 
   /** @brief Prefill receive processing thread */
   std::thread prefill_recv_thread_;

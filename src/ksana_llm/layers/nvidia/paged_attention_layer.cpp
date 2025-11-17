@@ -60,13 +60,11 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
   // cache_offset是0,3,9
   const Tensor& kv_list = input_tensors[2];
   const Tensor& cache_offset = input_tensors[3];
-  size_t multi_token_request_num = input_tensors[7].shape[0];
   const Tensor& rotary_embedding_pos = input_tensors[4];
   const Tensor& rotary_embedding_mask = input_tensors[5];
   const Tensor& workspace = input_tensors[6];
   const Tensor& qkv_workspace = input_tensors[8];
   int layer_block_num = input_tensors[7].shape[5];
-  int context_layer_block_num = input_tensors[7].shape[2];
   int max_tokens = input_tensors[7].shape[4];
   int batch_size = input_tensors[7].shape[3];
   int total_tokens = batch_size;

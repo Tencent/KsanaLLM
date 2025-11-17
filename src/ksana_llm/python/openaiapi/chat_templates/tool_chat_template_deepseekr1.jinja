@@ -42,7 +42,7 @@
             {% set content = content.split('</think>')[-1] %}
         {% endif %}
     {% endif %}
-    {%- if message['role'] == 'assistant' and message['tool_calls'] is defined and message['tool_calls'] is not none %}
+    {%- if message['role'] == 'assistant' and message['tool_calls'] is defined and message['tool_calls'] is not none and message['tool_calls']|length > 0 %}
         {%- set ns.is_last_user = false -%}
         {%- if ns.is_tool %}
             {{- '<｜tool▁outputs▁end｜>'}}
@@ -64,7 +64,7 @@
         {%- endfor %}
         {{- '<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}
     {%- endif %}
-    {%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none)%}
+    {%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none or message['tool_calls']|length == 0)%}
         {%- set ns.is_last_user = false -%}
         {%- if ns.is_tool %}
             {{- '<｜tool▁outputs▁end｜>' + content + '<｜end▁of▁sentence｜>'}}

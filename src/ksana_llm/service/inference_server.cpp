@@ -9,6 +9,7 @@
 #include <string>
 
 #include "ksana_llm/endpoints/endpoint_factory.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -17,6 +18,18 @@ namespace ksana_llm {
 InferenceServer::InferenceServer(const std::string &config_file, const EndpointConfig &endpoint_config) {
   InitLoguru();
   KLLM_LOG_INFO << "Log levels: " << Vector2Str(GetLogLevels());
+
+  // Initialize attention backend manager using singleton pattern.
+  KLLM_LOG_INFO << "Init flash attention backend";
+  auto attention_manager = AttentionBackendManager::GetInstance();
+  if (!attention_manager) {
+    KLLM_THROW("The AttentionBackendManager is nullptr.");
+  }
+  if (attention_manager->Initialize()) {
+    KLLM_LOG_INFO << "Attention backend initialized.";
+  } else {
+    KLLM_LOG_ERROR << "Failed to initialize attention backend.";
+  }
 
   KLLM_LOG_INFO << "Init inference server with config file: " << config_file;
   auto env = Singleton<Environment>::GetInstance();

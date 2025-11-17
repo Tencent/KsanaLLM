@@ -49,10 +49,11 @@ class ExpertParallelControlChannel : public ControlChannel {
   // Shutdown the pipeline cluster.
   Status ShutdownCluster();
 
-  Status SynchronizeExpertParallelExperts();
+  // Exchange Nvshmem unique-ID among Expert-Parallel nodes.
   Status SynchronizeNvshmemUniqueId();
-  Status SerializeAllocateExpertRequest(char* buffer, AllocateExpertRequest& request, size_t world_size);
-  Status DeserializeAllocateExpertRequest(AllocateExpertRequest& request, const char* buffer, size_t world_size);
+
+  // Set the deepep_wrapper_
+  Status SetExpertParallelDeepepWrapper(const std::shared_ptr<ExpertParallelDeepepWrapper>& deepep_wrapper);
 
  private:
   // Add node.
@@ -73,14 +74,6 @@ class ExpertParallelControlChannel : public ControlChannel {
 
   // heartbeat thread handle.
   virtual Status ProcessHeartbeatLoop();
-
-  // Layers
-  virtual Status ProcessLayerRequest(NodeInfo* node_info, Packet* req_packet) override;
-  virtual Status ProcessLayerResponse(NodeInfo* node_info, Packet* rsp_packet) override;
-
-  // Experts parallel.
-  virtual Status ProcessExpertParallelResponse(NodeInfo* node_info, Packet* req_packet);
-  virtual Status ProcessExpertParallelRequest(NodeInfo* node_info, Packet* req_packet);
 
   // send schedule output to workers.
   // virtual Status ProcessSendScheduleOutputLoop();
@@ -121,7 +114,6 @@ class ExpertParallelControlChannel : public ControlChannel {
   // Notify for barrier utility.
   std::condition_variable barrier_cv_;
   std::condition_variable shutdown_cv_;
-  std::condition_variable layer_allocation_cv_;
   std::condition_variable block_num_cv_;
 
   std::condition_variable nvshmem_unique_id_cv_;
@@ -134,9 +126,6 @@ class ExpertParallelControlChannel : public ControlChannel {
   std::unordered_map<int, NodeInfo> rank_nodes_;
   std::unordered_map<NodeInfo, int, NodeInfoHash, NodeInfoEqual> node_ranks_;
 
-  // rank to data node.
-  std::unordered_map<int, NodeInfo> rank_data_nodes_;
-
   // The heartbeat thread & timeout.
   std::shared_ptr<std::thread> heartbeat_thread_ = nullptr;
   size_t heartbeat_timeout_secs_ = 120;
@@ -146,9 +135,6 @@ class ExpertParallelControlChannel : public ControlChannel {
   std::unordered_map<int, time_t> node_heartbeat_timestamp_;
 
   std::unordered_map<int, std::unique_ptr<char[]>> node_ipc_handles_;
-
-  // Send schedule_output async.
-  std::shared_ptr<std::thread> expert_parallel_send_packet_thread_ = nullptr;
 
   // Protect multi-thread receive handles.
   std::mutex mutex_;

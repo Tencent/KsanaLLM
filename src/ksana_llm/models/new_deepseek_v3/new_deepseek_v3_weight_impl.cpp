@@ -273,23 +273,21 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
                     dequant_kv_b_proj.GetPtr<void>() + nope_dst_pitch, src_pitch, v_head_dst_pitch, head_num_tp,
                     MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
       // For the latest weight absorption version process
-      if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM) {
-        // Copy dequant kv_b_proj to w_uk_t
-        Tensor w_uk_t_tensor = dequant_kv_b_nope_proj;
-        w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, dequant_kv_b_nope_proj.shape[1]};
-        std::string w_uk_t_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uk_t.weight";
-        device_model_weights[w_uk_t_name] = w_uk_t_tensor;
+      // Copy dequant kv_b_proj to w_uk_t
+      Tensor w_uk_t_tensor = dequant_kv_b_nope_proj;
+      w_uk_t_tensor.shape = {head_num_tp, qk_nope_head_dim, dequant_kv_b_nope_proj.shape[1]};
+      std::string w_uk_t_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uk_t.weight";
+      device_model_weights[w_uk_t_name] = w_uk_t_tensor;
 
-        // Permute dequant_nope_weight to w_uv
-        Tensor w_uv_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, w_uk_t_tensor.dtype,
-                                    {head_num_tp, dequant_v_head_proj.shape[1], v_head_dim}, dev_rank, nullptr,
-                                    &(context_->GetMemoryManageStreams()[dev_rank]));
-        dequant_v_head_proj.shape = {head_num_tp, v_head_dim, dequant_v_head_proj.shape[1]};
-        Permute(dequant_v_head_proj, w_uv_tensor, {0, 2, 1}, context_->GetMemoryManageStreams()[dev_rank]);
-        std::string w_uv_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uv.weight";
-        device_model_weights[w_uv_name] = w_uv_tensor;
-        dequant_v_head_proj.shape = {head_num_tp * v_head_dim, dequant_kv_b_proj.shape[1]};
-      }
+      // Permute dequant_nope_weight to w_uv
+      Tensor w_uv_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, w_uk_t_tensor.dtype,
+                                  {head_num_tp, dequant_v_head_proj.shape[1], v_head_dim}, dev_rank, nullptr,
+                                  &(context_->GetMemoryManageStreams()[dev_rank]));
+      dequant_v_head_proj.shape = {head_num_tp, v_head_dim, dequant_v_head_proj.shape[1]};
+      Permute(dequant_v_head_proj, w_uv_tensor, {0, 2, 1}, context_->GetMemoryManageStreams()[dev_rank]);
+      std::string w_uv_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uv.weight";
+      device_model_weights[w_uv_name] = w_uv_tensor;
+      dequant_v_head_proj.shape = {head_num_tp * v_head_dim, dequant_kv_b_proj.shape[1]};
 
       // Quant kv_b_nope_proj and v_head_proj
       std::string quant_nope_weight_name =
@@ -992,8 +990,7 @@ Status NewDeepSeekV3WeightImpl<T>::PostProcessInt4QuantWeights(
   }
 
   // Absorb V2 for GPTQ
-  if (GetAbsorbWeightsType() == AbsorbWeightsType::kAbsorbTypeBMM &&
-      new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
+  if (new_deepseek_v3_config->quant_config.method == QUANT_GPTQ) {
     size_t kv_lora_rank = new_deepseek_v3_config->mla_config.kv_lora_rank;
     size_t qk_nope_head_dim = new_deepseek_v3_config->mla_config.qk_nope_head_dim;
     size_t v_head_dim = new_deepseek_v3_config->mla_config.v_head_dim;

@@ -134,7 +134,7 @@ std::string RuntimeDllManager::FindMangledFunctionSymbol(
   }
 
   // 如果没有找到匹配的符号，警告并返回空字符串
-  KLLM_LOG_ERROR << "No exact match found for " << function_name
+  KLLM_LOG_WARNING << "No exact match found for " << function_name
                    << " with expected signature: " << target_symbol_demangled;
 
   return "";

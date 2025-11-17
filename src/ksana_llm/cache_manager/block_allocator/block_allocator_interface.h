@@ -26,6 +26,9 @@ class BlockAllocatorInterface {
   // Get memory address of blocked memory.
   virtual Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) = 0;
 
+  // Append new memory address of blocked memory.
+  virtual Status AppendBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) = 0;
+
   // Used for ATB mode, all blocks is part of a whole flatten memory space
   virtual void* GetBlocksBasePtr() = 0;
 

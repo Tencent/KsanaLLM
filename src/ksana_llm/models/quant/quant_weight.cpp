@@ -37,7 +37,6 @@
 
 #include "ksana_llm/kernels/cast.h"
 #include "ksana_llm/kernels/permute.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/optional_file.h"

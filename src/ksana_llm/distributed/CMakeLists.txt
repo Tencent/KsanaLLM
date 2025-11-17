@@ -20,13 +20,6 @@ if(WITH_CUDA)
 
   message(STATUS "nccl_data_channel_test_SRCS: ${nccl_data_channel_test_SRCS}")
   cpp_test(distributed_nccl_data_channel_test SRCS ${nccl_data_channel_test_SRCS} DEPS utils runtime data_hub LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
-
-  # expert_parallel_nccl_data_channel_test
-  file(GLOB_RECURSE expert_parallel_nccl_data_channel_test_SRCS
-    ${PROJECT_SOURCE_DIR}/src/ksana_llm/distributed/nvidia/expert_parallel_nccl_data_channel_test.cpp)
-
-  message(STATUS "expert_parallel_nccl_data_channel_test_SRCS: ${expert_parallel_nccl_data_channel_test_SRCS}")
-  cpp_test(expert_parallel_nccl_data_channel_test SRCS ${expert_parallel_nccl_data_channel_test_SRCS} DEPS utils runtime data_hub LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} ${NCCL_LIBRARIES} -lcudart -lcublas -lcublasLt)
 endif()
 
 if(WITH_ACL)
@@ -69,13 +62,6 @@ file(GLOB_RECURSE data_channel_test_SRCS
 
 message(STATUS "data_channel_test_SRCS: ${data_channel_test_SRCS}")
 cpp_test(distributed_data_channel_test SRCS ${data_channel_test_SRCS} DEPS utils runtime data_hub LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
-
-# expert_parallel_data_channel_test
-file(GLOB_RECURSE expert_parallel_data_channel_test_SRCS
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/distributed/expert_parallel_data_channel_test.cpp)
-
-message(STATUS "expert_parallel_data_channel_test_SRCS: ${expert_parallel_data_channel_test_SRCS}")
-cpp_test(expert_parallel_data_channel_test SRCS ${expert_parallel_data_channel_test_SRCS} DEPS utils runtime data_hub LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
 
 # distributed_coordinator_test
 if(WITH_CUDA)

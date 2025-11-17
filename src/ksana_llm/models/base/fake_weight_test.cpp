@@ -7,7 +7,6 @@
 
 #include "ksana_llm/models/base/fake_weight_for_test.h"
 #include "ksana_llm/models/common/common_config.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/tensor_test_helper.h"
 
@@ -49,11 +48,8 @@ TEST_F(FakeWeightTest, FakeWeightBasic) {
 
 TEST_F(FakeWeightTest, GetCacheFolder) {
   FakeWeight fake_weight(rank_);
-  auto bak = GetAbsorbWeightsType();
-  SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
   std::string cache_folder = fake_weight.GetCacheFolder();
-  SetAbsorbWeightsType(bak);
-  EXPECT_TRUE(cache_folder.find("absorb_2") != std::string::npos);
+  EXPECT_TRUE(cache_folder.find("cached_model_") != std::string::npos);
 }
 
 bool IsVectorSame(const std::vector<size_t>& a, const std::vector<size_t>& b) {

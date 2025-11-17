@@ -164,7 +164,6 @@ bool ModelCommunicator::CheckIfUseCustomReduceSum(const std::vector<Tensor>& inp
     return false;
   }
 #endif
-  int batch_size = input_tensors[0].shape[0];
   return use_custom && (tp_size_ == 2 || is_full_nvlink_);
 }
 

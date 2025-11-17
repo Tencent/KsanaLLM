@@ -13,7 +13,7 @@ Status MatMulLayer<T>::Init(const std::vector<std::any>& parameters, const Runti
 }
 
 template <typename T>
-size_t MatMulLayer<T>::GetWorkSpaceSize() {
+size_t MatMulLayer<T>::GetWorkspaceSize() {
   return 0;
 }
 

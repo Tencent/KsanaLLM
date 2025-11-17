@@ -30,18 +30,18 @@ class ModelInput {
   void PrepareInputRefit(const std::vector<ForwardRequest*>& forward_reqs);
   void PrepareVLInputRefit(const std::vector<ForwardRequest*>& forward_reqs);
   void CreateVLTensors();
-  void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode);
+  void PrepareVLRequest(const std::vector<ForwardRequest*>& forward_reqs);
+  void PrepareCutoffLayer(const std::vector<ForwardRequest*>& forward_reqs);
+  void PrepareNextNGatherIdx(const std::vector<ForwardRequest*>& forward_reqs, const RunMode run_mode);
 
   // Prepare MRope position for qwen2_vl
-  void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareMRopePos(const std::vector<ForwardRequest*>& forward_reqs);
 
 #ifdef ENABLE_CUDA
   template <typename T>
   void PrepareImgMask(size_t pos_num);
 
-  void PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareCudagraphParams(const std::vector<ForwardRequest*>& forward_reqs);
 #endif
 
   // Whether all requests in the current batch use greedy sampling
@@ -51,7 +51,7 @@ class ModelInput {
   void ExecuteChecksumVerification(const std::vector<ForwardRequest*>& forward_reqs, bool is_after_forward);
 
 #ifdef ENABLE_ACL
-  void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
+  void PrepareATBKVCache(const std::vector<ForwardRequest*>& forward_reqs, bool is_multi_token_forward);
 #endif
 
  public:
@@ -59,9 +59,13 @@ class ModelInput {
   size_t batch_size = 0;
   size_t dp_batch_size = 0;
 
-  // The multi-token forwarding request total sequence length.
-  size_t multi_token_request_total_seq_len = 0;
-  size_t dp_multi_token_request_total_seq_len = 0;
+  // Number of dp tokens in context/decode phase
+  size_t dp_context_tokens = 0;
+  size_t dp_decode_tokens = 0;
+
+  // Number of kv cache blocks in context/decode phase
+  size_t context_kv_cache_block_num = 0;
+  size_t decode_kv_cache_block_num = 0;
 
   // Number of requests who are forwarding multi-tokens in this step.
   size_t multi_token_request_num = 0;
@@ -256,20 +260,22 @@ class ModelInput {
  public:
   struct input_info {
     input_info() = default;
+    input_info(input_info&&) = default;
+    input_info& operator=(input_info&&) = default;
     // Disable the time-consuming copy
     input_info(const input_info&) = delete;
     input_info& operator=(const input_info&) = delete;
 
-    std::vector<ForwardRequest*> reqs;
     std::vector<ForwardRequest*> dp_reqs;
 
-    Tensor input_length;  // only for page, forwarding_tokens.size()
+    // Tensors in input_info are views of the above shared tensors
+    // Their shape is used to locate the offset of each input_info in the shared tensors
+    Tensor input_length;
     Tensor kv_list;
     Tensor indexer_kv_list;
     Tensor kv_cache_offset;
     Tensor rotary_embedding_pos;
     Tensor rotary_embedding_mask;
-    Tensor layer_kv_cache_ptr;  // host
     Tensor block_table;
     Tensor tile_scheduler_metadata;
     Tensor num_splits;
@@ -277,30 +283,27 @@ class ModelInput {
     Tensor cur_seq_len_end;      // 每个token可以看到的结束位置的token索引
     Tensor paged_schedule_meta;  // for paged sparse mla indexer
 
+    size_t q_seq_len = 0;
     size_t total_dp_input_ids_len = 0;
-    size_t kv_cache_block_num = 0;
 
     void Reset() {
-      reqs.clear();
       dp_reqs.clear();
+      q_seq_len = 0;
       total_dp_input_ids_len = 0;
-      kv_cache_block_num = 0;
     }
   };
 
-  input_info flash_input;        // input_ids length is non-specialized, use flash attention
-  input_info page_single_input;  // input_ids length is 1, use page attention
-  input_info page_dual_input;    // input_ids length is 2, use page attention
+  input_info flash_input;               // input_ids length is non-specialized, use flash attention
+  std::vector<input_info> page_inputs;  // input_ids length is fixed (`[1, decode_token_num_threshold]`), use page
+                                        // attention, maintain only `page_input` with non-empty `dp_reqs`
 
   // Divide the forward requests into two categories: flash, page (with different lengths)
   void PrepareInputInfo(const std::vector<ForwardRequest*>& forward_reqs);
   // Prepare information related to tokens of the current batch of requests
-  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareInputIds(const std::vector<ForwardRequest*>& forward_reqs);
 
   void PreparePrefill();
-  void PrepareDualDecode();
-  void PrepareSingleDecode();
-  void PrepareMetadata();
+  void PrepareDecode();
 
   // Determine whether to use cache for the current batch of multi token requests
   void PrepareUseCache(input_info& input);

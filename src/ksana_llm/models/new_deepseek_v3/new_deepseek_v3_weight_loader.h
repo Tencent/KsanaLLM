@@ -32,7 +32,7 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
                                          int dev_rank) override;
 
  private:
-  Status InitWeightLoaderImpl(std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config);
+  Status InitWeightLoaderImpl(const std::shared_ptr<NewDeepSeekV3Config>& new_deepseek_v3_config);
 
   // Load EPLB mapping configuration from JSON file
   Status InitExpertMap(const size_t& num_experts, const size_t& expert_start_id, const size_t& expert_end_id,
@@ -42,6 +42,7 @@ class NewDeepSeekV3WeightLoader : public BaseModelWeightLoader {
  private:
   PipelineConfig pipeline_config_;
   RuntimeConfig runtime_config_;
+  BatchSchedulerConfig batch_scheduler_config_;
   std::unique_ptr<NewDeepSeekV3WeightImplBase> weight_impl_;
   // rank -> weight_name
   std::vector<std::unordered_set<std::string>> weights_to_permute_;

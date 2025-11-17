@@ -8,8 +8,7 @@
 
 namespace ksana_llm {
 
-PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, AbsorbWeightsType absorb_type,
-                                     const LayerCreationContext& creation_context,
+PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
                                      const AttentionCreationConfig& attn_config) {
   const uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   const uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
@@ -65,7 +64,7 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, Absor
 
   paged_mla_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
                                    creation_context.rank);
-  paged_mla_attention_layer_->SetWorkSpaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
+  paged_mla_attention_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
 
   // Initialize bmm module
   attn_w_uv_bmm_ = std::make_shared<Bmm>(fmt::format("model.layers.{}.self_attn.w_uv.weight", layer_idx),

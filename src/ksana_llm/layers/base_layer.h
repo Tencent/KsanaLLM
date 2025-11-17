@@ -32,11 +32,11 @@ class BaseLayer {
     return Status();
   }
 
-  virtual size_t GetWorkSpaceSize() { return 0; }
+  virtual size_t GetWorkspaceSize() { return 0; }
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) = 0;
 
-  virtual Status SetWorkSpaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+  virtual Status SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
     workspace_buffer_ = workspace_buffer;
     return Status();
   }

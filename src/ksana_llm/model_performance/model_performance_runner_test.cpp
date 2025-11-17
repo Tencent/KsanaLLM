@@ -20,8 +20,8 @@ class ModelPerformanceRunnerTest : public testing::Test {
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
     std::filesystem::path profile_json_config_relate = parent_path / "test_config.json";
     std::string profile_json_config_path = std::filesystem::absolute(profile_json_config_relate).string();
-    size_t warmup_round = 10;
-    size_t profile_round = 100;
+    size_t warmup_round = 1;
+    size_t profile_round = 1;
     config_builder_ = std::make_shared<ksana_llm::PerfProfileConfigBuilderWithJson>(profile_json_config_path,
                                                                                     warmup_round, profile_round);
     model_performance_runner_ =

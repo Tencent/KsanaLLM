@@ -17,7 +17,6 @@
 #include "ksana_llm/models/common_moe/moe_config.h"
 #include "ksana_llm/models/deepseek_v3/deepseek_v3_config.h"
 #include "ksana_llm/models/gpt/gpt_config.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
 #include "ksana_llm/utils/logger.h"

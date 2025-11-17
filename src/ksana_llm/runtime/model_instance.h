@@ -47,10 +47,11 @@ class ModelInstance {
   std::string type;
 
   std::vector<Status> Forward(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group, InferStage stage,
-                              std::vector<ForwardRequest>& forward_reqs, bool epilogue);
+                              std::vector<ForwardRequest*>& forward_reqs, bool epilogue);
 
   std::vector<std::future<Status>> ForwardAsync(size_t multi_batch_id, std::shared_ptr<WorkerGroup> worker_group,
-                                                InferStage stage, std::vector<ForwardRequest>& forward_reqs,
+                                                InferStage stage,
+                                                std::vector<ForwardRequest*>& forward_reqs,
                                                 bool epilogue, RunMode run_mode = RunMode::kMain);
 
   // Get  the data type.

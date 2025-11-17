@@ -30,9 +30,9 @@ struct LayerCreationContext {
   DataType input_type;
   DataType output_type;
 
-  void Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_, int rank_,
-            PipelineConfig& pipeline_config_, ModelConfig& model_config, const RuntimeConfig& runtime_config,
-            BufferManager* buffer_mgr);
+  void Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_, const int rank_,
+            const PipelineConfig& pipeline_config_, const ModelConfig& model_config,
+            const RuntimeConfig& runtime_config, BufferManager* buffer_mgr);
 };
 
 // TODO(robertyuan): clear useless params

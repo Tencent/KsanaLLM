@@ -24,7 +24,7 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   return Status();
 }
 
-size_t MatMulLayer::GetWorkSpaceSize() { return 0; }
+size_t MatMulLayer::GetWorkspaceSize() { return 0; }
 
 Status MatMulLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // TODO(karlluo): support bias

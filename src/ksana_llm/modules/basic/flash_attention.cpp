@@ -95,7 +95,7 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
        query_layernorm_weight, /* for use_qk_norm */
        key_layernorm_weight,   /* for use_qk_norm */
        forward_context.flag_tensor,
-       model_input->flash_input.layer_kv_cache_ptr,
+       model_input->layer_kv_cache_ptr,
        model_input->flash_input.block_table,
        model_input->dp_prefill_q_offset_uint64_tensor},
       hidden_buffer_tensors_1));

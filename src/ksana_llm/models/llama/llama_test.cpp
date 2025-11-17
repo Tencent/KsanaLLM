@@ -9,6 +9,7 @@
 #include "ksana_llm/models/common/model_test_helper.h"
 #include "ksana_llm/models/llama/llama_model.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/calc_intvec_hash.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -37,6 +38,7 @@ class LlamaTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / "../../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path);
     env->GetModelConfig(model_config);
@@ -154,7 +156,6 @@ class LlamaTest : public testing::Test {
     EXPECT_TRUE(wrong_tensor.shape.empty());
 
     // ContextDecode
-    ForwardRequest forward;
     std::vector<int> input_ids = {233, 1681};
     ForwardRequestBuilderForTest request_builder(model_config, runtime_config, cache_manager_);
     auto forward = request_builder.CreateForwardRequest(1, input_ids);
@@ -164,7 +165,7 @@ class LlamaTest : public testing::Test {
     std::vector<ForwardRequest *> forward_reqs = {forward};
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
 
-    std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
+    std::vector<ForwardRequest *> multi_forward_reqs = {forward, forward};
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (int i = 0; i < rounds; ++i) {
       llama->Forward(schedule_id, llama_weight, multi_forward_reqs, false);
@@ -188,7 +189,7 @@ class LlamaTest : public testing::Test {
     std::vector<float> prompt_probs;
     std::vector<int> sampling_result_tokens;
     sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
-    sample_req.logits_offset = forward_reqs[0].logits_offset;
+    sample_req.logits_offset = forward_reqs[0]->logits_offset;
     sample_req.sampling_token_num = 1;
     sample_req.sampling_result_tokens = &sampling_result_tokens;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
@@ -203,34 +204,34 @@ class LlamaTest : public testing::Test {
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
     sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29871, sampling_result_tokens[0]);
-    (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
+    (*forward_reqs[0]->forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->infer_stage = InferStage::kDecode;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
     // Decode
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
     sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29896, sampling_result_tokens[0]);
-    (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
+    (*forward_reqs[0]->forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
 
 #ifdef ENABLE_CUDA
     EXPECT_TRUE(llama->Forward(schedule_id, llama_weight, forward_reqs, false).OK());
     sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29929, sampling_result_tokens[0]);
-    (*forward_reqs[0].forwarding_tokens).push_back(sampling_result_tokens[0]);
+    (*forward_reqs[0]->forwarding_tokens).push_back(sampling_result_tokens[0]);
     sampling_result_tokens.clear();
 #endif
 
     EventRecord(start, context_->GetComputeStreams()[device_id]);
     for (auto &forward_req : multi_forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->infer_stage = InferStage::kDecode;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
       llama->Forward(schedule_id, llama_weight, multi_forward_reqs, false);
@@ -246,15 +247,18 @@ class LlamaTest : public testing::Test {
 
     // Test logits_custom_length
     std::vector<int> prompt_probs_input_tokens = {1, 2, 3, 4, 5, 6, 7, 8, 9};
-    forward.forwarding_tokens = std::make_shared<std::vector<int>>(prompt_probs_input_tokens);
-    forward.logits_custom_length = 5;
-    forward.sampling_token_num = forward.logits_custom_length;
+    forward->forwarding_tokens = std::make_shared<std::vector<int>>(prompt_probs_input_tokens);
+    forward->logits_custom_length = 5;
+    forward->infer_stage = InferStage::kContext;
+    forward->kv_cached_token_num = 0;
+    forward->sampling_token_num = forward->logits_custom_length;
     std::map<std::string, ksana_llm::TargetDescribe> request_target;
     ksana_llm::TargetDescribe target_describe;
     target_describe.slice_pos.push_back({0, 4});
     request_target["logits"] = target_describe;
-    forward.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
-    std::vector<ForwardRequest> prompt_probs_forward_reqs = {forward, forward};
+    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+
+    std::vector<ForwardRequest *> prompt_probs_forward_reqs = {forward, forward};
     ModelInput model_input(model_config, runtime_config, 0, context_);
     model_input.ParseFromRequests(prompt_probs_forward_reqs);
     std::vector<uint64_t> result(model_input.logits_idx_uint64_tensor.GetElementNumber());

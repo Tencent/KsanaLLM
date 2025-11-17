@@ -8,9 +8,10 @@
 
 namespace ksana_llm {
 
-void LayerCreationContext::Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_, int rank_,
-                                PipelineConfig& pipeline_config_, ModelConfig& model_config_,
-                                const RuntimeConfig& runtime_config, BufferManager* buffer_mgr) {
+void LayerCreationContext::Init(std::shared_ptr<BaseWeight> base_weight_, std::shared_ptr<Context> context_,
+                                const int rank_, const PipelineConfig& pipeline_config_,
+                                const ModelConfig& model_config_, const RuntimeConfig& runtime_config,
+                                BufferManager* buffer_mgr) {
   base_weight = base_weight_;
   matmul_layer_factory = std::make_shared<MatMulLayerFactory>(model_config_, runtime_config, rank_, context_);
   if (model_config_.is_moe) {

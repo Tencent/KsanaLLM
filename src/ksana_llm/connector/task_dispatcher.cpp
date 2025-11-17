@@ -51,6 +51,10 @@ void TaskDispatcher::Shutdown() {
     send_thread_pool_->Stop();
   }
 
+  if (clean_task_thread_.joinable()) {
+    clean_task_thread_.join();
+  }
+
   // 关闭通信管理器
   if (comm_manager_) comm_manager_->Shutdown();
 }
@@ -115,11 +119,20 @@ Status TaskDispatcher::Initialize(std::shared_ptr<DeviceInfoManager> device_info
     decode_process_thread_ = std::thread(&TaskDispatcher::SendToPrefill, this);
   }
 
+  clean_task_thread_ = std::thread([this]() {
+    while (running_) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      task_manager_->CleanupExpiredTasks(config_.task_expire_sec);
+    }
+  });
+
   return Status();
 }
 
 void TaskDispatcher::SendConfigToPrefill(const std::string& group_key, size_t adp_num, size_t device_num) {
-  std::string signal = MakeConnectionId(group_key, adp_num, device_num);
+  // Build device configuration signal once (prefix + connection id)
+  std::string signal = std::string(kDeviceSignal) +
+                       MakeConnectionId(group_key, static_cast<int>(adp_num), static_cast<int>(device_num));
   if (group_key.empty()) {
     KLLM_LOG_ERROR << "Send device config info failed, group_key is empty";
     return;
@@ -216,7 +229,6 @@ void TaskDispatcher::HandlePrefillGroupBatch(
   std::string signal = connection_id + "|" + std::to_string(group_vec.size());
   Status status = zmq_communicator_->Send(group_key, src_device_idx, dst_device_idx, 0, signal.data(), signal.size(),
                                           DataType::TYPE_BYTES);
-  KLLM_LOG_INFO << "Fetched batch of size: " << group_vec.size();
   if (!status.OK()) {
     KLLM_LOG_WARNING << "Failed to send signal to Decode";
     return;
@@ -248,16 +260,19 @@ void TaskDispatcher::RegisterPrefillRecv() {
   }
   zmq_communicator_->SetReceiveCallback([this](const char* data, size_t size, uint64_t job_id, void* /*user_data*/) {
     std::string signal(data, size);
-    if (signal.find('_') != std::string::npos && signal.find('-') != std::string::npos &&
-        size == DEFAULT_TRANSFER_CONFIG_SIZE) {
+    if (signal.size() >= kDeviceSignalPrefixLen && signal.substr(0, kDeviceSignalPrefixLen) == kDeviceSignal) {
       KLLM_LOG_DEBUG << "Step_Prepare_1: Prefill received device config signal from Decode: " << signal
                      << ", size: " << size;
-      auto [group_key, device_config_pair] = ParseConnectionId(signal);
+      if (signal.size() <= kDeviceSignalPrefixLen) {
+        KLLM_LOG_ERROR << "Device config signal missing payload (connection id).";
+        return;
+      }
+      auto [group_key, device_config_pair] = ParseConnectionId(signal.substr(kDeviceSignalPrefixLen));
       auto [decode_dev_num, decode_adp_num] = device_config_pair;
       device_info_manager_->Insert(group_key, decode_adp_num, decode_dev_num);
       KLLM_LOG_DEBUG << "Step_Prepare_2: Prefill insert device config signal to device_info_manager with group_key:"
                      << group_key << ", decode_adp_num:" << decode_adp_num << ", decode_dev_num:" << decode_dev_num;
-    } else {
+    } else if (size % sizeof(TaskKey) == 0 && size > 0) {
       std::vector<TaskKey> received = TaskKey::DeserializeBatch(data, size);
       if (received.empty()) {
         return;
@@ -266,6 +281,9 @@ void TaskDispatcher::RegisterPrefillRecv() {
       // 使用TaskManager的封装方法来处理接收到的Decode确认
       KLLM_LOG_DEBUG << "Step_2 Prefill received " << received.size() << " task_keys from Decode";
       task_manager_->RegisterDecodeConfirmedTasks(received);
+    } else {
+      KLLM_LOG_ERROR << "Invalid signal format in RegisterPrefillRecv: " << signal;
+      return;
     }
   });
 }
@@ -406,13 +424,13 @@ std::string TaskDispatcher::MakeConnectionId(const std::string& group_key, int s
 
 std::pair<std::string, std::pair<int, int>> TaskDispatcher::ParseConnectionId(const std::string& connection_id) {
   auto pos = connection_id.rfind('_');
-  if (pos == std::string::npos) {
+  if (pos == std::string::npos || pos + 1 >= connection_id.size()) {
     throw std::invalid_argument("Invalid connection_id format: " + connection_id);
   }
   std::string group_key = connection_id.substr(0, pos);
   int dst_device_idx = std::stoi(connection_id.substr(pos + 1, pos + 2));
   int src_device_idx = std::stoi(connection_id.substr(pos + 3));
-  KLLM_LOG_DEBUG << "ParseConnectionId " << "group_key: " << group_key << ", src_device_idx: " << src_device_idx
+  KLLM_LOG_DEBUG << "ParseConnectionId group_key: " << group_key << ", src_device_idx: " << src_device_idx
                  << ", dst_device_idx: " << dst_device_idx;
   return {group_key, {src_device_idx, dst_device_idx}};
 }
@@ -509,9 +527,6 @@ void TaskDispatcher::AddTensorForTask(const std::shared_ptr<TransferTask>& task,
 
 // batch 出队
 std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
-  // 定期清理过期的promise条目
-  task_manager_->CleanupExpiredTasks(config_.connector_waiting_sec);
-
   // Use the new circular buffer batch method - naturally parallel by req_id
   std::vector<TaskKey> raw_tasks = task_manager_->GetProcessingBufferBatch(batch_size);
   if (raw_tasks.empty()) {
@@ -531,6 +546,7 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
   // Group by req_id for parallel processing
   std::unordered_map<uint64_t, std::vector<TaskKey>> grouped_by_req_id;
   for (auto& task_key : raw_tasks) {
+    KLLM_LOG_DEBUG << "BatchTasks grouping task_key by req_id: " << task_key.ToString();
     grouped_by_req_id[task_key.req_id].push_back(task_key);
   }
 
@@ -539,19 +555,19 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
   if (grouped_by_req_id.size() <= 1) {
     // Serial processing for single req_id group
     for (auto& task_key : raw_tasks) {
-      KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
-      if (task_manager_->TryActivatePendingTask(task_key)) {
+      KLLM_LOG_DEBUG << "Checking unconfirmed promises for task_key: " << task_key.ToString();
+      if (task_manager_->TryActivateUnconfirmedTask(task_key)) {
         // Only add non-skipped tasks to batch
         if (!task_key.GetIsSkippedTaskFlag()) {
-          KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
+          KLLM_LOG_DEBUG << "TryActivateUnconfirmedTask Adding task_key to batch: " << task_key.ToString();
           batch.push_back(task_key);
         } else {
-          KLLM_LOG_DEBUG << "TryActivatePendingTask Skipping task_key: " << task_key.ToString();
+          KLLM_LOG_DEBUG << "TryActivateUnconfirmedTask Skipping task_key: " << task_key.ToString();
           ++skipped_tasks_num;
         }
       } else {
-        task_manager_->AddPrefillPendingTask(task_key);
-        KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to pending: " << task_key.ToString();
+        task_manager_->AddUnconfirmedTask(task_key);
+        KLLM_LOG_DEBUG << "AddUnconfirmedTask Adding task_key to unconfirmed: " << task_key.ToString();
       }
     }
   } else {
@@ -564,19 +580,19 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
 
       // Process all tasks for this req_id serially (maintain order within req_id)
       for (auto& task_key : req_tasks) {
-        KLLM_LOG_DEBUG << "Checking pending promises for task_key: " << task_key.ToString();
-        if (task_manager_->TryActivatePendingTask(task_key)) {
+        KLLM_LOG_DEBUG << "Checking unconfirmed promises for task_key: " << task_key.ToString();
+        if (task_manager_->TryActivateUnconfirmedTask(task_key)) {
           // Only add non-skipped tasks to batch
           if (!task_key.GetIsSkippedTaskFlag()) {
-            KLLM_LOG_DEBUG << "TryActivatePendingTask Adding task_key to batch: " << task_key.ToString();
+            KLLM_LOG_DEBUG << "TryActivateUnconfirmedTask Adding task_key to batch: " << task_key.ToString();
             concurrent_batch.push_back(task_key);
           } else {
-            KLLM_LOG_DEBUG << "TryActivatePendingTask Skipping task_key: " << task_key.ToString();
+            KLLM_LOG_DEBUG << "TryActivateUnconfirmedTask Skipping task_key: " << task_key.ToString();
             ++skipped_tasks_num;
           }
         } else {
-          task_manager_->AddPrefillPendingTask(task_key);
-          KLLM_LOG_DEBUG << "AddPrefillPendingTask Adding task_key to batch: " << task_key.ToString();
+          task_manager_->AddUnconfirmedTask(task_key);
+          KLLM_LOG_DEBUG << "AddUnconfirmedTask Adding task_key to unconfirmed: " << task_key.ToString();
         }
       }
     });
@@ -592,6 +608,7 @@ std::vector<TaskKey> TaskDispatcher::BatchTasks(int batch_size) {
   REPORT_METRIC("pd_transfer_skipped_task_num", skipped_tasks_num);
   KLLM_LOG_DEBUG << "Taking " << batch.size() << " tasks from circular processing buffers for prefill role, skipping "
                  << skipped_tasks_num << " tasks, the max batch size is " << batch_size;
+
   return batch;
 }
 

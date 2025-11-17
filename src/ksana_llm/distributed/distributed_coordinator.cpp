@@ -7,23 +7,21 @@
 #include <stdexcept>
 
 #include "fmt/core.h"
-#include "ksana_llm/data_hub/expert_parallel_hidden_unit_buffer.h"
 #include "ksana_llm/distributed/data_channel_factory.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/singleton.h"
 #ifdef ENABLE_CUDA
-#  include "ksana_llm/distributed/nvidia/expert_parallel_nccl_data_channel.h"
 #  include "ksana_llm/distributed/nvidia/nccl_data_channel.h"
 
 #endif
 
 namespace ksana_llm {
 
-DistributedCoordinator::DistributedCoordinator(
-    std::shared_ptr<Context> context, PacketCreationFunc packet_creation_fn, ScheduleOutputPool* schedule_output_pool,
-    HiddenUnitBufferPool* hidden_unit_buffer_pool,
-    ExpertParallelHiddenUnitBufferPool* expert_parallel_hidden_unit_buffer_pool, std::shared_ptr<Environment> env) {
+DistributedCoordinator::DistributedCoordinator(std::shared_ptr<Context> context, PacketCreationFunc packet_creation_fn,
+                                               ScheduleOutputPool* schedule_output_pool,
+                                               HiddenUnitBufferPool* hidden_unit_buffer_pool,
+                                               std::shared_ptr<Environment> env) {
   context_ = context;
   env_ = env ? env : Singleton<Environment>::GetInstance();
 
@@ -42,26 +40,13 @@ DistributedCoordinator::DistributedCoordinator(
 #endif
   }
 
-  // Crate ControlChannel and DataChannel for EP.
+  // Create ControlChannel for EP.
   env->GetExpertParallelConfig(expert_parallel_config_);
   if (expert_parallel_config_.global_expert_para_size > 1) {
     expert_parallel_control_channel_ = std::make_shared<ExpertParallelControlChannel>(
         expert_parallel_config_.expert_master_host, expert_parallel_config_.expert_master_port,
         expert_parallel_config_.expert_world_size, expert_parallel_config_.expert_node_rank,
         expert_parallel_config_.global_expert_para_size, packet_creation_fn, schedule_output_pool, env_);
-
-#ifdef ENABLE_CUDA
-    Status status = DataChannelFactory::CreateExpertDataChannel<ExpertParallelNcclDataChannel>(
-        packet_creation_fn, hidden_unit_buffer_pool, expert_parallel_hidden_unit_buffer_pool, env_, context_,
-        expert_parallel_data_channel_);
-    if (!status.OK()) {
-      KLLM_LOG_INFO << "DistributedCoordinator Create expert_parallel_channel_ failed \n";
-
-      throw std::runtime_error(FormatStr("Ceate data channel error, %s", status.GetMessage()));
-    }
-#endif
-
-    KLLM_LOG_INFO << "DistributedCoordinator Create expert_parallel_channel_ succeed \n";
   }
   KLLM_LOG_INFO << "DistributedCoordinator() \n";
 }
@@ -69,11 +54,6 @@ DistributedCoordinator::DistributedCoordinator(
 DistributedCoordinator::~DistributedCoordinator() {
   control_channel_.reset();
   data_channel_.reset();
-
-  if (expert_parallel_config_.global_expert_para_size > 1) {
-    expert_parallel_control_channel_.reset();
-    expert_parallel_data_channel_.reset();
-  }
 }
 
 // Extract function for pipeline parallel later.
@@ -133,12 +113,7 @@ Status DistributedCoordinator::InitializeCluster() {
 Status DistributedCoordinator::InitializeExpertParallelCluster() {
   KLLM_LOG_INFO << "InitializeExpertParallelCluster.";
 
-  // Must invoke first, the add node method will report data port to master.
-  Status status = expert_parallel_data_channel_->Listen();
-  if (!status.OK()) {
-    throw std::runtime_error(fmt::format("ExpertParallel , listen data port error: {}", status.GetMessage()));
-  }
-
+  Status status;
   if (context_->IsExpertParallelChief()) {
     status = expert_parallel_control_channel_->Listen();
     if (!status.OK()) {
@@ -201,33 +176,13 @@ Status DistributedCoordinator::SynchronizeNodeLayers(size_t master_offload_layer
   return Status();
 }
 
-Status DistributedCoordinator::SynchronizeExpertParallelExperts() {
-  expert_parallel_control_channel_->SynchronizeExpertParallelExperts();
-  // Connect downstream node.
-  int try_times = 600;
-  while (--try_times >= 0) {
-    Status status = expert_parallel_data_channel_->Connect();
-    if (status.OK()) {
-      break;
-    }
-
-    if (try_times == 0 && !status.OK()) {
-      throw std::runtime_error(fmt::format("Connect to {}:{} error: {}", expert_parallel_config_.expert_master_host,
-                                           expert_parallel_config_.expert_master_port, status.GetMessage()));
-    }
-
-    KLLM_LOG_INFO << "DistributedCoordinator data channel connect failed, try again.";
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-  }
-
-  return Status();
-}
-
 Status DistributedCoordinator::SynchronizeCacheBlockNum() { return control_channel_->SynchronizeCacheBlockNum(); }
 
 Status DistributedCoordinator::SynchronizeNvshmemUniqueId() {
   return expert_parallel_control_channel_->SynchronizeNvshmemUniqueId();
 }
+
+Status DistributedCoordinator::ExpertParallelBarrier() { return expert_parallel_control_channel_->Barrier(); }
 
 Status DistributedCoordinator::Barrier() { return control_channel_->Barrier(); }
 
@@ -238,12 +193,6 @@ Status DistributedCoordinator::Frozen() {
     }
     if (data_channel_) {
       data_channel_->Frozen();
-    }
-    if (expert_parallel_control_channel_) {
-      expert_parallel_control_channel_->Frozen();
-    }
-    if (expert_parallel_data_channel_) {
-      expert_parallel_data_channel_->Frozen();
     }
   }
   return Status();
@@ -267,10 +216,6 @@ Status DistributedCoordinator::DestroyCluster() {
 
 Status DistributedCoordinator::DestroyExpertCluster() {
   if (expert_parallel_config_.global_expert_para_size <= 1) return Status();
-
-  // Close all data channels.
-  expert_parallel_data_channel_->Disconnect();
-  expert_parallel_data_channel_->Close();
 
   if (context_->IsExpertParallelChief()) {
     expert_parallel_control_channel_->Close();

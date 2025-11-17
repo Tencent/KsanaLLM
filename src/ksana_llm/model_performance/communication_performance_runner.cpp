@@ -11,6 +11,7 @@
 #include "ksana_llm/cache_manager/cache_manager_factory.h"
 #include "ksana_llm/data_hub/data_hub.h"
 #include "ksana_llm/distributed/distributed_coordinator.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/yaml_reader.h"
 
@@ -32,6 +33,7 @@ CommunicationPerformanceRunner::~CommunicationPerformanceRunner() {
 void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
   InitLoguru();
 
+  AttentionBackendManager::GetInstance()->Initialize();
   const auto& env = Singleton<Environment>::GetInstance();
   env->ParseConfig(config_path);
 
@@ -58,7 +60,7 @@ void CommunicationPerformanceRunner::InitEnvs(const std::string& config_path) {
 
   // init DistributedCoordinator
   distributed_coordinator_ = std::make_shared<DistributedCoordinator>(
-      context_, GetPacketObject, GetScheduleOutputPool(), GetHiddenUnitBufferPool(), nullptr, env);
+      context_, GetPacketObject, GetScheduleOutputPool(), GetHiddenUnitBufferPool(), env);
   KLLM_LOG_INFO << "Initialize distributed coordinator.";
   distributed_coordinator_->InitializeCluster();
   KLLM_LOG_INFO << "Start to synchronize node layers.";

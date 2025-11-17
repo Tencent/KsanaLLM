@@ -4,18 +4,18 @@
 #include <curl/curl.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
-#include <vector>
 #include <string>
+#include <vector>
 #include "ksana_llm/connector/node_info.h"
+#include "ksana_llm/connector/router_client/http_router_client.h"
+#include "ksana_llm/connector/router_client/resolved_endpoint.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/socket_util.h"
 #include "ksana_llm/utils/status.h"
 #include "test.h"
-#include "ksana_llm/connector/router_client/http_router_client.h"
-#include "ksana_llm/connector/router_client/resolved_endpoint.h"
 
 using namespace ksana_llm;
 
@@ -703,7 +703,7 @@ class FastTimeoutHTTPRouterClientTest : public HTTPRouterClient {
 
 // Test MakeHttpRequest with invalid URL (should handle gracefully)
 TEST_F(RouterClientTest, TestMakeHttpRequestInvalidURL) {
-  RealHTTPRouterClientTest client("invalid-url-format");
+  RealHTTPRouterClientTest client("http://1.1.1.1/index.html");
 
   nlohmann::json test_data = {{"key", "value"}};
 
@@ -844,7 +844,7 @@ TEST_F(RouterClientTest, TestMakeHttpRequestErrorScenarios) {
   EXPECT_TRUE(true);  // Should handle timeout gracefully (fails in ~1 second)
 
   // Test 3: Invalid URL format (instant failure)
-  RealHTTPRouterClientTest invalid_client("invalid-url-format");
+  RealHTTPRouterClientTest invalid_client("http://1.1.1.1/index.html");
   std::string invalid_response = invalid_client.MakeHttpRequest("/test", "GET", test_data);
   EXPECT_TRUE(true);  // Should handle invalid URL gracefully
 }

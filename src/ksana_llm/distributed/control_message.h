@@ -42,17 +42,6 @@ struct AllocateLayerRequest {
   char nccl_unique_id[kNcclUniqueIdSize];
 };
 
-// for layer allocation, master to worker.
-struct AllocateExpertRequest {
-  char downstream_host[kMaxNumRanks];
-  uint16_t downstream_port;
-
-  // Used to broadcast nccl unique_id to all workers.
-  // Because ncclUniqueId is platform dependency, so char[] is used.
-  char nccl_unique_id[kNcclUniqueIdSize];
-  std::vector<std::array<char, kNcclUniqueIdSize> > nccl_unique_ids;
-};
-
 // add node, worker to master.
 struct AddNodeRequest {
   std::size_t node_rank;

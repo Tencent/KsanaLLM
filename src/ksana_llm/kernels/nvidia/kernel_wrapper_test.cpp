@@ -282,6 +282,196 @@ TEST_F(KernelWrapperTest, MaxTest) {
   CUDA_CHECK(cudaFree(device_c));
 }
 
+TEST_F(KernelWrapperTest, RunTrtFusedAllReduceResidualNorm) {
+  int device_count = 0;
+  CUDA_CHECK(cudaGetDeviceCount(&device_count));
+  if (device_count < 2) {
+    GTEST_SKIP() << "TRT fused allreduce residual norm requires nranks in {2,4,8,16}; skip on <2 GPUs";
+  }
+
+  // Enable P2P between device 0 and 1 if available
+  for (int src = 0; src < 2; ++src) {
+    CUDA_CHECK(cudaSetDevice(src));
+    int can = 0;
+    CUDA_CHECK(cudaDeviceCanAccessPeer(&can, src, 1 - src));
+    if (can) {
+      cudaError_t err = cudaDeviceEnablePeerAccess(1 - src, 0);
+      if (err != cudaErrorPeerAccessAlreadyEnabled) {
+        CUDA_CHECK(err);
+      }
+    } else {
+      GTEST_SKIP() << "P2P not supported between device 0 and 1";
+    }
+  }
+
+  const int nranks = 2;
+  const int token_num = 32;
+  const int hidden_dim = 256;  // multiple of 4 for float4 path
+  const size_t num_elements = static_cast<size_t>(token_num) * hidden_dim;
+  const float rms_eps = 1e-6f;
+
+  // Create a separate stream for device 1
+  CUDA_CHECK(cudaSetDevice(0));
+  cudaStream_t stream0 = stream;
+  CUDA_CHECK(cudaSetDevice(1));
+  cudaStream_t stream1;
+  CUDA_CHECK(cudaStreamCreate(&stream1));
+
+  // Shared workspace pointer arrays (host-side tables)
+  std::vector<void*> buffer_d_ptrs(3 * nranks, nullptr);
+  std::vector<void*> flag_d_ptrs(nranks, nullptr);
+  std::vector<void*> workspace_d_ptrs(nranks, nullptr);
+
+  // Allocate and init workspaces for both ranks
+  CUDA_CHECK(cudaSetDevice(0));
+  AllocTrtAllReduceWorkspace(/*rank=*/0, token_num, hidden_dim, sizeof(half), buffer_d_ptrs, flag_d_ptrs,
+                             workspace_d_ptrs, stream0);
+  CUDA_CHECK(cudaSetDevice(1));
+  AllocTrtAllReduceWorkspace(/*rank=*/1, token_num, hidden_dim, sizeof(half), buffer_d_ptrs, flag_d_ptrs,
+                             workspace_d_ptrs, stream1);
+  CUDA_CHECK(cudaSetDevice(0));
+  InitTrtAllReduceWorkspace(/*rank=*/0, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream0);
+  CUDA_CHECK(cudaSetDevice(1));
+  InitTrtAllReduceWorkspace(/*rank=*/1, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream1);
+
+  // Allocate device tensors for rank 0
+  CUDA_CHECK(cudaSetDevice(0));
+  half *d_input0 = nullptr, *d_residual_in0 = nullptr, *d_residual_out0 = nullptr,
+    *d_norm_out0 = nullptr, *d_gamma0 = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_input0, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_residual_in0, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_residual_out0, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_norm_out0, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_gamma0, hidden_dim * sizeof(half)));
+
+  // Allocate device tensors for rank 1
+  CUDA_CHECK(cudaSetDevice(1));
+  half *d_input1 = nullptr, *d_residual_in1 = nullptr, *d_residual_out1 = nullptr,
+    *d_norm_out1 = nullptr, *d_gamma1 = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_input1, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_residual_in1, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_residual_out1, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_norm_out1, num_elements * sizeof(half)));
+  CUDA_CHECK(cudaMalloc(&d_gamma1, hidden_dim * sizeof(half)));
+
+  // Prepare host data
+  std::vector<float> h_input0_f(num_elements), h_input1_f(num_elements);
+  std::vector<float> h_residual0_f(num_elements), h_residual1_f(num_elements);
+  std::vector<float> h_gamma_f(hidden_dim);
+  std::vector<half> h_input0(num_elements), h_input1(num_elements);
+  std::vector<half> h_residual0(num_elements), h_residual1(num_elements);
+  std::vector<half> h_gamma(hidden_dim);
+  std::mt19937 rng(123);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  for (size_t i = 0; i < num_elements; ++i) {
+    h_input0_f[i] = dist(rng);
+    h_input1_f[i] = dist(rng);
+    h_residual0_f[i] = dist(rng);
+    h_residual1_f[i] = dist(rng);
+    h_input0[i] = __float2half(h_input0_f[i]);
+    h_input1[i] = __float2half(h_input1_f[i]);
+    h_residual0[i] = __float2half(h_residual0_f[i]);
+    h_residual1[i] = __float2half(h_residual1_f[i]);
+  }
+  for (int i = 0; i < hidden_dim; ++i) {
+    h_gamma_f[i] = 0.5f + 0.5f * dist(rng);
+    h_gamma[i] = __float2half(h_gamma_f[i]);
+  }
+
+  // H2D for both ranks
+  CUDA_CHECK(cudaSetDevice(0));
+  CUDA_CHECK(cudaMemcpyAsync(d_input0, h_input0.data(), num_elements * sizeof(half),
+                             cudaMemcpyHostToDevice, stream0));
+  CUDA_CHECK(cudaMemcpyAsync(d_residual_in0, h_residual0.data(), num_elements * sizeof(half),
+                             cudaMemcpyHostToDevice, stream0));
+  CUDA_CHECK(cudaMemcpyAsync(d_gamma0, h_gamma.data(), hidden_dim * sizeof(half), cudaMemcpyHostToDevice,
+                             stream0));
+  CUDA_CHECK(cudaSetDevice(1));
+  CUDA_CHECK(cudaMemcpyAsync(d_input1, h_input1.data(), num_elements * sizeof(half), cudaMemcpyHostToDevice,
+                            stream1));
+  CUDA_CHECK(cudaMemcpyAsync(d_residual_in1, h_residual1.data(), num_elements * sizeof(half), cudaMemcpyHostToDevice,
+                             stream1));
+  CUDA_CHECK(cudaMemcpyAsync(d_gamma1, h_gamma.data(), hidden_dim * sizeof(half), cudaMemcpyHostToDevice, stream1));
+  CUDA_CHECK(cudaStreamSynchronize(stream0));
+  CUDA_CHECK(cudaStreamSynchronize(stream1));
+
+  // Launch on both ranks
+  CUDA_CHECK(cudaSetDevice(0));
+  RunTrtFusedAllReduceResidualNorm<half>(d_input0, /*rank=*/0, token_num, hidden_dim, workspace_d_ptrs,
+                                          d_gamma0, rms_eps, d_residual_in0, d_residual_out0, d_norm_out0, stream0);
+  CUDA_CHECK(cudaSetDevice(1));
+  RunTrtFusedAllReduceResidualNorm<half>(d_input1, /*rank=*/1, token_num, hidden_dim, workspace_d_ptrs,
+                                          d_gamma1, rms_eps, d_residual_in1, d_residual_out1, d_norm_out1, stream1);
+
+  CUDA_CHECK(cudaStreamSynchronize(stream0));
+  CUDA_CHECK(cudaStreamSynchronize(stream1));
+
+  // Copy back some outputs for sanity
+  std::vector<half> h_residual_out0(num_elements), h_norm_out0(num_elements);
+  CUDA_CHECK(cudaSetDevice(0));
+  CUDA_CHECK(cudaMemcpyAsync(h_residual_out0.data(), d_residual_out0, num_elements * sizeof(half),
+                             cudaMemcpyDeviceToHost, stream0));
+  CUDA_CHECK(cudaMemcpyAsync(h_norm_out0.data(), d_norm_out0, num_elements * sizeof(half),
+                             cudaMemcpyDeviceToHost, stream0));
+  CUDA_CHECK(cudaStreamSynchronize(stream0));
+  for (size_t i = 0; i < num_elements; ++i) {
+    float v0 = __half2float(h_residual_out0[i]);
+    float v1 = __half2float(h_norm_out0[i]);
+    ASSERT_TRUE(std::isfinite(v0));
+    ASSERT_TRUE(std::isfinite(v1));
+  }
+
+  // Reference (non-fused) check on host for rank 0 output: allreduce(sum of inputs) + residual add + RMSNorm
+  std::vector<float> ref_residual_out(num_elements);
+  std::vector<float> ref_norm_out(num_elements);
+  for (int t = 0; t < token_num; ++t) {
+    float acc_sq = 0.f;
+    for (int c = 0; c < hidden_dim; ++c) {
+      const size_t idx = static_cast<size_t>(t) * hidden_dim + c;
+      float v = (h_input0_f[idx] + h_input1_f[idx]) + h_residual0_f[idx];
+      ref_residual_out[idx] = v;
+      acc_sq += v * v;
+    }
+    float mean_sq = acc_sq / static_cast<float>(hidden_dim);
+    float inv_rms = 1.0f / std::sqrt(mean_sq + rms_eps);
+    for (int c = 0; c < hidden_dim; ++c) {
+      const size_t idx = static_cast<size_t>(t) * hidden_dim + c;
+      ref_norm_out[idx] = ref_residual_out[idx] * h_gamma_f[c] * inv_rms;
+    }
+  }
+
+  // Compare fused device outputs with reference (allowing half precision tolerance)
+  const float atol_residual = 1e-2f;
+  const float atol_norm = 2e-2f;
+  for (size_t i = 0; i < num_elements; ++i) {
+    float fused_residual = __half2float(h_residual_out0[i]);
+    float fused_norm = __half2float(h_norm_out0[i]);
+    EXPECT_NEAR(fused_residual, ref_residual_out[i], atol_residual) << "residual mismatch at [" << i << "]";
+    EXPECT_NEAR(fused_norm, ref_norm_out[i], atol_norm) << "norm mismatch at [" << i << "]";
+  }
+
+  // Cleanup device resources
+  CUDA_CHECK(cudaSetDevice(0));
+  CUDA_CHECK(cudaFree(d_input0));
+  CUDA_CHECK(cudaFree(d_residual_in0));
+  CUDA_CHECK(cudaFree(d_residual_out0));
+  CUDA_CHECK(cudaFree(d_norm_out0));
+  CUDA_CHECK(cudaFree(d_gamma0));
+  CUDA_CHECK(cudaSetDevice(1));
+  CUDA_CHECK(cudaFree(d_input1));
+  CUDA_CHECK(cudaFree(d_residual_in1));
+  CUDA_CHECK(cudaFree(d_residual_out1));
+  CUDA_CHECK(cudaFree(d_norm_out1));
+  CUDA_CHECK(cudaFree(d_gamma1));
+
+  // Free workspaces
+  CUDA_CHECK(cudaSetDevice(0));
+  FreeTrtAllReduceWorkspace(/*rank=*/0, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream0);
+  CUDA_CHECK(cudaSetDevice(1));
+  FreeTrtAllReduceWorkspace(/*rank=*/1, buffer_d_ptrs, flag_d_ptrs, workspace_d_ptrs, stream1);
+  CUDA_CHECK(cudaStreamDestroy(stream1));
+}
+
 TEST_F(KernelWrapperTest, InvokeFusedMoeTest) {
   // 测试不同的num_tokens和num_experts组合
   std::vector<size_t> test_num_tokens = {32 /*, 512, 1024, 2048, 4096, 8192, 32000*/};

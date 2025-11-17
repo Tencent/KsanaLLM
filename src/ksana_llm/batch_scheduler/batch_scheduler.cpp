@@ -94,6 +94,11 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
       }
     }
   }
+
+  // Initialize QPS tracking
+  last_qps_update_time_ = std::chrono::steady_clock::now();
+  request_count_window_ = 0;
+  current_qps_ = 0.0;
 }
 
 BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
@@ -301,8 +306,13 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
   Singleton<LayerProgressTracker>::GetInstance()->ResetState();
 
-  BalanceWaitingReqs();
-
+  // ADP Balance: Apply balance strategy before normal balance
+  if (batch_scheduler_config_.attention_dp_lb_config.enable_balance && dp_num_ > 1) {
+    BalanceADPRequests(multi_batch_id);
+  } else {
+    // Normal balance process when ADP Balance is disabled
+    BalanceWaitingReqs();
+  }
   BalancePPMultiBatchReqs(multi_batch_id);
 
   std::vector<std::future<void>> futures;
@@ -354,14 +364,12 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
 }
 
 void BatchScheduler::ReportTotalState() {
-  static time_t last_report_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  time_t current_time_ms = ProfileTimer::GetCurrentTimeInMs();
   // Report every 10 seconds.
   constexpr size_t kReportIntervalMs = 10000;
-  if ((current_time_ms - last_report_time_ms) < kReportIntervalMs) {
+  static IntervalLogger interval_logger(kReportIntervalMs);
+  if (!interval_logger.ShouldLog()) {
     return;
   }
-  last_report_time_ms = current_time_ms;
 
   size_t total_running_size = 0;
   size_t total_waiting_size = 0;
@@ -400,7 +408,7 @@ Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
                                      std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
   // To avoid Mock requests being categorized as SingleTokenForward requests, we calculate the Mock request total
   // length as: Mock total length = MTP token count + SingleToken length + 1 (additional token)
-  size_t mock_req_length = (runtime_config.enable_mtp_module ? 1 : 0) + 1 + 1;
+  const size_t mock_req_length = runtime_config.mtp_step_num + 1 + 1;
   auto mock_req_input = std::make_shared<KsanaPythonInput>();
   alias_python_input_ = mock_req_input;
   std::vector<int> input_tokens(mock_req_length, 0);
@@ -431,7 +439,7 @@ Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
     Singleton<Environment>::GetInstance()->GetCacheManagerConfig(cache_manager_config);
     infer_req->block_token_num = cache_manager_config.block_token_num;
     infer_req->model_instance = model_instances_[0];
-    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 0;
     infer_req->kv_cached_token_num = 0;
     infer_req->req_id = mock_req->req_id;
@@ -445,6 +453,224 @@ Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
   }
 
   return Status();
+}
+
+void BatchScheduler::CalculatePrefillWorkload(std::vector<float>& workload) {
+  workload.assign(dp_num_, 0);
+  for (size_t i = 0; i < dp_num_; ++i) {
+    float prefill_workload = 0;
+    // Calculate PrefillWorkload: sum of (forwarding_tokens - kv_cached_token_num) for running requests
+    for (int j = 0; j < pp_batch_num_; j++) {
+      auto& batch_state = batch_states_[i][j];
+      std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
+      for (const auto& req : batch_state->schedule_output->running_reqs) {
+        int64_t tokens_num = 0;
+        if (req->forwarding_tokens.size() > 0) {
+          tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+        } else {
+          tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+        }
+        prefill_workload += static_cast<float>(tokens_num > 0 ? tokens_num : 1);
+      }
+    }
+    workload[i] = prefill_workload;
+  }
+}
+
+void BatchScheduler::DistributeRequestsByToken(
+    const std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>>& requests_with_tokens) {
+  // Calculate current workload for each DP rank
+  std::vector<float> workload;
+  CalculatePrefillWorkload(workload);
+
+  // Sort requests by token count in descending order (largest first)
+  // This is a key optimization: assign heavy requests first for better global balance
+  auto sorted_requests = requests_with_tokens;
+  std::sort(sorted_requests.begin(), sorted_requests.end(),
+            [](const auto& a, const auto& b) { return a.first > b.first; });
+
+  // Use minimum makespan algorithm (minimize maximum workload)
+  // This is better than simple greedy as it considers global optimization
+  for (const auto& [tokens_num, req] : sorted_requests) {
+    // Find the rank that would result in minimum maximum workload after assignment
+    size_t best_rank = 0;
+    float min_max_workload = workload[0] + static_cast<float>(tokens_num);
+
+    for (size_t i = 1; i < dp_num_; ++i) {
+      float potential_workload = workload[i] + static_cast<float>(tokens_num);
+      if (potential_workload < min_max_workload) {
+        min_max_workload = potential_workload;
+        best_rank = i;
+      }
+    }
+
+    // Assign request to the best rank
+    dp_waiting_reqs_[best_rank].push_back(req);
+
+    // Update workload for the selected rank
+    workload[best_rank] += static_cast<float>(tokens_num);
+  }
+
+  // Calculate and log final load balance metrics for debugging
+  float max_workload = *std::max_element(workload.begin(), workload.end());
+  float min_workload = *std::min_element(workload.begin(), workload.end());
+  float avg_workload = std::accumulate(workload.begin(), workload.end(), 0.0f) / dp_num_;
+  float load_imbalance = max_workload > 0 ? (max_workload - min_workload) / max_workload : 0.0f;
+
+  KLLM_LOG_DEBUG << "ADP DistributeRequestsByToken: assigned " << sorted_requests.size()
+                 << " requests, load_imbalance=" << load_imbalance << ", max_workload=" << max_workload
+                 << ", min_workload=" << min_workload << ", avg_workload=" << avg_workload;
+}
+
+bool BatchScheduler::IsADPBalanceTimeout() {
+  // Check time-based timeout first
+  if (adp_balance_waiting_iters_ > 0) {
+    auto current_time = std::chrono::steady_clock::now();
+    auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(current_time - adp_balance_start_time_).count();
+    if (elapsed_ms >= static_cast<int64_t>(GetCurrentPrefillAccumulationMaxTimeMs())) {
+      return true;
+    }
+  }
+
+  // Check iteration-based timeout
+  return adp_balance_waiting_iters_ >= GetCurrentPrefillAccumulationMaxSteps();
+}
+
+void BatchScheduler::UpdateQPS(size_t request_count) {
+  request_count_window_ += request_count;  // 累加实际的请求数量
+
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_qps_update_time_).count();
+
+  // 每隔QPS_UPDATE_INTERVAL_SECONDS秒更新一次QPS
+  if (elapsed >= static_cast<double>(QPS_UPDATE_INTERVAL_SECONDS)) {
+    current_qps_ = request_count_window_ / elapsed;
+
+    KLLM_LOG_DEBUG << "Updated QPS: " << current_qps_ << " req/s (based on " << request_count_window_ << " requests in "
+                   << elapsed << "s)";
+
+    last_qps_update_time_ = now;
+    request_count_window_ = 0;
+  }
+}
+
+size_t BatchScheduler::GetCurrentPrefillAccumulationMaxSteps() {
+  double min_qps_for_waiting = batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting;
+  // QPS大于阈值时不做累积，否则使用配置值（阈值<0表示所有QPS都使用）
+  return (min_qps_for_waiting >= 0 && current_qps_ > min_qps_for_waiting)
+             ? 0
+             : batch_scheduler_config_.attention_dp_lb_config.max_waiting_steps;
+}
+
+size_t BatchScheduler::GetCurrentPrefillAccumulationMaxTimeMs() {
+  double min_qps_for_waiting = batch_scheduler_config_.attention_dp_lb_config.min_qps_for_waiting;
+  // QPS大于阈值时不做累积，否则使用配置值（阈值<0表示所有QPS都使用）
+  return (min_qps_for_waiting >= 0 && current_qps_ > min_qps_for_waiting)
+             ? 0
+             : batch_scheduler_config_.attention_dp_lb_config.max_waiting_time_in_ms;
+}
+
+void BatchScheduler::BalanceADPRequests(size_t multi_batch_id) {
+  // Step 1: Collect all waiting requests (similar to BalanceWaitingReqs)
+  std::vector<std::pair<size_t, std::shared_ptr<InferRequest>>> waiting_reqs_with_index;
+  {
+    std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
+
+    // Collect from waiting_reqs_
+    for (auto& req : waiting_reqs_) {
+      int64_t tokens_num = 0;
+      if (req->forwarding_tokens.size() > 0) {
+        tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      } else {
+        tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+      }
+      tokens_num = tokens_num > 0 ? tokens_num : 1;
+      waiting_reqs_with_index.emplace_back(
+          std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
+    }
+    waiting_reqs_.clear();
+  }
+
+  // Collect from dp_waiting_reqs_ and batch_states waiting queues
+  for (size_t i = 0; i < dp_num_; ++i) {
+    // From dp_waiting_reqs_
+    for (auto& req : dp_waiting_reqs_[i]) {
+      int64_t tokens_num = 0;
+      if (req->forwarding_tokens.size() > 0) {
+        tokens_num = req->forwarding_tokens.size() - req->kv_cached_token_num;
+      } else {
+        tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+      }
+      tokens_num = tokens_num > 0 ? tokens_num : 1;
+      waiting_reqs_with_index.emplace_back(
+          std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
+    }
+    dp_waiting_reqs_[i].clear();
+
+    // From batch_states waiting queues for the specific multi_batch_id
+    auto& batch_state = batch_states_[i][multi_batch_id];
+    std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
+    for (auto& req : batch_state->waiting_queue) {
+      int64_t tokens_num = req->input_tokens.size() - req->kv_cached_token_num;
+      tokens_num = tokens_num > 0 ? tokens_num : 1;
+      waiting_reqs_with_index.emplace_back(
+          std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
+    }
+    batch_state->waiting_queue.clear();
+  }
+
+  // Step 2: All waiting requests are prefill requests
+  // Check balance conditions:
+  // 1. waiting_reqs_with_index.size() >= dp_num_ (enough requests for all ranks)
+  // 2. Not all ranks have generation requests
+  bool all_ranks_have_ctx_requests = waiting_reqs_with_index.size() >= dp_num_;
+  bool all_ranks_have_gen_requests = true;
+
+  // Check if all ranks have generation requests
+  for (size_t i = 0; i < dp_num_; i++) {
+    auto& batch_state = batch_states_[i][multi_batch_id];
+    if (batch_state->schedule_output->running_reqs.size() == 0) {
+      all_ranks_have_gen_requests = false;
+      break;
+    }
+  }
+
+  // Step 3: Check timeout condition
+  bool timeout_reached = IsADPBalanceTimeout();
+
+  // Step 4: Decide whether to proceed with prefill
+  bool should_proceed_prefill = all_ranks_have_ctx_requests || !all_ranks_have_gen_requests || timeout_reached;
+  // Step 5: Apply decision and distribute requests
+  if (should_proceed_prefill) {
+    // Proceed with prefill: distribute requests based on current workload
+    DistributeRequestsByToken(waiting_reqs_with_index);
+
+    adp_balance_waiting_iters_ = 0;
+    adp_balance_context_batches_ = 0;
+
+    if (timeout_reached) {
+      KLLM_LOG_DEBUG << "ADP Balance: Proceeding with prefill due to timeout - waiting_iters="
+                     << adp_balance_waiting_iters_ << ", waiting_reqs_count=" << waiting_reqs_with_index.size();
+    } else {
+      KLLM_LOG_DEBUG << "ADP Balance: Proceeding with prefill - waiting_reqs_count=" << waiting_reqs_with_index.size()
+                     << ", dp_num=" << dp_num_ << ", all_ranks_have_gen=" << all_ranks_have_gen_requests;
+    }
+  } else {
+    // Don't proceed with prefill: save all waiting requests back for next iteration
+    {
+      std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
+      for (auto& [tokens_num, req] : waiting_reqs_with_index) {
+        waiting_reqs_.push_back(req);
+      }
+    }
+
+    // Initialize start time for first wait iteration
+    if (adp_balance_waiting_iters_ == 0) {
+      adp_balance_start_time_ = std::chrono::steady_clock::now();
+    }
+    adp_balance_waiting_iters_++;
+  }
 }
 
 }  // namespace ksana_llm

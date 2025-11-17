@@ -100,6 +100,7 @@ TEST_F(LlmRuntimeTest, TransferGeneratedTokenTest) {
 
   EXPECT_CALL(*MockTransferEngine::GetInstance(), Send(expected)).Times(1);
 
+  MockTransferEngine::GetInstance()->SetGroupRole(GroupRole::PREFILL);
   llm_runtime_->TransferGeneratedToken(reqs, MockTransferEngine::GetInstance());
 }
 

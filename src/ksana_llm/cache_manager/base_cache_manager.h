@@ -247,7 +247,7 @@ class BaseCacheManager {
     req_memory_block_swappiness.device_memory_blocks = memory_block_ids;
 
     request_memory_block_swap_result_[req_id] = threadpool_->Submit([=] {
-      for (int i = 0; i < memory_block_ids.size(); ++i) {
+      for (size_t i = 0; i < memory_block_ids.size(); ++i) {
         for (size_t j = 0; j < block_device_num_; ++j) {
           block_allocator_group_->SwapIn(j, req_memory_block_swappiness.device_memory_blocks[j],
                                          req_memory_block_swappiness.host_memory_blocks[i][j]);

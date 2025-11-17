@@ -67,7 +67,7 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
   // is full nvlink on each device
   is_full_nvlink_ = context_->ext->IsFullNvLink();
   // Enable trt allreduce only when `tp_size == 2` and group all reduce is not used
-  if (enable_trt_reduce_ = (world_size_ == 2 && !is_group_custom_all_reduce_)) {
+  if ((enable_trt_reduce_ = (world_size_ == 2 && !is_group_custom_all_reduce_))) {
     // When nvlink is not available, lower the threshold for using trt allreduce
     if (!is_full_nvlink_) {
       TRT_REDUCE_THRESHOLD = 128;

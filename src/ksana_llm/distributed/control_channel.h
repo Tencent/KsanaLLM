@@ -103,9 +103,6 @@ class ControlChannel {
   // send schedule output to workers.
   virtual Status ProcessSendScheduleOutputLoop();
 
-  virtual Status ProcessExpertParallelResponse(NodeInfo* node_info, Packet* req_packet) { return Status(); }
-  virtual Status ProcessExpertParallelRequest(NodeInfo* node_info, Packet* req_packet) { return Status(); }
-
   virtual Status ProcessNvshmemUniqueIdRequest(NodeInfo* node_info, Packet* req_packet) { return Status(); }
   virtual Status ProcessNvshmemUniqueIdResponse(NodeInfo* node_info, Packet* rsp_packet) { return Status(); }
 
@@ -118,7 +115,6 @@ class ControlChannel {
 
   // The environments.
   std::shared_ptr<Environment> env_ = nullptr;
-  bool enable_mtp_module_ = false;
 
   // The buffer pool.
   ScheduleOutputPool* schedule_output_pool_ = nullptr;

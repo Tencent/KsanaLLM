@@ -3,8 +3,6 @@
 ==============================================================================*/
 #pragma once
 
-#include "ksana_llm/data_hub/expert_parallel_data_transfer.h"
-#include "ksana_llm/data_hub/expert_parallel_hidden_unit_buffer.h"
 #include "ksana_llm/data_hub/hidden_unit_buffer.h"
 #include "ksana_llm/layers/activation_layer.h"
 #include "ksana_llm/layers/mul_layer.h"
@@ -50,9 +48,9 @@ class DeepSeekV3DecoderLayer {
 
   std::shared_ptr<MultiHeadLatentAttention> mla_;
 
-  bool enable_full_shared_expert_;
-  int layer_idx_;
-  int rank_;
+  const bool enable_full_shared_expert_;
+  const int layer_idx_;
+  const int rank_;
 
   std::shared_ptr<TwoLayeredFFN> mlp_;
   std::shared_ptr<TwoLayeredFFN> shared_mlp_;
@@ -68,8 +66,6 @@ class DeepSeekV3DecoderLayer {
   std::vector<Tensor> distributed_device_buffer_;
   std::vector<Tensor> distributed_device_buffer_prefill_;
 
-  // Used to send and recive moe input/output among expert parallel nodes.
-  std::shared_ptr<ExpertParallelDataTransfer> ep_data_transfer_;
   // Store the moe-computing-tasks from remote expert parallel nodes.
   std::vector<std::vector<Tensor>> moe_queue_in_;
 };
@@ -110,8 +106,9 @@ class DeepSeekV3Model : public CommonModel {
 
   std::map<int, std::shared_ptr<DeepSeekV3DecoderLayer>> layers_;
   std::map<int, std::shared_ptr<DeepSeekV3MtpLayer>> nextn_layers_;
+  int16_t nextn_layer_idx_;  // Record the index of MTP layers used in this forward pass.
 
-  int first_k_dense_replace_;
+  const int first_k_dense_replace_;
   MlaBuffers mla_buffers_;
   IndexerBuffers indexer_buffers_;
   TensorBuffer* moe_buffer_;

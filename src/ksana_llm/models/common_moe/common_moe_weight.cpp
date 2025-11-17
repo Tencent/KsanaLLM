@@ -17,21 +17,21 @@ CommonMoeWeight<T>::CommonMoeWeight(const ModelConfig& model_config, const Runti
   SetDevice(rank_);
   ExpertParallelConfig expert_parallel_config;
   Singleton<Environment>::GetInstance()->GetExpertParallelConfig(expert_parallel_config);
-  size_t expert_node_rank = expert_parallel_config.expert_node_rank;
-  size_t num_experts = model_config_.moe_config.num_experts;
+  const size_t expert_node_rank = expert_parallel_config.expert_node_rank;
+  const size_t num_experts = model_config_.moe_config.num_experts;
   num_experts_per_rank_ = (num_experts + global_expert_para_size_ - 1) / global_expert_para_size_;
-  expert_map_ = std::vector<int>(num_experts, -1);
-  size_t rank_expert_offset = expert_node_rank * expert_para_size_ * num_experts_per_rank_;
-  size_t expert_offset = (global_expert_para_size_ > 1) ? ((rank_ % expert_para_size_) * num_experts_per_rank_) : 0;
-  size_t expert_start_id = rank_expert_offset + expert_offset;
-  size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank_);
+  const size_t rank_expert_offset = expert_node_rank * expert_para_size_ * num_experts_per_rank_;
+  const size_t expert_offset =
+      (global_expert_para_size_ > 1) ? ((rank_ % expert_para_size_) * num_experts_per_rank_) : 0;
+  const size_t expert_start_id = rank_expert_offset + expert_offset;
+  const size_t expert_end_id = std::min(num_experts, expert_start_id + num_experts_per_rank_);
   KLLM_LOG_INFO << fmt::format(
       "node number = {}, node rank = {}, expert_para_size on each node = {}. experts number on each gpu rank = {}",
       expert_world_size_, expert_node_rank, expert_para_size_, num_experts_per_rank_);
 
-  for (size_t i = expert_start_id; i < expert_end_id; ++i) {
-    expert_map_[i] = i - expert_start_id;
-  }
+  expert_map_.assign(num_experts, -1);
+  std::iota(expert_map_.begin() + expert_start_id, expert_map_.begin() + expert_end_id, 0);
+
   KLLM_LOG_INFO << fmt::format("In Rank {}, valid expert range is from {} to {}", rank_, expert_start_id,
                                expert_end_id - 1);
 }

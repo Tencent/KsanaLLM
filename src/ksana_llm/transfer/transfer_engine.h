@@ -153,6 +153,8 @@ class TransferEngine {
 
   void SetGroupRole(GroupRole group_role) { group_role_ = group_role; }
 
+  GroupRole GetGroupRole() const { return group_role_; }
+
  private:
   /**
    * @brief 为decode节点创建传输任务

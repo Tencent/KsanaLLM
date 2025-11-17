@@ -97,7 +97,12 @@ class FakedBlockAllocator : public BlockAllocatorInterface {
   }
 
   virtual Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override {
-    addrs.resize(blocks.size(), nullptr);
+    addrs.assign(blocks.size(), nullptr);
+    return Status();
+  }
+
+  virtual Status AppendBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override {
+    addrs.assign(blocks.size(), nullptr);
     return Status();
   }
 

@@ -228,6 +228,12 @@ void RunTrtAllReduce(void* input, const int rank, const int token_num, const int
                      const std::vector<void*>& workspace_d_ptrs, void* output, cudaStream_t stream);
 
 template <typename T>
+void RunTrtFusedAllReduceResidualNorm(void* input, const int rank, const int token_num, const int hidden_dim,
+                                      const std::vector<void*>& workspace_d_ptrs, void* d_rms_gamma_ptr, float rms_eps,
+                                      void* residual_in_ptr, void* residual_out_ptr, void* norm_out_ptr,
+                                      cudaStream_t stream);
+
+template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream);
 
 template <typename T>
@@ -252,6 +258,8 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
                   int64_t* token_ids);
 
 #ifdef ENABLE_FP8
+// The input address of each token must be aligned to 16-byte.
+// This alignment is required by the underlying CUDA kernels (v2 version) that utilize vectorized data access.
 template <typename T>
 void Fp8E4m3Quantize(int num_channels, int channel_size, const T* input_ptr, void* quant_ptr, float* scale_ptr,
                      bool is_static, cudaStream_t& stream);
@@ -280,6 +288,9 @@ cudaStream_t InvokeSetTorchStream(cudaStream_t& stream, int rank);
 template <typename T>
 void InvokeBlockGemm(void* a, float* a_scales, void* b, float* b_scales, void* output, int m, int k, int n,
                      cudaStream_t& stream, void* cutlass_buffer = nullptr, size_t cutlass_buffer_size = 0ul);
+
+template <typename T>
+size_t InvokeGetBlockGemmWorkspaceSize(int m, int k, int n);
 
 struct PerTokenGroupQuantFusionParams {
   bool fuse_silu_mul{false};  // apply silu-mul to the input first, the shape of input should be `[m, 2*n]`

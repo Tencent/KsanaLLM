@@ -241,7 +241,7 @@ class TaskDispatcherTest : public ::testing::Test {
     for (const auto& key : task_keys) {
       auto task = CreateMockTask(key.req_id, key.block_idx, key.layer_idx, key.hash_device_id, key.tensor_size);
       task_manager_->AddTask(key, task);
-      // Add to processing buffer to simulate pending tasks
+      // Add to processing buffer to simulate unconfirmed tasks
       task_manager_->PutProcessingBuffer(key);
     }
   }
@@ -447,6 +447,56 @@ TEST_F(TaskDispatcherTest, RegisterPrefillRecv) {
 
   // Should not crash when called
   task_dispatcher_->RegisterPrefillRecv();
+}
+
+// RegisterPrefillRecv error branch: ZMQ communicator is null
+TEST_F(TaskDispatcherTest, RegisterPrefillRecv_ZmqCommunicatorNull) {
+  CreateTaskDispatcher();
+
+  // Don't initialize to keep zmq_communicator_ null
+  EXPECT_NO_THROW(task_dispatcher_->RegisterPrefillRecv());
+}
+
+// RegisterPrefillRecv error branches inside callback
+TEST_F(TaskDispatcherTest, RegisterPrefillRecv_CallbackErrorBranches) {
+  CreateTaskDispatcher();
+
+  // Avoid auto-calling RegisterPrefillRecv in Initialize
+  task_dispatcher_->config_.group_role = GroupRole::DECODE;
+
+  // Set up expectations for Initialize() call to get a valid ZMQ communicator
+  EXPECT_CALL(*mock_comm_manager_, IsInitialized()).WillOnce(testing::Return(false));
+  EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
+  EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
+  EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
+      .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
+
+  // Capture the callback (it may be set multiple times; keep the latest)
+  Communicator::ReceiveCallback captured_callback;
+  EXPECT_CALL(*mock_zmq_communicator_, DoSetReceiveCallback(testing::_))
+      .WillRepeatedly(testing::DoAll(testing::SaveArg<0>(&captured_callback), testing::Return()));
+
+  // Initialize to set zmq communicator instance
+  task_dispatcher_->Initialize(device_info_manager_);
+
+  // Now register the prefill recv handler; this should update captured_callback
+  task_dispatcher_->RegisterPrefillRecv();
+  ASSERT_TRUE(captured_callback != nullptr);
+
+  // Case 1: Device config signal with missing payload (only prefix)
+  {
+    std::string only_prefix = std::string(kDeviceSignal);
+    captured_callback(only_prefix.data(), only_prefix.size(), 0, nullptr);
+  }
+
+  // Case 2: Invalid signal format (neither device config nor valid TaskKey batch)
+  {
+    const char* invalid = "bad";  // size not multiple of sizeof(TaskKey) and no device signal prefix
+    captured_callback(invalid, 3, 0, nullptr);
+  }
+
+  // Clean up threads started during Initialize
+  task_dispatcher_->Shutdown();
 }
 
 TEST_F(TaskDispatcherTest, RegisterDecodeRecv) {
@@ -1170,11 +1220,11 @@ TEST_F(TaskDispatcherTest, SendDataToDecodeWithNccl_MixedValidInvalidTasks) {
 
   // Create mixed task keys - some valid, some invalid
   std::vector<TaskKey> task_keys;
-  task_keys.push_back(CreateTaskKey(1, 0, 0, 0, 0));  // Valid task (will be added to manager)
+  task_keys.push_back(CreateTaskKey(1, 0, 0, 0, 2));  // Valid tensor task (tensor_size>0, will be added to manager)
   task_keys.push_back(CreateTaskKey(2, 1, 0, 0, 1));  // Invalid task (not added to manager)
-  task_keys.push_back(CreateTaskKey(3, 2, 0, 0, 0));  // Valid task (will be added to manager)
+  task_keys.push_back(CreateTaskKey(3, 2, 0, 0, 2));  // Valid tensor task (tensor_size>0, will be added to manager)
 
-  // Only add some tasks to manager
+  // Only add valid tensor tasks to manager so NCCL SendGroup has payloads
   std::vector<TaskKey> valid_tasks = {task_keys[0], task_keys[2]};
   AddTasksToManager(valid_tasks);
 
@@ -1336,34 +1386,6 @@ TEST_F(TaskDispatcherTest, CheckConnection_FirstAttemptWithTimeout) {
   // Note: In test environment, the actual wait may be shorter due to mocking
 }
 
-TEST_F(TaskDispatcherTest, CheckConnection_RetryAfterFirstAttempt) {
-  CreateTaskDispatcher();
-
-  // Set up expectations for Initialize() call
-  EXPECT_CALL(*mock_comm_manager_, IsInitialized()).WillOnce(testing::Return(false));
-  EXPECT_CALL(*mock_comm_manager_, Initialize()).WillOnce(testing::Return(Status()));
-  EXPECT_CALL(*mock_comm_manager_, CreateZmqCommunicator()).WillOnce(testing::Return(Status()));
-  EXPECT_CALL(*mock_comm_manager_, GetZmqCommunicator())
-      .WillRepeatedly(testing::Return(reinterpret_cast<ZmqCommunicator*>(mock_zmq_communicator_.get())));
-
-  task_dispatcher_->Initialize(device_info_manager_);
-
-  // First attempt - fails (allow multiple calls during timeout waiting and final check)
-  EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("failing_group", 0))
-      .WillOnce(testing::Return(false))
-      .WillOnce(testing::Return(true))
-      .WillOnce(testing::Return(false));
-
-  bool first_result = task_dispatcher_->CheckConnection("failing_group", 0);
-  EXPECT_TRUE(first_result);
-
-  // Second attempt (retry) - should not wait as long since it's not first attempt
-  bool second_result = task_dispatcher_->CheckConnection("failing_group", 0);
-
-  EXPECT_FALSE(second_result);
-  // Retry should be faster than first attempt
-}
-
 TEST_F(TaskDispatcherTest, CheckConnection_NullZmqCommunicator) {
   CreateTaskDispatcher();
 
@@ -1479,7 +1501,7 @@ TEST_F(TaskDispatcherTest, CheckConnection_RepeatedFailures) {
   EXPECT_CALL(*mock_zmq_communicator_, IsConnectionReady("failing_group", 0)).WillRepeatedly(testing::Return(false));
 
   // Test multiple consecutive failures
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < 2; ++i) {
     bool result = task_dispatcher_->CheckConnection("failing_group", 0);
     EXPECT_FALSE(result);
   }

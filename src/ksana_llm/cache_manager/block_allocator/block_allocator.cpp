@@ -83,7 +83,7 @@ void BlockAllocator::Clear() {
 
 #if defined(ENABLE_ACL_ATB) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(shared_mutex_);
 
     if (blocks_base_ptr_ != nullptr) {
       if (location_ == MemoryLocation::LOCATION_DEVICE && !DeviceMemoryPool::Empty()) {
@@ -111,14 +111,14 @@ void BlockAllocator::Clear() {
       }
     };
 
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(shared_mutex_);
     clear_fn(free_blocks_);
     clear_fn(used_blocks_);
   }
 }
 
 Status BlockAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks) {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::shared_mutex> lock(shared_mutex_);
 
   if (block_num > free_blocks_.size()) {
     return Status(RET_DEVICE_MEM_ALLOCATE_FAILED,
@@ -137,7 +137,7 @@ Status BlockAllocator::AllocateBlocks(size_t block_num, std::vector<int>& blocks
 }
 
 Status BlockAllocator::FreeBlocks(const std::vector<int>& blocks) {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::shared_mutex> lock(shared_mutex_);
 
   for (auto block_id : blocks) {
     auto it = used_blocks_.find(block_id);
@@ -151,23 +151,32 @@ Status BlockAllocator::FreeBlocks(const std::vector<int>& blocks) {
   return Status();
 }
 
+// get block pointer to addrs
 Status BlockAllocator::GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
-  std::unique_lock<std::mutex> lock(mutex_);
-
   addrs.clear();
-  addrs.reserve(blocks.size());
-  for (auto block_id : blocks) {
-    auto it = used_blocks_.find(block_id);
-    if (it != used_blocks_.end()) {
-      addrs.push_back(it->second);
+  return AppendBlockPtrs(blocks, addrs);
+}
+
+// append new block pointers to addrs
+Status BlockAllocator::AppendBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) {
+  const size_t exist_blocks = addrs.size();
+  if (exist_blocks == blocks.size()) {
+    return Status();
+  }
+
+  addrs.resize(blocks.size());
+  std::shared_lock<std::shared_mutex> lock(shared_mutex_);
+  for (size_t i = exist_blocks; i < blocks.size(); ++i) {
+    const int block_id = blocks[i];
+    if (const auto it = used_blocks_.find(block_id); it != used_blocks_.end()) {
+      addrs[i] = it->second;
       continue;
     }
 
     // For distributed worker node, get from free blocks.
     if (!context_->IsChief()) {
-      auto it2 = free_blocks_.find(block_id);
-      if (it2 != free_blocks_.end()) {
-        addrs.push_back(it2->second);
+      if (const auto it = free_blocks_.find(block_id); it != free_blocks_.end()) {
+        addrs[i] = it->second;
         continue;
       }
     }
@@ -183,12 +192,12 @@ void* BlockAllocator::GetBlocksBasePtr() { return blocks_base_ptr_; }
 int BlockAllocator::GetBlocksBaseId() { return blocks_base_id_; }
 
 size_t BlockAllocator::GetFreeBlockNumber() {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(shared_mutex_);
   return free_blocks_.size();
 }
 
 size_t BlockAllocator::GetUsedBlockNumber() {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(shared_mutex_);
   return used_blocks_.size();
 }
 

@@ -76,7 +76,6 @@ class SamplerTest : public testing::Test {
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs_);
     sample_req.ngram_dict = &ngram_dict_;
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
-    sample_req.model_config = &model_config_;
     sample_req.sampling_config = &sampling_config_;
     sample_req.last_step_token_num = last_step_token_num_;
     return sample_req;

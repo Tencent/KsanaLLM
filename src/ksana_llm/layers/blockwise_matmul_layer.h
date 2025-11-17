@@ -4,6 +4,7 @@
 #pragma once
 
 #ifdef ENABLE_FP8
+#  include <mutex>
 #  include "ksana_llm/layers/base_layer.h"
 #  ifdef ENABLE_CUDA
 #    include "csrc/kernels/nvidia/gemm/deepgemm/deepgemm_wrapper.h"
@@ -20,7 +21,7 @@ class BlockwiseMatMulLayer : public BaseLayer {
 
   virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
 
-  virtual size_t GetWorkSpaceSize() override;
+  virtual size_t GetWorkspaceSize() override;
 
   virtual Status Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) override;
 

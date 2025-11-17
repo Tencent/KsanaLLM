@@ -88,7 +88,7 @@ void ScheduleConfigParser::Reset() {
   reasoning_config_ = {};
 }
 
-Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelConfig &model_config) {
+Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const ModelConfig &model_config) {
   // Read global setting.
   runtime_config_.parallel_basic_config.tensor_parallel_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.tensor_para_size", 0);
@@ -238,8 +238,22 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.split_fuse_token_num", 0);
   batch_scheduler_config_.enable_speculative_decoding = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
-  batch_scheduler_config_.enable_mtp_module =
+  batch_scheduler_config_.mtp_step_num =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.mtp_step_num", 0);
+
+  // TODO(lijiajieli): compatible for enable_mtp_module, will be deleted around 2025.11
+  const bool enable_mtp_module =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_mtp_module", false);
+  if (enable_mtp_module && batch_scheduler_config_.mtp_step_num == 0) {
+    batch_scheduler_config_.mtp_step_num = 1;
+  }
+  if (model_config.num_nextn_predict_layers == 0 && batch_scheduler_config_.mtp_step_num != 0) {
+    batch_scheduler_config_.mtp_step_num = 0;
+    KLLM_LOG_WARNING << "There is no MTP layer in the model, mtp_step_num will be set to 0.";
+  }
+  KLLM_LOG_INFO << "mtp_step_num: " << batch_scheduler_config_.mtp_step_num
+                << ", model MTP layer: " << model_config.num_nextn_predict_layers;
+
   batch_scheduler_config_.enable_xgrammar =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", false);
   batch_scheduler_config_.enable_async =
@@ -267,8 +281,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, ModelC
 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
-  // When MTP is enabled, each request requires calculating 2 tokens while decoding.
-  batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.enable_mtp_module ? 2 : 1;
+  // When MTP is enabled, each request requires calculating mtp_step_num + 1 tokens while decoding.
+  batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.mtp_step_num + 1;
 
   if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
     KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,
@@ -425,8 +439,8 @@ void ScheduleConfigParser::UpdateMembers(const std::string &model_dir, ModelConf
   }
 }
 
-void ScheduleConfigParser::InitConnectorConfig(
-    YamlReader &yaml_reader) {  // Parse connector role first to check if we should continue parsing
+void ScheduleConfigParser::InitConnectorConfig(YamlReader &yaml_reader) {
+  // Parse connector role first to check if we should continue parsing
   std::string role_str =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.group_role", "none");
 
@@ -476,6 +490,8 @@ void ScheduleConfigParser::InitConnectorConfig(
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.transfer_batch", 1048576);
       connector_config_.connector_waiting_sec =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.connector_waiting_sec", 1800);
+      connector_config_.task_expire_sec =
+          yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.task_expire_sec", 300);
       connector_config_.circular_bucket_size =
           yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.connector.circular_bucket_size", 8192);
       connector_config_.circular_bucket_num =
@@ -578,7 +594,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
   runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
-  runtime_config_.enable_mtp_module = batch_scheduler_config_.enable_mtp_module;
+  runtime_config_.mtp_step_num = batch_scheduler_config_.mtp_step_num;
   runtime_config_.enable_async = batch_scheduler_config_.enable_async;
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
@@ -698,7 +714,7 @@ Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &mod
   if (pipeline_config_.lower_layer_idx < 0 || pipeline_config_.upper_layer_idx < 0) {
     pipeline_config_.lower_layer_idx = 0;
     pipeline_config_.upper_layer_idx = model_config.num_layer - 1;
-    if (model_config.num_nextn_predict_layers != 0 && batch_scheduler_config_.enable_mtp_module) {
+    if (batch_scheduler_config_.mtp_step_num > 0) {
       pipeline_config_.lower_nextn_layer_idx = model_config.num_layer;
       pipeline_config_.upper_nextn_layer_idx = model_config.num_layer + model_config.num_nextn_predict_layers - 1;
     }
@@ -892,10 +908,9 @@ bool ScheduleConfigParser::IsPrefixCachingEnabled() { return cache_manager_confi
 size_t ScheduleConfigParser::GetTransferLayerChunkSize() { return batch_scheduler_config_.transfer_layer_chunk_size; }
 
 void ScheduleConfigParser::InitializeExpertParallelConfig() {
-  const char *expert_master_host = std::getenv("EXPERT_MASTER_HOST");
-  const char *expert_master_port = std::getenv("EXPERT_MASTER_PORT");
-  const char *expert_node_rank = std::getenv("EXPERT_NODE_RANK");
-  const char *use_tcp_data_channel = std::getenv("USE_TCP_DATA_CHANNEL");
+  const char *const expert_master_host = std::getenv("EXPERT_MASTER_HOST");
+  const char *const expert_master_port = std::getenv("EXPERT_MASTER_PORT");
+  const char *const expert_node_rank = std::getenv("EXPERT_NODE_RANK");
 
   ExpertParallelConfig expert_parallel_config;
   GetExpertParallelConfig(expert_parallel_config);
@@ -915,16 +930,13 @@ void ScheduleConfigParser::InitializeExpertParallelConfig() {
   expert_parallel_config.expert_master_host = expert_master_host ? expert_master_host : "";
   expert_parallel_config.expert_master_port = expert_master_port ? std::stoi(expert_master_port) : 0;
 
-  if (use_tcp_data_channel && strcmp(use_tcp_data_channel, "1") == 0) expert_parallel_config_.use_tcp = true;
-
   KLLM_LOG_INFO << "InferenceServer initialize expert parallel config, expert_master_host:"
                 << expert_parallel_config.expert_master_host
                 << ", expert_master_port:" << expert_parallel_config.expert_master_port
                 << ", expert_world_size:" << expert_parallel_config.expert_world_size
                 << ", expert_para_size:" << expert_parallel_config.expert_para_size
                 << ", gloal_expert_para_size:" << expert_parallel_config.global_expert_para_size
-                << ", expert_node_rank:" << expert_parallel_config.expert_node_rank
-                << ", use_tcp: " << expert_parallel_config.use_tcp;
+                << ", expert_node_rank:" << expert_parallel_config.expert_node_rank;
   SetExpertParallelConfig(expert_parallel_config);
 }
 

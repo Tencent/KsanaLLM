@@ -4,8 +4,11 @@
 
 #include "ksana_llm/models/base/forwarding_context.h"
 
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/singleton.h"
+
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
+#endif
 
 namespace ksana_llm {
 void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, const size_t batch_size,
@@ -93,7 +96,7 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   // TODO(robertyuan): This buffer is too large
   // TODO(jinxcwu): Move all env to environment
   // Use double-checking to avoid cases where environment variables are configured for non-MLA models.
-  if (IsAbsorbWeightsEnabled() && model_config.use_mla) {
+  if (model_config.use_mla) {
     buffers_shape_map["kv_cache_buffer"] = {0};
   } else {
     const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
@@ -112,7 +115,6 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
 
   Stream* const stream = &(context->GetMemoryManageStreams()[rank]);
 
-  const DataType weight_type = model_config.weight_data_type;
   // NOTE(karlluo): all create tensor used dynamic memory pool
   hidden_buffer_0 = buffer_mgr->CreateBufferTensor("hidden_buffer_0", buffers_shape_map["hidden_buffer_0"], weight_type,
                                                    ksana_llm::LOCATION_DEVICE);
@@ -242,7 +244,7 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest*>& forwar
   attn_ctx_.forward_shape.shape = {
       model_input_->multi_token_request_num,          // request num use flash_attention kernel
       model_input_->multi_token_request_max_tokens,   // max request tokens of request that use flash_attention kernel
-      model_input_->flash_input.kv_cache_block_num,   // total kv cache block num that use flash_attention kernel
+      model_input_->context_kv_cache_block_num,       // total kv cache block num that use flash_attention kernel
       model_input_->single_token_request_num,         // request num use page_attention kernel
       model_input_->single_token_request_max_tokens,  // max request tokens of request that use page_attention kernel
       model_input_->decode_kv_cache_block_num,        // total kv cache block num that use page_attention kernel
@@ -256,14 +258,13 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest*>& forwar
   attn_ctx_.forward_shape.shape = {
       std::max(model_input_->multi_token_request_num, model_input_->single_token_request_num),
       std::max(model_input_->multi_token_request_max_tokens, model_input_->single_token_request_max_tokens),
-      model_input_->page_single_input.kv_cache_block_num + model_input_->page_dual_input.kv_cache_block_num +
-          model_input_->flash_input.kv_cache_block_num};
+      model_input_->context_kv_cache_block_num + model_input_->decode_kv_cache_block_num};
 #endif
   // Pass the `use_cache` flag to `flag_tensor_`.
-  ((Tensor)attn_ctx_.flag_tensor).GetPtr<bool>()[0] = model_input_->use_cache;
+  attn_ctx_.flag_tensor.template GetPtr<bool>()[0] = model_input_->use_cache;
 }
 
-void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs) {
+void ForwardingContext::UpdateAfterForward(std::vector<ForwardRequest*>& forward_reqs) {
   // Cast to float & Copy to logits buffer
   attn_ctx_.forward_shape.shape = {/*logits_offset*/ 0, vocab_size_, vocab_size_pad_};
 }

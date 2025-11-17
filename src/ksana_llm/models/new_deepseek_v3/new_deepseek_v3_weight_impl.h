@@ -13,7 +13,6 @@
 #include "ksana_llm/kernels/permute.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
 #include "ksana_llm/models/quant/machete_utils.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/context.h"
 
 #ifdef ENABLE_CUDA

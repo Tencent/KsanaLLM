@@ -47,7 +47,6 @@
 #include "ksana_llm/kernels/argmax.h"
 #include "ksana_llm/kernels/cast.h"
 
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 #include "ksana_llm/utils/search_status.h"

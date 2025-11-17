@@ -70,10 +70,11 @@ class BgeRerankerMinicpmModel : public CommonModel {
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
-  bool BgeRerankerUpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
+  bool BgeRerankerUpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Tensor& output,
+                                 const std::string& stage);
 
   Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) override;
+                std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode) override;
 
  protected:
   using CommonModel::context_;

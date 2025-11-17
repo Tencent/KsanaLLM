@@ -7,10 +7,11 @@
 
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
 #include "ksana_llm/models/qwen/qwen_model.h"
+#include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
-#include "ksana_llm/runtime/llm_runtime.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/samplers/sampler.h"
+#include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
@@ -33,7 +34,6 @@ class QwenTest : public testing::Test {
     const std::string test_name = test_info->name();
     std::string model_path = "/model/qwen1.5-hf/0.5B-Chat";
     std::string yaml_path = "../../../../examples/llama7b/ksana_llm.yaml";
-    SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbTypeBMM);
     context = std::make_shared<Context>(1, 1, 1);
 
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
@@ -42,11 +42,12 @@ class QwenTest : public testing::Test {
     std::filesystem::path config_path_relate = parent_path / yaml_path;
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
+    AttentionBackendManager::GetInstance()->Initialize();
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, model_path);
     BatchSchedulerConfig batch_scheduler_config;
     env->GetBatchSchedulerConfig(batch_scheduler_config);
-    batch_scheduler_config.enable_mtp_module = false;  // Qwen doesn't use MTP
+    batch_scheduler_config.mtp_step_num = 0;  // Qwen doesn't use MTP
     env->SetBatchSchedulerConfig(batch_scheduler_config);
     env->UpdateModelConfig();
     env->GetModelConfig(model_config);
@@ -87,10 +88,7 @@ class QwenTest : public testing::Test {
     cache_manager = std::make_shared<PrefixCacheManager>(cache_manager_config, block_allocator_group);
   }
 
-  void TearDown() override {
-    SetAbsorbWeightsType(AbsorbWeightsType::kAbsorbDisabled);
-    std::cout << "TearDown" << std::endl;
-  }
+  void TearDown() override { std::cout << "TearDown" << std::endl; }
 
  protected:
   ModelConfig model_config;
@@ -150,31 +148,31 @@ class QwenTest : public testing::Test {
     EmbeddingSlice embedding_slice;
     embedding_slice.pos = input_refit_pos;
     embedding_slice.embeddings = input_refit_embedding;
-    forward.input_refit_embedding = &embedding_slice;
+    forward->input_refit_embedding = &embedding_slice;
 
     std::vector<int> block_ids;
     int use_block_num = (input_ids.size() + runtime_config.attn_backend_config.block_token_num - 1) /
                         runtime_config.attn_backend_config.block_token_num;
     block_allocator_group->GetDeviceBlockAllocator(0)->AllocateBlocks(use_block_num, block_ids);
-    forward.kv_cache_ptrs.resize(1);  // rank num = 1
-    block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward.kv_cache_ptrs[0]);
+    forward->kv_cache_ptrs.resize(1);  // rank num = 1
+    block_allocator_group->GetDeviceBlockAllocator(0)->GetBlockPtrs(block_ids, forward->kv_cache_ptrs[0]);
 
-    LlmRuntime::BuildFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward.atb_kv_cache_base_blk_ids,
-                                       cache_manager);
+    forward->atb_kv_cache_base_blk_ids.assign(1, {});
+    AppendFlatKVCacheBlkIds(model_config.num_layer, {block_ids}, forward->atb_kv_cache_base_blk_ids, cache_manager);
     for (int block_idx = 0; block_idx < use_block_num; block_idx++) {
-      Memset(forward.kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
+      Memset(forward->kv_cache_ptrs[0][block_idx], 0, runtime_config.attn_backend_config.block_size);
       KLLM_LOG_DEBUG << fmt::format(
-          "kv_cache_ptrs {} end {}", forward.kv_cache_ptrs[0][block_idx],
-          forward.kv_cache_ptrs[0][block_idx] + (runtime_config.attn_backend_config.block_size));
+          "kv_cache_ptrs {} end {}", forward->kv_cache_ptrs[0][block_idx],
+          forward->kv_cache_ptrs[0][block_idx] + (runtime_config.attn_backend_config.block_size));
     }
 
-    ForwardRequest decode_forward = forward;
-    decode_forward.cache_manager = cache_manager;
+    auto decode_forward = std::make_unique<ForwardRequest>(*forward);
+    decode_forward->cache_manager = cache_manager;
     std::vector<int> decode_ids = input_ids;
-    decode_forward.forwarding_tokens = std::make_shared<std::vector<int>>(decode_ids);
-    decode_forward.infer_stage = InferStage::STATE_DECODE;
-    decode_forward.kv_cached_token_num = decode_forward.forwarding_tokens->size() - 1;
-    std::vector<ForwardRequest> forward_reqs = {forward, decode_forward};
+    decode_forward->forwarding_tokens = std::make_shared<std::vector<int>>(decode_ids);
+    decode_forward->infer_stage = InferStage::kDecode;
+    decode_forward->kv_cached_token_num = decode_forward->forwarding_tokens->size() - 1;
+    std::vector<ForwardRequest *> forward_reqs = {forward.get(), decode_forward.get()};
     Singleton<LayerProgressTracker>::GetInstance()->Initialize(
         runtime_config.parallel_basic_config.tensor_parallel_size, model_config.num_layer);
     Singleton<LayerProgressTracker>::GetInstance()->RegisterCallback([&](int device_id, int layer_index) {
@@ -182,7 +180,8 @@ class QwenTest : public testing::Test {
     });
     EXPECT_TRUE(qwen->Forward(multi_batch_id, qwen_weight, forward_reqs, false).OK());
     Singleton<LayerProgressTracker>::GetInstance()->Cleanup();
-    std::vector<ForwardRequest> multi_forward_reqs = {forward, forward};
+
+    std::vector<ForwardRequest *> multi_forward_reqs = {forward.get(), forward.get()};
     // warmup
     for (int i = 0; i < rounds; ++i) {
       qwen->Forward(multi_batch_id, qwen_weight, multi_forward_reqs, false);
@@ -209,7 +208,7 @@ class QwenTest : public testing::Test {
     std::vector<int> generated_tokens0, generated_tokens1;
     sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
     sample_req.sampling_token_num = 1;
-    sample_req.logits_offset = forward_reqs[0].logits_offset;
+    sample_req.logits_offset = forward_reqs[0]->logits_offset;
     sample_req.sampling_result_tokens = &generated_tokens0;
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
@@ -242,13 +241,13 @@ class QwenTest : public testing::Test {
     EXPECT_TRUE(match1 || expected_tokens.empty());
 
     // Decode
-    (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
-    (*forward_reqs[1].forwarding_tokens).push_back(generated_tokens1[0]);
+    (*forward_reqs[0]->forwarding_tokens).emplace_back(generated_tokens0[0]);
+    (*forward_reqs[1]->forwarding_tokens).emplace_back(generated_tokens1[0]);
     generated_tokens0.clear();
     generated_tokens1.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->infer_stage = InferStage::kDecode;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
     EXPECT_TRUE(qwen->Forward(multi_batch_id, qwen_weight, forward_reqs, false).OK());
     sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
@@ -264,18 +263,18 @@ class QwenTest : public testing::Test {
     EXPECT_TRUE(match0 || expected_tokens.empty());
     EXPECT_TRUE(match1 || expected_tokens.empty());
 
-    (*forward_reqs[0].forwarding_tokens).push_back(generated_tokens0[0]);
-    (*forward_reqs[1].forwarding_tokens).push_back(generated_tokens1[0]);
+    (*forward_reqs[0]->forwarding_tokens).emplace_back(generated_tokens0[0]);
+    (*forward_reqs[1]->forwarding_tokens).emplace_back(generated_tokens1[0]);
     generated_tokens0.clear();
     generated_tokens1.clear();
     for (auto &forward_req : forward_reqs) {
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
 
     EventRecord(start, context->GetComputeStreams()[device_id]);
     for (auto &forward_req : multi_forward_reqs) {
-      forward_req.infer_stage = InferStage::STATE_DECODE;
-      forward_req.kv_cached_token_num = forward_req.forwarding_tokens->size() - 1;
+      forward_req->infer_stage = InferStage::kDecode;
+      forward_req->kv_cached_token_num = forward_req->forwarding_tokens->size() - 1;
     }
     for (int i = 0; i < rounds; ++i) {
       qwen->Forward(multi_batch_id, qwen_weight, multi_forward_reqs, false);

@@ -160,12 +160,6 @@ Status ExpertParallelControlChannel::ProcessAddNodeRequest(NodeInfo* node_info, 
   node_ranks_[*node_info] = req_node_rank;
   rank_nodes_[req_node_rank] = *node_info;
 
-  char* data_host = add_node_req->data_host;
-  uint16_t data_port = add_node_req->data_port;
-  rank_data_nodes_[req_node_rank] = {std::string(data_host), data_port};
-  KLLM_LOG_INFO << "ExpertParallelControlChannel add node, data_host: " << std::string(data_host)
-                << ", port: " << data_port << ", node_rank: " << req_node_rank;
-
   Packet* rsp_packet = GetPacketObject(PacketType::CONTROL_RSP_ADD_NODE, 0);
   if (rsp_packet == nullptr) {
     throw std::runtime_error("ExpertParallelControlChannel::ProcessAddNodeRequest allocate memory error.");
@@ -264,119 +258,6 @@ Status ExpertParallelControlChannel::ProcessBarrierResponse(NodeInfo* node_info,
     barrier_cv_.notify_all();
   }
 
-  free(rsp_packet);
-  return Status();
-}
-
-Status ExpertParallelControlChannel::ProcessLayerRequest(NodeInfo* node_info, Packet* req_packet) {
-  ExpertParallelConfig expert_parallel_config;
-  env_->GetExpertParallelConfig(expert_parallel_config);
-
-  AllocateExpertRequest* layer_req = reinterpret_cast<AllocateExpertRequest*>(req_packet->body);
-
-  // update pipeline config.
-  // expert_parallel_config.lower_layer_idx = layer_req->lower_layer_idx;
-  // expert_parallel_config.upper_layer_idx = layer_req->upper_layer_idx;
-  // expert_parallel_config.lower_nextn_layer_idx = layer_req->lower_nextn_layer_idx;
-  // expert_parallel_config.upper_nextn_layer_idx = layer_req->upper_nextn_layer_idx;
-  expert_parallel_config.downstream_host = layer_req->downstream_host;
-  expert_parallel_config.downstream_port = layer_req->downstream_port;
-
-#ifdef ENABLE_CUDA
-  memcpy(expert_parallel_config.nccl_unique_id, layer_req->nccl_unique_id, sizeof(layer_req->nccl_unique_id));
-  KLLM_LOG_INFO << "ProcessLayerRequest, recv nccl_unique_id: " << expert_parallel_config.nccl_unique_id
-                << ", layer_req->nccl_unique_id: " << layer_req->nccl_unique_id;
-#endif
-
-  env_->SetExpertParallelConfig(expert_parallel_config);
-
-  {
-    std::unique_lock<std::mutex> lock(mutex_);
-    layer_allocated_ = true;
-    layer_allocation_cv_.notify_all();
-  }
-
-  // Send response.
-  Packet* rsp_packet = GetPacketObject(PacketType::CONTROL_RSP_LAYER, 0);
-  if (rsp_packet == nullptr) {
-    throw std::runtime_error("ExpertParallelControlChannel::ProcessLayerRequest allocate memory error.");
-  }
-
-  Status status = raw_socket_->Send({master_host_, master_port_}, rsp_packet);
-  free(rsp_packet);
-
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "ExpertParallelControlChannel process allocate layer reqeust error, "
-                      "send packet failed, info:"
-                   << status.GetMessage();
-  } else {
-    KLLM_LOG_INFO << "ExpertParallelControlChannel process allocate layer reqeust succeed";
-  }
-
-  free(req_packet);
-  return status;
-}
-
-Status ExpertParallelControlChannel::ProcessLayerResponse(NodeInfo* node_info, Packet* rsp_packet) {
-  free(rsp_packet);
-  return Status();
-}
-
-Status ExpertParallelControlChannel::ProcessExpertParallelRequest(NodeInfo* node_info, Packet* req_packet) {
-  ExpertParallelConfig expert_parallel_config;
-  env_->GetExpertParallelConfig(expert_parallel_config);
-
-  AllocateExpertRequest layer_req;
-  DeserializeAllocateExpertRequest(layer_req, req_packet->body, expert_parallel_config.expert_world_size);
-
-  expert_parallel_config.downstream_host = layer_req.downstream_host;
-  expert_parallel_config.downstream_port = layer_req.downstream_port;
-
-#ifdef ENABLE_CUDA
-  memcpy(expert_parallel_config.nccl_unique_id, layer_req.nccl_unique_id, sizeof(layer_req.nccl_unique_id));
-  KLLM_LOG_INFO << "ProcessExpertParallelRequest, expert_parallele_config nccl_unique_id: "
-                << expert_parallel_config.nccl_unique_id;
-
-  expert_parallel_config.nccl_unique_ids.resize(world_size_);
-  for (size_t target_node_rank = 0; target_node_rank < world_size_; target_node_rank++) {
-    memcpy(expert_parallel_config.nccl_unique_ids[target_node_rank].data(),
-           layer_req.nccl_unique_ids[target_node_rank].data(), sizeof(layer_req.nccl_unique_id));
-    KLLM_LOG_INFO << "ProcessExpertParallelRequest, rank: " << target_node_rank
-                  << ", expert_parallele_config nccl_unique_ids: : "
-                  << reinterpret_cast<char*>(expert_parallel_config.nccl_unique_ids[target_node_rank].data());
-  }
-#endif
-
-  env_->SetExpertParallelConfig(expert_parallel_config);
-
-  {
-    std::unique_lock<std::mutex> lock(mutex_);
-    layer_allocated_ = true;
-    layer_allocation_cv_.notify_all();
-  }
-
-  // Send response.
-  Packet* rsp_packet = GetPacketObject(PacketType::CONTROL_RSP_EXPERT_PARALLEL, 0);
-  if (rsp_packet == nullptr) {
-    throw std::runtime_error("ExpertParallelControlChannel::ProcessLayerRequest allocate memory error.");
-  }
-
-  Status status = raw_socket_->Send({master_host_, master_port_}, rsp_packet);
-  free(rsp_packet);
-
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "ExpertParallelControlChannel process allocate layer reqeust error, "
-                      "send packet failed, info:"
-                   << status.GetMessage();
-  } else {
-    KLLM_LOG_INFO << "ExpertParallelControlChannel process allocate layer reqeust succeed";
-  }
-
-  free(req_packet);
-  return status;
-}
-
-Status ExpertParallelControlChannel::ProcessExpertParallelResponse(NodeInfo* node_info, Packet* rsp_packet) {
   free(rsp_packet);
   return Status();
 }
@@ -500,11 +381,6 @@ Status ExpertParallelControlChannel::AddNode() {
   AddNodeRequest* add_node_req = reinterpret_cast<AddNodeRequest*>(req_packet->body);
   add_node_req->node_rank = node_rank_;
 
-  strcpy(add_node_req->data_host, expert_parallel_config.data_host.c_str());
-  add_node_req->data_port = expert_parallel_config.data_port;
-
-  KLLM_LOG_INFO << "ExpertParallelControlChannel add node, node_rank " << node_rank_ << ", data endpoint "
-                << add_node_req->data_host << ":" << add_node_req->data_port;
   Status status = raw_socket_->Send({master_host_, master_port_}, req_packet);
   free(req_packet);
 
@@ -513,157 +389,6 @@ Status ExpertParallelControlChannel::AddNode() {
   }
 
   return status;
-}
-
-// buffer = request.
-Status ExpertParallelControlChannel::SerializeAllocateExpertRequest(char* buffer, AllocateExpertRequest& request,
-                                                                    size_t world_size) {
-  char* current = buffer;
-  // downstream_host
-  memcpy(current, request.downstream_host, 16);
-  current += 16;
-
-  // downstream port.
-  memcpy(current, reinterpret_cast<char*>(&request.downstream_port), sizeof(uint16_t));
-  current += sizeof(uint16_t);
-#ifdef ENABLE_CUDA
-  // 反序列化 nccl_unique_id
-  memcpy(current, reinterpret_cast<char*>(request.nccl_unique_id), kNcclUniqueIdSize);
-  current += kNcclUniqueIdSize;
-
-  // 反序列化 nccl_unique_ids 的每个元素
-  for (size_t target_node_rank = 0; target_node_rank < world_size; target_node_rank++) {
-    memcpy(current, request.nccl_unique_ids[target_node_rank].data(), kNcclUniqueIdSize);
-    std::cout << "SerializeAllocateExpertRequest, unique_dst: " << std::hex << std::setw(2) << current
-              << ", unique_src: " << request.nccl_unique_ids[target_node_rank].data() << std::endl;
-    current += kNcclUniqueIdSize;
-  }
-#endif
-
-  return Status();
-}
-
-Status ExpertParallelControlChannel::DeserializeAllocateExpertRequest(AllocateExpertRequest& request,
-                                                                      const char* buffer, size_t world_size) {
-  std::cout << "DeserializeAllocateExpertRequest world_size: " << world_size << std::endl;
-  const char* current = buffer;
-  // downstream_host
-  memcpy(request.downstream_host, current, 16);
-  current += 16;
-
-  // downstream port.
-  memcpy(&request.downstream_port, current, sizeof(uint16_t));
-  current += sizeof(uint16_t);
-
-#ifdef ENABLE_CUDA
-  // 反序列化 nccl_unique_id
-  memcpy(request.nccl_unique_id, current, kNcclUniqueIdSize);
-  current += kNcclUniqueIdSize;
-
-  //
-  // 反序列化 nccl_unique_ids 的每个元素
-  request.nccl_unique_ids.resize(world_size);
-  for (uint32_t i = 0; i < world_size; ++i) {
-    std::array<char, kNcclUniqueIdSize> unique_id;
-    memcpy(request.nccl_unique_ids[i].data(), current, kNcclUniqueIdSize);
-    current += kNcclUniqueIdSize;
-  }
-#endif
-
-  return Status();
-}
-
-Status ExpertParallelControlChannel::SynchronizeExpertParallelExperts() {
-  ModelConfig model_config;
-  Status status = env_->GetModelConfig(model_config);
-  if (!status.OK()) {
-    KLLM_LOG_ERROR << "SynchronizeExpertParallelExperts failed. status: " << status.ToString();
-    return status;
-  }
-  const size_t num_experts = model_config.moe_config.num_experts;
-
-  if (node_rank_ == 0) {
-    ExpertParallelConfig expert_parallel_config;
-    env_->GetExpertParallelConfig(expert_parallel_config);
-    expert_parallel_config.expert_node_host.resize(expert_parallel_config.expert_world_size);
-    expert_parallel_config.expert_node_port.resize(expert_parallel_config.expert_world_size);
-
-    const size_t local_num_experts = (num_experts + expert_parallel_config.global_expert_para_size - 1) /
-                                     expert_parallel_config.global_expert_para_size;
-    expert_parallel_config.local_num_experts = local_num_experts;
-
-    // Set expert_id vs expert node mapping.
-    for (size_t target_node_rank = 0; target_node_rank < world_size_; target_node_rank++) {
-      expert_parallel_config.expert_route_table[target_node_rank * local_num_experts] = target_node_rank;
-    }
-
-    // TODO(xingjinglu): Support more than two nodes later.
-    KLLM_LOG_INFO << "rank_data_nodes_[1].host: " << rank_data_nodes_[1].host
-                  << ", rank_data_nodes_[1].port: " << rank_data_nodes_[1].port;
-    expert_parallel_config.expert_node_host[1] = rank_data_nodes_[1].host;
-    expert_parallel_config.expert_node_port[1] = rank_data_nodes_[1].port;
-    expert_parallel_config.downstream_host = rank_data_nodes_[1].host;
-    expert_parallel_config.downstream_port = rank_data_nodes_[1].port;
-
-    env_->SetExpertParallelConfig(expert_parallel_config);
-    KLLM_LOG_INFO << "ExpertParallelControlChannel set master node "
-                  << ", local_num_experts: " << local_num_experts << "\n";
-
-    // Send comm info to every worker node.
-    int padding = 0;
-    for (size_t target_node_rank = 1; target_node_rank < world_size_; target_node_rank++) {
-      Packet* req_packet = GetPacketObject(PacketType::CONTROL_REQ_EXPERT_PARALLEL, 0);
-      if (req_packet == nullptr) {
-        throw std::runtime_error("ControlChannel::SynchronizeNodeLayers allocate memory error.");
-      }
-
-      AllocateExpertRequest layer_req;
-#ifdef ENABLE_CUDA
-      layer_req.nccl_unique_ids.resize(world_size_);
-#endif
-
-      // post-data_node
-      if (target_node_rank == world_size_ - 1) {
-        strcpy(layer_req.downstream_host, expert_parallel_config.data_host.c_str());
-        layer_req.downstream_port = expert_parallel_config.data_port;
-      } else {
-        strcpy(layer_req.downstream_host, rank_data_nodes_[target_node_rank + 1].host.c_str());
-        layer_req.downstream_port = rank_data_nodes_[target_node_rank + 1].port;
-      }
-
-      Status status;
-      // Broadcast nccl unique_id for all nodes.
-      if (!expert_parallel_config.use_tcp) {
-#ifdef ENABLE_CUDA
-        memcpy(layer_req.nccl_unique_id, expert_parallel_config.nccl_unique_id,
-               sizeof(expert_parallel_config.nccl_unique_id));
-        for (size_t i = 0; i < world_size_; i++) {
-          memcpy(layer_req.nccl_unique_ids[i].data(), expert_parallel_config.nccl_unique_ids[i].data(),
-                 sizeof(expert_parallel_config.nccl_unique_id));
-        }
-        KLLM_LOG_INFO << "ExpertParallelControlChannel set worker node " << target_node_rank << ", send  nccl_unique_id"
-                      << expert_parallel_config.nccl_unique_id << "\n";
-#endif
-
-        SerializeAllocateExpertRequest(req_packet->body, layer_req, world_size_);
-        status = raw_socket_->Send(rank_nodes_[target_node_rank], req_packet);
-      }
-
-      free(req_packet);
-
-      if (!status.OK()) {
-        KLLM_LOG_ERROR << "ExpertParallelControlChannel sync expert parallel nodes error, send packet, failed, info:"
-                       << status.GetMessage();
-      }
-    }
-  } else {
-    // for worker node,  wait master response
-    std::unique_lock<std::mutex> lock(mutex_);
-
-    layer_allocation_cv_.wait(lock, [this]() -> bool { return layer_allocated_; });
-  }
-
-  return Status();
 }
 
 Status ExpertParallelControlChannel::ShutdownCluster() {
@@ -780,6 +505,12 @@ Status ExpertParallelControlChannel::SynchronizeNvshmemUniqueId() {
   return Status();
 }
 
+Status ExpertParallelControlChannel::SetExpertParallelDeepepWrapper(
+    const std::shared_ptr<ExpertParallelDeepepWrapper>& deepep_wrapper) {
+  deepep_wrapper_ = deepep_wrapper;
+  return Status();
+}
+
 Status ExpertParallelControlChannel::ProcessNvshmemUniqueIdRequest(NodeInfo* node_info, Packet* req_packet) {
   KLLM_LOG_INFO << "ProcessNvshmemUniqueIdRequest";
   NvshmemUniqueIdRequest* nvshmem_req = reinterpret_cast<NvshmemUniqueIdRequest*>(req_packet->body);
@@ -818,7 +549,6 @@ Status ExpertParallelControlChannel::ProcessNvshmemUniqueIdRequest(NodeInfo* nod
 
   NvshmemUniqueIdResponse* nvshmem_rsp = reinterpret_cast<NvshmemUniqueIdResponse*>(rsp_packet->body);
   nvshmem_rsp->status = 0;  // success
-
   Status status = raw_socket_->Send(*node_info, rsp_packet);
   free(rsp_packet);
 

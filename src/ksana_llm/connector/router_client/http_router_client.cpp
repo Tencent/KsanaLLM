@@ -66,8 +66,8 @@ std::string HTTPRouterClient::MakeHttpRequest(const std::string& path, const std
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     // Set timeout to prevent hanging forever
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 1L);
 
     // Set custom request method if not GET
     if (method != "GET") {

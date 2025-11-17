@@ -151,30 +151,30 @@ Status BgeRerankerMinicpmModel::LayerForward(ForwardingContext& forwarding_conte
   return Status();
 }
 
-bool BgeRerankerMinicpmModel::BgeRerankerUpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output,
-                                                        const std::string& stage) {
+bool BgeRerankerMinicpmModel::BgeRerankerUpdateResponse(std::vector<ForwardRequest*>& forward_reqs,
+                                                        Tensor& output, const std::string& stage) {
   bool ret = true;
   int req_offset = 0;
-  for (ForwardRequest& req : forward_reqs) {
-    int output_token_num = req.forwarding_tokens->size();
+  for (auto& req : forward_reqs) {
+    int output_token_num = req->forwarding_tokens->size();
     // Validate request_target, stage existence, and token_reduce_mode in one check
-    if (!req.request_target) {
+    if (!req->request_target) {
       ret = false;
       continue;
     }
-    auto it = req.request_target->find(stage);
-    if (it == req.request_target->end() || it->second.token_reduce_mode != TokenReduceMode::GATHER_ALL) {
+    auto it = req->request_target->find(stage);
+    if (it == req->request_target->end() || it->second.token_reduce_mode != TokenReduceMode::GATHER_ALL) {
       ret = false;
       continue;
     }
     // Determine whether to exit early
-    ret &= req.request_target->size() == req.response->size();
+    ret &= req->request_target->size() == req->response->size();
     if (rank_ != 0) continue;
 
     if (stage == "lm_head") {
       size_t chunk_size = GetTypeSize(output.dtype) * output.shape[1];
       // Update the response tensor with the sliced data.
-      PythonTensor& ret_tensor = (*req.response)[stage];
+      PythonTensor& ret_tensor = (*req->response)[stage];
       ret_tensor.shape = {static_cast<size_t>(output_token_num), output.shape[1]};
       ret_tensor.dtype = GetTypeString(output.dtype);
       ret_tensor.data.resize(output_token_num * chunk_size);
@@ -191,7 +191,7 @@ bool BgeRerankerMinicpmModel::BgeRerankerUpdateResponse(std::vector<ForwardReque
 
 Status BgeRerankerMinicpmModel::LmHead(ForwardingContext& forwarding_context,
                                        std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                                       std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
+                                       std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode) {
   if (rank_ != 0) return Status();
 
   int cutoff_layer = forwarding_context.GetModelInput()->cutoff_layer;

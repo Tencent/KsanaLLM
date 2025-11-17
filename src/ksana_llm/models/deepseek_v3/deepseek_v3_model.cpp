@@ -38,7 +38,7 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
   }
 
   g_mla_tensor_parallel_barrier.Init(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size);
-  std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
+  const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   pre_attention_add_norm_ = std::make_shared<AddNorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
@@ -71,6 +71,7 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
   }
 
   // mla should be init after linear, because mla will reuse workspace buffer which is created by linear layers
+  constexpr bool is_neox = false;
   mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, is_neox, creation_context, model_creation_config,
                                                     mla_buffers_, indexer_buffers_);
 
@@ -108,13 +109,11 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
 
   const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
   const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
-  const size_t dp_context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
-  const size_t dp_decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
-                                  forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
-  size_t dp_token_size = dp_context_tokens + dp_decode_tokens;
+  const size_t dp_context_tokens = forwarding_context.GetModelInput()->dp_context_tokens;
+  const size_t dp_decode_tokens = forwarding_context.GetModelInput()->dp_decode_tokens;
+  const size_t dp_token_size = std::max(dp_context_tokens + dp_decode_tokens, 1ul);
   const size_t dp_bytes_offset = dp_token_offset * token_hidden_stat_bytes;
   const size_t dp_bytes = dp_token_size * token_hidden_stat_bytes;
-  dp_token_size = dp_token_size > 0 ? dp_token_size : 1;
   KLLM_LOG_DEBUG << fmt::format(
       "rank: {}, dp_group_id: {}, dp_token_offset: {}, dp_context_tokens: {}, dp_decode_tokens: {}, dp_token_size: {}, "
       "dp_bytes_offset: {}, dp_bytes: {}",
@@ -167,8 +166,8 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
 Status DeepSeekV3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                          std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                          ForwardingContext& forwarding_context) {
-  size_t seq_len = hidden_buffer_tensors_0[0].shape[0];
-  size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
+  const size_t seq_len = hidden_buffer_tensors_0[0].shape[0];
+  const size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
 
   PROFILE_EVENT_SCOPE(DS_CommonMlp_seq_len_,
                       fmt::format("DS_CommonMlp_seq_len_{}_hidden_units_{}", seq_len, hidden_units),
@@ -221,7 +220,8 @@ void DeepSeekV3DecoderLayer::ReleaseMoeBuffers() {
 
 DeepSeekV3MtpLayer::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext& creation_context,
                                        ModelCreationConfig& model_creation_config,
-                                       std::shared_ptr<DeepSeekV3DecoderLayer> decoder_layer) {
+                                       std::shared_ptr<DeepSeekV3DecoderLayer> decoder_layer)
+    : decoder_layer_(decoder_layer) {
   enorm_ = std::make_shared<Layernorm>(fmt::format("model.layers.{}.enorm.weight", layer_idx),
                                        model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
   hnorm_ = std::make_shared<Layernorm>(fmt::format("model.layers.{}.hnorm.weight", layer_idx),
@@ -238,8 +238,6 @@ DeepSeekV3MtpLayer::DeepSeekV3MtpLayer(const int layer_idx, LayerCreationContext
 
   eh_proj_ = std::make_shared<Linear>(fmt::format("model.layers.{}.eh_proj.weight", layer_idx), creation_context,
                                       model_creation_config.attn_config.model_config.quant_config.backend);
-
-  decoder_layer_ = decoder_layer;
 
   tp_comm_ = std::make_shared<TpCommunicator>();
 }
@@ -289,7 +287,6 @@ DeepSeekV3Model::DeepSeekV3Model(const ModelConfig& model_config, const RuntimeC
       first_k_dense_replace_(model_config.moe_config.first_k_dense_replace) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding = PositionEncoding::ROPE;
-
   CommonModel::InitRunConfig(model_run_config, base_weight);
 }
 
@@ -302,9 +299,8 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
                                     creation_context.runtime_config, indexer_buffers_);
   }
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
-  size_t max_token_num = creation_context.runtime_config.max_step_token_num;
-  size_t expert_world_size = creation_context.runtime_config.parallel_basic_config.expert_world_size;
-  size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
+  const size_t max_token_num = creation_context.runtime_config.max_step_token_num;
+  const size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
   moe_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
 
   if (creation_context.runtime_config.parallel_basic_config.expert_world_size > 1 ||
@@ -313,22 +309,21 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
     if (GetExpertParallelDeepepWrapper()) {
       GetExpertParallelDeepepWrapper()->SetMoeBuffer(moe_buffer_tensors, creation_context.rank);
     } else {
-      KLLM_LOG_ERROR << fmt::format(
+      KLLM_LOG_WARNING << fmt::format(
           "Failed to initialize moe buffer tensor data_ptr with DeepEPWrapper: GetExpertParallelDeepepWrapper failed.");
     }
   }
 
-  for (int layer_idx = creation_context.pipeline_config.lower_layer_idx;
-       layer_idx <= creation_context.pipeline_config.upper_layer_idx; ++layer_idx) {
+  for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
     const bool is_moe = layer_idx >= first_k_dense_replace_;
     layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(
         layer_idx, is_moe, creation_context, model_creation_config, mla_buffers_, indexer_buffers_, moe_buffer_);
   }
 
-  if (creation_context.pipeline_config.lower_nextn_layer_idx >=
+  if (pipeline_config_.lower_nextn_layer_idx >=
       static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
-    for (int layer_idx = creation_context.pipeline_config.lower_nextn_layer_idx;
-         layer_idx <= creation_context.pipeline_config.upper_nextn_layer_idx; ++layer_idx) {
+    for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
+         ++layer_idx) {
       const bool is_moe = layer_idx >= first_k_dense_replace_;
       layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(
           layer_idx, is_moe, creation_context, model_creation_config, mla_buffers_, indexer_buffers_, moe_buffer_);
@@ -336,6 +331,7 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
       nextn_layers_[layer_idx] =
           std::make_shared<DeepSeekV3MtpLayer>(layer_idx, creation_context, model_creation_config, layers_[layer_idx]);
     }
+    nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
   }
   return Status();
 }
@@ -348,12 +344,11 @@ Status DeepSeekV3Model::LayerForward(ForwardingContext& forwarding_context, cons
 
   if (run_mode == RunMode::kMain) {
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(forwarding_context, need_recv);
-    for (int layer_idx = forwarding_context.GetPipelineConfig().lower_layer_idx;
-         layer_idx <= forwarding_context.GetPipelineConfig().upper_layer_idx; ++layer_idx) {
-      STATUS_CHECK_RETURN(layers_[layer_idx]->Forward(
-          residual_buffer, is_multi_token_forward, forwarding_context,
-          /* need_add_residual_before_attn */ layer_idx != forwarding_context.GetPipelineConfig().lower_layer_idx,
-          /* need_add_residual_after_mlp */ layer_idx == forwarding_context.GetPipelineConfig().upper_layer_idx));
+    for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
+      STATUS_CHECK_RETURN(
+          layers_[layer_idx]->Forward(residual_buffer, is_multi_token_forward, forwarding_context,
+                                      /* need_add_residual_before_attn */ layer_idx != pipeline_config_.lower_layer_idx,
+                                      /* need_add_residual_after_mlp */ layer_idx == pipeline_config_.upper_layer_idx));
     }
     SetHiddenUnitBuffer(residual_buffer, forwarding_context);
   } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
@@ -375,10 +370,8 @@ Status DeepSeekV3Model::LayerForward(ForwardingContext& forwarding_context, cons
     const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
     const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
     const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
-    const size_t dp_context_tokens = forwarding_context.GetModelInput()->flash_input.total_dp_input_ids_len;
-    const size_t dp_decode_tokens = forwarding_context.GetModelInput()->page_single_input.total_dp_input_ids_len +
-                                    forwarding_context.GetModelInput()->page_dual_input.total_dp_input_ids_len;
-    size_t dp_token_size = dp_context_tokens + dp_decode_tokens;
+    const size_t dp_token_size =
+        forwarding_context.GetModelInput()->dp_context_tokens + forwarding_context.GetModelInput()->dp_decode_tokens;
 
     if (dp_token_offset > 0) {
       MemsetAsync(residual_buffer[0].GetPtr<void>(), 0, dp_token_offset * token_hidden_stat_bytes,

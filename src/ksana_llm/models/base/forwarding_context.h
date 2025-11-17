@@ -76,9 +76,9 @@ class ForwardingContext {
             const RuntimeConfig& runtime_config, const PipelineConfig& pipeline_config, ForwardingBuffers* buffers,
             BufferManager* buffer_mgr, size_t multi_batch_id);
 
-  void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
+  void UpdateBeforeForward(std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode);
 
-  void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
+  void UpdateAfterForward(std::vector<ForwardRequest*>& forward_reqs);
 
  public:
   ForwardingBuffers* GetForwardingBuffers() { return buffers_; }

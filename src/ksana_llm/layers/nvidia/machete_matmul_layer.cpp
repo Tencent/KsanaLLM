@@ -38,7 +38,7 @@ Status MacheteMatMulLayer::Init(const std::vector<std::any>& parameters, const R
   return Status();
 }
 
-size_t MacheteMatMulLayer::GetWorkSpaceSize() {
+size_t MacheteMatMulLayer::GetWorkspaceSize() {
   if (weight_data_type_ == TYPE_I4_GROUP) {
     // shape配置
     const size_t bits = 4;

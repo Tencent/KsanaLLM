@@ -38,7 +38,7 @@ class ScheduleOutputTest : public testing::Test {
     infer_req->req_id = 123;
     infer_req->model_name = "schedule_output_test";
     infer_req->output_tokens = {1001, 1003, 1005};
-    infer_req->infer_stage = InferStage::STAGE_CONTEXT;
+    infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 3;
     infer_req->kv_cache_blocks = {{101, 103, 105}, {101, 103, 105}};
     infer_req->is_use_prefix_cache = false;

@@ -190,6 +190,8 @@ class MemoryChecker {
  private:
   // rank id to memory check meta.
   static inline std::vector<std::unordered_map<std::string, MemoryMeta>> check_memory_map_;
+
+  inline static bool enabled_ = (std::getenv("ENABLE_MEMORY_CHECK") != nullptr);
 };
 
 }  // namespace ksana_llm

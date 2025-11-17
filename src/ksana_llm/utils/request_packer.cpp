@@ -103,14 +103,14 @@ void RequestPacker::GetResponseSerials(const std::vector<std::shared_ptr<KsanaPy
 }
 
 Status RequestPacker::UnpackMsgpack(const std::string& request_bytes,
-                                     std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
+                                    std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
   // Return early if `request_bytes` is empty.
   if (request_bytes.empty()) {
     return Status(RET_INVALID_ARGUMENT, "Request content is empty.");
   }
 
   // Construct a KsanaPythonInput object from a RequestSerial object.
-  auto GetKsanaPythonInput = [this](const RequestSerial& req) -> KsanaPythonInput {
+  [[maybe_unused]] auto GetKsanaPythonInput = [this](const RequestSerial& req) -> KsanaPythonInput {
     KsanaPythonInput ksana_python_input;
     if (req.input_tokens.empty()) {  // If input tokens are empty, tokenize the prompt.
       Singleton<Tokenizer>::GetInstance()->Encode(req.prompt, ksana_python_input.input_tokens);
@@ -152,7 +152,7 @@ Status RequestPacker::UnpackMsgpack(const std::string& request_bytes,
 }
 
 Status RequestPacker::UnpackJson(const std::string& request_bytes,
-                                  std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
+                                 std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs) {
   if (request_bytes.empty()) {
     return Status(RET_INVALID_ARGUMENT, "Json Request content is empty.");
   }
@@ -182,8 +182,8 @@ Status RequestPacker::UnpackJson(const std::string& request_bytes,
 }
 
 Status RequestPacker::PackJson(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
-                                const std::vector<KsanaPythonOutput>& ksana_python_outputs,
-                                const Status& response_status, std::string& response_bytes) {
+                               const std::vector<KsanaPythonOutput>& ksana_python_outputs,
+                               const Status& response_status, std::string& response_bytes) {
   BatchResponseSerial batch_rsp;
   GetResponseSerials(ksana_python_inputs, ksana_python_outputs, response_status, batch_rsp);
 
@@ -194,8 +194,8 @@ Status RequestPacker::PackJson(const std::vector<std::shared_ptr<KsanaPythonInpu
 }
 
 Status RequestPacker::PackMsgpack(const std::vector<std::shared_ptr<KsanaPythonInput>>& ksana_python_inputs,
-                                   const std::vector<KsanaPythonOutput>& ksana_python_outputs,
-                                   const Status& response_status, std::string& response_bytes) {
+                                  const std::vector<KsanaPythonOutput>& ksana_python_outputs,
+                                  const Status& response_status, std::string& response_bytes) {
   // Convert the batch of KsanaPythonOutput objects into BatchResponseSerial objects and pack to response bytes.
   msgpack::sbuffer sbuf;
   BatchResponseSerial batch_rsp;

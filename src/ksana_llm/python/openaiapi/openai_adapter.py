@@ -71,7 +71,7 @@ class OpenAIConfig:
     default_model_name: str = "ksana-llm"
     default_temperature: float = 1.0
     default_do_sample: bool = False
-    default_top_k: int = 0
+    default_top_k: int = 1
     default_top_p: float = 1.0
     default_num_beams: int = 1
     default_num_return_sequences: int = 1
@@ -656,6 +656,9 @@ class KsanaOpenAIServing:
                 conversation=conversation,
                 **_chat_template_kwargs,
             )
+        if(getattr(request, 'debug_mode', False)):
+            print(f"original messages: {messages}")
+            print(f"apply hf chat template Prompt text: {request_prompt}")
 
         # TODO(ethanyczeng): Multi Modal Data Support
         # now, it is temporarily set to None

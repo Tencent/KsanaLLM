@@ -12,7 +12,6 @@
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/transfer/transfer_engine.h"
-#include "ksana_llm/utils/absorb_weights_type.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/ret_code.h"
@@ -264,7 +263,7 @@ void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req,
   KLLM_LOG_SCHEDULER << "ResetRequest " << req->ScheduleStateToStr() << ", ret_status:" << ret_status.ToString()
                      << ", terminate:" << terminate;
 
-  req->finish_status = req_status;
+  req->finish_status = ret_status;
   req->finished = terminate;
   req->RebuildBlockPtrs();
 
@@ -591,7 +590,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     if (CheckRequestTimeout(req)) {
       KLLM_LOG_SCHEDULER << "req timeout in waiting:" << req;
 
-      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), false);
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), RequestState::REQUEST_STATE_WAITING);
       it = batch_state_->waiting_queue.erase(it);
       continue;
     }

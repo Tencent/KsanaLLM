@@ -82,7 +82,7 @@ class CommonModel : public BaseModel {
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
   Status Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                 std::vector<ForwardRequest>& forward_reqs, bool epilogue,
+                 std::vector<ForwardRequest*>& forward_reqs, bool epilogue,
                  const RunMode run_mode = RunMode::kMain) override;
 
   Status AllocResources(size_t multi_batch_id);
@@ -104,7 +104,7 @@ class CommonModel : public BaseModel {
 
   // Execute the lm head, and generate the logits.
   virtual Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
+                        std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode);
 
   // Get a reference for hidden buffer.
   std::vector<Tensor>& GetHiddenUnitBufferRef(ForwardingContext& forwarding_context);
@@ -129,9 +129,9 @@ class CommonModel : public BaseModel {
   bool speculative_decoding_enabled_;
 
   // The model config.
-  ModelConfig model_config_;
+  const ModelConfig model_config_;
 
-  RuntimeConfig runtime_config_;
+  const RuntimeConfig runtime_config_;
 
   // The pipeline_config for distributed mode.
   PipelineConfig pipeline_config_;
@@ -184,7 +184,7 @@ class CommonModel : public BaseModel {
  protected:
   bool IsPrefixCachingComputationReuse();
 
-  Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
+  Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest*>& forward_reqs,
                            ForwardingContext& forwarding_context);
 
   virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context);

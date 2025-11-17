@@ -29,9 +29,8 @@ void RecordRequestSchedEventWithFContext(ForwardingContext& forwarding_context, 
 }
 
 CommonModel::CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
-                         std::shared_ptr<Context> context) {
-  model_config_ = model_config;
-  runtime_config_ = runtime_config;
+                         std::shared_ptr<Context> context)
+    : model_config_(model_config), runtime_config_(runtime_config) {
   context_ = context;
   rank_ = rank;
   GetBufferManager()->SetRank(rank_);
@@ -39,8 +38,6 @@ CommonModel::CommonModel(const ModelConfig& model_config, const RuntimeConfig& r
   KLLM_LOG_DEBUG << "Working mode info, is_standalone:" << context_->IsStandalone()
                  << ", is_chief:" << context_->IsChief();
 }
-
-CommonModel::~CommonModel() {}
 
 void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight) {
   SetDevice(rank_);
@@ -89,7 +86,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
     if (GetExpertParallelDeepepWrapper()) {
       GetExpertParallelDeepepWrapper()->SetHiddenBuffers(hidden_buffer_tensors, rank_);
     } else {
-      KLLM_LOG_ERROR << fmt::format(
+      KLLM_LOG_WARNING << fmt::format(
           "Failed to initialize hidden buffer tensor data_ptr with DeepEPWrapper: GetExpertParallelDeepepWrapper "
           "failed.");
     }
@@ -113,7 +110,7 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 
   emb_lookup_layer_ = std::make_shared<EmbLookupLayer>();
   if (model_run_config_.position_encoding == PositionEncoding::LEARNED_ABSOLUTE) {
-    Tensor position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
+    const Tensor& position_weight = base_weight->GetModelWeights("model.embed_positions.weight");
     emb_lookup_layer_->Init(
         {model_run_config_.use_emb_scale, model_run_config_.emb_scale, position_weight.GetPtr<void>()}, runtime_config_,
         context_, rank_);
@@ -252,14 +249,14 @@ Status CommonModel::EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContex
 bool CommonModel::UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Tensor& output, const std::string& stage) {
   bool ret = true;
   int req_offset = 0;
-  for (ForwardRequest& req : forward_reqs) {
-    int output_token_num = req.forwarding_tokens->size();
-    if (!req.request_target) {
+  for (auto& req : forward_reqs) {
+    int output_token_num = req->forwarding_tokens->size();
+    if (!req->request_target) {
       ret = false;
       continue;
     }
-    auto it = req.request_target->find(stage);
-    if (it == req.request_target->end()) {
+    auto it = req->request_target->find(stage);
+    if (it == req->request_target->end()) {
       ret = false;
       continue;
     } else if (it->second.token_reduce_mode != TokenReduceMode::GATHER_ALL) {
@@ -268,7 +265,7 @@ bool CommonModel::UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Ten
       continue;
     }
     // Determine whether to exit early
-    ret &= req.request_target->size() == req.response->size();
+    ret &= req->request_target->size() == req->response->size();
     if (rank_ != 0) continue;
     int output_len = 0;
     std::vector<std::pair<int, int>> slice_pos = it->second.slice_pos;
@@ -276,7 +273,7 @@ bool CommonModel::UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Ten
     if (it->second.token_id.size() != 0) {
       std::set<int> token_id_set(it->second.token_id.begin(), it->second.token_id.end());
       for (int i = 0; i < output_token_num; i++) {
-        if (token_id_set.count(req.forwarding_tokens->at(i)) > 0) {
+        if (token_id_set.count(req->forwarding_tokens->at(i)) > 0) {
           slice_pos.push_back({i, i});
         }
       }
@@ -288,7 +285,7 @@ bool CommonModel::UpdateResponse(std::vector<ForwardRequest*>& forward_reqs, Ten
     // Calculate the size of each chunk based on the output tensor's data type and shape.
     size_t chunk_size = GetTypeSize(output.dtype) * output.shape[1];
     // Update the response tensor with the sliced data.
-    PythonTensor& ret_tensor = (*req.response)[stage];
+    PythonTensor& ret_tensor = (*req->response)[stage];
     ret_tensor.shape = {static_cast<size_t>(output_len), output.shape[1]};
     ret_tensor.dtype = GetTypeString(output.dtype);
     ret_tensor.data.resize(output_len * chunk_size);
@@ -317,7 +314,7 @@ std::vector<Tensor>& CommonModel::GetHiddenUnitBufferRef(ForwardingContext& forw
   }
 
 #ifdef ENABLE_ACL
-  if (forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT) {
+  if (forwarding_context.GetModelInput()->infer_stage == InferStage::kContext) {
     HiddenUnitDeviceBuffer* device_buffer = GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId());
     if (distributed_device_buffer_prefill_.empty()) {
       distributed_device_buffer_prefill_.push_back(device_buffer->prefill_tensors[rank_]);
@@ -355,7 +352,7 @@ std::vector<Tensor>& CommonModel::GetHiddenUnitBuffer(ForwardingContext& forward
   if (do_recv) {
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::Begin);
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferRef(forwarding_context);
-    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::kContext;
     CopyFromHiddenUnitBuffer(residual_buffer[0], GetCurrentHiddenUnitBuffer(forwarding_context.GetMultiBatchId()),
                              forwarding_context.GetCurrentRank(), is_prefill);
     RecordRequestSchedEventWithFContext(forwarding_context, "RecvHiddenUnitBuffer", RequestEventPhase::End);
@@ -397,7 +394,7 @@ void CommonModel::SetHiddenUnitBuffer(std::vector<Tensor>& residual_buffer, Forw
   // Copy to hidden_unit_buffer if not standalone.
   if (!forwarding_context.GetContext()->IsStandalone()) {
     RecordRequestSchedEventWithFContext(forwarding_context, "StreamSynchronize", RequestEventPhase::Begin);
-    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::STAGE_CONTEXT;
+    bool is_prefill = forwarding_context.GetModelInput()->infer_stage == InferStage::kContext;
 
     auto working_stream = forwarding_context.GetContext()->GetComputeStreams()[forwarding_context.GetCurrentRank()];
     StreamSynchronize(working_stream);
@@ -413,18 +410,16 @@ ForwardingContext* CommonModel::GetForwardingContext(size_t multi_batch_id) {
                          FormatStr("multi_batch_id: %d should be smaller than max_pp: %d.", multi_batch_id,
                                    forwarding_context_buffer_size_));
   }
-  size_t id = context_->IsChief() ? multi_batch_id : 0;
+  const size_t id = context_->IsChief() ? multi_batch_id : 0;
   return forwarding_context_buffer_[id].get();
 }
 
 Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                             std::vector<ForwardRequest*>& forward_reqs, bool epilogue, const RunMode run_mode) {
   // Get the forwarding context for this multi_batch_id
-  time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
-  ForwardingContext* forwarding_context = GetForwardingContext(multi_batch_id);
+  const time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
+  ForwardingContext* const forwarding_context = GetForwardingContext(multi_batch_id);
   KLLM_LOG_DEBUG << "start forward multi_batch_id=" << forwarding_context->GetMultiBatchId() << ", rank=" << rank_;
-
-  {}
 
   PROFILE_EVENT_SCOPE(
       CommonModel_Forward,
@@ -470,9 +465,8 @@ Status CommonModel::Forward(size_t multi_batch_id, std::shared_ptr<ksana_llm::Ba
   model_buffers_.ReleaseBuffers();
   forwarding_context->ReleaseBuffers();
 
-  time_t end_time_ms = ProfileTimer::GetCurrentTimeInMs();
   KLLM_LOG_DEBUG << "CommonModel Forward multi_batch_id=" << multi_batch_id << ", epilogue=" << epilogue
-                 << ", time cost=" << end_time_ms - start_time_ms << "ms";
+                 << ", time cost=" << ProfileTimer::GetCurrentTimeInMs() - start_time_ms << "ms";
   return Status();
 }
 
@@ -514,7 +508,7 @@ Status CommonModel::LookupEmbedding(ForwardingContext& forwarding_context,
 }
 
 Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                           std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) {
+                           std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode) {
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBuffer(
       forwarding_context, !context_->IsStandalone() && context_->IsChief() && run_mode == RunMode::kMain);

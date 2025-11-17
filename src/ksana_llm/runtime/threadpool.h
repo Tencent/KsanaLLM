@@ -21,13 +21,9 @@ namespace ksana_llm {
 // / The thread pool
 class ThreadPool {
  public:
-  using Task = std::function<void()>;
-
-  explicit ThreadPool(size_t size) : size_(size) {}
+  explicit ThreadPool(const size_t thread_num) : thread_num_(thread_num) {}
 
   ~ThreadPool() {}
-
-  int Idle() { return idle_; }
 
   void Stop() {
     {
@@ -43,9 +39,8 @@ class ThreadPool {
   }
 
   void Start() {
-    idle_ = size_ < 1 ? 1 : size_;
     stopped_.store(false);
-    for (size_ = 0; size_ < idle_; ++size_) {
+    for (size_t i = 0; i < thread_num_; ++i) {
       pool_.emplace_back([this] {
         while (!this->stopped_) {
           std::function<void()> task;
@@ -58,9 +53,7 @@ class ThreadPool {
             task = std::move(this->tasks_.front());
             this->tasks_.pop();
           }
-          idle_--;
           task();
-          idle_++;
         }
       });
     }
@@ -84,19 +77,16 @@ class ThreadPool {
     return future;
   }
 
-  size_t Size() { return size_; }
-
  private:
   std::condition_variable cv_;
   std::mutex mutex_;
 
-  std::atomic<size_t> idle_;
   std::atomic<bool> stopped_;
 
   std::vector<std::thread> pool_;
-  std::queue<Task> tasks_;
+  std::queue<std::function<void()>> tasks_;
 
-  size_t size_;
+  const size_t thread_num_;
 };
 
 }  // namespace ksana_llm
