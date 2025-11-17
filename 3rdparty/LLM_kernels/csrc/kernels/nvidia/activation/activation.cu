@@ -138,25 +138,62 @@ struct IdentityActivation {
 };
 
 template <template <typename T> class Activation, typename T>
-__global__ void RowBasedActivationKernel(T* out, const T* __restrict input, int32_t m, int32_t n, int32_t stride,
+__global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, int32_t m, int32_t n, int32_t stride,
                                          int32_t for_range, int32_t packed_elems) {
+  /*
+   * - input: row-major matrix with logical shape [m, n]. The last dimension is split into two contiguous halves:
+   *     [0 .. n/2)  -> value part
+   *     [n/2 .. n)  -> gate  part
+   *   Access pattern in kernel (per row row_id):
+   *     base      = row_id * n;
+   *     gate_base = base + stride;    // stride == n/2 (for packed types, n and stride are pre-divided at launch)
+   *     val  = input[base + col];
+   *     gate = input[gate_base + col];
+   * - out: row-major matrix with shape [m, n/2]. For each row, write to:
+   *     out_base = row_id * (n/2);
+   *     out[out_base + col] = Activation(val) * gate;
+   * - packed_elems note: when vectorized packing is enabled (packed_elems > 1), the launched kernel receives
+   *   n and stride already divided by packed_elems, but the logical layout remains as above.
+   */
   using ActType = typename Activation<T>::return_type;
 
   int32_t row_id = blockIdx.x;
+  if (row_id >= m) {
+    return;
+  }
   int32_t output_col_num = n / 2;
-  for (int32_t offset = 0; offset < for_range && threadIdx.x * for_range + offset < output_col_num; ++offset) {
-    int32_t col_id = threadIdx.x * for_range + offset;
-    if (col_id >= output_col_num) {
-      return;
+  const T* base = input + row_id * n;
+  const T* gate_base = base + stride;
+  T* out_row  = out + row_id * output_col_num;
+  constexpr int32_t kColsPerIter = 2;  // process two columns per iteration
+
+  #pragma unroll 2
+  for (int32_t col = threadIdx.x; col < output_col_num; col += (blockDim.x * kColsPerIter)) {
+    const int32_t col_0 = col;
+    const int32_t col_1 = col_0 + blockDim.x;
+    T val_in_0 = base[col_0];
+    T gate_in_0 = gate_base[col_0];
+    T val_in_1{};
+    T gate_in_1{};
+    const bool has_c1 = (col_1 < output_col_num);
+    if (has_c1) {
+      val_in_1 = base[col_1];
+      gate_in_1 = gate_base[col_1];
     }
-    int32_t input_idx = row_id * n + col_id;
-    T val = input[input_idx];
 
-    T gated_val = input[input_idx + stride];
+    ActType act_0 = Activation<T>::apply(val_in_0);
+    T out_0 = CastCudaDataType<T>(act_0 * CastCudaDataType<ActType>(gate_in_0));
 
-    val = CastCudaDataType<T>(Activation<T>::apply(val) * CastCudaDataType<ActType>(gated_val));
+    T out_1{};
+    if (has_c1) {
+      ActType act_1 = Activation<T>::apply(val_in_1);
+      out_1 = CastCudaDataType<T>(act_1 * CastCudaDataType<ActType>(gate_in_1));
+    }
 
-    out[row_id * output_col_num + col_id] = val;
+    out_row[col_0] = out_0;
+    if (has_c1) {
+      out_row[col_1] = out_1;
+    }
   }
 }
 

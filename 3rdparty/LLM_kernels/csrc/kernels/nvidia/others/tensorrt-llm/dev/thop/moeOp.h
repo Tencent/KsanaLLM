@@ -1,10 +1,6 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
+ * Copyright 2025 Tencent Inc.  All rights reserved.
+ *
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +14,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Adapted from [TensorRT-LLM Project]
+ * https://github.com/NVIDIA/TensorRT-LLM/blob/v1.1.0rc4/cpp/tensorrt_llm/thop/moeOp.cpp
  */
 
 #pragma once
@@ -41,7 +40,9 @@ namespace llm_kernels::nvidia::tensorrt_llm::dev {
 namespace internal {
 namespace common = llm_kernels::nvidia::tensorrt_llm::dev::common;
 namespace kernels = CUTLASS_MOE_GEMM_KERNELS_NAMESPACE;
+using ActivationParams = CUTLASS_MOE_GEMM_NAMESPACE::ActivationParams;
 using ActivationType = CUTLASS_MOE_GEMM_NAMESPACE::ActivationType;
+using MoeGemmId = CUTLASS_MOE_GEMM_NAMESPACE::MoeGemmId;
 // Always use public header as it is just utility functions and types
 using TmaWarpSpecializedGroupedGemmInput =
     llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels::TmaWarpSpecializedGroupedGemmInput;
@@ -58,21 +59,30 @@ class FusedMoeRunner {
   template <typename TypeAct, typename TypeWeight, bool NeedQuant = false>
   std::unique_ptr<internal::kernels::CutlassMoeFCRunnerInterface> switch_output_type(ScalarType output_type);
 
+  template <typename TypeAct>
+  std::unique_ptr<internal::kernels::CutlassMoeFCRunnerInterface> create_weight_quant_runner();
+
   FusedMoeRunner(ScalarType activation_dtype, ScalarType weight_dtype, ScalarType output_dtype,
-                 bool use_deepseek_fp8_block_scale, bool use_w4a8_group_scaling, bool use_mxfp8_act_scaling);
+                 bool use_deepseek_fp8_block_scale, bool use_w4_group_scaling, bool use_int8_woq_per_channel,
+                 bool use_mxfp8_act_scaling, bool use_fused_finalize);
 
   FusedMoeRunner(FusedMoeRunner const&) = delete;
   void operator=(FusedMoeRunner const&) = delete;
 
   size_t getRuntimeWorkspaceInfo(const Tensor& input, const Tensor& token_selected_experts,
-                                 const Tensor& fc2_expert_weights, int64_t const tp_size, int64_t const tp_rank,
-                                 int64_t const ep_size, int64_t const ep_rank, bool min_latency_mode,
-                                 const std::vector<int64_t>& profile_ids);
+                                 const Tensor& fc2_expert_weights, const std::optional<Tensor>& swiglu_alpha,
+                                 const std::optional<Tensor>& swiglu_beta, const std::optional<Tensor>& swiglu_limit,
+                                 int64_t const tp_size, int64_t const tp_rank, int64_t const ep_size,
+                                 int64_t const ep_rank, bool min_latency_mode, const std::vector<int64_t>& profile_ids,
+                                 const std::optional<int64_t>& unpadded_hidden_size);
 
-  size_t getRuntimeWorkspaceInfo(const size_t experts_per_token, const size_t num_rows, const size_t hidden_size,
-                                 const size_t inter_size, const size_t num_experts_on_rank, int64_t const tp_size,
-                                 int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank,
-                                 bool min_latency_mode, const std::vector<int64_t>& profile_ids);
+  size_t getRuntimeWorkspaceInfo(const std::optional<Tensor>& swiglu_alpha, const std::optional<Tensor>& swiglu_beta,
+                                 const std::optional<Tensor>& swiglu_limit, const size_t experts_per_token,
+                                 const size_t num_rows, const size_t hidden_size, const size_t inter_size,
+                                 const size_t num_experts_on_rank, int64_t const tp_size, int64_t const tp_rank,
+                                 int64_t const ep_size, int64_t const ep_rank, bool min_latency_mode,
+                                 const std::vector<int64_t>& profile_ids,
+                                 const std::optional<int64_t>& unpadded_hidden_size);
 
   void setRuntimeWorkspaceInfo(void* workspace_ptr);
 
@@ -80,22 +90,27 @@ class FusedMoeRunner {
               const std::optional<Tensor>& token_final_scales, const Tensor& fc1_expert_weights,
               const std::optional<Tensor>& fc1_expert_biases, const Tensor& fc2_expert_weights,
               const std::optional<Tensor>& fc2_expert_biases, const std::vector<Tensor>& quant_scales,
-              const std::optional<Tensor>& input_sf, int64_t const tp_size, int64_t const tp_rank,
+              const std::optional<Tensor>& input_sf, const bool swizzled_input_sf,
+              const std::optional<Tensor>& swiglu_alpha, const std::optional<Tensor>& swiglu_beta,
+              const std::optional<Tensor>& swiglu_limit, int64_t const tp_size, int64_t const tp_rank,
               int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size, int64_t const cluster_rank,
               bool const enable_alltoall, bool min_latency_mode, const std::vector<int64_t>& profile_ids,
-              cudaStream_t stream);
+              std::optional<int64_t> const& unpadded_hidden_size, cudaStream_t stream);
 
   void runMoeMinLantency(Tensor& output, Tensor& num_active_experts_per_node, Tensor& experts_to_token_score,
                          Tensor& active_expert_global_ids, const Tensor& input, const Tensor& token_selected_experts,
                          const std::optional<Tensor>& token_final_scales, const Tensor& fc1_expert_weights,
                          const std::optional<Tensor>& fc1_expert_biases, const Tensor& fc2_expert_weights,
                          const std::optional<Tensor>& fc2_expert_biases, const std::vector<Tensor>& quant_scales,
-                         const std::optional<Tensor>& input_sf, int64_t const tp_size, int64_t const tp_rank,
+                         const std::optional<Tensor>& input_sf, const bool swizzled_input_sf,
+                         const std::optional<Tensor>& swiglu_alpha, const std::optional<Tensor>& swiglu_beta,
+                         const std::optional<Tensor>& swiglu_limit, int64_t const tp_size, int64_t const tp_rank,
                          int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size,
                          int64_t const cluster_rank, bool const enable_alltoall, bool min_latency_mode,
-                         const std::vector<int64_t>& profile_ids, cudaStream_t stream);
+                         const std::vector<int64_t>& profile_ids, std::optional<int64_t> const& unpadded_hidden_size,
+                         cudaStream_t stream);
 
-  int64_t getTacticNum();
+  int64_t getTacticNum(int64_t const gemm_idx);
 
   size_t getProfileWorkspace(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                              const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
@@ -103,7 +118,7 @@ class FusedMoeRunner {
                              int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size,
                              int64_t const cluster_rank, bool const enable_alltoall, bool const min_latency_mode,
                              int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation,
-                             cudaStream_t stream);
+                             int64_t const unpadded_hidden_size, cudaStream_t stream);
 
   void setProfileWorkspace(void* profile_workspace_ptr, const Tensor& fc1_expert_weights,
                            const std::optional<Tensor>& fc1_expert_biases, const Tensor& fc2_expert_weights,
@@ -111,14 +126,15 @@ class FusedMoeRunner {
                            int64_t const tp_size, int64_t const tp_rank, int64_t const ep_size, int64_t const ep_rank,
                            int64_t const cluster_size, int64_t const cluster_rank, bool const enable_alltoall,
                            bool const min_latency_mode, int64_t const gemm_idx, int64_t const profile_id,
-                           bool const do_preparation, cudaStream_t stream);
+                           bool const do_preparation, int64_t const unpadded_hidden_size, cudaStream_t stream);
 
   void runGemmProfile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                       const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
                       const int64_t num_rows, int64_t const top_k, int64_t const tp_size, int64_t const tp_rank,
                       int64_t const ep_size, int64_t const ep_rank, int64_t const cluster_size,
                       int64_t const cluster_rank, bool const enable_alltoall, bool const min_latency_mode,
-                      int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation, cudaStream_t stream);
+                      int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation,
+                      int64_t const unpadded_hidden_size, cudaStream_t stream);
 
  private:
   std::shared_ptr<internal::kernels::CutlassMoeFCRunnerInterface> mKernelRunner;
@@ -132,21 +148,24 @@ class FusedMoeRunner {
   char* mProfileWorkspace = nullptr;
 
   bool mUseDeepSeekFP8BlockScaling = false;
-  bool mUseW4A8GroupScaling = false;
+  bool mUseW4GroupScaling = false;
+  bool mUseINT8WoqPerChannel = false;
   bool mUseMxfp8ActScaling = false;
+  bool mUseFusedFinalize = true;
 
   using Profile = llm_kernels::nvidia::tensorrt_llm::dev::cutlass_extensions::CutlassGemmConfig;
-  std::vector<Profile> mAllProfiles;
+  std::vector<Profile> mGemm1Profiles;
+  std::vector<Profile> mGemm2Profiles;
 
   WorkspaceInfo runtime_workspace;
   size_t moe_workspace_size;
   size_t src_to_dest_map_size;
 
+  void setRunnerProfiles(const std::vector<int64_t>& profile_ids);
+
   size_t getWorkspaceInfo(int64_t const num_rows, int64_t const hidden_size, int64_t const inter_size, int num_experts,
                           int experts_per_token, internal::ActivationType activation_type,
                           internal::kernels::MOEParallelismConfig const& parallelismConfig, bool min_latency_mode);
-
-  void setRunnerProfiles(const std::vector<int64_t>& profile_ids);
 
   internal::kernels::QuantParams getQuantParams(int64_t const num_experts_on_rank, int64_t const hidden_size,
                                                 int64_t const inter_size,
@@ -162,9 +181,15 @@ class FusedMoeRunner {
            mActivationDtype != ScalarType::Float8_e4m3fn;  // FP8 activation does not use FP4
   }
 
+  bool isWFP4A16Quant() const { return mUseW4GroupScaling && mWeightDtype == ScalarType::Byte; }
+
+  bool isInt8Quant() const { return mWeightDtype == ScalarType::Char; }
+
   bool isInt4Quant() const { return mWeightDtype == ScalarType::QUInt4x2; }
 
   bool isW4AFp8Quant() const { return mActivationDtype == ScalarType::Float8_e4m3fn && isInt4Quant(); }
+
+  bool isIntWeightOnlyQuant() const { return isInt8Quant() || isInt4Quant(); }
 
   bool isWMxfp4AFp8Quant() const {
     return mActivationDtype == ScalarType::Float8_e4m3fn && mWeightDtype == ScalarType::Long && !mUseMxfp8ActScaling;

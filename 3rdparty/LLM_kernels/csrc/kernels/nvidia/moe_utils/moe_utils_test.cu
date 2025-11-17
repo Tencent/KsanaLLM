@@ -60,12 +60,8 @@ TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_input, reinterpret_cast<void*>(input.data()), total_elements * sizeof(float),
                                      cudaMemcpyHostToDevice));
 
-  for (int i = 0; i < 10; ++i)
-    InvokeMoeSum<float, false>(d_input, d_output, nullptr, num_tokens, topk, hidden_size, stream);
+  InvokeMoeSum<float, false>(d_input, d_output, nullptr, num_tokens, topk, hidden_size, stream);
 
-  cudaEvent_t start, stop;
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&start));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventCreate(&stop));
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(output.data(), d_output, output_elements * sizeof(float), cudaMemcpyDeviceToHost));
 
   for (size_t i = 0; i < output_elements; ++i) {
@@ -74,8 +70,6 @@ TEST_F(LlamaNvidiaMoeTestSuit, SumOutDim1KernelTest) {
 
   cudaFree(d_input);
   cudaFree(d_output);
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(start));
-  CHECK_NVIDIA_CUDA_ERROR(cudaEventDestroy(stop));
 }
 
 template <typename T>

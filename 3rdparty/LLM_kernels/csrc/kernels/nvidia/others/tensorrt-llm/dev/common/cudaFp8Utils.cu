@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -302,8 +296,10 @@ void invokeComputeFP8QuantizeScale(T_S* quant_ptr, const T_W* weights, const int
 DEFINE_INVOKE_COMPUTE_FP8_QUANTIZE_SCALE(half, half);
 DEFINE_INVOKE_COMPUTE_FP8_QUANTIZE_SCALE(float, half);
 DEFINE_INVOKE_COMPUTE_FP8_QUANTIZE_SCALE(float, float);
+#  ifdef ENABLE_BF16
 DEFINE_INVOKE_COMPUTE_FP8_QUANTIZE_SCALE(__nv_bfloat16, __nv_bfloat16);
 DEFINE_INVOKE_COMPUTE_FP8_QUANTIZE_SCALE(float, __nv_bfloat16);
+#  endif
 
 template <typename T_OUT, typename T_S, typename T_IN>
 __global__ void dynamicQuantizeMatrixPerToken(T_OUT* output, T_S* quant_ptr, T_IN const* input, int64_t numel,
@@ -392,10 +388,12 @@ DEFINE_INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, half, half);
 DEFINE_INVOKE_QUANTIZE_MATRIX(half, half, __nv_fp8_e4m3);
 DEFINE_INVOKE_QUANTIZE_MATRIX(float, float, __nv_fp8_e4m3);
 DEFINE_INVOKE_QUANTIZE_MATRIX(half, float, __nv_fp8_e4m3);
+#    ifdef ENABLE_BF16
 DEFINE_INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, float, __nv_bfloat16);
 DEFINE_INVOKE_QUANTIZE_MATRIX(__nv_fp8_e4m3, __nv_bfloat16, __nv_bfloat16);
 DEFINE_INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, __nv_bfloat16, __nv_fp8_e4m3);
 DEFINE_INVOKE_QUANTIZE_MATRIX(__nv_bfloat16, float, __nv_fp8_e4m3);
+#    endif
 #  endif
 
 #endif  // ENABLE_FP8

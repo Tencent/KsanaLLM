@@ -46,7 +46,7 @@ class ATBOperationExecutor {
 
   int GetRank() { return rank_; }
 
-  size_t GetWorkSpaceSize(atb::Context* context);
+  size_t GetWorkspaceSize(atb::Context* context);
 
   void Run(atb::Context* context, void* workspace_ptr);
 

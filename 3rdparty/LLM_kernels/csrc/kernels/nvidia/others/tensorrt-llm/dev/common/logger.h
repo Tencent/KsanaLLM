@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,20 +44,21 @@ class Logger {
 
 #if defined(_MSC_VER)
   template <typename... Args>
-  void log(Level level, char const* format, Args const&... args);
+  void log(Level const level, char const* format, Args const&... args);
 
   template <typename... Args>
-  void log(Level level, int rank, char const* format, Args const&... args);
+  void log(Level const level, int const rank, char const* format, Args const&... args);
 #else
   template <typename... Args>
-  void log(Level level, char const* format, Args const&... args) __attribute__((format(printf, 3, 0)));
+  void log(Level const level, char const* format, Args const&... args) __attribute__((format(printf, 3, 0)));
 
   template <typename... Args>
-  void log(Level level, int rank, char const* format, Args const&... args) __attribute__((format(printf, 4, 0)));
+  void log(Level const level, int const rank, char const* format, Args const&... args)
+      __attribute__((format(printf, 4, 0)));
 #endif
 
   template <typename... Args>
-  void log(Level level, std::string const& format, Args const&... args) {
+  void log(Level const level, std::string const& format, Args const&... args) {
     return log(level, format.c_str(), args...);
   }
 
@@ -120,7 +115,7 @@ class Logger {
 };
 
 template <typename... Args>
-void Logger::log(Logger::Level level, char const* format, Args const&... args) {
+void Logger::log(Logger::Level const level, char const* format, Args const&... args) {
   if (isEnabled(level)) {
     auto const fmt = getPrefix(level) + format;
     auto& out = level_ < WARNING ? std::cout : std::cerr;

@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -92,7 +86,9 @@ void deviceMalloc(T** ptr, size_t size, bool is_random_initialize) {
 
 template void deviceMalloc(float** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(half** ptr, size_t size, bool is_random_initialize);
+#ifdef ENABLE_BF16
 template void deviceMalloc(__nv_bfloat16** ptr, size_t size, bool is_random_initialize);
+#endif
 template void deviceMalloc(uint32_t** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(uint16_t** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(int** ptr, size_t size, bool is_random_initialize);
@@ -116,7 +112,9 @@ template void deviceMemSetZero(bool* ptr, size_t size);
 #ifdef ENABLE_FP8
 template void deviceMemSetZero(__nv_fp8_e4m3* ptr, size_t size);
 #endif
+#ifdef ENABLE_BF16
 template void deviceMemSetZero(__nv_bfloat16* ptr, size_t size);
+#endif
 
 template <typename T>
 void deviceFree(T*& ptr) {
@@ -128,7 +126,9 @@ void deviceFree(T*& ptr) {
 
 template void deviceFree(float*& ptr);
 template void deviceFree(half*& ptr);
+#ifdef ENABLE_BF16
 template void deviceFree(__nv_bfloat16*& ptr);
+#endif
 template void deviceFree(unsigned short*& ptr);
 template void deviceFree(uint32_t*& ptr);
 template void deviceFree(int*& ptr);
@@ -149,7 +149,9 @@ void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream) {
 
 template void deviceFill(float* devptr, size_t size, float value, cudaStream_t stream);
 template void deviceFill(half* devptr, size_t size, half value, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void deviceFill(__nv_bfloat16* devptr, size_t size, __nv_bfloat16 value, cudaStream_t stream);
+#endif
 template void deviceFill(int* devptr, size_t size, int value, cudaStream_t stream);
 template void deviceFill(bool* devptr, size_t size, bool value, cudaStream_t stream);
 
@@ -160,7 +162,9 @@ void cudaD2Hcpy(T* tgt, T const* src, const size_t size) {
 
 template void cudaD2Hcpy(float* tgt, float const* src, size_t size);
 template void cudaD2Hcpy(half* tgt, half const* src, size_t size);
+#ifdef ENABLE_BF16
 template void cudaD2Hcpy(__nv_bfloat16* tgt, __nv_bfloat16 const* src, size_t size);
+#endif
 template void cudaD2Hcpy(int* tgt, int const* src, size_t size);
 template void cudaD2Hcpy(bool* tgt, bool const* src, size_t size);
 #ifdef ENABLE_FP8
@@ -177,7 +181,9 @@ void cudaH2Dcpy(T* tgt, T const* src, const size_t size) {
 
 template void cudaH2Dcpy(float* tgt, float const* src, size_t size);
 template void cudaH2Dcpy(half* tgt, half const* src, size_t size);
+#ifdef ENABLE_BF16
 template void cudaH2Dcpy(__nv_bfloat16* tgt, __nv_bfloat16 const* src, size_t size);
+#endif
 template void cudaH2Dcpy(int* tgt, int const* src, size_t size);
 template void cudaH2Dcpy(bool* tgt, bool const* src, size_t size);
 #ifdef ENABLE_FP8
@@ -194,7 +200,9 @@ void cudaD2Dcpy(T* tgt, T const* src, const size_t size, cudaStream_t stream) {
 
 template void cudaD2Dcpy(float* tgt, float const* src, size_t size, cudaStream_t stream);
 template void cudaD2Dcpy(half* tgt, half const* src, size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void cudaD2Dcpy(__nv_bfloat16* tgt, __nv_bfloat16 const* src, size_t size, cudaStream_t stream);
+#endif
 template void cudaD2Dcpy(int* tgt, int const* src, size_t size, cudaStream_t stream);
 template void cudaD2Dcpy(bool* tgt, bool const* src, size_t size, cudaStream_t stream);
 template void cudaD2Dcpy(int8_t* tgt, int8_t const* src, size_t size, cudaStream_t stream);
@@ -216,10 +224,12 @@ void invokeCudaCast(T_OUT* dst, T_IN const* const src, const size_t size, cudaSt
 }
 
 template void invokeCudaCast(float* dst, half const* const src, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void invokeCudaCast(float* dst, __nv_bfloat16 const* const src, const size_t size, cudaStream_t stream);
 template void invokeCudaCast(__nv_bfloat16* dst, float const* const src, const size_t size, cudaStream_t stream);
 template void invokeCudaCast(__nv_bfloat16* dst, half const* const src, const size_t size, cudaStream_t stream);
 template void invokeCudaCast(half* dst, __nv_bfloat16 const* const src, const size_t size, cudaStream_t stream);
+#endif
 #ifdef ENABLE_FP8
 template void invokeCudaCast(float* dst, __nv_fp8_e4m3 const* const src, const size_t size, cudaStream_t stream);
 template void invokeCudaCast(__nv_bfloat16* dst, __nv_fp8_e4m3 const* const src, const size_t size,
@@ -242,7 +252,9 @@ void cudaAutoCpy(T* tgt, T const* src, const size_t size, cudaStream_t stream) {
 
 template void cudaAutoCpy(float* tgt, float const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(half* tgt, half const* src, size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void cudaAutoCpy(__nv_bfloat16* tgt, __nv_bfloat16 const* src, size_t size, cudaStream_t stream);
+#endif
 template void cudaAutoCpy(int* tgt, int const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(bool* tgt, bool const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(int8_t* tgt, int8_t const* src, size_t size, cudaStream_t stream);
@@ -254,7 +266,9 @@ template void cudaAutoCpy(char* tgt, char const* src, size_t size, cudaStream_t 
 
 template void cudaAutoCpy(float const** tgt, float const* const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(half const** tgt, half const* const* src, size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void cudaAutoCpy(__nv_bfloat16 const** tgt, __nv_bfloat16 const* const* src, size_t size, cudaStream_t stream);
+#endif
 template void cudaAutoCpy(int const** tgt, int const* const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(bool const** tgt, bool const* const* src, size_t size, cudaStream_t stream);
 template void cudaAutoCpy(int8_t const** tgt, int8_t const* const* src, size_t size, cudaStream_t stream);
@@ -310,7 +324,9 @@ void cudaRandomUniform(T* buffer, const size_t size) {
 
 template void cudaRandomUniform(float* buffer, const size_t size);
 template void cudaRandomUniform(half* buffer, const size_t size);
+#ifdef ENABLE_BF16
 template void cudaRandomUniform(__nv_bfloat16* buffer, const size_t size);
+#endif
 template void cudaRandomUniform(int* buffer, const size_t size);
 template void cudaRandomUniform(bool* buffer, const size_t size);
 template void cudaRandomUniform(char* buffer, const size_t size);
@@ -386,6 +402,7 @@ template int loadWeightFromBinFunc<half, float>(half* ptr, std::vector<size_t> s
 template int loadWeightFromBinFunc<float, half>(float* ptr, std::vector<size_t> shape, std::string filename);
 template int loadWeightFromBinFunc<half, half>(half* ptr, std::vector<size_t> shape, std::string filename);
 template int loadWeightFromBinFunc<int8_t, int8_t>(int8_t* ptr, std::vector<size_t> shape, std::string filename);
+#ifdef ENABLE_BF16
 template int loadWeightFromBinFunc<__nv_bfloat16, float>(__nv_bfloat16* ptr, std::vector<size_t> shape,
                                                          std::string filename);
 template int loadWeightFromBinFunc<__nv_bfloat16, half>(__nv_bfloat16* ptr, std::vector<size_t> shape,
@@ -394,6 +411,7 @@ template int loadWeightFromBinFunc<float, __nv_bfloat16>(float* ptr, std::vector
 template int loadWeightFromBinFunc<half, __nv_bfloat16>(half* ptr, std::vector<size_t> shape, std::string filename);
 template int loadWeightFromBinFunc<__nv_bfloat16, __nv_bfloat16>(__nv_bfloat16* ptr, std::vector<size_t> shape,
                                                                  std::string filename);
+#endif  // ENABLE_BF16
 template int loadWeightFromBinFunc<int, int>(int* ptr, std::vector<size_t> shape, std::string filename);
 #ifdef ENABLE_FP8
 template int loadWeightFromBinFunc<__nv_fp8_e4m3, float>(__nv_fp8_e4m3* ptr, std::vector<size_t> shape,
@@ -412,9 +430,11 @@ int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, T
     case TRTLLMCudaDataType::INT8:
       loadWeightFromBinFunc<T, int8_t>(ptr, shape, filename);
       break;
+#ifdef ENABLE_BF16
     case TRTLLMCudaDataType::BF16:
       loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename);
       break;
+#endif
 #ifdef ENABLE_FP8
     case TRTLLMCudaDataType::FP8:
       loadWeightFromBinFunc<T, float>(ptr, shape, filename);
@@ -439,8 +459,10 @@ template int loadWeightFromBin(half* ptr, std::vector<size_t> shape, std::string
                                TRTLLMCudaDataType model_file_type);
 template int loadWeightFromBin(int8_t* ptr, std::vector<size_t> shape, std::string filename,
                                TRTLLMCudaDataType model_file_type);
+#ifdef ENABLE_BF16
 template int loadWeightFromBin(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename,
                                TRTLLMCudaDataType model_file_type);
+#endif
 #ifdef ENABLE_FP8
 template int loadWeightFromBin(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename,
                                TRTLLMCudaDataType model_file_type);
@@ -470,10 +492,12 @@ template void invokeCudaD2DcpyConvert(int* tgt, uint32_t const* src, const size_
 template void invokeCudaD2DcpyConvert(int* tgt, float const* src, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(int* tgt, half const* src, const size_t size, cudaStream_t stream);
 
+#ifdef ENABLE_BF16
 template void invokeCudaD2DcpyConvert(__nv_bfloat16* tgt, float const* src, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(__nv_bfloat16* tgt, int const* src, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(float* tgt, __nv_bfloat16 const* src, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(int* tgt, __nv_bfloat16 const* src, const size_t size, cudaStream_t stream);
+#endif  // ENABLE_BF16
 
 template <typename T_IN, typename T_OUT>
 __global__ void cudaD2DScaleCpyConvert(T_OUT* dst, const T_IN* src, float const* scale, bool invert_scale,
@@ -495,8 +519,10 @@ template void invokeCudaD2DScaleCpyConvert(float* tgt, const int32_t* src, const
 template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const float* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DScaleCpyConvert(half* tgt, const int32_t* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const half* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void invokeCudaD2DScaleCpyConvert(__nv_bfloat16* tgt, const int32_t* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
 template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const __nv_bfloat16* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
+#endif  // ENABLE_BF16
 #ifdef ENABLE_FP8
 template void invokeCudaD2DScaleCpyConvert(float* tgt, const __nv_fp8_e4m3* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream);
 #endif  // ENABLE_FP8
@@ -527,7 +553,9 @@ void saveToBinary(T const* ptr, const size_t size, std::string filename) {
 
 template void saveToBinary(float const* ptr, const size_t size, std::string filename);
 template void saveToBinary(half const* ptr, const size_t size, std::string filename);
+#ifdef ENABLE_BF16
 template void saveToBinary(__nv_bfloat16 const* ptr, const size_t size, std::string filename);
+#endif  // ENABLE_BF16
 
 template <>
 void saveToBinary(int const* ptr, const size_t size, std::string filename) {
@@ -626,8 +654,10 @@ void invokeInPlaceTranspose(T* data, T* workspace, const size_t dim0, const size
 template void invokeInPlaceTranspose(__nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const size_t dim0,
                                      const size_t dim1);
 #endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
 template void invokeInPlaceTranspose(__nv_bfloat16* data, __nv_bfloat16* workspace, const size_t dim0,
                                      const size_t dim1);
+#endif  // ENABLE_BF16
 template void invokeInPlaceTranspose(float* data, float* workspace, const size_t dim0, const size_t dim1);
 
 template <typename T_OUT, typename T_IN>
@@ -662,8 +692,10 @@ void invokeInPlaceTranspose0213(T* data, T* workspace, const size_t dim0, const 
 template void invokeInPlaceTranspose0213(__nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const size_t dim0,
                                          const size_t dim1, const size_t dim2, const size_t dim3);
 #endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
 template void invokeInPlaceTranspose0213(__nv_bfloat16* data, __nv_bfloat16* workspace, const size_t dim0,
                                          const size_t dim1, const size_t dim2, const size_t dim3);
+#endif  // ENABLE_BF16
 template void invokeInPlaceTranspose0213(float* data, float* workspace, const size_t dim0, const size_t dim1,
                                          const size_t dim2, const size_t dim3);
 
@@ -694,8 +726,10 @@ void invokeInPlaceTranspose102(T* data, T* workspace, const size_t dim0, const s
 template void invokeInPlaceTranspose102(__nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const size_t dim0,
                                         const size_t dim1, const size_t dim2);
 #endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
 template void invokeInPlaceTranspose102(__nv_bfloat16* data, __nv_bfloat16* workspace, const size_t dim0,
                                         const size_t dim1, const size_t dim2);
+#endif  // ENABLE_BF16
 template void invokeInPlaceTranspose102(float* data, float* workspace, const size_t dim0, const size_t dim1,
                                         const size_t dim2);
 
@@ -715,7 +749,9 @@ void invokeMultiplyScale(T* tensor, float scale, const size_t size, cudaStream_t
 
 template void invokeMultiplyScale(float* tensor, float scale, const size_t size, cudaStream_t stream);
 template void invokeMultiplyScale(half* tensor, float scale, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void invokeMultiplyScale(__nv_bfloat16* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
 #ifdef ENABLE_FP8
 template void invokeMultiplyScale(__nv_fp8_e4m3* tensor, float scale, const size_t size, cudaStream_t stream);
 #endif
@@ -736,14 +772,18 @@ void invokeDivideScale(T* tensor, float scale, const size_t size, cudaStream_t s
 
 template void invokeDivideScale(float* tensor, float scale, const size_t size, cudaStream_t stream);
 template void invokeDivideScale(half* tensor, float scale, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
 template void invokeDivideScale(__nv_bfloat16* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
 #ifdef ENABLE_FP8
 template void invokeDivideScale(__nv_fp8_e4m3* tensor, float scale, const size_t size, cudaStream_t stream);
 #endif
+#ifdef ENABLE_BF16
 template void invokeFakeCast<float, __nv_bfloat16>(float* input_ptr, const size_t size, cudaStream_t stream);
 template void invokeFakeCast<__nv_bfloat16, __nv_bfloat16>(__nv_bfloat16* input_ptr, const size_t size,
                                                            cudaStream_t stream);
 template void invokeFakeCast<half, __nv_bfloat16>(half* input_ptr, const size_t size, cudaStream_t stream);
+#endif
 template void invokeFakeCast<float, half>(float* input_ptr, const size_t size, cudaStream_t stream);
 template void invokeFakeCast<float, float>(float* input_ptr, const size_t size, cudaStream_t stream);
 #ifdef ENABLE_FP8
@@ -755,8 +795,12 @@ template void invokeFakeCast<__nv_bfloat16, __nv_fp8_e4m3>(__nv_bfloat16* input_
 
 size_t cuda_datatype_size(TRTLLMCudaDataType dt) {
   static const std::unordered_map<TRTLLMCudaDataType, size_t> sizes{{TRTLLMCudaDataType::FP32, sizeof(float)},
-                                                                    {TRTLLMCudaDataType::FP16, sizeof(half)},
-                                                                    {TRTLLMCudaDataType::BF16, sizeof(__nv_bfloat16)}};
+                                                                    {TRTLLMCudaDataType::FP16, sizeof(half)}
+#ifdef ENABLE_BF16
+                                                                    ,
+                                                                    {TRTLLMCudaDataType::BF16, sizeof(__nv_bfloat16)}
+#endif
+  };
 
   return sizes.at(dt);
 }

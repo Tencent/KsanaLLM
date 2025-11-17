@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +17,7 @@
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/tllmException.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/stringUtils.h"
 
+#include <cinttypes>
 #include <cstdlib>
 #if !defined(_MSC_VER)
 #  include <cxxabi.h>
@@ -93,5 +88,18 @@ std::string TllmException::demangle(char const* name) {
   return clearName;
 #endif
 }
+
+RequestSpecificException::RequestSpecificException(std::string const& file, std::size_t line, char const* msg,
+                                                   uint64_t requestID, RequestErrorCode errorCode)
+    : std::runtime_error{fmtstr("%s (Request ID: %" PRIu64 ", Error Code: %u) (%s:%zu)", msg, requestID,
+                                static_cast<uint32_t>(errorCode), file.c_str(), line)},
+      mRequestID{requestID},
+      mErrorCode{errorCode} {}
+
+RequestSpecificException::~RequestSpecificException() noexcept = default;
+
+uint64_t RequestSpecificException::getRequestId() const noexcept { return mRequestID; }
+
+RequestErrorCode RequestSpecificException::getErrorCode() const noexcept { return mErrorCode; }
 
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::common

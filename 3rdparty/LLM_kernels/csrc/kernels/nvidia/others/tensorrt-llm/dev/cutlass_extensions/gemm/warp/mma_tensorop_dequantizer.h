@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2017-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -150,7 +144,7 @@ class MmaTensorOpDequantizer<
 
   CUTLASS_DEVICE
   void dequantize(FragmentDequantizedOperand& operand_frag, FragmentScale const& scale_frag) {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
     using _MmaOperandB = typename ArchMmaOperator::FragmentB;
     using ExpandedMmaOperandB = Array<typename _MmaOperandB::Element, kExpansionFactor * _MmaOperandB::kElements>;
     static_assert(
@@ -198,7 +192,7 @@ class MmaTensorOpDequantizer<
   CUTLASS_DEVICE
   void dequantize(FragmentDequantizedOperand& operand_frag, FragmentScale const& scale_frag,
                   FragmentScale const& zero_frag) {
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
     using _MmaOperandB = typename ArchMmaOperator::FragmentB;
     using ExpandedMmaOperandB = Array<typename _MmaOperandB::Element, kExpansionFactor * _MmaOperandB::kElements>;
     static_assert(

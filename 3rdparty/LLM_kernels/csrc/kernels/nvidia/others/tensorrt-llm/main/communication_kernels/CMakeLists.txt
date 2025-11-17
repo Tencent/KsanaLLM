@@ -14,4 +14,5 @@ file(GLOB_RECURSE TRT_ALL_REDUCE_TEST_SRCS *test.cu)
 message(STATUS "TRT_ALL_REDUCE_TEST_SRCS : ${TRT_ALL_REDUCE_TEST_SRCS}")
 cc_test(llm_kernels_nvidia_kernel_trt_all_reduce_test SRCS ${TRT_ALL_REDUCE_TEST_SRCS} DEPS
   llm_kernels_nvidia_kernel_trt_all_reduce
-  llm_kernels_nvidia_kernel_fused_add_norm)
+  llm_kernels_nvidia_kernel_fused_add_norm
+)

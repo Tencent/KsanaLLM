@@ -28,6 +28,7 @@ GET_SCALAR_TYPE(char, ScalarType::Int8);
 GET_SCALAR_TYPE(int8_t, ScalarType::Int8);
 #undef GET_SCALAR_TYPE
 
+/** Tensor: 轻量张量描述，包含裸指针、shape 和 dtype；不负责 data 的内存管理。 */
 struct Tensor {
   void* data;
   std::vector<size_t> shape;

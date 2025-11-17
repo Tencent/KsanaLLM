@@ -601,6 +601,13 @@ void MlaFlashFlexibleKCacheCopy(SCALAR_T* k_src, void** k_list, size_t* flexible
       SCALAR_T * k_src, SCALAR_T * v_src, void** k_list, void** v_list, size_t* prefix_offsets,                        \
       size_t* without_prefix_offsets, int* block_offsets, int block_size, int bs, int total_len, int k_stride_size,    \
       int v_stride_size, float k_scale, float v_scale, cudaStream_t stream);                                           \
+  template void MlaFlashPrefixKVReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                         \
+      SCALAR_T * k_dst, SCALAR_T * v_dst, void** kv_list, size_t* prefix_offsets, size_t* seq_len_offset,              \
+      int* block_offsets, int block_size, int total_len, int k_stride_size, int v_stride_size, float k_scale,          \
+      float v_scale, cudaStream_t stream);                                                                             \
+  template void MlaFlashWithoutPrefixKVCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                              \
+      SCALAR_T * k_dst, SCALAR_T * v_dst, SCALAR_T * k_new, SCALAR_T * v_new, size_t* prefix_offsets,                  \
+      size_t* without_prefix_offsets, int total_q_len, int k_stride_size, int v_stride_size, cudaStream_t stream);     \
   template void MlaPagedKVCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(SCALAR_T*, SCALAR_T*, void**, int*, int*, int, int,   \
                                                                  int, int, int, int, int, float, cudaStream_t);        \
   template void MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(                                                \

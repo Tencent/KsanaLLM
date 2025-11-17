@@ -73,7 +73,7 @@ TEST_F(LlamaNvidiaFlashMlaTestSuit, FlashMlaKernelTest) {
   void* const attn_out = CreateFlashMlaTensor<half>({batch, num_heads, num_kv_splits, kv_lora_rank + 1});
 
   FlashMlaWorkspaceMap flash_mla_workspace_map;
-  GetNumSmParts(flash_mla_workspace_map, num_heads, 1, 0, 0);
+  GetNumSmParts(flash_mla_workspace_map, num_heads, 1, 0);
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(
       CreateFlashMlaTensor<int>({flash_mla_workspace_map.num_sm_parts * TileSchedulerMetaDataSize}));
   flash_mla_workspace_map.num_splits_ptr = reinterpret_cast<int*>(CreateFlashMlaTensor<int>({batch + 1}));
@@ -137,7 +137,7 @@ TEST_F(LlamaNvidiaFlashMlaTestSuit, FP8FlashMlaKernelTest) {
       CreateFlashMlaTensor<__nv_bfloat16>({batch, q_seq_len * num_heads, num_kv_splits, kv_lora_rank + 1});
 
   FlashMlaWorkspaceMap flash_mla_workspace_map;
-  GetNumSmParts(flash_mla_workspace_map, num_heads, 1, 0, 0);
+  GetNumSmParts(flash_mla_workspace_map, num_heads, 1, 0);
   flash_mla_workspace_map.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(
       CreateFlashMlaTensor<int>({flash_mla_workspace_map.num_sm_parts * TileSchedulerMetaDataSize}));
   flash_mla_workspace_map.num_splits_ptr = reinterpret_cast<int*>(CreateFlashMlaTensor<int>({batch + 1}));

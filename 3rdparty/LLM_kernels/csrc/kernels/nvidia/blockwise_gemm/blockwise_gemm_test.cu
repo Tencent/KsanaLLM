@@ -2,7 +2,6 @@
  * Copyright 2024 Tencent Inc.  All rights reserved.
  */
 
-#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -28,6 +27,15 @@ class BlockwiseGemmTestSuit : public NvidiaTestSuitBase {
   void SetUp() override { NvidiaTestSuitBase::SetUp(); }
 
   void TearDown() override { NvidiaTestSuitBase::TearDown(); }
+
+  bool ShouldSkip() {
+    int major = 0;
+    CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+    if (major < 9) {
+      return true;
+    }
+    return false;
+  }
 
  protected:
   using NvidiaTestSuitBase::stream;
@@ -171,8 +179,7 @@ void ReferenceGemm(const std::vector<__nv_fp8_e4m3>& a, const std::vector<float>
 template <typename T>
 std::vector<T> GenerateRandomData(size_t size, float min_val = -1.0f, float max_val = 1.0f) {
   std::vector<T> data(size);
-  std::random_device rd;
-  std::mt19937 gen(rd());
+  std::mt19937 gen(42);
   std::uniform_real_distribution<float> dist(min_val, max_val);
 
   for (size_t i = 0; i < size; ++i) {
@@ -198,12 +205,8 @@ float CalcRelativeError(const std::vector<half>& a, const std::vector<half>& b) 
 }
 
 TEST_F(BlockwiseGemmTestSuit, BlockwiseKernelTestLegacy) {
-  int major = 0, minor = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
-  if (major < 9) {
-    GTEST_SKIP() << "Skipping test because SM version is less than 90";
-    return;
+  if (ShouldSkip()) {
+    GTEST_SKIP() << "BlockwiseGemmKernel is not supported on this device.";
   }
 
   std::vector<char> a = ReadTensorData<half>("/local_data/zezhao/work/data/A.bin", 2048 * 18432);
@@ -238,13 +241,23 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseKernelTestLegacy) {
   CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 }
 
+TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmGetWorkspaceSizeTest) {
+  if (ShouldSkip()) {
+    GTEST_SKIP() << "BlockwiseGemmKernel is not supported on this device.";
+  }
+  const int max_m = 65536;
+  const int k = 7168;
+  const int n = 1024;
+  size_t workspace_size = 0;
+  for (int m = 1; m <= max_m; ++m) {
+    workspace_size = std::max(workspace_size, GetBlockwiseGemmWorkspaceSize<__nv_bfloat16>(m, k, n));
+  }
+  EXPECT_GT(workspace_size, 0);
+}
+
 TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPrecisionTest) {
-  int major = 0, minor = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
-  if (major < 9) {
-    GTEST_SKIP() << "Skipping test because SM version is less than 90";
-    return;
+  if (ShouldSkip()) {
+    GTEST_SKIP() << "BlockwiseGemmKernel is not supported on this device.";
   }
 
   const int m = 128;
@@ -331,21 +344,9 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPrecisionTest) {
 
 // Performance test
 TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
-  int major = 0, minor = 0;
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-  CHECK_NVIDIA_CUDA_ERROR(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
-  if (major < 9) {
-    GTEST_SKIP() << "Skipping test because SM version is less than 90";
-    return;
+  if (ShouldSkip()) {
+    GTEST_SKIP() << "BlockwiseGemmKernel is not supported on this device.";
   }
-
-  std::vector<std::tuple<int, int, int>> test_sizes = {
-      {128, 128, 128}, {128, 512, 512}, {128, 1024, 1024}, {128, 10240, 2560}};
-
-  for (const auto& size : test_sizes) {
-    int m = std::get<0>(size);
-    int k = std::get<1>(size);
-    int n = std::get<2>(size);
 
   const int block_size_n = 128;
   const int block_size_k = 128;
@@ -393,75 +394,51 @@ TEST_F(BlockwiseGemmTestSuit, BlockwiseGemmPerformanceTest) {
   for (const auto& [k, n] : k_n_list) {
     for (size_t m : m_list) {
 
-    const int num_blocks_n = (n + block_size_n - 1) / block_size_n;
-    const int num_blocks_k = (k + block_size_k - 1) / block_size_k;
+      const int num_blocks_n = (n + block_size_n - 1) / block_size_n;
+      const int num_blocks_k = (k + block_size_k - 1) / block_size_k;
 
-    std::vector<half> a_half_host = GenerateRandomData<half>(m * k);
-    std::vector<half> b_half_host = GenerateRandomData<half>(k * n);
+      std::vector<half> a_half_host = GenerateRandomData<half>(m * k);
+      std::vector<half> b_half_host = GenerateRandomData<half>(k * n);
 
-    std::vector<float> a_scales_host = GenerateRandomData<float>(num_blocks_k, 0.5f, 2.0f);
-    std::vector<float> b_scales_host = GenerateRandomData<float>(num_blocks_n * num_blocks_k, 0.5f, 2.0f);
+      std::vector<float> a_scales_host = GenerateRandomData<float>(num_blocks_k, 0.5f, 2.0f);
+      std::vector<float> b_scales_host = GenerateRandomData<float>(num_blocks_n * num_blocks_k, 0.5f, 2.0f);
 
-    std::vector<half> c_host(m * n, half(0.0f));
+      std::vector<half> c_host(m * n, half(0.0f));
 
-    half* a_device;
-    half* b_device;
-    half* c_device;
-    float* a_scales_device;
-    float* b_scales_device;
-    __nv_fp8_e4m3* a_fp8_device;
-    __nv_fp8_e4m3* b_fp8_device;
-    void* cutlass_buffer = nullptr;
-    size_t cutlass_buffer_size = m * k * sizeof(float);
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(a_device, a_half_host.data(), m * k * sizeof(half), cudaMemcpyHostToDevice));
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(b_device, b_half_host.data(), k * n * sizeof(half), cudaMemcpyHostToDevice));
+      CHECK_NVIDIA_CUDA_ERROR(
+          cudaMemcpy(a_scales_device, a_scales_host.data(), num_blocks_k * sizeof(float), cudaMemcpyHostToDevice));
+      CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(b_scales_device, b_scales_host.data(),
+                                         num_blocks_n * num_blocks_k * sizeof(float), cudaMemcpyHostToDevice));
 
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_device, m * k * sizeof(half)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_device, k * n * sizeof(half)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&c_device, m * n * sizeof(half)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_scales_device, num_blocks_k * sizeof(float)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_scales_device, num_blocks_n * num_blocks_k * sizeof(float)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&a_fp8_device, m * k * sizeof(__nv_fp8_e4m3)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&b_fp8_device, k * n * sizeof(__nv_fp8_e4m3)));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMalloc(&cutlass_buffer, m * k * sizeof(float)));
+      ConvertToFp8(a_device, a_fp8_device, m * k, stream);
+      ConvertToFp8(b_device, b_fp8_device, k * n, stream);
 
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(a_device, a_half_host.data(), m * k * sizeof(half), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(b_device, b_half_host.data(), k * n * sizeof(half), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaMemcpy(a_scales_device, a_scales_host.data(), num_blocks_k * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(b_scales_device, b_scales_host.data(),
-                                       num_blocks_n * num_blocks_k * sizeof(float), cudaMemcpyHostToDevice));
+      for (int i = 0; i < 5; ++i) {
+        BlockwiseGemmKernel<half>(static_cast<void*>(a_fp8_device), a_scales_device, static_cast<void*>(b_fp8_device),
+                                  b_scales_device, static_cast<void*>(c_device), m, k, n, stream, cutlass_buffer,
+                                  max_cutlass_buffer_size);
+      }
+      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
-    ConvertToFp8(a_device, a_fp8_device, m * k, stream);
-    ConvertToFp8(b_device, b_fp8_device, k * n, stream);
-
-    for (int i = 0; i < 5; ++i) {
-      BlockwiseGemmKernel<half>(static_cast<void*>(a_fp8_device), a_scales_device, static_cast<void*>(b_fp8_device),
-                                b_scales_device, static_cast<void*>(c_device), m, k, n, stream, cutlass_buffer,
-                                cutlass_buffer_size);
+      const int num_iterations = 10;
+      auto cuda_run = [&]() {
+        BlockwiseGemmKernel<half>(static_cast<void*>(a_fp8_device), a_scales_device, static_cast<void*>(b_fp8_device),
+                                  b_scales_device, static_cast<void*>(c_device), m, k, n, stream, cutlass_buffer,
+                                  max_cutlass_buffer_size);
+      };
+      float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
+      PrintGemmBenchmarkResult(m, k, n, elapsed_ms);
     }
-    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-    const int num_iterations = 10;
-    auto cuda_run = [&]() {
-      BlockwiseGemmKernel<half>(static_cast<void*>(a_fp8_device), a_scales_device, static_cast<void*>(b_fp8_device),
-                                b_scales_device, static_cast<void*>(c_device), m, k, n, stream, cutlass_buffer,
-                                cutlass_buffer_size);
-    };
-    float elapsed_ms = MeasureCudaExecutionTime(cuda_run, stream, num_iterations, num_iterations);
-
-    double flops = 2.0 * m * n * k;
-    double gflops = (flops * 1e-9) / (elapsed_ms * 1e-3);
-
-    std::cout << "Matrix size: " << m << "x" << k << "x" << n << ", Execution time: " << elapsed_ms << " ms"
-              << ", Performance: " << gflops << " GFLOPS" << std::endl;
-
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(c_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_scales_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_scales_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_fp8_device));
-    CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_fp8_device));
   }
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(c_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_scales_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_scales_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(a_fp8_device));
+  CHECK_NVIDIA_CUDA_ERROR(cudaFree(b_fp8_device));
 }
 
 }  // namespace test

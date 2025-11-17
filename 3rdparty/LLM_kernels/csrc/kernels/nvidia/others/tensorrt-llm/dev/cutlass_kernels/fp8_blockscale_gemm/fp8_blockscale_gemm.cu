@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -118,7 +112,7 @@ void CutlassFp8BlockScaleGemmRunner<ElementA, ElementB, ElementD>::moeGemm(
     ws_ptr += num_problems * shape_n * shape_k * sizeof(__nv_fp8_e4m3);
     per_block_scales = reinterpret_cast<float*>(ws_ptr);
   } else {
-    for (size_t i = 0; i < num_problems; i++) {
+    for (int i = 0; i < num_problems; i++) {
       fp8_mat_b = reinterpret_cast<__nv_fp8_e4m3*>(const_cast<void*>(mat_b));
       per_block_scales = const_cast<float*>(scales_b);
     }

@@ -16,6 +16,7 @@
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
+
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
@@ -34,7 +35,8 @@ namespace test {
 class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
  public:
   void SetUp() override {
-    skip_test = GetSMVersion() < 90;
+    skip_float_test = GetSMVersion() < 90;
+    skip_test = GetSMVersion() < 89;
     device_count = GetDeviceCount();
     if (device_count < 2 || device_count > 8 || device_count % 2 != 0 || !EnableGpuP2PAccess(device_count)) {
       skip_test = true;
@@ -108,7 +110,8 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
  protected:
   int device_count = 0;
   bool skip_test = false;
-
+  bool skip_float_test = false;
+  
   ncclUniqueId nccl_id;
   std::vector<ncclComm_t> nccl_comms;
 
@@ -354,7 +357,9 @@ TEST_F(LlamaNvidiaTrtllmAllReduceTestSuit, TrtllmAllReduceAccTest) {
     return;
   }
   for (const int token_num : {32, 256}) {
-    RunTrtllmAllReduce<float>(token_num);
+    if (!skip_float_test) {
+      RunTrtllmAllReduce<float>(token_num);
+    }
     RunTrtllmAllReduce<half>(token_num);
     RunTrtllmAllReduce<__nv_bfloat16>(token_num);
   }
@@ -365,8 +370,10 @@ TEST_F(LlamaNvidiaTrtllmAllReduceTestSuit, DISABLED_TrtllmAllReducePerfTest) {
     return;
   }
   const std::vector<int> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
-  for (const int token_num : token_nums) {
-    RunTrtllmAllReduce<float>(token_num, /*perf*/ true);
+  if (!skip_float_test) {
+    for (const int token_num : token_nums) {
+      RunTrtllmAllReduce<float>(token_num, /*perf*/ true);
+    }
   }
   for (const int token_num : token_nums) {
     RunTrtllmAllReduce<half>(token_num, /*perf*/ true);
@@ -381,7 +388,9 @@ TEST_F(LlamaNvidiaTrtllmAllReduceTestSuit, TrtllmAllReduceResidualNormAccTest) {
     return;
   }
   for (const int token_num : {32, 256}) {
-    RunTrtllmAllReduceResidualNorm<float>(token_num);
+    if (!skip_float_test) {
+      RunTrtllmAllReduceResidualNorm<float>(token_num);
+    }
     RunTrtllmAllReduceResidualNorm<half>(token_num);
     RunTrtllmAllReduceResidualNorm<__nv_bfloat16>(token_num);
   }
@@ -392,8 +401,10 @@ TEST_F(LlamaNvidiaTrtllmAllReduceTestSuit, DISABLED_TrtllmAllReduceResidualNormP
     return;
   }
   const std::vector<int> token_nums = {1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
-  for (const int token_num : token_nums) {
-    RunTrtllmAllReduceResidualNorm<float>(token_num, /*perf*/ true);
+  if (!skip_float_test) {
+    for (const int token_num : token_nums) {
+      RunTrtllmAllReduceResidualNorm<float>(token_num, /*perf*/ true);
+    }
   }
   for (const int token_num : token_nums) {
     RunTrtllmAllReduceResidualNorm<half>(token_num, /*perf*/ true);

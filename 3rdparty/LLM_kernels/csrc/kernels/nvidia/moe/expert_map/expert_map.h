@@ -14,6 +14,9 @@ class ExpertMap {
  public:
   ExpertMap(size_t ep_size, size_t ep_rank, size_t expert_num);
 
+  // 原地(in-place)映射：
+  // - 将全局 expert id（范围 0 .. expert_num-1）映射为本 rank 的本地 id（范围 0 .. expert_num/ep_size - 1）；
+  // - 对于不属于当前 rank 的 id（不在 [start_expert_, end_expert_) 范围内）写为 -1。
   void InvokeExpertMapInplace(int32_t* data, size_t data_size, cudaStream_t stream);
 
   // 原地(in-place)逆映射：

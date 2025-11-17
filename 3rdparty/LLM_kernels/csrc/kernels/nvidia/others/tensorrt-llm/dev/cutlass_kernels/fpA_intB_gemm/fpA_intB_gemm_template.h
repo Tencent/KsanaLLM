@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,14 +58,20 @@ void generic_mixed_gemm_kernelLauncher(ActivationType const* A, WeightType const
                                        cudaStream_t stream, int* occupancy = nullptr) {
   TLLM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
+#ifdef ENABLE_BF16
   static_assert(
-#ifdef ENABLE_FP8
+#  ifdef ENABLE_FP8
       cutlass::platform::is_same<ActivationType, __nv_fp8_e4m3>::value ||
-#endif
+#  endif
           cutlass::platform::is_same<ActivationType, __nv_bfloat16>::value ||
           cutlass::platform::is_same<ActivationType, half>::value ||
           cutlass::platform::is_same<ActivationType, float>::value,
       "Specialized for bfloat16, half, float");
+#else
+  static_assert(cutlass::platform::is_same<ActivationType, half>::value ||
+                    cutlass::platform::is_same<ActivationType, float>::value,
+                "Specialized for half, float");
+#endif
 
   static_assert(cutlass::platform::is_same<ActivationType, WeightType>::value ||
                     cutlass::platform::is_same<WeightType, uint8_t>::value ||

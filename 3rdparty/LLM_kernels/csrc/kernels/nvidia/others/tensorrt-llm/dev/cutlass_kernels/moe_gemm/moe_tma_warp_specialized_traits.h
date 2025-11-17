@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +16,9 @@
 
 #pragma once
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/epilogue_helpers.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/moe_gemm_kernels.h"
 #include "cutlass/arch/mma_sm90.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/epilogue_helpers.h"
 
 #ifdef ENABLE_FP4
 #  include <cuda_fp4.h>
@@ -39,8 +33,7 @@ template <typename T, typename WeightType, typename EpilogueTag = cutlass_extens
 constexpr bool isValidSM120MOESpecialisation() {
 #if defined(CUTLASS_ARCH_MMA_SM120_SUPPORTED)  // TODO Is there a better choice
   return cutlass::platform::is_same<T, __nv_fp4_e2m1>::value && cutlass::platform::is_same<T, WeightType>::value &&
-         cutlass::platform::is_same<EpilogueTag, cutlass_extensions::EpilogueOpDefault>::value &&
-         Fusion == TmaWarpSpecializedGroupedGemmInput::EpilogueFusion::NONE;
+         cutlass::platform::is_same<EpilogueTag, cutlass_extensions::EpilogueOpDefault>::value;
 #else
   return false;  // CUTLASS_ARCH_MMA_SM100_SUPPORTED is set when Blackwell kernels are enabled
 #endif
@@ -54,8 +47,7 @@ constexpr bool isValidBlackwellMOESpecialisation() {
   return (cutlass::platform::is_same<T, WeightType>::value ||
           (cutlass::platform::is_same<T, __nv_fp8_e4m3>::value &&
            cutlass::platform::is_same<WeightType, __nv_fp4_e2m1>::value)) &&
-         cutlass::platform::is_same<EpilogueTag, cutlass_extensions::EpilogueOpDefault>::value &&
-         Fusion == TmaWarpSpecializedGroupedGemmInput::EpilogueFusion::NONE;
+         cutlass::platform::is_same<EpilogueTag, cutlass_extensions::EpilogueOpDefault>::value;
 #else
   return false;  // CUTLASS_ARCH_MMA_SM100_SUPPORTED is set when Blackwell kernels are enabled
 #endif
@@ -69,7 +61,9 @@ constexpr bool isValidHopperMOESpecialisation() {
 #if defined(CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_SUPPORTED)
   return (cutlass::platform::is_same<T, WeightType>::value ||
           (cutlass::platform::is_same<cutlass::uint4b_t, WeightType>::value &&
-           cutlass::platform::is_same<T, __nv_fp8_e4m3>::value))
+           cutlass::platform::is_same<T, __nv_fp8_e4m3>::value) ||
+          (cutlass::platform::is_same<__nv_fp4_e2m1, WeightType>::value &&
+           !cutlass::platform::is_same<T, __nv_fp8_e4m3>::value))
 #  ifdef ENABLE_FP4
          && !cutlass::platform::is_same<T, __nv_fp4_e2m1>::value
 #  endif

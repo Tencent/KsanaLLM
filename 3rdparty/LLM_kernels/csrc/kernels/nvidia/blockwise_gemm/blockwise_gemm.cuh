@@ -65,7 +65,6 @@ struct Cutlass3xGemmFp8Blockwise {
   using GroupSizeN = Int<GroupSizeN_>;
   using GroupSizeK = Int<GroupSizeK_>;
   using TileSizeM = Int<TileSizeM_>;
-
   static_assert(TileSizeM_ % GroupSizeM_ == 0, "TileSizeM must be a multiple of GroupSizeM");
 
   using ElementAB = cutlass::float_e4m3_t;
@@ -121,8 +120,9 @@ struct Cutlass3xGemmFp8Blockwise {
 };
 
 template <typename Gemm>
-void CutlassGemmBlockwiseCaller(const void* a, const float* a_scales, const void* b, const float* b_scales, void* out,
-                                void* workspace, size_t workspace_size, int m, int k, int n, cudaStream_t& stream) {
+typename Gemm::GemmKernel::Arguments GetCutlassGemmBlockwiseKernelArgs(const void* a, const float* a_scales,
+                                                                       const void* b, const float* b_scales, void* out,
+                                                                       int m, int k, int n) {
   using GemmKernel = typename Gemm::GemmKernel;
 
   using ElementAB = typename Gemm::ElementAB;
@@ -151,7 +151,38 @@ void CutlassGemmBlockwiseCaller(const void* a, const float* a_scales, const void
 
   auto c_ptr = static_cast<ElementD*>(out);
   typename GemmKernel::EpilogueArguments epilogue_args{{}, c_ptr, c_stride, c_ptr, c_stride};
-  c3x::cutlass_gemm_caller<GemmKernel>(prob_shape, mainloop_args, epilogue_args, workspace, stream);
+
+  typename GemmKernel::TileSchedulerArguments scheduler;
+
+  static constexpr bool UsesStreamKScheduler =
+      cute::is_same_v<typename GemmKernel::TileSchedulerTag, cutlass::gemm::StreamKScheduler>;
+
+  if constexpr (UsesStreamKScheduler) {
+    using DecompositionMode =
+        typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90StreamKParams::DecompositionMode;
+    using ReductionMode =
+        typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90StreamKParams::ReductionMode;
+
+    scheduler.decomposition_mode = DecompositionMode::StreamK;
+    scheduler.reduction_mode = ReductionMode::Nondeterministic;
+  }
+
+  cutlass::KernelHardwareInfo hw_info;
+  typename GemmKernel::Arguments args{
+      cutlass::gemm::GemmUniversalMode::kGemm, prob_shape, mainloop_args, epilogue_args, hw_info, scheduler};
+  return args;
+}
+
+template <typename SchedulerType, typename OutType>
+void InvokeGemmBlockwise(void* a, float* a_scales, void* b, float* b_scales, void* out, void* workspace,
+                         size_t workspace_size, int m, int k, int n, cudaStream_t& stream) {
+  using GemmFp8Blockwise = Cutlass3xGemmFp8Blockwise<SchedulerType, OutType, 1, 128, 128>;
+  auto args = GetCutlassGemmBlockwiseKernelArgs<GemmFp8Blockwise>(a, a_scales, b, b_scales, out, m, k, n);
+  using GemmOp = cutlass::gemm::device::GemmUniversalAdapter<typename GemmFp8Blockwise::GemmKernel>;
+  GemmOp gemm_op;
+  CUTLASS_CHECK(gemm_op.can_implement(args));
+  cutlass::Status status = gemm_op.run(args, workspace, stream);
+  CUTLASS_CHECK(status);
 }
 
 template <typename OutType>
@@ -159,14 +190,33 @@ void DispatchCutlassGemmBlockwiseSm90Fp8(void* a, float* a_scales, void* b, floa
                                          size_t workspace_size, int m, int k, int n, cudaStream_t& stream) {
   // NOTE(karlluo): adapted from
   // https://github.com/vllm-project/vllm/blob/v0.8.4/csrc/quantization/cutlass_w8a8/c3x/scaled_mm_blockwise_sm90_fp8_dispatch.cuh#L183
+
   if (k > 3 * n && workspace != nullptr && workspace_size > 0) {
     // NOTE(karlluo): Use StreamKScheduler if k is large enough and workspace is provided
-    CutlassGemmBlockwiseCaller<Cutlass3xGemmFp8Blockwise<cutlass::gemm::StreamKScheduler, OutType, 1, 128, 128>>(
+    InvokeGemmBlockwise<cutlass::gemm::StreamKScheduler, OutType>(
         a, a_scales, b, b_scales, out, workspace, workspace_size, m, k, n, stream);
   } else {
     // NOTE(karlluo): Use PersistentScheduler if k is small or workspace is not provided but performance regression
-    CutlassGemmBlockwiseCaller<Cutlass3xGemmFp8Blockwise<cutlass::gemm::PersistentScheduler, OutType, 1, 128, 128>>(
+    InvokeGemmBlockwise<cutlass::gemm::PersistentScheduler, OutType>(
         a, a_scales, b, b_scales, out, workspace, workspace_size, m, k, n, stream);
+  }
+}
+
+template <typename SchedulerType, typename OutType>
+size_t GetGemmBlockwiseWorkspace(int m, int k, int n) {
+  using GemmFp8Blockwise = Cutlass3xGemmFp8Blockwise<SchedulerType, OutType, 1, 128, 128>;
+  auto args = GetCutlassGemmBlockwiseKernelArgs<GemmFp8Blockwise>(nullptr, nullptr, nullptr, nullptr, nullptr, m, k, n);
+  using GemmOp = cutlass::gemm::device::GemmUniversalAdapter<typename GemmFp8Blockwise::GemmKernel>;
+  GemmOp gemm_op;
+  return gemm_op.get_workspace_size(args);
+}
+
+template <typename OutType>
+size_t GetCutlassGemmBlockwiseSm90Fp8Workspace(int m, int k, int n) {
+  if (k > 3 * n) {
+    return GetGemmBlockwiseWorkspace<cutlass::gemm::StreamKScheduler, OutType>(m, k, n);
+  } else {
+    return GetGemmBlockwiseWorkspace<cutlass::gemm::PersistentScheduler, OutType>(m, k, n);
   }
 }
 

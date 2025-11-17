@@ -45,6 +45,15 @@ std::optional<size_t> getUInt64Env(char const* name) {
   return {val};
 };
 
+std::optional<float> getFloatEnv(char const* name) {
+  char const* const env = std::getenv(name);
+  if (env == nullptr) {
+    return std::nullopt;
+  }
+  float const val = std::stof(env);
+  return {val};
+}
+
 std::optional<std::string> getStrEnv(char const* name) {
   char const* const env = std::getenv(name);
   if (env == nullptr) {
@@ -188,8 +197,7 @@ bool getEnvEnablePDL() {
 
   std::call_once(flag, [&]() {
     if (getSMVersion() >= 90) {
-      // PDL will be enabled by setting the env variables `TRTLLM_ENABLE_PDL` to `1`
-      enablePDL = getBoolEnv("TRTLLM_ENABLE_PDL");
+      enablePDL = true;
     }
   });
   return enablePDL;
@@ -281,6 +289,11 @@ bool getEnvForceDeterministicMOE() {
   return forceDeterministic;
 }
 
+bool getEnvMOEDisableFinalizeFusion() {
+  static bool const moeDisableFinalizeFusion = getBoolEnv("TRTLLM_MOE_DISABLE_FINALIZE_FUSION");
+  return moeDisableFinalizeFusion;
+}
+
 bool getEnvForceDeterministicAttention() {
   static bool const forceDeterministic =
       getBoolEnv("FORCE_ATTENTION_KERNEL_DETERMINISTIC") || getEnvForceDeterministic();
@@ -298,7 +311,7 @@ size_t getEnvAllReduceWorkspaceSize() {
   return workspaceSize;
 }
 
-std::string getEnvKVCacheTransferOutputPath() {
+std::string const& getEnvKVCacheTransferOutputPath() {
   static std::string outputPath = getStrEnv("TRTLLM_KVCACHE_TIME_OUTPUT_PATH").value_or("");
   return outputPath;
 }

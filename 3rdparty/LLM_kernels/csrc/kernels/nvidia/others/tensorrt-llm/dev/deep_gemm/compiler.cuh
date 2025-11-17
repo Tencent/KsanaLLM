@@ -132,7 +132,6 @@ inline std::vector<std::filesystem::path> getJitIncludeDirs() {
       includeDirs.push_back(dir_path);
     } else {
       std::filesystem::path dir_path(env_path_str);
-      dir_path = dir_path / detail_path;
       includeDirs.push_back(dir_path);
     }
   }
@@ -270,7 +269,6 @@ class Compiler {
     Runtime* cachedRuntime = runtimeCache[path.string()];
     if (cachedRuntime != nullptr) {
       if (kJitDebugging) {
-        // TODO(jinxcwu): 这里原本是TLLM_LOG_INFO
         printf("Using cached JIT runtime %s during build (thread %d)\n", name.c_str(), thread_id);
       }
       return cachedRuntime;

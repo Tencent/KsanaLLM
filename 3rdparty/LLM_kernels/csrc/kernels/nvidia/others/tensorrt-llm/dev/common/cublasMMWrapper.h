@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -119,7 +113,9 @@ class CublasMMWrapper {
 
   void setFP32GemmConfig();
   void setFP16GemmConfig(cudaDataType_t outputType = CUDA_R_16F);
+#ifdef ENABLE_BF16
   void setBF16GemmConfig(cudaDataType_t outputType = CUDA_R_16BF);
+#endif
 #ifdef ENABLE_FP8
   void setFP8GemmConfig(cudaDataType_t outputType = CUDA_R_16F);
 #endif

@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,4 +16,6 @@
 
 #pragma once
 
-#include <cuda_bf16.h>
+#ifdef ENABLE_BF16
+#  include <cuda_bf16.h>
+#endif

@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +17,8 @@
 
 #include <cuda_runtime_api.h>
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/cudaUtils.h"
 #include "cutlass/device_kernel.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/cudaUtils.h"
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
 namespace cutlass_extensions {

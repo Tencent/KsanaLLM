@@ -27,7 +27,6 @@ enum GemmOpType {
   CUSTOM_GEMM_ALGO = 1,
   DEFAULT_GEMM_ALGO = 2,
   CUSTOM_CUTLASS_GEMM_ALGO = 3,
-  DEEPGEMM_ALGO = 4
 };
 
 constexpr size_t DEFAULT_ALGO_SEARCH_NUM = 200ul;
@@ -79,22 +78,11 @@ struct GemmAlgoPerformance {
   float global_mem_usage = FLT_MIN_EXP;
 };
 
-struct DeepGEMMOpConfig {
-  std::string dynamic_lib_path;
-  uint32_t m = 0;
-  uint32_t n = 0;
-  uint32_t k = 0;
-  uint64_t smem_size = 0;
-  uint32_t num_sms = 0;
-};
-
 struct GemmAlgoInfo {
   GemmAlgoPerformance gemm_algo_perf;
   GemmOpType gemm_op_type = DEFAULT_GEMM_ALGO;
   // for CUBLASLT
   cublasLtMatmulAlgo_t cublaslt_algo;
-  // for DeepGEMM
-  DeepGEMMOpConfig deepgemm_op_config;
 };
 
 class GPUGemmAlgoHelper {

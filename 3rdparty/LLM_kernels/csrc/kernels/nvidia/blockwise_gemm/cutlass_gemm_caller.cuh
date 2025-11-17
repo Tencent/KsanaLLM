@@ -43,15 +43,19 @@ namespace ksana_llm::c3x {
 template <typename GemmKernel>
 void cutlass_gemm_caller(cute::Shape<int, int, int, int> prob_shape,
                          typename GemmKernel::MainloopArguments mainloop_args,
-                         typename GemmKernel::EpilogueArguments epilogue_args, void* workspace, cudaStream_t& stream) {
-  typename GemmKernel::Arguments args{cutlass::gemm::GemmUniversalMode::kGemm, prob_shape, mainloop_args,
-                                      epilogue_args};
+                         typename GemmKernel::EpilogueArguments epilogue_args, void* workspace, cudaStream_t& stream,
+                         typename GemmKernel::TileSchedulerArguments scheduler = {}) {
+  cutlass::KernelHardwareInfo hw_info;
+  typename GemmKernel::Arguments args{
+      cutlass::gemm::GemmUniversalMode::kGemm, prob_shape, mainloop_args, epilogue_args, hw_info, scheduler};
   // Launch the CUTLASS GEMM kernel.
   using GemmOp = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
   GemmOp gemm_op;
   CUTLASS_CHECK(gemm_op.can_implement(args));
+  size_t workspace_size = gemm_op.get_workspace_size(args);
   cutlass::Status status = gemm_op.run(args, workspace, stream);
   CUTLASS_CHECK(status);
 }
 
-}  // namespace ksana_llm::c3x
+ }  // namespace ksana_llm::c3x
+ 

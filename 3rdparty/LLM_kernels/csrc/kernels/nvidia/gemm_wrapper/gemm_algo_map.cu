@@ -52,10 +52,6 @@ bool GPUGemmAlgoHelper::SaveToYaml(const std::string& yaml_file) {
           memcpy(cublas_algo_buffer.data(), &(gemm_algo_info.cublaslt_algo), sizeof(cublasLtMatmulAlgo_t));
           algo_node["blas_algo_id"] = cublas_algo_buffer;
         }
-        if (gemm_algo_info.gemm_op_type == DEEPGEMM_ALGO) {
-          algo_node["smem_size"] = gemm_algo_info.deepgemm_op_config.smem_size;
-          algo_node["num_sms"] = gemm_algo_info.deepgemm_op_config.num_sms;
-        }
         cuda_ver_node[cuda_ver].push_back(algo_node);
       }
       sm_root_node[sm].push_back(cuda_ver_node);
@@ -101,13 +97,6 @@ bool GPUGemmAlgoHelper::LoadFromYaml(const std::string& yaml_file) {
           cublasLtMatmulAlgo_t blas_algo_id;
           memcpy(&blas_algo_id, cublas_algo_buffer.data(), sizeof(cublasLtMatmulAlgo_t));
           gemm_algo_info.cublaslt_algo = blas_algo_id;
-        }
-        if (gemm_algo_info.gemm_op_type == DEEPGEMM_ALGO) {
-          gemm_algo_info.deepgemm_op_config.smem_size = algo_node["smem_size"].as<uint32_t>();
-          gemm_algo_info.deepgemm_op_config.num_sms = algo_node["num_sms"].as<uint32_t>();
-          gemm_algo_info.deepgemm_op_config.m = algo_node["m"].as<uint32_t>();
-          gemm_algo_info.deepgemm_op_config.n = algo_node["n"].as<uint32_t>();
-          gemm_algo_info.deepgemm_op_config.k = algo_node["k"].as<uint32_t>();
         }
         AddGemmAlgo(sm, cuda_ver, gemm_algo_fingerprint, gemm_algo_info);
       }

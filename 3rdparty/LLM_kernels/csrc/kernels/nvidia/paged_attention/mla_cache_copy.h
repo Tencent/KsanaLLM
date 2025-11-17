@@ -29,6 +29,17 @@ void MlaFlashKVCacheCopy(SCALAR_T* k_src, SCALAR_T* v_src, void** k_list, void**
                          size_t* without_prefix_offsets, int* block_offsets, int block_size, int bs, int total_len,
                          int k_stride_size, int v_stride_size, float k_scale, float v_scale, cudaStream_t stream);
 
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashPrefixKVReverseCacheCopy(SCALAR_T* k_dst, SCALAR_T* v_dst, void** kv_list, size_t* prefix_offsets,
+                                      size_t* seq_len_offset, int* block_offsets, int block_size, int total_len,
+                                      int k_stride_size, int v_stride_size, float k_scale, float v_scale,
+                                      cudaStream_t stream);
+
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void MlaFlashWithoutPrefixKVCopy(SCALAR_T* k_dst, SCALAR_T* v_dst, SCALAR_T* k_new, SCALAR_T* v_new,
+                                 size_t* prefix_offsets, size_t* without_prefix_offsets, int total_q_len,
+                                 int k_stride_size, int v_stride_size, cudaStream_t stream);
+
 /**
  * @brief Copy `kv_c` (compress-kv) and `k_pe` (key-rope) into `kv_list` (the joint key-value cache list of MLA) for MQA
  * computations

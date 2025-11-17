@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,7 +27,6 @@
 #include "cutlass/trace.h"
 #include "cutlass/transform/collective/sm90_wgmma_transpose.hpp"
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/interleaved_numeric_conversion.h"
 #include "cute/algorithm/functional.hpp"
 #include "cute/algorithm/gemm.hpp"
 #include "cute/arch/cluster_sm90.hpp"
@@ -41,6 +34,7 @@
 #include "cute/atom/copy_traits_sm90_tma.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/numeric/arithmetic_tuple.hpp"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/interleaved_numeric_conversion.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

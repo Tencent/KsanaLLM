@@ -179,8 +179,9 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
                        dtype_option) *
           affine_coeff;
 
-      torch::Tensor input_scale =
-          torch::randn({1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)) * 0.02;
+      // torch::Tensor input_scale =
+      //     torch::randn({1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)) * 0.02;
+      torch::Tensor input_scale = torch::ones({1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
       weights[fmt::format("{}.w1.input_scale", expert_id)] = input_scale.clone();
       weights[fmt::format("{}.w2.input_scale", expert_id)] = input_scale.clone();
       weights[fmt::format("{}.w3.input_scale", expert_id)] = input_scale.clone();
@@ -207,7 +208,7 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
            tokens_num, model_cfg.top_k, model_cfg.num_experts);
 
     auto fused_moe_runner = std::make_shared<FusedMoeRunner>(GetScalarType<dtype>(), ScalarType::QUInt4x2,
-                                                             GetScalarType<dtype>(), false, true, false);
+                                                             GetScalarType<dtype>(), false, true, false, false, true);
 
     auto dtype_option = torch::TensorOptions().dtype(GetTorchDataType<dtype>()).device(torch::kCUDA);
 
@@ -219,9 +220,8 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
         MemoryType::MEMORY_GPU,
         {model_cfg.expert_size_per_partition, model_cfg.hidden_size, model_cfg.intermediate_size_per_partition / 2},
         false);
-    BufferMeta fc31_act_scale = CreateBuffer<dtype>(MemoryType::MEMORY_GPU, {1, model_cfg.hidden_size}, false);
-    BufferMeta fc2_act_scale =
-        CreateBuffer<dtype>(MemoryType::MEMORY_GPU, {1, model_cfg.intermediate_size_per_partition, 1}, false);
+    BufferMeta fc31_act_scale = CreateBuffer<dtype>(MemoryType::MEMORY_GPU, {1}, false);
+    BufferMeta fc2_act_scale = CreateBuffer<dtype>(MemoryType::MEMORY_GPU, {1}, false);
     BufferMeta fc31_weight_scale = CreateBuffer<dtype>(
         MemoryType::MEMORY_GPU,
         {model_cfg.expert_size_per_partition, model_cfg.hidden_size / (128 * model_cfg.interleave[0]),
@@ -249,30 +249,29 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
     Tensor fc1_alpha_tensor(fc31_alpha.data_ptr, fc31_alpha.shape, GetScalarType<alpha_dtype>());
     Tensor fc2_alpha_tensor(fc2_alpha.data_ptr, fc2_alpha.shape, GetScalarType<alpha_dtype>());
 
-    int64_t fused_moe_tactic_num = fused_moe_runner->getTacticNum();
-
     auto get_gemm_best_tactic = [&](int64_t gemm_idx, size_t warmup_iters, size_t profile_iters) -> int64_t {
       // 获取workspace
       size_t profile_workspace_size = fused_moe_runner->getProfileWorkspace(
           fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, tokens_num, model_cfg.top_k,
           model_cfg.tp_size, model_cfg.tp_rank, model_cfg.ep_size, model_cfg.ep_rank, model_cfg.cluster_size,
-          model_cfg.cluster_rank, false, false, gemm_idx, -1, true, stream);
+          model_cfg.cluster_rank, false, false, gemm_idx, -1, true, 0, stream);
       // 开辟workspace
       BufferMeta profile_workspace = CreateBuffer<char>(MemoryType::MEMORY_GPU, {profile_workspace_size}, false);
       // 设置workspace
       fused_moe_runner->setProfileWorkspace(
           profile_workspace.data_ptr, fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, tokens_num,
           model_cfg.top_k, model_cfg.tp_size, model_cfg.tp_rank, model_cfg.ep_size, model_cfg.ep_rank,
-          model_cfg.cluster_size, model_cfg.cluster_rank, false, false, gemm_idx, -1, true, stream);
+          model_cfg.cluster_size, model_cfg.cluster_rank, false, false, gemm_idx, -1, true, 0, stream);
       // 获取最优tactic
       int64_t best_tactic = -1;
       float best_tactic_time = std::numeric_limits<float>::max();
+      int64_t fused_moe_tactic_num = fused_moe_runner->getTacticNum(gemm_idx);
       for (int64_t tactic = 0; tactic < fused_moe_tactic_num; tactic++) {
         auto kernel = [&]() {
           fused_moe_runner->runGemmProfile(fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt,
                                            tokens_num, model_cfg.top_k, model_cfg.tp_size, model_cfg.tp_rank,
                                            model_cfg.ep_size, model_cfg.ep_rank, model_cfg.cluster_size,
-                                           model_cfg.cluster_rank, false, false, gemm_idx, tactic, false, stream);
+                                           model_cfg.cluster_rank, false, false, gemm_idx, tactic, false, 0, stream);
         };
         float tactic_time = MeasureCudaExecutionTime(kernel, stream, warmup_iters, profile_iters);
         if (tactic_time < best_tactic_time) {
@@ -289,8 +288,7 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
     int64_t gemm1_tactic = get_gemm_best_tactic(1, 10, 50);
     int64_t gemm2_tactic = get_gemm_best_tactic(2, 10, 50);
 
-    printf("FusedMoeRunner Tactic Num: %ld, Gemm1 best tactic: %ld, Gemm2 best tactic: %ld\n", fused_moe_tactic_num,
-           gemm1_tactic, gemm2_tactic);
+    printf("FusedMoeRunner Gemm1 best tactic: %ld, Gemm2 best tactic: %ld\n", gemm1_tactic, gemm2_tactic);
 
     // routing
     torch::Tensor router_logits =
@@ -311,8 +309,9 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
     Tensor output_tensor(output.data_ptr, output.shape, GetScalarType<dtype>());
 
     size_t total_workspace_size = fused_moe_runner->getRuntimeWorkspaceInfo(
-        input_tensor, token_selected_experts_tensor, fc2_expert_weights, model_cfg.tp_size, 0, model_cfg.ep_size, 0,
-        false, {gemm1_tactic, gemm2_tactic});
+        input_tensor, token_selected_experts_tensor, fc2_expert_weights, std::nullopt, std::nullopt, std::nullopt,
+        model_cfg.tp_size, model_cfg.tp_rank, model_cfg.ep_size, model_cfg.ep_rank, false, {gemm1_tactic, gemm2_tactic},
+        std::nullopt);
     BufferMeta workspace = CreateBuffer<char>(MemoryType::MEMORY_GPU, {total_workspace_size}, false);
     fused_moe_runner->setRuntimeWorkspaceInfo(workspace.data_ptr);
     printf("Runtime Workspace Size: %zu\n", total_workspace_size);
@@ -323,8 +322,9 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
           std::nullopt, fc2_expert_weights, std::nullopt,
           {fc1_weight_scales_tensor, fc2_weight_scales_tensor, fc1_act_scales_tensor, fc2_act_scales_tensor,
            fc1_weight_zeros_tensor, fc2_weight_zeros_tensor, fc1_alpha_tensor, fc2_alpha_tensor},
-          std::nullopt, model_cfg.tp_size, 0, model_cfg.ep_size, 0, 1, 0, false, false, {gemm1_tactic, gemm2_tactic},
-          stream);
+          std::nullopt, false, std::nullopt, std::nullopt, std::nullopt, model_cfg.tp_size, model_cfg.tp_rank,
+          model_cfg.ep_size, model_cfg.ep_rank, model_cfg.cluster_size, model_cfg.cluster_rank, false, false,
+          {gemm1_tactic, gemm2_tactic}, std::nullopt, stream);
     };
     float kernel_time = MeasureCudaExecutionTime(kernel, stream, 100, 1000);
 
@@ -371,12 +371,8 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
         {static_cast<int64_t>(model_cfg.expert_size_per_partition), static_cast<int64_t>(model_cfg.hidden_size),
          static_cast<int64_t>(model_cfg.intermediate_size_per_partition / 2)},
         int8_option);
-    torch::Tensor fc31_act_scale =
-        torch::empty({static_cast<int64_t>(1), static_cast<int64_t>(model_cfg.hidden_size)}, dtype_option);
-    torch::Tensor fc2_act_scale =
-        torch::empty({static_cast<int64_t>(1), static_cast<int64_t>(model_cfg.intermediate_size_per_partition),
-                      static_cast<int64_t>(1)},
-                     dtype_option);
+    torch::Tensor fc31_act_scale = torch::empty({static_cast<int64_t>(1)}, dtype_option);
+    torch::Tensor fc2_act_scale = torch::empty({static_cast<int64_t>(1)}, dtype_option);
     torch::Tensor fc31_weight_scale =
         torch::empty({static_cast<int64_t>(model_cfg.expert_size_per_partition),
                       static_cast<int64_t>(model_cfg.hidden_size / (128 * model_cfg.interleave[0])),
@@ -498,11 +494,12 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
 
     // 创建cutlass moe算子
     auto fused_moe_runner = std::make_shared<FusedMoeRunner>(GetScalarType<dtype>(), ScalarType::QUInt4x2,
-                                                             GetScalarType<dtype>(), false, true, false);
+                                                             GetScalarType<dtype>(), false, true, false, false, true);
     // 创建workspace
     size_t total_workspace_size = fused_moe_runner->getRuntimeWorkspaceInfo(
-        input_tensor, token_selected_experts_tensor, fc2_expert_weights_tensor, model_cfg.tp_size, model_cfg.tp_rank,
-        model_cfg.ep_size, model_cfg.ep_rank, false, {});
+        input_tensor, token_selected_experts_tensor, fc2_expert_weights_tensor, std::nullopt, std::nullopt,
+        std::nullopt, model_cfg.tp_size, model_cfg.tp_rank, model_cfg.ep_size, model_cfg.ep_rank, false, {},
+        std::nullopt);
     BufferMeta workspace = CreateBuffer<char>(MemoryType::MEMORY_GPU, {total_workspace_size}, false);
     fused_moe_runner->setRuntimeWorkspaceInfo(workspace.data_ptr);
     // cutlass推理获取结果
@@ -511,8 +508,9 @@ class NvidiaCutlassMoeTestSuit : public NvidiaTestSuitBase {
         fc1_expert_weights_tensor, std::nullopt, fc2_expert_weights_tensor, std::nullopt,
         {fc1_weight_scales_tensor, fc2_weight_scales_tensor, fc1_act_scales_tensor, fc2_act_scales_tensor,
          fc1_weight_zeros_tensor, fc2_weight_zeros_tensor, fc1_alpha_tensor, fc2_alpha_tensor},
-        std::nullopt, model_cfg.tp_size, model_cfg.tp_rank, model_cfg.ep_size, model_cfg.ep_rank,
-        model_cfg.cluster_size, model_cfg.cluster_rank, false, false, {}, stream);
+        std::nullopt, false, std::nullopt, std::nullopt, std::nullopt, model_cfg.tp_size, model_cfg.tp_rank,
+        model_cfg.ep_size, model_cfg.ep_rank, model_cfg.cluster_size, model_cfg.cluster_rank, false, false, {},
+        std::nullopt, stream);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     // 计算参考结果

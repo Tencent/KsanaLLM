@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2023-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -80,10 +74,12 @@ struct TllmToCutlassTypeAdapter<half> {
   using type = cutlass::half_t;
 };
 
+#if defined(ENABLE_BF16)
 template <>
 struct TllmToCutlassTypeAdapter<__nv_bfloat16> {
   using type = cutlass::bfloat16_t;
 };
+#endif
 
 #if defined(ENABLE_FP8)
 template <>
@@ -117,10 +113,12 @@ struct CutlassToTllmTypeAdapter<cutlass::half_t> {
   using type = half;
 };
 
+#if defined(ENABLE_BF16)
 template <>
 struct CutlassToTllmTypeAdapter<cutlass::bfloat16_t> {
   using type = __nv_bfloat16;
 };
+#endif
 
 #if defined(ENABLE_FP8)
 template <>

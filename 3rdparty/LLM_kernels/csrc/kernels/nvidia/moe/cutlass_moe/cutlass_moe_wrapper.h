@@ -48,29 +48,31 @@ class CutlassMoeWrapper {
                const Tensor& fc2_expert_weights, const std::vector<Tensor>& quant_scales,
                const std::vector<int64_t>& profile_ids, cudaStream_t stream);
 
-  int64_t GetTacticNum();
+  int64_t GetTacticNum(const int64_t gemm_idx);
 
   size_t GetProfileWorkspace(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                              const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
-                             const int64_t num_rows, bool const enable_alltoall, bool const min_latency_mode,
-                             int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation,
-                             cudaStream_t stream);
+                             const int64_t num_rows, int64_t const gemm_idx, int64_t const profile_id,
+                             bool const do_preparation, cudaStream_t stream);
 
   void SetProfileWorkspace(void* profile_workspace_ptr, const Tensor& fc1_expert_weights,
                            const std::optional<Tensor>& fc1_expert_biases, const Tensor& fc2_expert_weights,
                            const std::optional<Tensor>& fc2_expert_biases, const int64_t num_rows,
-                           bool const enable_alltoall, bool const min_latency_mode, int64_t const gemm_idx,
-                           int64_t const profile_id, bool const do_preparation, cudaStream_t stream);
+                           int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation,
+                           cudaStream_t stream);
 
   void RunGemmProfile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                       const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
-                      const int64_t num_rows, bool const enable_alltoall, bool const min_latency_mode,
-                      int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation, cudaStream_t stream);
+                      const int64_t num_rows, int64_t const gemm_idx, int64_t const profile_id,
+                      bool const do_preparation, cudaStream_t stream);
 
  private:
 #if ENABLE_CUTLASSMOE
   std::unique_ptr<FusedMoeRunner> fused_moe_runner_;
 #endif
+
+  bool enable_alltoall_ = false;
+  bool min_latency_mode_ = false;
 
   size_t tp_size_;
   size_t tp_rank_;

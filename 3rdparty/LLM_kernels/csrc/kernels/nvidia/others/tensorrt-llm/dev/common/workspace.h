@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 1993-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +19,8 @@
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev::common {
 
-std::uintptr_t constexpr kCudaMemAlign = 128;
+// CuBLAS >= 12.9.1 requires 256-byte alignment.
+std::uintptr_t constexpr kCudaMemAlign = 256;
 
 inline int8_t* alignPtr(int8_t* ptr, uintptr_t to) {
   uintptr_t addr = (uintptr_t)ptr;

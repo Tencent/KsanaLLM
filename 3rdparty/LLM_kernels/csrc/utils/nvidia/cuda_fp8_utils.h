@@ -42,6 +42,7 @@ namespace utils {
 constexpr float FP8_E4M3_MAX = 448.0f;
 constexpr float FP8_E4M3_MIN = -448.0f;
 constexpr float FP8_E4M3_MIN_SCALE = 1.0f / FP8_E4M3_MAX / 512.0f;
+constexpr size_t VEC_MEM_ACC_SIZE = 16;  // Size in bytes used for vectorized memory accesses
 
 // Packed Data Type
 typedef struct __CUDA_ALIGN__(32) {
@@ -112,11 +113,11 @@ __inline__ __device__ half2 fp8x2_e4m3_to_half2(const __nv_fp8x2_e4m3* in) {
 }
 
 template <typename T_OUT, typename T_IN>
-void InvokeQuantizeMatrix(T_OUT* output, float const* scale, T_IN const* input, uint32_t num_channels,
-                          uint32_t channel_size, cudaStream_t stream);
+void InvokeQuantizeMatrix(T_OUT* output, float const* scale, T_IN const* input, size_t num_channels,
+                          size_t channel_size, cudaStream_t stream);
 
 template <typename T_OUT, typename T_IN, typename T_FAKE>
-void invokeFakeQuantize(T_OUT* dst, const T_IN* src, const int32_t size, cudaStream_t stream);
+void InvokeFakeQuantize(T_OUT* dst, const T_IN* src, const int32_t size, cudaStream_t stream);
 
 template <typename T_IN>
 void InvokeComputeFP8QuantizeScale(float* output, const T_IN* input, const int32_t num_channels,

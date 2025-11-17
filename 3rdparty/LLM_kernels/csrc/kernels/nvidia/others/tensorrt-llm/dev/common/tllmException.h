@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +16,12 @@
 
 #pragma once
 
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/stringUtils.h"
+
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -32,6 +30,18 @@
       __FILE__, __LINE__, llm_kernels::nvidia::tensorrt_llm::dev::common::fmtstr(__VA_ARGS__).c_str())
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev::common {
+
+/// @brief Enumeration of different error codes for request-specific exceptions
+enum class RequestErrorCode : uint32_t {
+  // General errors (0-999)
+  kUNKNOWN_ERROR = 0,
+
+  // Network and communication errors (1000-1999)
+  kNETWORK_ERROR = 1000,
+};
+
+/// @brief Constant for unknown request ID
+static constexpr uint64_t kUNKNOWN_REQUEST_ID = std::numeric_limits<uint64_t>::max();
 
 class TllmException : public std::runtime_error {
  public:
@@ -48,6 +58,30 @@ class TllmException : public std::runtime_error {
  private:
   std::array<void*, MAX_FRAMES> mCallstack{};
   int mNbFrames;
+};
+
+[[noreturn]] inline void throwRuntimeError(char const* const file, int const line, char const* info) {
+  throw TllmException(file, line, fmtstr("[TensorRT-LLM][ERROR] Assertion failed: %s", info).c_str());
+}
+
+[[noreturn]] inline void throwRuntimeError(char const* const file, int const line, std::string const& info = "") {
+  throw TllmException(file, line, fmtstr("[TensorRT-LLM][ERROR] Assertion failed: %s", info.c_str()).c_str());
+}
+
+class RequestSpecificException : public std::runtime_error {
+ public:
+  explicit RequestSpecificException(std::string const& file, std::size_t line, char const* msg, uint64_t requestID,
+                                    RequestErrorCode errorCode);
+
+  ~RequestSpecificException() noexcept override;
+
+  [[nodiscard]] uint64_t getRequestId() const noexcept;
+
+  [[nodiscard]] RequestErrorCode getErrorCode() const noexcept;
+
+ private:
+  uint64_t mRequestID;
+  RequestErrorCode mErrorCode;
 };
 
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::common

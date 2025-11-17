@@ -46,7 +46,7 @@ struct FlashMlaWorkspaceMap {
 void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream);
 void InvokeGetMlaMetadata(int *b_seqlen, FlashMlaWorkspaceMap &workspace_param, int tokens_num, cudaStream_t stream);
 void GetNumSmParts(FlashMlaWorkspaceMap &workspace_param, const int num_heads_per_head_k, const int num_heads_k,
-                   int rank, cudaStream_t stream);
+                   int rank);
 
 // FlashMLA inference type follows KV cache type, so the input type is CACHE_T
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>

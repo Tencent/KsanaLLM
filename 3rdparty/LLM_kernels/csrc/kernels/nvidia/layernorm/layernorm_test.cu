@@ -234,6 +234,129 @@ class LlamaNvidiaLayernormTestSuit : public NvidiaTestSuitBase {
   }
 };
 
+TEST_F(LlamaNvidiaLayernormTestSuit, DISABLED_InvokeFusedQKVRmsNormFloatPerfTest) {
+  using T = float;
+  auto s = this->stream;
+  const float layernorm_eps = 1e-6f;
+  const std::vector<std::tuple<int, int, int, int>> shapes = {
+      {32, 5, 10, 32}, {64, 5, 10, 64}, {128, 8, 8, 128}, {256, 8, 8, 128}};
+
+  for (const auto& shp : shapes) {
+    const int l = std::get<0>(shp);
+    const int num_heads = std::get<1>(shp);
+    const int num_kv_heads = std::get<2>(shp);
+    const int head_size = std::get<3>(shp);
+    std::vector<size_t> input_shape_float = {static_cast<size_t>(l),
+                                             static_cast<size_t>(num_heads + 2 * num_kv_heads),
+                                             static_cast<size_t>(head_size)};
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, input_shape_float, true);
+    std::vector<size_t> weight_shape_float = {static_cast<size_t>(head_size)};
+    BufferMeta weight_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, weight_shape_float, true);
+    std::vector<size_t> mask_shape_float = {static_cast<size_t>(l)};
+    BufferMeta mask_meta = CreateBuffer<int64_t>(MemoryType::MEMORY_GPU, mask_shape_float, false);
+    std::vector<int64_t> h_mask(l, 1);
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(mask_meta.data_ptr, h_mask.data(), l * sizeof(int64_t), cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(s));
+
+    auto run = [&]() {
+      InvokeFusedQKVRmsNorm<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, num_heads,
+                               num_kv_heads, head_size, reinterpret_cast<int64_t*>(mask_meta.data_ptr), s);
+    };
+    float ms = MeasureCudaExecutionTime(run, s, 10, 200);
+    std::cout << "[InvokeFusedQKVRmsNorm][float] l=" << l << " heads=" << num_heads << "+2*" << num_kv_heads
+              << " n=" << head_size << " time=" << ms << " ms" << std::endl;
+
+    DeleteBuffer(mask_meta);
+    DeleteBuffer(weight_meta);
+    DeleteBuffer(input_meta);
+  }
+}
+
+TEST_F(LlamaNvidiaLayernormTestSuit, DISABLED_InvokeFusedQKVRmsNormHalfPerfTest) {
+  using T = half;
+  auto s = this->stream;
+  const float layernorm_eps = 1e-6f;
+  const std::vector<std::tuple<int, int, int, int>> shapes = {
+      {32, 5, 10, 32}, {64, 5, 10, 64}, {128, 8, 8, 128}, {256, 8, 8, 128}};
+
+  for (const auto& shp : shapes) {
+    const int l = std::get<0>(shp);
+    const int num_heads = std::get<1>(shp);
+    const int num_kv_heads = std::get<2>(shp);
+    const int head_size = std::get<3>(shp);
+    std::vector<size_t> input_shape_half = {static_cast<size_t>(l),
+                                            static_cast<size_t>(num_heads + 2 * num_kv_heads),
+                                            static_cast<size_t>(head_size)};
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, input_shape_half, true);
+    std::vector<size_t> weight_shape_half = {static_cast<size_t>(head_size)};
+    BufferMeta weight_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, weight_shape_half, true);
+    std::vector<size_t> mask_shape_half = {static_cast<size_t>(l)};
+    BufferMeta mask_meta = CreateBuffer<int64_t>(MemoryType::MEMORY_GPU, mask_shape_half, false);
+    std::vector<int64_t> h_mask(l, 1);
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(mask_meta.data_ptr, h_mask.data(), l * sizeof(int64_t), cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(s));
+
+    auto run = [&]() {
+      InvokeFusedQKVRmsNorm<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, num_heads,
+                               num_kv_heads, head_size, reinterpret_cast<int64_t*>(mask_meta.data_ptr), s);
+    };
+    float ms = MeasureCudaExecutionTime(run, s, 10, 200);
+    std::cout << "[InvokeFusedQKVRmsNorm][half] l=" << l << " heads=" << num_heads << "+2*" << num_kv_heads
+              << " n=" << head_size << " time=" << ms << " ms" << std::endl;
+
+    DeleteBuffer(mask_meta);
+    DeleteBuffer(weight_meta);
+    DeleteBuffer(input_meta);
+  }
+}
+
+TEST_F(LlamaNvidiaLayernormTestSuit, DISABLED_InvokeFusedQKVRmsNormBf16PerfTest) {
+  using T = __nv_bfloat16;
+  auto s = this->stream;
+  const float layernorm_eps = 1e-6f;
+  const std::vector<std::tuple<int, int, int, int>> shapes = {
+      {32, 5, 10, 32}, {64, 5, 10, 64}, {128, 8, 8, 128}, {256, 8, 8, 128}};
+
+  for (const auto& shp : shapes) {
+    const int l = std::get<0>(shp);
+    const int num_heads = std::get<1>(shp);
+    const int num_kv_heads = std::get<2>(shp);
+    const int head_size = std::get<3>(shp);
+    std::vector<size_t> input_shape_bf16 = {static_cast<size_t>(l),
+                                            static_cast<size_t>(num_heads + 2 * num_kv_heads),
+                                            static_cast<size_t>(head_size)};
+    BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, input_shape_bf16, true);
+    std::vector<size_t> weight_shape_bf16 = {static_cast<size_t>(head_size)};
+    BufferMeta weight_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, weight_shape_bf16, true);
+    std::vector<size_t> mask_shape_bf16 = {static_cast<size_t>(l)};
+    BufferMeta mask_meta = CreateBuffer<int64_t>(MemoryType::MEMORY_GPU, mask_shape_bf16, false);
+    std::vector<int64_t> h_mask(l, 1);
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(mask_meta.data_ptr, h_mask.data(), l * sizeof(int64_t), cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(s));
+
+    auto run = [&]() {
+      InvokeFusedQKVRmsNorm<T>(reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<const T*>(input_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr),
+                               reinterpret_cast<const T*>(weight_meta.data_ptr), layernorm_eps, l, num_heads,
+                               num_kv_heads, head_size, reinterpret_cast<int64_t*>(mask_meta.data_ptr), s);
+    };
+    float ms = MeasureCudaExecutionTime(run, s, 10, 200);
+    std::cout << "[InvokeFusedQKVRmsNorm][bf16] l=" << l << " heads=" << num_heads << "+2*" << num_kv_heads
+              << " n=" << head_size << " time=" << ms << " ms" << std::endl;
+
+    DeleteBuffer(mask_meta);
+    DeleteBuffer(weight_meta);
+    DeleteBuffer(input_meta);
+  }
+}
+
 TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernormCommonTest) {
   for (const auto& m_n_pair : m_n_pairs) {
     TestLayerNorm<half>(static_cast<size_t>(m_n_pair.first), static_cast<size_t>(m_n_pair.second));
@@ -258,11 +381,20 @@ TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernorm3DTest) { TestLayerNorm3D<flo
 
 TEST_F(LlamaNvidiaLayernormTestSuit, Bf16Layernorm3DTest) { TestLayerNorm3D<__nv_bfloat16>(5, 5, 6); }
 
-TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernormFusedQKVTest) { TestLayerNormFusedQKV<half>(5, 2, 2, 6); }
+TEST_F(LlamaNvidiaLayernormTestSuit, HalfLayernormFusedQKVTest) {
+  TestLayerNormFusedQKV<half>(5, 2, 2, 6);
+  TestLayerNormFusedQKV<half>(10, 2, 2, 6);
+}
 
-TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernormFusedQKVTest) { TestLayerNormFusedQKV<float>(5, 2, 2, 6); }
+TEST_F(LlamaNvidiaLayernormTestSuit, FloatLayernormFusedQKVTest) {
+  TestLayerNormFusedQKV<float>(5, 2, 2, 6);
+  TestLayerNormFusedQKV<float>(10, 2, 2, 6);
+}
 
-TEST_F(LlamaNvidiaLayernormTestSuit, Bf16LayernormFusedQKVTest) { TestLayerNormFusedQKV<__nv_bfloat16>(5, 2, 2, 6); }
+TEST_F(LlamaNvidiaLayernormTestSuit, Bf16LayernormFusedQKVTest) {
+  TestLayerNormFusedQKV<__nv_bfloat16>(5, 2, 2, 6);
+  TestLayerNormFusedQKV<__nv_bfloat16>(10, 2, 2, 6);
+}
 
 }  // namespace test
 }  // namespace nvidia

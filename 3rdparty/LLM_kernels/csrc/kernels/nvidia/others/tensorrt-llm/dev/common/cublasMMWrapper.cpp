@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -199,9 +193,11 @@ void CublasMMWrapper::setFP16GemmConfig(cudaDataType_t outputType) {
   setGemmConfig(CUDA_R_16F, CUDA_R_16F, outputType, CUDA_R_32F);
 }
 
+#ifdef ENABLE_BF16
 void CublasMMWrapper::setBF16GemmConfig(cudaDataType_t outputType) {
   setGemmConfig(CUDA_R_16BF, CUDA_R_16BF, outputType, CUDA_R_32F);
 }
+#endif
 
 #ifdef ENABLE_FP8
 void CublasMMWrapper::setFP8GemmConfig(cudaDataType_t outputType) {
@@ -231,9 +227,12 @@ CublasDataType CublasMMWrapper::getCublasDataType(cudaDataType_t data_type) {
     return FLOAT_DATATYPE;
   } else if (data_type == CUDA_R_8I) {
     return INT8_DATATYPE;
-  } else if (data_type == CUDA_R_16BF) {
+  }
+#ifdef ENABLE_BF16
+  else if (data_type == CUDA_R_16BF) {
     return BFLOAT16_DATATYPE;
   }
+#endif
   return FLOAT_DATATYPE;
 }
 

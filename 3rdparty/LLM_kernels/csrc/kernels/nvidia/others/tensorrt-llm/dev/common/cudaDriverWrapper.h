@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2024, NVIDIA CORPORATION. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -160,6 +154,13 @@ void checkDriver(T result, CUDADriverWrapper const& wrap, char const* const func
   }
 }
 
+template <typename T>
+void checkDriverExitSafe(T result, char const* const func, char const* const file, int const line) {
+  if (result != CUDA_SUCCESS && result != CUDA_ERROR_DEINITIALIZED) {
+    throw TllmException(file, line, fmtstr("[TensorRT-LLM][ERROR] CUDA driver error in %s: %d.", func, result).c_str());
+  }
+}
+
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::common
 
 /*
@@ -170,6 +171,12 @@ void checkDriver(T result, CUDADriverWrapper const& wrap, char const* const func
     llm_kernels::nvidia::tensorrt_llm::dev::common::checkDriver(                                                    \
         (stat), *llm_kernels::nvidia::tensorrt_llm::dev::common::CUDADriverWrapper::getInstance(), #stat, __FILE__, \
         __LINE__);                                                                                                  \
+  } while (0)
+
+// Avoid using CUDADriverWrapper when freeing resource, during which the global instance may already be freed.
+#define TLLM_CU_CHECK_FREE_RESOURCE(stat)                                                                   \
+  do {                                                                                                      \
+    llm_kernels::nvidia::tensorrt_llm::dev::common::checkDriverExitSafe((stat), #stat, __FILE__, __LINE__); \
   } while (0)
 
 #endif  // CUDA_DRIVER_WRAPPER_H

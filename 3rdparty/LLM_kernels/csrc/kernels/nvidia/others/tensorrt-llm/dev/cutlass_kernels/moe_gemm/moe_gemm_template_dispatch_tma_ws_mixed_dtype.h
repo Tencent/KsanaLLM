@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,11 +46,11 @@
 #  pragma GCC diagnostic pop
 #endif
 
+#include "csrc/utils/nvidia/assert.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/cudaUtils.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/cutlass_heuristic.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/moe_gemm_kernels.h"
-#include "csrc/utils/nvidia/assert.h"
-#include "launchers/moe_gemm_tma_ws_mixed_input_launcher.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/moe_gemm/launchers/moe_gemm_tma_ws_mixed_input_launcher.h"
 
 #include <cuda.h>
 #include <cuda_fp16.h>
@@ -153,10 +147,13 @@ void sm90_dispatch_moe_mixed_dtype_gemm_to_cutlass(
   // We also only instantiate configs here where threadblockShapeM == warpShapeM since those usually perform the best
   // for mixed type gemms.
 
-  constexpr int Ktile = 128 * PackedScalesNum / sizeof(T);
-  KLLM_KERNEL_CHECK(sizeof(T) == 1);
+  constexpr int Ntile = (std::is_same_v<WeightType, __nv_fp4_e2m1>) ? 64 : 128;
+  constexpr int Ktile = (std::is_same_v<WeightType, __nv_fp4_e2m1>) ? 128 : 128 * PackedScalesNum / sizeof(T);
+  KLLM_KERNEL_CHECK(sizeof(T) == (std::is_same_v<WeightType, __nv_fp4_e2m1>) ? 2 : 1);
 
+  using _Ntile = Int<Ntile>;
   using _Ktile = Int<Ktile>;
+
   switch (inputs.gemm_config.tile_config_sm90) {
     case tkc::CutlassTileConfigSM90::CtaShape64x16x128B:
       sm90_dispatch_moe_mixed_dtype_gemm_config<T, WeightType, GemmOutputType, EpilogueTag, Shape<_64, _16, _Ktile>>(
@@ -171,7 +168,7 @@ void sm90_dispatch_moe_mixed_dtype_gemm_to_cutlass(
           inputs, hopper_inputs, sm_count_, workspace_size);
       break;
     case tkc::CutlassTileConfigSM90::CtaShape64x128x128B:
-      sm90_dispatch_moe_mixed_dtype_gemm_config<T, WeightType, GemmOutputType, EpilogueTag, Shape<_64, _128, _Ktile>>(
+      sm90_dispatch_moe_mixed_dtype_gemm_config<T, WeightType, GemmOutputType, EpilogueTag, Shape<_64, _Ntile, _Ktile>>(
           inputs, hopper_inputs, sm_count_, workspace_size);
       break;
     // case tkc::CutlassTileConfigSM90::CtaShape64x256x128B:
@@ -222,12 +219,15 @@ void sm90_dispatch_moe_mixed_dtype_gemm_to_cutlass(
 template <typename T, typename WeightType, typename OutputType>
 size_t calcMaxWorkspaceSizeTmaWarpSpecializedMixedInput(int num_experts, int sm_count_) {
   size_t count = 0;
+  constexpr int Ktile = (std::is_same_v<WeightType, __nv_fp4_e2m1>) ? 256 : 512;
+  using _Ktile = Int<Ktile>;
+
 #ifdef COMPILE_HOPPER_TMA_GROUPED_GEMMS
   GroupedGemmInput<T, WeightType, OutputType, OutputType> inputs{};
   inputs.num_experts = num_experts;
   sm90_generic_mixed_moe_gemm_kernelLauncher<
       T, WeightType, OutputType, llm_kernels::nvidia::tensorrt_llm::dev::cutlass_extensions::EpilogueOpDefault,
-      Shape<_128, _64, _512>, Shape<_1, _1, _1>, cutlass::gemm::KernelTmaWarpSpecializedCooperative,
+      Shape<_128, _64, _Ktile>, Shape<_1, _1, _1>, cutlass::gemm::KernelTmaWarpSpecializedCooperative,
       cutlass::epilogue::TmaWarpSpecializedCooperative, cutlass::WeightOnlyQuantOp::FINEGRAINED_SCALE_ONLY>(
       inputs, TmaWarpSpecializedGroupedGemmInput{}, sm_count_, &count);
 #endif

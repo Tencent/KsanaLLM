@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -1111,7 +1105,6 @@ __global__ void convert_kernel(OutputType* output, InputType const* const input,
 }
 
 static int kNumDeviceSMs = -1;
-// NOTE(jinxcwu) 默认会检查deepgemm的一些配置，后面还要做修改，还要注意这里用了deepgemm，需要留意多线程抢占问题
 static bool kDeepGemmEnabled = []() -> bool {
   char const* env_var = std::getenv("TRTLLM_DG_ENABLED");
   return deep_gemm::jit::getGlobalCompiler().isValid() && (!env_var || std::string(env_var) != "0");

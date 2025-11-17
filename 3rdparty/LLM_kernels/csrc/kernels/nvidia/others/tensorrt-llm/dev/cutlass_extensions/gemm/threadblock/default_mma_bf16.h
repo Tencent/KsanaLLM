@@ -16,9 +16,9 @@
  */
 #pragma once
 
+#include "cutlass/gemm/threadblock/default_mma.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/gemm/threadblock/default_dq_mma_multistage.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_extensions/gemm/threadblock/default_dq_mma_pipelined.h"
-#include "cutlass/gemm/threadblock/default_mma.h"
 
 namespace cutlass {
 namespace gemm {

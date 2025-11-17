@@ -26,7 +26,7 @@ template <>
 struct Vec2Type<half> {
   using type = half2;
 };
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
 template <>
 struct Vec2Type<__nv_bfloat16> {
   using type = __nv_bfloat162;
@@ -50,7 +50,7 @@ __global__ void apply_per_channel_scale(T_out* smoothed_act, T_in const* act, T_
   for (int i = 0; i < kProcessRows; ++i) {
     *reinterpret_cast<AccessType*>(act_vec) = reinterpret_cast<AccessType const*>(act + i * cols)[col_offset];
     if constexpr ((std::is_same_v<T_in, half>
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && defined(ENABLE_BF16))
                    || std::is_same_v<T_in, __nv_bfloat16>
 #endif
                    )&&(kElems % 2 == 0)) {
@@ -118,9 +118,11 @@ INSTANTIATE_PREQUANT_SCALE(half, half);
 INSTANTIATE_PREQUANT_SCALE(half, __nv_fp8_e4m3);
 #endif
 
+#if defined(ENABLE_BF16)
 INSTANTIATE_PREQUANT_SCALE(__nv_bfloat16, __nv_bfloat16);
-#if defined(ENABLE_FP8)
+#  if defined(ENABLE_FP8)
 INSTANTIATE_PREQUANT_SCALE(__nv_bfloat16, __nv_fp8_e4m3);
+#  endif
 #endif
 
 }  // namespace kernels

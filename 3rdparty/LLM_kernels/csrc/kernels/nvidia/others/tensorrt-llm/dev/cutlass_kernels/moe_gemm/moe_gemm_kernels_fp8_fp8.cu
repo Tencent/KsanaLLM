@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +19,9 @@
 namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels {
 #ifdef ENABLE_FP8
 template class MoeGemmRunner<__nv_fp8_e4m3, __nv_fp8_e4m3, half>;
+#  ifdef ENABLE_BF16
 template class MoeGemmRunner<__nv_fp8_e4m3, __nv_fp8_e4m3, __nv_bfloat16>;
+#  endif
 // template class MoeGemmRunner<__nv_fp8_e5m2, __nv_fp8_e5m2>;
 #endif
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels

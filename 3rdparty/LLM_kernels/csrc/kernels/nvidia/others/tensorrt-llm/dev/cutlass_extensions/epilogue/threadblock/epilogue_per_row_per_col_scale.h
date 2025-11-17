@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2017-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -32,12 +26,12 @@
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/quantization.h"
 #include "cutlass/arch/memory.h"
 #include "cutlass/arch/memory_sm75.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/fast_math.h"
 #include "cutlass/numeric_conversion.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/quantization.h"
 
 namespace tk = llm_kernels::nvidia::tensorrt_llm::dev::common;
 

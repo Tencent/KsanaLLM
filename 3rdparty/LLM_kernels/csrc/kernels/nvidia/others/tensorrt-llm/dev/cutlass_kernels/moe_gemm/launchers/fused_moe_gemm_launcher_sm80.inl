@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -87,15 +81,13 @@ void sm80_generic_fused_moe_gemm_kernelLauncher(ElementType_ const* A, CutlassWe
   if (GemmType::kSmemSize >= (48 << 10)) {
     cudaError_t result = cudaFuncSetAttribute(fused_moe::run_global<GemmType>,
                                               cudaFuncAttributeMaxDynamicSharedMemorySize, GemmType::kSmemSize);
-    KLLM_KERNEL_CHECK_WITH_INFO(
-        result == cudaSuccess,
-        "Fail to set the max smem size to " + std::to_string(GemmType::kSmemSize) + " for fused moe kernel");
+    KLLM_KERNEL_CHECK_WITH_INFO(result == cudaSuccess, "Fail to set the max smem size to " +
+                                                    std::to_string(GemmType::kSmemSize) + " for fused moe kernel");
   }
   dim3 grid(params.threadblock_count, 1, 1);
   dim3 block(GemmType::kThreadCount);
   fused_moe::run_global<GemmType><<<grid, block, GemmType::kSmemSize, stream>>>(params);
   auto result = cudaGetLastError();
-  KLLM_KERNEL_CHECK_WITH_INFO(result == cudaSuccess, "Fail to execute fused moe kernel, cuda error %d\n",
-                              (int)(result));
+  KLLM_KERNEL_CHECK_WITH_INFO(result == cudaSuccess, "Fail to execute fused moe kernel, cuda error %d\n", (int)(result));
 }
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels

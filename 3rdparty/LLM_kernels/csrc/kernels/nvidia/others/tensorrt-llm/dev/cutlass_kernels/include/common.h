@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +19,6 @@
 namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels {
 
 // Note update moe.py to match
-enum class ActivationType { Gelu = 0, Relu, Silu, Swiglu, Geglu, Identity, InvalidType };
+enum class ActivationType { Gelu = 0, Relu, Silu, Swiglu, Geglu, SwigluBias, Identity, InvalidType };
 
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels

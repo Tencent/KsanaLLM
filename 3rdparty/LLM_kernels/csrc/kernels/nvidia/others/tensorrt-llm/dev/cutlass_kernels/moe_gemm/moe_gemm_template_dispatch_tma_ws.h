@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,10 +50,10 @@
 #  pragma GCC diagnostic pop
 #endif
 
+#include "csrc/utils/nvidia/assert.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/common/cudaUtils.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/cutlass_heuristic.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/cutlass_type_conversion.h"
-#include "csrc/utils/nvidia/assert.h"
 
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/moe_gemm_kernels.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/moe_gemm/launchers/moe_gemm_tma_ws_launcher.h"
@@ -74,10 +68,46 @@ namespace llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels {
 using EpilogueFusion = TmaWarpSpecializedGroupedGemmInput::EpilogueFusion;
 
 template <typename Arch, typename T, typename WeightType, typename OutputType, typename EpilogueTag,
+          EpilogueFusion FUSION, typename TileShape, typename ClusterShape, bool is_wfp4afp8>
+auto getDispatchFunctionForSM100(cutlass_extensions::EpilogueScheduleType epilogue_schedule, bool dynamic_cga,
+                                 bool swap_ab) {
+  auto select_swap_ab = [dynamic_cga, epilogue_schedule](auto swap_ab_t) {
+    auto select_dynamic_cga = [epilogue_schedule](auto dynamic_cga_t) {
+      if constexpr (!std::is_same_v<T, __nv_fp4_e2m1> && !std::is_same_v<WeightType, __nv_fp4_e2m1> &&
+                    FUSION != EpilogueFusion::FINALIZE) {
+        auto func_map = std::array{
+            &kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
+                Arch, T, WeightType, OutputType, cutlass::epilogue::PtrArrayNoSmemWarpSpecialized, EpilogueTag, FUSION,
+                TileShape, ClusterShape, is_wfp4afp8, decltype(dynamic_cga_t)::value, false,
+                decltype(swap_ab_t)::value>,
+            &kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
+                Arch, T, WeightType, OutputType, cutlass::epilogue::PtrArrayTmaWarpSpecialized, EpilogueTag, FUSION,
+                TileShape, ClusterShape, is_wfp4afp8, decltype(dynamic_cga_t)::value, false, decltype(swap_ab_t)::value>
+
+        };
+        bool const tma_epilogue = epilogue_schedule == cutlass_extensions::EpilogueScheduleType::TMA;
+        return func_map[tma_epilogue];
+      } else {
+        KLLM_KERNEL_CHECK_WITH_INFO(epilogue_schedule == cutlass_extensions::EpilogueScheduleType::TMA,
+                             "No Smem epilogue schedule is not supported for block scaled types or finalize fusion");
+        return &kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
+            Arch, T, WeightType, OutputType, cutlass::epilogue::PtrArrayTmaWarpSpecialized, EpilogueTag, FUSION,
+            TileShape, ClusterShape, is_wfp4afp8, decltype(dynamic_cga_t)::value, false, decltype(swap_ab_t)::value>;
+      }
+    };
+    return dynamic_cga ? select_dynamic_cga(llm_kernels::nvidia::tensorrt_llm::dev::common::ConstBool<true>{})
+                       : select_dynamic_cga(llm_kernels::nvidia::tensorrt_llm::dev::common::ConstBool<false>{});
+  };
+  return swap_ab ? select_swap_ab(llm_kernels::nvidia::tensorrt_llm::dev::common::ConstBool<true>{})
+                 : select_swap_ab(llm_kernels::nvidia::tensorrt_llm::dev::common::ConstBool<false>{});
+}
+
+template <typename Arch, typename T, typename WeightType, typename OutputType, typename EpilogueTag,
           EpilogueFusion FUSION, typename TileShape, typename ClusterShape>
-void dispatchMoeGemmSelectBiasTmaWarpSpecialized(TmaWarpSpecializedGroupedGemmInput hopper_input, int num_experts,
-                                                 int multi_processor_count, cudaStream_t stream, int* occupancy,
-                                                 size_t* workspace_size) {
+void dispatchMoeGemmFinalDispatchTmaWarpSpecialized(TmaWarpSpecializedGroupedGemmInput hopper_input, int num_experts,
+                                                    cutlass_extensions::CutlassGemmConfig gemm_config,
+                                                    int multi_processor_count, cudaStream_t stream, int* occupancy,
+                                                    size_t* workspace_size) {
   static_assert((Arch::kMinComputeCapability == 90 &&
                  kernels::cutlass_kernels::isValidHopperMOESpecialisation<T, WeightType, EpilogueTag>()) ||
                     (Arch::kMinComputeCapability >= 100 &&
@@ -85,16 +115,7 @@ void dispatchMoeGemmSelectBiasTmaWarpSpecialized(TmaWarpSpecializedGroupedGemmIn
                 "Invalid TMA WS configuration invoked, fallback to Sm80");
 
   KLLM_KERNEL_CHECK_WITH_INFO(workspace_size || hopper_input.isValid(),
-                              "Hopper specialisation is missing additional input information");
-
-  //            auto func = hopper_input.ptr_c ?
-  //            kernels::cutlass_kernels::genericMoeGemmKernelLauncherHopper<T, WeightType,
-  //                            cutlass::arch::Sm90, EpilogueTag, true>
-  //                                           :
-  //                                           kernels::cutlass_kernels::genericMoeGemmKernelLauncherHopper<T,
-  //                                           WeightType,
-  //                                               cutlass::arch::Sm90, EpilogueTag, false>;
-  // TODO Re-enable bias when CUTLASS supports it
+                       "Hopper specialisation is missing additional input information");
 
   if constexpr (Arch::kMinComputeCapability < 90) {
     KLLM_KERNEL_THROW("Invalid architecture instantiated");
@@ -115,29 +136,56 @@ void dispatchMoeGemmSelectBiasTmaWarpSpecialized(TmaWarpSpecializedGroupedGemmIn
   }
 #endif
   else {
-    auto getFunc = [&]() {
-      if constexpr (std::is_same_v<T, __nv_fp8_e4m3> && std::is_same_v<WeightType, __nv_fp4_e2m1>) {
-        KLLM_KERNEL_CHECK_WITH_INFO(
-            hopper_input.fpX_block_scaling_type == TmaWarpSpecializedGroupedGemmInput::FpXBlockScalingType::MXFPX,
-            "MXFPX is the only supported scaling type for WFP4AFP8");
-        return &kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
-            Arch, T, WeightType, OutputType, EpilogueTag, FUSION, TileShape, ClusterShape, true, false>;
-      } else {
-        KLLM_KERNEL_CHECK_WITH_INFO(
-            hopper_input.fpX_block_scaling_type != TmaWarpSpecializedGroupedGemmInput::FpXBlockScalingType::MXFPX,
-            "MXFPX is not supported for the selected weight combination");
-        return &kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
-            Arch, T, WeightType, OutputType, EpilogueTag, FUSION, TileShape, ClusterShape, false, false>;
-      }
-    };
-    getFunc()(hopper_input, num_experts, multi_processor_count, stream, occupancy, workspace_size);
+    constexpr static bool is_wfp4afp8 = std::is_same_v<T, __nv_fp8_e4m3> && std::is_same_v<WeightType, __nv_fp4_e2m1>;
+    if constexpr (is_wfp4afp8) {
+      KLLM_KERNEL_CHECK_WITH_INFO(
+          hopper_input.fpX_block_scaling_type == TmaWarpSpecializedGroupedGemmInput::FpXBlockScalingType::MXFPX,
+          "MXFPX is the only supported scaling type for WFP4AFP8");
+    } else {
+      KLLM_KERNEL_CHECK_WITH_INFO(
+          hopper_input.fpX_block_scaling_type != TmaWarpSpecializedGroupedGemmInput::FpXBlockScalingType::MXFPX,
+          "MXFPX is not supported for the selected weight combination");
+    }
+
+    if constexpr (Arch::kMinComputeCapability >= 100 && Arch::kMinComputeCapability < 120) {
+      bool const dynamic_cga = gemm_config.dynamic_cluster_shape != cutlass_extensions::ClusterShape::Undefined;
+      bool const swap_ab = hopper_input.swap_ab;
+      auto cluster_shape = cutlass_extensions::enum_to_shape_tuple(gemm_config.dynamic_cluster_shape);
+      auto cluster_shape_cute =
+          cute::Shape<int32_t, int32_t, cute::_1>{std::get<0>(cluster_shape), std::get<1>(cluster_shape), cute::_1{}};
+      auto cluster_shape_fallback = cutlass_extensions::enum_to_shape_tuple(gemm_config.fallback_cluster_shape);
+      auto cluster_shape_cute_fallback = cute::Shape<int32_t, int32_t, cute::_1>{
+          std::get<0>(cluster_shape_fallback), std::get<1>(cluster_shape_fallback), cute::_1{}};
+
+      auto selected_func =
+          getDispatchFunctionForSM100<Arch, T, WeightType, OutputType, EpilogueTag, FUSION, TileShape, ClusterShape,
+                                      is_wfp4afp8>(gemm_config.epilogue_schedule, dynamic_cga, swap_ab);
+      selected_func(hopper_input, num_experts, multi_processor_count, stream, occupancy, workspace_size,
+                    cluster_shape_cute, cluster_shape_cute_fallback);
+    } else if constexpr (Arch::kMinComputeCapability >= 120 || Arch::kMinComputeCapability == 90) {
+      using EpilogueSchedule = void;  // These are hardcoded in the launcher
+      constexpr bool dynamic_cga = false;
+      auto selected_func = hopper_input.swap_ab
+                               ? kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
+                                     Arch, T, WeightType, OutputType, EpilogueSchedule, EpilogueTag, FUSION, TileShape,
+                                     ClusterShape, is_wfp4afp8, dynamic_cga, false, true>
+                               : kernels::cutlass_kernels::tma_warp_specialized_generic_moe_gemm_kernelLauncher<
+                                     Arch, T, WeightType, OutputType, EpilogueSchedule, EpilogueTag, FUSION, TileShape,
+                                     ClusterShape, is_wfp4afp8, dynamic_cga, false, false>;
+
+      selected_func(hopper_input, num_experts, multi_processor_count, stream, occupancy, workspace_size, {}, {});
+    }
   }
 }
 
-template <typename ClusterTileShape, typename ClusterShape, typename DataType, typename WeightType>
+template <typename CtaShape, typename ClusterShape, typename DataType, typename WeightType>
 constexpr bool are_tile_shapes_supported_sm100() {
+  // We use a runtime cluster shape for SM100, so we only support 1x1x1 and 2x1x1 cluster shapes.
+  if (cute::size<0>(ClusterShape{}) > 2 || cute::size<1>(ClusterShape{}) != 1 || cute::size<2>(ClusterShape{}) != 1) {
+    return false;
+  }
+
   using namespace cute;
-  using CtaShape = decltype(shape_div(ClusterTileShape{}, ClusterShape{}));
   // This is the epilogue shape. The MMA shape will be twice this for 2SM
   constexpr auto TileM = size<0>(CtaShape{});
   constexpr auto TileN = size<1>(CtaShape{});
@@ -152,7 +200,7 @@ constexpr bool are_tile_shapes_supported_sm100() {
     // {
     //     return false;
     // }
-    if ((TileN != 64 && TileN != 128) || TileM != 128) {
+    if ((TileN != 64 && TileN != 128 && TileN != 256) || TileM != 128) {
       return false;
     }
   }
@@ -176,14 +224,13 @@ constexpr bool are_tile_shapes_supported_sm100() {
   return true;
 }
 
-template <typename ClusterTileShape, typename ClusterShape, typename DataType>
+template <typename CtaShape, typename ClusterShape, typename DataType>
 constexpr bool are_tile_shapes_supported_sm120() {
   using namespace cute;
   if constexpr (cute::size<0>(ClusterShape{}) != 1 || cute::size<1>(ClusterShape{}) != 1 ||
                 cute::size<2>(ClusterShape{}) != 1) {
     return false;
   }
-  using CtaShape = decltype(shape_div(ClusterTileShape{}, ClusterShape{}));
   // This is the epilogue shape. The MMA shape will be twice this for 2SM
   constexpr auto TileM = size<0>(CtaShape{});
   constexpr auto TileN = size<1>(CtaShape{});
@@ -240,17 +287,18 @@ void dispatchMoeGemmSelectClusterShapeTmaWarpSpecialized(TmaWarpSpecializedGroup
                                                          int multi_processor_count, cudaStream_t stream, int* occupancy,
                                                          size_t* workspace_size) {
   using namespace cute;
+  // This uses the fallback cluster shape for sm100 if a dynamic cluster shape is requested.
   switch (gemm_config.cluster_shape) {
 #define SHAPE_CASE(M, N, K)                                                                                           \
   case cutlass_extensions::ClusterShape::ClusterShape_##M##x##N##x##K: {                                              \
     using ClusterShape = Shape<_##M, _##N, _##K>;                                                                     \
     if constexpr (are_tile_shapes_supported<Arch, TileShape, ClusterShape, T, WeightType>()) {                        \
-      dispatchMoeGemmSelectBiasTmaWarpSpecialized<Arch, T, WeightType, OutputType, EpilogueTag, FUSION, TileShape,    \
-                                                  ClusterShape>(hopper_input, num_experts, multi_processor_count,     \
-                                                                stream, occupancy, workspace_size);                   \
+      dispatchMoeGemmFinalDispatchTmaWarpSpecialized<Arch, T, WeightType, OutputType, EpilogueTag, FUSION, TileShape, \
+                                                     ClusterShape>(                                                   \
+          hopper_input, num_experts, gemm_config, multi_processor_count, stream, occupancy, workspace_size);          \
       break;                                                                                                          \
     } else {                                                                                                          \
-      KLLM_KERNEL_THROW(                                                                                              \
+      KLLM_KERNEL_THROW(                                                                                                     \
           "%s\nUnsupported tile (%d, %d, %d) and cluster (%d, %d, %d) shape combination for arch %d.\nConfig "        \
           "was %s",                                                                                                   \
           __PRETTY_FUNCTION__, (int)cute::get<0>(TileShape{}), (int)cute::get<1>(TileShape{}),                        \
@@ -266,9 +314,10 @@ void dispatchMoeGemmSelectClusterShapeTmaWarpSpecialized(TmaWarpSpecializedGroup
 
 #undef SHAPE_CASE
     default:
-      KLLM_KERNEL_THROW("Unsupported config %d for MoE gemm.", (int)gemm_config.cluster_shape);
+      KLLM_KERNEL_THROW("Unsupported cluster shape config %d for MoE gemm.", (int)gemm_config.cluster_shape);
   }
-}  // namespace llm_kernels::nvidia::tensorrt_llm::dev
+}  // namespace tensorrt_llm
+
 template <typename T, typename WeightType, typename OutputType, typename EpilogueTag, EpilogueFusion FUSION>
 void dispatchMoeGemmSelectTileShapeTmaWarpSpecialized(TmaWarpSpecializedGroupedGemmInput hopper_input, int num_experts,
                                                       cutlass_extensions::CutlassGemmConfig gemm_config,
@@ -287,15 +336,15 @@ void dispatchMoeGemmSelectTileShapeTmaWarpSpecialized(TmaWarpSpecializedGroupedG
         hopper_input, num_experts, gemm_config, multi_processor_count, stream, occupancy, workspace_size);           \
     break;                                                                                                           \
   }
-#define DEFAULT_CASE(SMVERSION)                                                                           \
-  case cutlass_extensions::CutlassTileConfigSM##SMVERSION::Undefined:                                     \
-    KLLM_KERNEL_THROW("GEMM config undefined.");                                                          \
-    break;                                                                                                \
-  case cutlass_extensions::CutlassTileConfigSM##SMVERSION::ChooseWithHeuristic:                           \
-    KLLM_KERNEL_THROW("GEMM config should have already been set by heuristic.");                          \
-    break;                                                                                                \
-  default:                                                                                                \
-    KLLM_KERNEL_THROW("Unsupported config %d for MoE gemm.", (int)gemm_config.tile_config_sm##SMVERSION); \
+#define DEFAULT_CASE(SMVERSION)                                                                               \
+  case cutlass_extensions::CutlassTileConfigSM##SMVERSION::Undefined:                                         \
+    KLLM_KERNEL_THROW("GEMM config undefined.");                                                                     \
+    break;                                                                                                    \
+  case cutlass_extensions::CutlassTileConfigSM##SMVERSION::ChooseWithHeuristic:                               \
+    KLLM_KERNEL_THROW("GEMM config should have already been set by heuristic.");                                     \
+    break;                                                                                                    \
+  default:                                                                                                    \
+    KLLM_KERNEL_THROW("Unsupported tile shape config %d for MoE gemm.", (int)gemm_config.tile_config_sm##SMVERSION); \
     break;
 
   if (gemm_config.sm_version == 90) {
@@ -315,6 +364,7 @@ void dispatchMoeGemmSelectTileShapeTmaWarpSpecialized(TmaWarpSpecializedGroupedG
   } else if (gemm_config.sm_version >= 100 && gemm_config.sm_version < 120) {
     if constexpr (kernels::cutlass_kernels::isValidBlackwellMOESpecialisation<T, WeightType, EpilogueTag, FUSION>()) {
       switch (gemm_config.tile_config_sm100) {
+        SHAPE_CASE(100, 64, 32, 128)
         SHAPE_CASE(100, 64, 64, 128)
         SHAPE_CASE(100, 64, 128, 128)
         SHAPE_CASE(100, 64, 256, 128)
@@ -325,13 +375,8 @@ void dispatchMoeGemmSelectTileShapeTmaWarpSpecialized(TmaWarpSpecializedGroupedG
         SHAPE_CASE(100, 128, 128, 128)
         SHAPE_CASE(100, 128, 256, 128)
 
-        SHAPE_CASE(100, 256, 64, 128)
-        SHAPE_CASE(100, 256, 128, 128)
-        SHAPE_CASE(100, 256, 256, 128)
-
         // SHAPE_CASE(100, 128, 128, 64)
         // SHAPE_CASE(100, 128, 256, 64)
-        // SHAPE_CASE(100, 256, 256, 64)
         DEFAULT_CASE(100)
       }
     } else {

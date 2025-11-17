@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +19,7 @@
 #include "cute/tensor.hpp"
 #include "cute/util/print.hpp"
 
-namespace llm_kernels::nvidia::tensorrt_llm::dev::cutlass_extensions {
+namespace cutlass::util {
 
 /// Function object that applies an index to its argument
 template <class Iter>
@@ -71,7 +65,7 @@ struct CustomStride {
 
   template <class Div>
   CUTE_HOST_DEVICE constexpr friend auto safe_div(CustomStride const& s, Div const& div) {
-    return CustomStride<Func, decltype(safe_div(s.stride_, div))>(s.func_, safe_div(s.stride_, div));
+    return CustomStride<Func, decltype(cute::safe_div(s.stride_, div))>(s.func_, cute::safe_div(s.stride_, div));
   }
 
   // Circumvent the requirement on make_layout that shape and stride are integral
@@ -103,7 +97,7 @@ CUTLASS_HOST_DEVICE auto make_gather_tensor(Iterator iter, Shape const& shape, S
   Layout gather_layout = make_custom_stride_layout(stride, static_cast<Func&&>(func));
   return make_tensor(iter, ComposedLayout{gather_layout, offset, matrix_layout});
 }
-}  // namespace llm_kernels::nvidia::tensorrt_llm::dev::cutlass_extensions
+}  // namespace cutlass::util
 
 namespace cute {
 

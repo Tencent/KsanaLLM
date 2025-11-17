@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +16,9 @@
 
 #pragma once
 
-#include <cuda_bf16.h>
+#if ENABLE_BF16
+#  include <cuda_bf16.h>
+#endif  // ENABLE_BF16
 #include <cuda_fp16.h>
 
 #include <cstdarg>
@@ -33,10 +29,12 @@
 #include <vector>
 
 namespace llm_kernels::nvidia::tensorrt_llm::dev::common {
+#if ENABLE_BF16
 static inline std::basic_ostream<char>& operator<<(std::basic_ostream<char>& stream, __nv_bfloat16 const& val) {
   stream << __bfloat162float(val);
   return stream;
 }
+#endif  // ENABLE_BF16
 
 static inline std::basic_ostream<char>& operator<<(std::basic_ostream<char>& stream, __half const& val) {
   stream << __half2float(val);
@@ -68,6 +66,21 @@ template <typename... Args>
 void printElement(std::ostream& os, std::tuple<Args...> const& t) {
   printTupleImpl(os, t, std::index_sequence_for<Args...>{});
 }
+
+class va_list_guard {
+ public:
+  explicit va_list_guard(va_list& args) : mArgs(args) {}
+
+  ~va_list_guard() { va_end(mArgs); }
+
+  va_list_guard(va_list_guard const&) = delete;
+  va_list_guard& operator=(va_list_guard const&) = delete;
+  va_list_guard(va_list_guard&&) = delete;
+  va_list_guard& operator=(va_list_guard&&) = delete;
+
+ private:
+  va_list& mArgs;
+};
 
 }  // namespace
 
@@ -103,6 +116,8 @@ inline std::string fmtstr(char const* format, ...) {
 
   va_list args;
   va_start(args, format);
+  va_list_guard args_guard(args);
+
   fmtstr_(
       format,
       [](void* target, size_t count) -> char* {
@@ -115,7 +130,6 @@ inline std::string fmtstr(char const* format, ...) {
         return str->data();
       },
       &result, args);
-  va_end(args);
 
   return result;
 }

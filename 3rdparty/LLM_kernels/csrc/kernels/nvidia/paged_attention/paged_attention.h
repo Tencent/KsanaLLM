@@ -53,7 +53,7 @@ class PagedAttentionCuda {
  public:
   void SetConfig(int num_kv_heads, int num_heads, int head_size, int block_size,
                  int stride_size, float k_scale, float v_scale);
-  size_t GetWorkSpaceSize(int num_seqs, int max_context_len);
+  size_t GetWorkspaceSize(int num_seqs, int max_context_len);
   void SetInput(SCALAR_T* out,             // [num_seqs, num_heads, head_size]
                 const SCALAR_T* query,     // [num_seqs, num_heads, head_size]
                 CACHE_T** key_caches,      // num_seqs x [seq_blocks, num_heads, head_size/x, block_size, x]

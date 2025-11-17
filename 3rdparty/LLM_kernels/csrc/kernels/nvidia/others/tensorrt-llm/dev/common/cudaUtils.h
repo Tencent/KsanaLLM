@@ -184,10 +184,12 @@ template<typename T> struct packed_type;
 template <>          struct packed_type<float>         { using type = float; }; // we don't need to pack float by default
 template <>          struct packed_type<half>          { using type = half2; };
 
+#ifdef ENABLE_BF16
 template<>
 struct packed_type<__nv_bfloat16> {
     using type = __nv_bfloat162;
 };
+#endif
 
 #ifdef ENABLE_FP8
 template<>
@@ -202,8 +204,10 @@ template <>          struct num_elems<float2>          { static constexpr int va
 template <>          struct num_elems<float4>          { static constexpr int value = 4; };
 template <>          struct num_elems<half>            { static constexpr int value = 1; };
 template <>          struct num_elems<half2>           { static constexpr int value = 2; };
+#ifdef ENABLE_BF16
 template <>          struct num_elems<__nv_bfloat16>   { static constexpr int value = 1; };
 template <>          struct num_elems<__nv_bfloat162>  { static constexpr int value = 2; };
+#endif
 #ifdef ENABLE_FP8
 template <>          struct num_elems<__nv_fp8_e4m3>   { static constexpr int value = 1; };
 template <>          struct num_elems<__nv_fp8x2_e4m3>  { static constexpr int value = 2; };
@@ -217,8 +221,10 @@ template<>                    struct packed_as<int8_t, 2>         { using type =
 template<>                    struct packed_as<int32_t, 2>        { using type = int2; };
 template<>                    struct packed_as<half2, 1>          { using type = half; };
 template<>                    struct packed_as<float2, 1>         { using type = float; };
+#ifdef ENABLE_BF16
 template<> struct packed_as<__nv_bfloat16,  2> { using type = __nv_bfloat162; };
 template<> struct packed_as<__nv_bfloat162, 1> { using type = __nv_bfloat16;  };
+#endif
 #ifdef ENABLE_FP8
 template<> struct packed_as<__nv_fp8_e4m3,  2> { using type = __nv_fp8x2_e4m3; };
 template<> struct packed_as<__nv_fp8x2_e4m3, 1> { using type = __nv_fp8_e4m3;  };
@@ -249,10 +255,12 @@ struct CudaDataType<half> {
   static constexpr cudaDataType_t value = cudaDataType::CUDA_R_16F;
 };
 
+#ifdef ENABLE_BF16
 template <>
 struct CudaDataType<__nv_bfloat16> {
   static constexpr cudaDataType_t value = cudaDataType::CUDA_R_16BF;
 };
+#endif
 
 inline int getSMVersion() {
   int device{-1};
@@ -460,7 +468,9 @@ void printArrayInfo(T const* ptr, uint64_t nElement = 1, std::string name = "", 
 
 template void printArrayInfo(float const* ptr, uint64_t nElement, std::string name, bool const bPrintElement);
 template void printArrayInfo(half const* ptr, uint64_t nElement, std::string name, bool const bPrintElement);
+#ifdef ENABLE_BF16
 template void printArrayInfo(__nv_bfloat16 const* ptr, uint64_t nElement, std::string name, bool const bPrintElement);
+#endif
 #ifdef ENABLE_FP8
 template void printArrayInfo(__nv_fp8_e4m3 const* ptr, uint64_t nElement, std::string name, bool const bPrintElement);
 #endif
@@ -525,7 +535,9 @@ __host__ __device__ inline void print_element_(float x) { print_float_(x); }
 
 __host__ __device__ inline void print_element_(half x) { print_float_((float)x); }
 
+#ifdef ENABLE_BF16
 __host__ __device__ inline void print_element_(__nv_bfloat16 x) { print_float_((float)x); }
+#endif
 
 #ifdef ENABLE_FP8
 __host__ __device__ inline void print_element_(__nv_fp8_e4m3 x) { print_float_((float)x); }
@@ -594,7 +606,9 @@ inline void printMatrix(T const* ptr, int nRow, int nCol, int nStride) {
 
 template void printMatrix(float const* ptr, int nRow, int nCol, int nStride);
 template void printMatrix(half const* ptr, int nRow, int nCol, int nStride);
+#ifdef ENABLE_BF16
 template void printMatrix(__nv_bfloat16 const* ptr, int nRow, int nCol, int nStride);
+#endif
 #ifdef ENABLE_FP8
 template void printMatrix(__nv_fp8_e4m3 const* ptr, int nRow, int nCol, int nStride);
 #endif
@@ -620,7 +634,9 @@ __device__ inline void printMatrixDevice(T const* ptr, int nRow, int nCol, int n
 
 template __device__ void printMatrixDevice(float const* ptr, int nRow, int nCol, int nStride);
 template __device__ void printMatrixDevice(half const* ptr, int nRow, int nCol, int nStride);
+#ifdef ENABLE_BF16
 template __device__ void printMatrixDevice(__nv_bfloat16 const* ptr, int nRow, int nCol, int nStride);
+#endif
 #ifdef ENABLE_FP8
 template __device__ void printMatrixDevice(__nv_fp8_e4m3 const* ptr, int nRow, int nCol, int nStride);
 #endif

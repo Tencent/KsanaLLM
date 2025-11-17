@@ -56,7 +56,7 @@ inline std::vector<size_t> GetStride(std::vector<int> shape) {
 }
 
 void GetNumSmParts(FlashMlaWorkspaceMap& workspace_param, const int num_heads_per_head_k, const int num_heads_k,
-                   int rank, cudaStream_t stream) {
+                   int rank) {
   static int sm_count = 0;
   if (sm_count == 0) {
     cudaDeviceProp dprops;
@@ -155,7 +155,7 @@ void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float
   // softmax_lse_accum [batch_size, num_sm_parts, num_heads, q_seq_per_hk] Float
   // out_accum [batch_size + num_sm_parts, num_heads, q_seq_per_hk, head_size_v] Float
   FlashMlaWorkspaceMap workspace_param = {};
-  GetNumSmParts(workspace_param, q_seq_per_hk, num_heads_k, rank, stream);
+  GetNumSmParts(workspace_param, q_seq_per_hk, num_heads_k, rank);
   ApplyWorkspaceBuffer(workspace, workspace_param, batch_size, num_heads, q_seq_per_hk, head_size_v);
   workspace_param.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(tile_scheduler_metadata_ptr);
   workspace_param.num_splits_ptr = reinterpret_cast<int*>(num_splits_ptr);
@@ -269,7 +269,7 @@ namespace nvidia {
 void SetFlashMlaAttribute(const int max_batch_size, cudaStream_t stream) {}
 void InvokeGetMlaMetadata(int* b_seqlen, FlashMlaWorkspaceMap& workspace_param, int tokens_num, cudaStream_t stream) {}
 void GetNumSmParts(FlashMlaWorkspaceMap& workspace_param, const int num_heads_per_head_k, const int num_heads_k,
-                   int rank, cudaStream_t stream) {}
+                   int rank) {}
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float sm_scale, void* block_table_ptr,

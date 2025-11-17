@@ -119,7 +119,7 @@ TEST_F(LlamaNvidiaPagedAttentionTestSuit, LlamaPagedAttentionHalfTest) {
   // run paged_attention(..., stream);
   PagedAttentionCuda<DataType, DataType, llm_kernels::utils::KVCacheType::kAuto> op;
   op.SetConfig(num_kv_heads, num_heads, head_size, block_size, stride_size, k_scale, v_scale);
-  size_t work_size = op.GetWorkSpaceSize(num_seqs, max_context_len);
+  size_t work_size = op.GetWorkspaceSize(num_seqs, max_context_len);
   BufferMeta workspace_meta = CreateBuffer<char>(MemoryType::MEMORY_GPU, {work_size});
   op.SetInput(reinterpret_cast<DataType*>(out_meta.data_ptr), reinterpret_cast<DataType*>(query_meta.data_ptr),
               reinterpret_cast<DataType**>(key_cache_ptrs.data_ptr),

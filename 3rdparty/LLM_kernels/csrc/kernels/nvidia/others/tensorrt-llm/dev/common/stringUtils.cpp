@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +32,8 @@ void fmtstr_(char const* format, fmtstr_allocator alloc, void* target, va_list a
   size_t constexpr init_size = 2048;
   char fixed_buffer[init_size];
   auto const size = std::vsnprintf(fixed_buffer, init_size, format, args0);
+  va_end(args0);
+
   KLLM_KERNEL_CHECK_WITH_INFO(size >= 0, std::string(std::strerror(errno)));
   if (size == 0) {
     return;

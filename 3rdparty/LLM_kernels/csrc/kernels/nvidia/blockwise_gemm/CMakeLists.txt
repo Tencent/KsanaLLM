@@ -11,7 +11,7 @@ add_library(llm_kernels_nvidia_kernel_blockwise_gemm STATIC ${BLOCKWISE_GEMM_SRC
 set_property(TARGET llm_kernels_nvidia_kernel_blockwise_gemm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_blockwise_gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(llm_kernels_nvidia_kernel_blockwise_gemm PUBLIC -lcublas -lcudart -lcublasLt)
-target_link_libraries(llm_kernels_nvidia_kernel_blockwise_gemm PRIVATE cutlass_c3x)
+target_link_libraries(llm_kernels_nvidia_kernel_blockwise_gemm PRIVATE cutlass_c4x ${TORCH_LIBRARIES})
 
 # For test
 file(GLOB_RECURSE BLOCKWISE_GEMM_TEST_SRCS *test.cu)

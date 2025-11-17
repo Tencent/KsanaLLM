@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2022-2024, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,6 +58,7 @@ typedef struct __CUDA_ALIGN__(8) {
   half array[4];
 } half_4;
 
+#  ifdef ENABLE_BF16
 typedef struct __CUDA_ALIGN__(4) {
   __nv_bfloat16 array[2];
 } __nv_bfloat16_2;
@@ -91,6 +86,7 @@ typedef struct __CUDA_ALIGN__(16) {
 typedef struct __CUDA_ALIGN__(32) {
   __nv_bfloat16 array[16];
 } __nv_bfloat1616;
+#  endif
 
 #  ifdef ENABLE_FP8
 typedef struct __CUDA_ALIGN__(2) {
@@ -180,6 +176,7 @@ struct PackType<half, 8> {
   };
 };
 
+#  ifdef ENABLE_BF16
 template <>
 struct PackType<__nv_bfloat16, 2> {
   using type = __nv_bfloat16_2;
@@ -199,6 +196,7 @@ template <>
 struct PackType<__nv_bfloat16, 16> {
   using type = __nv_bfloat1616;
 };
+#  endif
 
 #  ifdef ENABLE_FP8
 template <>

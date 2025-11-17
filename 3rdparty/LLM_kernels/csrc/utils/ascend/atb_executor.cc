@@ -55,7 +55,7 @@ void ATBOperationExecutor::Run(atb::Context* context, void (*ws_func)(size_t, vo
       operation_->Execute(variant_pack_, reinterpret_cast<uint8_t*>(workspace_ptr_), workspace_size_, context));
 }
 
-size_t ATBOperationExecutor::GetWorkSpaceSize(atb::Context* context) {
+size_t ATBOperationExecutor::GetWorkspaceSize(atb::Context* context) {
   ATB_CHECK_RET(operation_->Setup(variant_pack_, workspace_size_, context));
   return workspace_size_;
 }

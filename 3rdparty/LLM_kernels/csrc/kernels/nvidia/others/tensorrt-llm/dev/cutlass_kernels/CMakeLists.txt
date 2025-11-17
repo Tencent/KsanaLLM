@@ -1,5 +1,3 @@
-add_definitions(-DENABLE_FP4=ON)
-
 # The Python executable will only be defined if building with Torch support. If
 # not, we need to find it here.
 if(NOT Python3_EXECUTABLE)

@@ -769,7 +769,7 @@ void PagedAttentionCuda<SCALAR_T, CACHE_T, KV_DTYPE>::SetConfig(const int num_kv
 }
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-size_t PagedAttentionCuda<SCALAR_T, CACHE_T, KV_DTYPE>::GetWorkSpaceSize(int num_seqs, int max_context_len) {
+size_t PagedAttentionCuda<SCALAR_T, CACHE_T, KV_DTYPE>::GetWorkspaceSize(int num_seqs, int max_context_len) {
   params_.num_seqs_ = num_seqs;
   params_.max_context_len_ = max_context_len;
   params_.max_num_partitions_ = params_.GetMaxNumPartitions();

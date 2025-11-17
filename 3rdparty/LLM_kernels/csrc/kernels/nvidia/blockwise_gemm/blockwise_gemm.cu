@@ -39,5 +39,26 @@ BLOCKWISE_GEMM_KERNEL(half);
 BLOCKWISE_GEMM_KERNEL(__nv_bfloat16);
 #undef BLOCKWISE_GEMM_KERNEL
 
+template <typename T>
+size_t GetBlockwiseGemmWorkspaceSize(int m, int k, int n) {
+#if defined(ENABLE_BLOCKWISE_GEMM)
+  if constexpr (std::is_same<T, float>::value) {
+    std::cerr << "BlockwiseGemmKernel do not support float type" << std::endl;
+  } else if constexpr (std::is_same<T, half>::value) {
+    return ksana_llm::GetCutlassGemmBlockwiseSm90Fp8Workspace<cutlass::half_t>(m, k, n);
+  } else if constexpr (std::is_same<T, __nv_bfloat16>::value) {
+    return ksana_llm::GetCutlassGemmBlockwiseSm90Fp8Workspace<cutlass::bfloat16_t>(m, k, n);
+  }
+#else
+  std::cerr << "SM version is lower than 90. BlockwiseGemmKernel is not supported." << std::endl;
+#endif
+  return 0;
+}
+#define GET_BLOCKWISE_GEMM_KERNEL_WORKSPACE(T) template size_t GetBlockwiseGemmWorkspaceSize<T>(int m, int k, int n)
+GET_BLOCKWISE_GEMM_KERNEL_WORKSPACE(float);
+GET_BLOCKWISE_GEMM_KERNEL_WORKSPACE(half);
+GET_BLOCKWISE_GEMM_KERNEL_WORKSPACE(__nv_bfloat16);
+#undef GET_BLOCKWISE_GEMM_KERNEL_WORKSPACE
+
 }  // namespace nvidia
 }  // namespace llm_kernels

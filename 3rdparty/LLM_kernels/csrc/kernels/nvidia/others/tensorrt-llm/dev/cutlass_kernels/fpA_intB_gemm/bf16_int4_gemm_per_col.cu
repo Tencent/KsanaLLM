@@ -1,10 +1,4 @@
 /*
- * Adapted from
- * [TensorRT-LLM Project]
- * https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc3
- */
-
-/*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +19,10 @@
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
 namespace kernels {
 namespace cutlass_kernels {
+#ifdef ENABLE_BF16
 template class CutlassFpAIntBGemmRunner<__nv_bfloat16, cutlass::uint4b_t,
                                         cutlass::WeightOnlyQuantOp::PER_COLUMN_SCALE_ONLY>;
+#endif
 }  // namespace cutlass_kernels
 }  // namespace kernels
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev

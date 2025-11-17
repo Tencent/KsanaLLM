@@ -23,7 +23,9 @@
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 
+#if defined(ENABLE_BF16)
 #include <cuda_bf16.h>
+#endif
 
 #include <type_traits>
 #include <vector>
@@ -33,8 +35,7 @@ namespace kernels {
 
 template <typename T_in, typename T_out = T_in>
 void apply_per_channel_scale_kernel_launcher(T_out* smoothed_act, T_in const* act, T_in const* per_channel_scale,
-                                             int rows, int cols, int64_t const* num_valid_tokens_ptr = nullptr,
-                                             cudaStream_t stream = 0);
+    int rows, int cols, int64_t const* num_valid_tokens_ptr = nullptr, cudaStream_t stream = 0);
 
 }  // namespace kernels
 }  // namespace llm_kernels::nvidia::tensorrt_llm::dev
