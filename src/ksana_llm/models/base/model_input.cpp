@@ -611,7 +611,7 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest*>& forward_r
 
   for (const auto& forward_req : forward_reqs) {
     // Only handle input refit for prefill requests
-    if (forward_req->GetType() == ForwardRequestType::kFlash) {
+    if (forward_req->GetType() == ForwardRequestType::kFlash && forward_req->kv_cached_token_num == 0) {
       const std::vector<int>& input_refit_pos = (*forward_req->input_refit_embedding).pos;
       std::vector<std::vector<float>>& input_refit_embeddings = (*forward_req->input_refit_embedding).embeddings;
       std::vector<py::object>& input_refit_embedding_tensors = (*forward_req->input_refit_embedding).embedding_tensors;
@@ -666,55 +666,62 @@ void ModelInput::PrepareInputRefit(const std::vector<ForwardRequest*>& forward_r
  * (`dp_mrotary_embedding_pos`), and record the offset value (`additional_tensors[1]`).
  */
 void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest*>& forward_reqs) {
+  constexpr int kMRotaryEmbeddingPosFactor = 3;
   int64_t dp_mrotary_embedding_pos_size = 0;
-
+  std::vector<int64_t> mrotary_embedding_pos_host;
   for (auto& req_ptr : forward_reqs) {
     auto& req = *req_ptr;
     // qwen2_vl only needs to handle the prefill requests in its dp group
     if (req.GetType() != ForwardRequestType::kFlash || req.attn_dp_group_id != attn_dp_group_id_) {
       continue;
     }
-
-    auto& additional_tensors = req.input_refit_embedding->additional_tensors;
-    // This is a plain text input.
-    if (additional_tensors.empty()) {
-      int64_t list_size = req.forwarding_tokens->size() * 3;
-      std::vector<int64_t> dp_mrotary_embedding_pos_list(list_size);
-      for (int64_t i = 0; i < list_size; i += 3) {
-        dp_mrotary_embedding_pos_list[i] = dp_mrotary_embedding_pos_list[i + 1] = dp_mrotary_embedding_pos_list[i + 2] =
-            i;
+    if (req.kv_cached_token_num == 0) {
+      auto& additional_tensors = req.input_refit_embedding->additional_tensors;
+      // This is a plain text input.
+      if (additional_tensors.empty()) {
+        int64_t list_size = req.forwarding_tokens->size() * kMRotaryEmbeddingPosFactor;
+        mrotary_embedding_pos_host.reserve(mrotary_embedding_pos_host.size() + list_size);
+        for (int64_t i = 0; i < list_size; i += kMRotaryEmbeddingPosFactor) {
+          for (int t = 0; t < kMRotaryEmbeddingPosFactor; ++t) {
+            mrotary_embedding_pos_host.emplace_back(i);
+          }
+        }
+        *req.mrotary_embedding_pos_offset = 0;
+        continue;
       }
-      MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
-                  dp_mrotary_embedding_pos_list.data(), sizeof(int64_t) * list_size, MEMCPY_HOST_TO_DEVICE,
-                  context_->GetD2HStreams()[rank_]);
-      dp_mrotary_embedding_pos_size += list_size;
-      *req.mrotary_embedding_pos_offset = 0;
-#ifdef ENABLE_ACL
-      StreamSynchronize(context_->GetD2HStreams()[rank_]);
-#endif
-      continue;
+      KLLM_CHECK_WITH_INFO(additional_tensors.size() >= 2,
+                           "For visual inputs, additional_tensors should contain at least 2 tensors: position tensor "
+                           "and offset tensor.");
+      // This is a input with visual information.
+      torch::Tensor dp_mrotary_embedding_pos_tensor;
+      {
+        py::gil_scoped_acquire acquire;
+        dp_mrotary_embedding_pos_tensor = THPVariable_Unpack(additional_tensors[0].ptr());
+      }
+      int64_t tensor_size = dp_mrotary_embedding_pos_tensor.numel();
+      int64_t mrotart_embedding_pos_index = mrotary_embedding_pos_host.size();
+      mrotary_embedding_pos_host.resize(mrotary_embedding_pos_host.size() + tensor_size);
+      std::memcpy(mrotary_embedding_pos_host.data() + mrotart_embedding_pos_index,
+                  dp_mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size);
+      torch::Tensor dp_mrotary_embedding_pos_offset_tensor = THPVariable_Unpack(additional_tensors[1].ptr());
+      *req.mrotary_embedding_pos_offset = dp_mrotary_embedding_pos_offset_tensor.item().toLong();
+    } else {
+      const size_t input_len = req.forwarding_tokens->size() - req.kv_cached_token_num;
+      const auto pos_offset = model_config_.type == "qwen2_vl" ? *req.mrotary_embedding_pos_offset : 0;
+      mrotary_embedding_pos_host.reserve(mrotary_embedding_pos_host.size() + kMRotaryEmbeddingPosFactor * input_len);
+      for (int i = 0; i < input_len; ++i) {
+        for (int t = 0; t < kMRotaryEmbeddingPosFactor; ++t) {
+          mrotary_embedding_pos_host.emplace_back(req.kv_cached_token_num + pos_offset + i);
+        }
+      }
     }
-    KLLM_CHECK_WITH_INFO(additional_tensors.size() >= 2,
-                         "For visual inputs, additional_tensors should contain at least 2 tensors: position tensor "
-                         "and offset tensor.");
-    // This is a input with visual information.
-    torch::Tensor dp_mrotary_embedding_pos_tensor;
-    {
-      py::gil_scoped_acquire acquire;
-      dp_mrotary_embedding_pos_tensor = THPVariable_Unpack(additional_tensors[0].ptr());
-    }
-    int64_t tensor_size = dp_mrotary_embedding_pos_tensor.numel();
-    MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>() + sizeof(int64_t) * dp_mrotary_embedding_pos_size,
-                dp_mrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size, MEMCPY_HOST_TO_DEVICE,
-                context_->GetD2HStreams()[rank_]);
-    dp_mrotary_embedding_pos_size += tensor_size;
-
-    torch::Tensor dp_mrotary_embedding_pos_offset_tensor = THPVariable_Unpack(additional_tensors[1].ptr());
-    *req.mrotary_embedding_pos_offset = dp_mrotary_embedding_pos_offset_tensor.item().toLong();
   }
+  MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>(), mrotary_embedding_pos_host.data(),
+              sizeof(int64_t) * mrotary_embedding_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
 }
 
@@ -949,7 +956,7 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
   kv_cache_offset.shape[0] += info.kv_cache_offset.GetElementNumber();
   MemcpyAsync(info.kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(),
               kv_cache_offset_host.size() * sizeof(decltype(kv_cache_offset_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+              context_->GetH2DStreams()[rank_]);
 
   const int total_block_num = kv_cache_offset_host.back();
   const int block_size_per_layer = block_size_ / layer_num_on_node_;
@@ -991,21 +998,21 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
     current_kv_list->shape[0] += current_info_kv_list->GetElementNumber();
     MemcpyAsync(current_info_kv_list->GetPtr<void>(), kv_list_host.data(),
                 kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-                context_->GetD2HStreams()[rank_]);
+                context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_CUDA
     // layer_i = [1, layer_num_on_node_)
     if (total_block_num > 0 && layer_num_on_node_ > 1) {
       InvokeProcessKvList(static_cast<void**>(current_info_kv_list->GetPtr<void>()), layer_num_on_node_,
-                          total_block_num * 2, block_size_, context_->GetD2HStreams()[rank_].Get());
+                          total_block_num * 2, block_size_, context_->GetH2DStreams()[rank_].Get());
     }
 #endif
   }
 
 #ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
-  EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
+  EventRecord(kvcache_offset_event, context_->GetH2DStreams()[rank_]);
 }
 
 void ModelInput::PrepareDecodeRotary(input_info& input) {
@@ -1023,7 +1030,7 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
   rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_mask_host.size(), MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+              context_->GetH2DStreams()[rank_]);
 
   // prepare pos
   std::vector<int64_t> rotary_pos_host(total_input_len, 1);
@@ -1040,11 +1047,11 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
   rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
               sizeof(decltype(rotary_pos_host)::value_type) * rotary_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+              context_->GetH2DStreams()[rank_]);
 
-  EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
+  EventRecord(rotary_embedding_event, context_->GetH2DStreams()[rank_]);
 #ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
 }
 
@@ -1075,17 +1082,16 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
     }
   }
 
-  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_pos_host.size()}, rotary_embedding_pos.shape[0]);
+  input.rotary_embedding_pos = rotary_embedding_pos.GetView({rotary_host_idx}, rotary_embedding_pos.shape[0]);
   rotary_embedding_pos.shape[0] += input.rotary_embedding_pos.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
               sizeof(decltype(rotary_pos_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
-  input.rotary_embedding_mask =
-      rotary_embedding_mask.GetView({rotary_mask_host.size()}, rotary_embedding_mask.shape[0]);
+              context_->GetH2DStreams()[rank_]);
+  input.rotary_embedding_mask = rotary_embedding_mask.GetView({rotary_host_idx}, rotary_embedding_mask.shape[0]);
   rotary_embedding_mask.shape[0] += input.rotary_embedding_mask.GetElementNumber();
   MemcpyAsync(input.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              context_->GetD2HStreams()[rank_]);
+              context_->GetH2DStreams()[rank_]);
 
   // For DeepSeek model, rope of flexible cached tokens and forwarding new tokens cannot be fused
   // because q&k buffers differ in total_tokens when there is prefix
@@ -1118,19 +1124,19 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
     }
     MemcpyAsync(dp_flexible_rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
                 sizeof(decltype(rotary_mask_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                context_->GetD2HStreams()[rank_]);
+                context_->GetH2DStreams()[rank_]);
     MemcpyAsync(dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
                 sizeof(decltype(rotary_pos_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                context_->GetD2HStreams()[rank_]);
+                context_->GetH2DStreams()[rank_]);
     if (model_config_.use_mla) {
       MemcpyAsync(dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(), mla_dst_flexible_rotary_pos_host.data(),
                   sizeof(decltype(mla_dst_flexible_rotary_pos_host)::value_type) * flexible_rotary_idx,
-                  MEMCPY_HOST_TO_DEVICE, context_->GetD2HStreams()[rank_]);
+                  MEMCPY_HOST_TO_DEVICE, context_->GetH2DStreams()[rank_]);
     }
   }
-  EventRecord(rotary_embedding_event, context_->GetD2HStreams()[rank_]);
+  EventRecord(rotary_embedding_event, context_->GetH2DStreams()[rank_]);
 #ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
 }
 
@@ -1197,9 +1203,9 @@ void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
               context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL
-  StreamSynchronize(context_->GetD2HStreams()[rank_]);
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
 #endif
-  EventRecord(kvcache_offset_event, context_->GetD2HStreams()[rank_]);
+  EventRecord(kvcache_offset_event, context_->GetH2DStreams()[rank_]);
 }
 
 void ModelInput::PrepareFlashMla(input_info& input) {
@@ -1370,7 +1376,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest*>& forward_req
       input_prefix_list_uint64.emplace_back(input_prefix_list_uint64.back());
       if (in_dp_group) {
         dp_single_token_request_max_tokens = std::max(dp_single_token_request_max_tokens, input_length);
-        dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + 1);
+        dp_input_offset_list_uint64.emplace_back(dp_input_offset_list_uint64.back() + input_ids_len);
         dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back());
       }
     }
@@ -1395,7 +1401,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest*>& forward_req
   for (const auto& req : forward_reqs) {
     process_func(*req);
   }
-
   KLLM_LOG_DEBUG << "input_ids_cpu " << input_ids_cpu;
   KLLM_LOG_DEBUG << "logits_idx_list " << logits_idx_list;
   KLLM_LOG_DEBUG << "input_offset_list_uint64 " << input_offset_list_uint64;

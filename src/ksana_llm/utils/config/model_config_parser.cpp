@@ -448,6 +448,10 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
         }
       }
     }
+    if (model_config.type == "qwen2_5_vl") {
+      model_config.type = "qwen2_vl";
+      KLLM_LOG_INFO << "model type changed from qwen2_5_vl to qwen2_vl";
+    }
 
     if (model_config.type == "chatglm") {
       PrepareChatglmAttributes(config_json, model_config);

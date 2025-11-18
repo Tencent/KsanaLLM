@@ -47,11 +47,11 @@ void LlmRuntime::SetMultiBatchController(std::shared_ptr<MultiBatchController> c
   multi_batch_controller_ = controller;
 }
 
-void LlmRuntime::SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator) {
-  if (draft_generator_ != nullptr) {
-    KLLM_LOG_WARNING << "draft_generator already exists, currently only supports one, will replace the previous one";
+void LlmRuntime::SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> controller) {
+  if (controller != nullptr) {
+    KLLM_LOG_WARNING << "draft_generator_controller already exists.";
   }
-  draft_generator_ = draft_generator;
+  draft_generator_controller_ = controller;
 }
 
 void LlmRuntime::BuildForwardRequests(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
@@ -317,21 +317,12 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
 
 // Speculative decoding, generate draft token with trie
 void LlmRuntime::GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  if (draft_generator_ == nullptr) {
+  if (draft_generator_controller_ == nullptr) {
     return;
   }
   PROFILE_EVENT_SCOPE(GenerateDraftToken_, fmt::format("GenerateDraftToken"));
   for (auto& req : reqs) {
-    std::vector<int> tokens;
-    tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +
-                   req->generated_tokens.size() + req->draft_tokens.mtp.size());
-    tokens.insert(tokens.end(), req->forwarding_tokens.begin(),
-                  req->forwarding_tokens.end() - req->forwarding_tokens_draft_num);
-    tokens.insert(tokens.end(), req->accepted_tokens.begin(), req->accepted_tokens.end());
-    tokens.insert(tokens.end(), req->generated_tokens.begin(), req->generated_tokens.end());
-    tokens.insert(tokens.end(), req->draft_tokens.mtp.begin(), req->draft_tokens.mtp.end());
-    draft_generator_->GenerateDraft(tokens, req->step, req->suggested_draft_num, req->draft_tokens.trie,
-                                    req->draft_tokens.mtp.size(), req->accepted_tokens.size(), req->req_id);
+    draft_generator_controller_->GenerateDraft(req);
   }
 }
 

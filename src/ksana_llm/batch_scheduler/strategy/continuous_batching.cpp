@@ -148,6 +148,7 @@ void ContinuousBatchingStrategy::DetermineDraftNum(std::shared_ptr<InferRequest>
 }
 
 void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> req) {
+  REPORT_COUNTER("recompute_request_num", 1);
   if (!req->HasInflightTask()) {
     // No task is running, recompute immediately
     SyncRecomputeRequest(req);
@@ -307,9 +308,13 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     const size_t not_kv_cached_token_num = req->GetPlanningQueryLen();
     // In Forward(), attention kernel use buffer with all tokens when step_token_num> threshold.
     // TODO(robertyuan): Adjust this after kernel problem fixed.
-    const size_t req_token_num = not_kv_cached_token_num <= GetDecodeTokenNumThreshold()
-                                     ? not_kv_cached_token_num
-                                     : req->GetPlanningSequenceLen();
+    size_t req_token_num = not_kv_cached_token_num <= GetDecodeTokenNumThreshold() ? not_kv_cached_token_num
+                                                                                   : req->GetPlanningSequenceLen();
+    if (batch_scheduler_config_.ptp_step_num > 0) {
+      // When using Parallel-Token-Predict, we used not_kv_cached_token_num to raise max_batch_size
+      // TODO(zezhao): 除特殊场景外，应尽可能开放该逻辑
+      req_token_num = not_kv_cached_token_num;
+    }
 
     scheduler_ticktok_->Lock();
 

@@ -20,10 +20,10 @@ class GenerationController {
   // Update generation state after sampling_result_tokens are generated.
   void UpdateGenerationState(std::vector<std::shared_ptr<InferRequest>> &reqs);
 
- private:
-  void UpdateGrammarState(std::vector<std::shared_ptr<InferRequest>> &reqs);
+ protected:
+  virtual void UpdateGrammarState(std::vector<std::shared_ptr<InferRequest>> &reqs);
 
-  void FilterDraftTokens(std::vector<std::shared_ptr<InferRequest>> &reqs);
+  virtual void FilterDraftTokens(std::vector<std::shared_ptr<InferRequest>> &reqs);
 
  private:
   std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;

@@ -279,14 +279,17 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, s
 
   if (batch_size > 0) {
     size_t token_num = 0;
+    size_t step_token_num = 0;
     const auto current_time = ProfileTimer::GetCurrentTimeInUs();
     for (const auto& req : batch_state->schedule_output->running_reqs) {
       token_num += req->forwarding_tokens.size();
+      step_token_num += req->forwarding_tokens.size() - req->prefix_cache_len;
       if (req->kv_cached_token_num == 0) {
         REPORT_METRIC("batch_manager_schedule_us", current_time - req->timestamp_in_us);
       }
     }
     REPORT_METRIC("num_tokens_to_schedule", token_num);
+    REPORT_METRIC("step_tokens_to_schedule", step_token_num);
   }
 }
 

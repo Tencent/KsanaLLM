@@ -119,6 +119,12 @@ struct BatchSchedulerConfig {
 
   size_t mtp_step_num = 0;
 
+  // The token length for Parallel Token Prediction
+  size_t ptp_step_num = 0;
+
+  // The token id for Parallel Token Prediction
+  uint32_t ptp_token_id;
+
   bool enable_async = false;
 
   bool enable_xgrammar = false;

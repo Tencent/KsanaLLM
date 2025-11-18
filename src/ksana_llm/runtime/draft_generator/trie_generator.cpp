@@ -118,24 +118,35 @@ void TrieTree::Prune() {
   DFSDelete(root_, max_nodes_);
 }
 
-void TrieGenerator::GenerateDraft(const std::vector<int>& input_tokens, int step, int suggested_draft_num,
-                                  std::vector<int>& draft_tokens, int unverfied_token_num, int accepted_tokens,
-                                  int req_id) {
+void TrieGenerator::GenerateDraft(std::shared_ptr<InferRequest> req) {
+  std::vector<int> input_tokens;
+  input_tokens.reserve(req->forwarding_tokens.size() - req->forwarding_tokens_draft_num + req->accepted_tokens.size() +
+                       kStepGenerateTokenNum + req->draft_tokens.mtp.size());
+  input_tokens.insert(input_tokens.end(), req->forwarding_tokens.begin(),
+                      req->forwarding_tokens.end() - req->forwarding_tokens_draft_num);
+  input_tokens.insert(input_tokens.end(), req->accepted_tokens.begin(), req->accepted_tokens.end());
+  input_tokens.insert(input_tokens.end(), req->generated_tokens.begin(), req->generated_tokens.end());
+  input_tokens.insert(input_tokens.end(), req->draft_tokens.mtp.begin(), req->draft_tokens.mtp.end());
+
+  int unverfied_token_num = req->draft_tokens.mtp.size();
   KLLM_CHECK(input_tokens.size() >= unverfied_token_num);
   const size_t usable_length = input_tokens.size() - unverfied_token_num;  // exclude mtp tokens
   const size_t update_begin =
-      step <= 1 ? 0 : usable_length - std::min(kStepGenerateTokenNum + accepted_tokens + kMaxDepth - 1, usable_length);
+      req->step <= 1 ? 0
+                     : usable_length -
+                           std::min(kStepGenerateTokenNum + req->accepted_tokens.size() + kMaxDepth - 1, usable_length);
   thread_local std::vector<int> tokens;  // TODO(lijiajieli): avoid copy
   KLLM_CHECK(input_tokens.size() >= update_begin);
   tokens.assign(input_tokens.begin() + update_begin, input_tokens.begin() + usable_length);
-  const TrieTree::FrequencyType type = step <= 1 ? TrieTree::FrequencyType::INPUT : TrieTree::FrequencyType::OUTPUT;
+  const TrieTree::FrequencyType type =
+      req->step <= 1 ? TrieTree::FrequencyType::INPUT : TrieTree::FrequencyType::OUTPUT;
   // TODO(qiannan): Need to determine if 'final' is appropriate for modifying the tree.
-  StreamPut(tokens, 0, false, type, req_id);
+  StreamPut(tokens, 0, false, type, req->req_id);
 
   // TODO(qiannan): kOutputWeight should be dynamically adjusted according to the length of the input request.
   constexpr double kOutputWeight = 0.2;
   tokens.insert(tokens.end(), input_tokens.begin() + usable_length, input_tokens.end());
-  Predict(tokens, draft_tokens, suggested_draft_num, 0, "OneBranch", kOutputWeight);
+  Predict(tokens, req->draft_tokens.trie, req->suggested_draft_num, 0, "OneBranch", kOutputWeight);
 }
 
 void TrieGenerator::StreamPut(const std::vector<int>& token_ids, int last_pos, bool is_final,

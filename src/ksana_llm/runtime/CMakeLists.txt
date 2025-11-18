@@ -54,7 +54,7 @@ target_link_libraries(runtime PUBLIC
 file(GLOB_RECURSE runtime_test_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/threadpool_test.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/llm_runtime_test.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/draft_generator/trie_generator_test.cpp)
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/draft_generator/*_test.cpp)
 if(WITH_CUDA AND DEFINED SM AND "${SM}" STREQUAL "90a")
   list(APPEND runtime_test_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/runtime/weight_instance_test.cpp)

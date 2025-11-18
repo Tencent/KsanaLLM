@@ -240,6 +240,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
   batch_scheduler_config_.mtp_step_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.mtp_step_num", 0);
+  batch_scheduler_config_.ptp_step_num = model_config.num_register_token;
+  batch_scheduler_config_.ptp_token_id = model_config.reg_id;
 
   // TODO(lijiajieli): compatible for enable_mtp_module, will be deleted around 2025.11
   const bool enable_mtp_module =
@@ -282,7 +284,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
   // When MTP is enabled, each request requires calculating mtp_step_num + 1 tokens while decoding.
-  batch_scheduler_config_.max_decode_tokens_per_req = batch_scheduler_config_.mtp_step_num + 1;
+  batch_scheduler_config_.max_decode_tokens_per_req =
+      batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num + 1;
 
   if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
     KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,
@@ -328,6 +331,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     KLLM_LOG_WARNING << "prefix caching not support NPU, will change enable_prefix_caching as false";
   }
 #endif
+  if (model_config.is_visual) {
+    if (cache_manager_config_.enable_prefix_caching) {
+      KLLM_LOG_WARNING << "PrefixCaching not support Visual Model, will change enable_prefix_caching as false";
+      cache_manager_config_.enable_prefix_caching = false;
+    }
+    if (batch_scheduler_config_.split_fuse_token_num > 0) {
+      KLLM_LOG_WARNING << "SplitFuse not support Visual Model, will change split_fuse_token_num as 0";
+      batch_scheduler_config_.split_fuse_token_num = 0;
+    }
+  }
 
   // Read parallel config.
   expert_parallel_config_.expert_world_size =

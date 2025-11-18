@@ -9,6 +9,7 @@
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "ksana_llm/runtime/ptp_generation_controller.h"
 #include "ksana_llm/runtime/structured_generation/reasoning_structured_generator.h"
 
 namespace ksana_llm {
@@ -319,6 +320,32 @@ TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorFindJumpForwardToke
   // 推理阶段结束后，FindJumpForwardTokens 会传递给内部生成器
   // MockStructuredGenerator 的实现返回 false
   EXPECT_FALSE(reasoner_generator->FindJumpForwardTokens(jump_tokens));
+}
+
+TEST_F(GenerationControllerTest, PTPGenerationControllerTest) {
+  std::shared_ptr<PTPGenerationController> ptp_generation_controller =
+      std::make_shared<PTPGenerationController>(nullptr);
+
+  auto req = CreateMockRequest();
+  std::shared_ptr<InferRequest> infer_req = std::make_shared<InferRequest>(req, 0);
+  infer_req->generated_tokens.clear();
+  infer_req->sampling_result_tokens = {10, 20, 30};
+  infer_req->output_tokens = {1, 2, 3};
+  infer_req->forwarding_tokens = {1, 2, 3, 4};
+
+  std::vector<std::shared_ptr<InferRequest>> reqs = {infer_req};
+
+  ptp_generation_controller->UpdateGenerationState(reqs);
+
+  // 采样结果均被认为是可接受，存储于 generated_tokens 中
+  EXPECT_EQ(infer_req->generated_tokens.size(), 3);
+  EXPECT_EQ(infer_req->generated_tokens[0], 10);
+  EXPECT_EQ(infer_req->generated_tokens[1], 20);
+  EXPECT_EQ(infer_req->generated_tokens[2], 30);
+
+  // 清空 accepted_tokens 与 draft_tokens
+  EXPECT_EQ(infer_req->accepted_tokens.size(), 0);
+  EXPECT_EQ(infer_req->draft_tokens.size(), 0);
 }
 
 }  // namespace ksana_llm

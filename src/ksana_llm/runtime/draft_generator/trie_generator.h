@@ -53,9 +53,10 @@ class TrieGenerator : public DraftGeneratorInterface {
   TrieGenerator() : trie_(new TrieTree()) {}
   inline explicit TrieGenerator(int max_nodes) : trie_(new TrieTree(max_nodes)) {}
   ~TrieGenerator() { delete trie_; }
-  void GenerateDraft(const std::vector<int>& input_tokens, int step, int suggested_draft_num,
-                     std::vector<int>& draft_tokens, int unverfied_token_num, int accepted_tokens, int req_id) override;
 
+  void GenerateDraft(std::shared_ptr<InferRequest> req) override;
+
+ private:
   void StreamPut(const std::vector<int>& token_ids, int last_pos, bool final, TrieTree::FrequencyType type, int pos_id);
   void Predict(const std::vector<int>& token_ids, std::vector<int>& spec_ids, size_t max_output_size, int pos_id,
                const std::string& function_name, double output_weight);

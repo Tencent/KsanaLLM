@@ -7,6 +7,7 @@ import sys
 
 from transformers import AutoConfig
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
 
 import torch
 
@@ -34,9 +35,19 @@ class VITModel:
             precision = self.precision
 
         # init vit model
-        visual = Qwen2VisionTransformerPretrainedModel._from_config(self.config.vision_config,
-                                                                    attn_implementation="flash_attention_2",
-                                                                    torch_dtype=precision)
+        # NOTE: qwen2.5_vl differs from qwen2_vl only in the visual encoder.
+        # We therefore branch here: qwen2.5_vl uses its own VisionTransformer
+        # (Qwen2_5_VisionTransformerPretrainedModel), while every other
+        # qwen2_vl variant keeps the original Qwen2VisionTransformerPretrainedModel.
+        if self.config.model_type == "qwen2_5_vl":
+            visual = Qwen2_5_VisionTransformerPretrainedModel._from_config(
+                self.config.vision_config,
+                torch_dtype=precision)
+        else:
+            visual = Qwen2VisionTransformerPretrainedModel._from_config(
+                self.config.vision_config,
+                attn_implementation="flash_attention_2",
+                torch_dtype=precision)
 
         # read weight
         weight_map_files = get_weight_map(model_path, "visual.")
@@ -55,6 +66,7 @@ class VITModel:
         visual = visual.to(dtype=precision)
         visual.load_state_dict(visual_weights)
         visual = visual.to(device=self.device)
+        visual.get_dtype = lambda: next(visual.parameters()).dtype
 
         free_cache()
         return visual

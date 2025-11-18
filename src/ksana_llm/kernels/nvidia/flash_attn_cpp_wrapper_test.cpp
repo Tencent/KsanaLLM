@@ -100,7 +100,7 @@ class DirectFlashAttnComparisonTest : public ::testing::Test {
     // 确保形状匹配
     if (tensor1.sizes() != tensor2.sizes()) {
       if (isPrint) {
-        std::cout << "❌ 形状不匹配: " << tensor1_name << "=" << tensor1.sizes() << " vs " << tensor2_name << "="
+        std::cout << "[ERROR] 形状不匹配: " << tensor1_name << "=" << tensor1.sizes() << " vs " << tensor2_name << "="
                   << tensor2.sizes() << std::endl;
       }
       result.comparison_passed = false;
@@ -398,7 +398,7 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
       ASSERT_LT(output_abs_max, 100.0f) << "输出值的绝对值应该在合理范围内";
 
       if (isPrint) {
-        std::cout << "✅ FA3 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
+        std::cout << "[PASS] FA3 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
         std::cout << "   输出形状: " << output_tensor.sizes() << std::endl;
         std::cout << "   输出最大绝对值: " << output_abs_max << std::endl;
       }
@@ -567,7 +567,7 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithFP8) {
       ASSERT_LT(output_abs_max, 100.0f) << "输出值的绝对值应该在合理范围内";
 
       if (isPrint) {
-        std::cout << "✅ FA3 FP8 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
+        std::cout << "[PASS] FA3 FP8 测试通过: 平均耗时=" << fa3_avg_ms << " ms" << std::endl;
         std::cout << "   输出形状: " << output_tensor.sizes() << std::endl;
         std::cout << "   输出最大绝对值: " << output_abs_max << std::endl;
       }
@@ -677,7 +677,7 @@ TEST_F(DirectFlashAttnComparisonTest, TestVllmFA2VarlenCall) {
         ASSERT_LT(output_abs_max, 100.0f) << "输出值的绝对值应该在合理范围内";
 
         if (isPrint) {
-          std::cout << "✅ VLLM FA2 varlen 调用成功" << std::endl;
+          std::cout << "[PASS] VLLM FA2 varlen 调用成功" << std::endl;
           std::cout << "   输出形状: " << output_tensor.sizes() << std::endl;
           std::cout << "   输出最大绝对值: " << output_abs_max << std::endl;
         }
@@ -892,9 +892,9 @@ TEST_F(DirectFlashAttnComparisonTest, CompareFA3WithVllmFA2) {
                   << std::endl;
 
         if (comparison_result.comparison_passed) {
-          std::cout << "✅ FA3 与 VLLM FA2 输出对比通过" << std::endl;
+          std::cout << "[PASS] FA3 与 VLLM FA2 输出对比通过" << std::endl;
         } else {
-          std::cout << "⚠️ FA3 与 VLLM FA2 输出存在差异，但这可能是正常的实现差异" << std::endl;
+          std::cout << "[WARNING] FA3 与 VLLM FA2 输出存在差异，但这可能是正常的实现差异" << std::endl;
         }
       }
 
@@ -1092,7 +1092,7 @@ TEST_F(DirectFlashAttnComparisonTest, CompareFA3FP16AndFP8) {
                   << std::endl;
 
         if (comparison_result.comparison_passed) {
-          std::cout << "✅ FA3 FP16 与 FP8 输出对比通过" << std::endl;
+          std::cout << "[PASS] FA3 FP16 与 FP8 输出对比通过" << std::endl;
         } else {
           std::cout << "⚠️ FA3 FP16 与 FP8 输出存在差异，但这可能是正常的实现差异" << std::endl;
         }

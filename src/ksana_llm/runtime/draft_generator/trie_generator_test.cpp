@@ -132,11 +132,19 @@ TEST_F(TrieTreeTest, ResetInputFreqs) {
 
 class TrieGeneratorTest : public testing::Test {
  protected:
-  void SetUp() override { generator_ = std::make_shared<TrieGenerator>(); }
+  void SetUp() override {
+    generator_ = std::make_shared<TrieGenerator>();
+
+    auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+    auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+    auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+    request_ = std::make_shared<InferRequest>(request, 1);
+  }
 
   void TearDown() override { generator_->GetTrie()->Reset(); }
 
   std::shared_ptr<TrieGenerator> generator_;
+  std::shared_ptr<InferRequest> request_;
 };
 
 TEST_F(TrieGeneratorTest, StreamPutAndPredict) {
@@ -189,13 +197,17 @@ TEST_F(TrieGeneratorTest, PredictEmpty) {
 }
 
 TEST_F(TrieGeneratorTest, BasicTest) {
-  std::vector<int> input_tokens = {1001, 1003, 1005, 10, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1005, 10, 2};
-  int step = 1;
-  int suggested_draft_num = 16;
-  std::vector<int> draft_tokens;
+  // std::shared_ptr<InferRequest> request_;
+  request_->step = 1;
+  request_->suggested_draft_num = 16;
+  request_->forwarding_tokens_draft_num = 0;
+  request_->forwarding_tokens = {1001, 1003, 1005, 10, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1005, 10};
+  request_->accepted_tokens = {};
+  request_->generated_tokens = {2};
+  request_->draft_tokens.mtp = {};
 
-  generator_->GenerateDraft(input_tokens, step, suggested_draft_num, draft_tokens, 0, 0, 1);
-
+  generator_->GenerateDraft(request_);
+  std::vector<int> draft_tokens = request_->draft_tokens.GetDraftTokens();
   EXPECT_EQ(9, draft_tokens.size());
   EXPECT_EQ(3, draft_tokens[0]);
 }
@@ -229,18 +241,21 @@ TEST_F(TrieGeneratorTest, HitRateTest) {
     const auto prefix = parse_tokens(prefix_str);
     const auto response = parse_tokens(response_str);
     // Simulate incremental decoding process
-    std::vector<int> input_tokens = prefix;
+    request_->forwarding_tokens = prefix;
     size_t pos = 0;
-    int step = 1, accepted_token = 0;
+    request_->step = 1;
+    request_->accepted_tokens.clear();
+    request_->suggested_draft_num = 8;
     while (pos < response.size()) {
-      std::vector<int> draft_tokens;
-      const int suggested_draft_num = 8;
-      generator_->GenerateDraft(input_tokens, step++, suggested_draft_num, draft_tokens, 0, accepted_token, req);
+      generator_->GenerateDraft(request_);
+      std::vector<int> draft_tokens = request_->draft_tokens.GetDraftTokens();
+      request_->step += 1;
       total_tokens += draft_tokens.size();
-      accepted_token = 0;
+      int accepted_token = 0;
+
       for (size_t i = 0; i < draft_tokens.size(); i++) {
         if (pos < response.size() && draft_tokens[i] == response[pos]) {
-          input_tokens.push_back(response[pos]);
+          request_->forwarding_tokens.push_back(response[pos]);
           ++total_hits;
           ++pos;
           ++accepted_token;
@@ -251,7 +266,7 @@ TEST_F(TrieGeneratorTest, HitRateTest) {
       std::cout << " draft_tokens.size() = " << draft_tokens.size() << " accepted_token = " << accepted_token
                 << std::endl;
       if (pos < response.size()) {
-        input_tokens.push_back(response[pos]);
+        request_->forwarding_tokens.push_back(response[pos]);
         pos++;
       }
     }
@@ -262,6 +277,5 @@ TEST_F(TrieGeneratorTest, HitRateTest) {
     ++req;
   }
 }
-
 
 }  // namespace ksana_llm

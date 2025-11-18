@@ -13,11 +13,14 @@
 #include "ksana_llm/data_hub/expert_data_hub.h"
 #include "ksana_llm/periphery/version_reporter.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/runtime/draft_generator/draft_generator_controller.h"
+#include "ksana_llm/runtime/draft_generator/ptp_generator.h"
 #include "ksana_llm/runtime/draft_generator/trie_generator.h"
 #include "ksana_llm/runtime/generation_controller.h"
-#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/layer_progress_tracker.h"
+#include "ksana_llm/runtime/ptp_generation_controller.h"
+#include "ksana_llm/runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 #include "ksana_llm/runtime/weight_instance.h"
 #include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/dynamic_memory_counter.h"
@@ -320,7 +323,11 @@ Status InferenceEngine::Initialize() {
   }
 
   // Create generation controller
-  generation_controller_ = std::make_shared<GenerationController>(structured_generator_factory);
+  if (batch_scheduler_config.ptp_step_num > 0) {
+    generation_controller_ = std::make_shared<PTPGenerationController>(structured_generator_factory);
+  } else {
+    generation_controller_ = std::make_shared<GenerationController>(structured_generator_factory);
+  }
 
   ExpertParallelConfig ep_config;
   Singleton<Environment>::GetInstance()->GetExpertParallelConfig(ep_config);
@@ -339,10 +346,15 @@ Status InferenceEngine::Initialize() {
 
 #ifdef ENABLE_CUDA
   // create draft generator for speculative decoding
+  auto draft_generator_controller = std::make_shared<DraftGeneratorController>();
   if (batch_scheduler_config.enable_speculative_decoding) {
-    auto draft_generator = std::make_shared<TrieGenerator>();
-    llm_runtime_->SetDraftGenerator(draft_generator);
+    draft_generator_controller->AppendDraftGenerator(std::make_shared<TrieGenerator>());
   }
+  if (batch_scheduler_config.ptp_step_num > 0) {
+    draft_generator_controller->AppendDraftGenerator(
+        std::make_shared<PtpGenerator>(batch_scheduler_config.ptp_step_num, batch_scheduler_config.ptp_token_id));
+  }
+  llm_runtime_->SetDraftGeneratorController(draft_generator_controller);
 #endif
 
   batch_manager_->SetBatchScheduler(batch_scheduler_);

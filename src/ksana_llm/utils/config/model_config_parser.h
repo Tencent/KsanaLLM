@@ -255,6 +255,8 @@ struct ModelConfig {
   uint32_t pad_id;
   size_t num_key_value_heads;  // nobody use it, to be removed
   int max_position_embeddings;
+  size_t num_register_token;
+  uint32_t reg_id;
 
   std::vector<float> k_scales;  // to be removed
   std::vector<float> v_scales;  // to be removed

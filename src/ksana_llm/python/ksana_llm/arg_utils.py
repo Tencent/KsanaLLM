@@ -91,6 +91,8 @@ class EngineArgs:
         model_type = model_config["model_type"]
         if model_type == "qwen" and "visual" in model_config:
             model_type = "qwen_vl"
+        if model_type == "qwen2_5_vl":
+            model_type = "qwen2_vl"
 
         # Adjust model type for internlmxcomposer2 and internvl_chat
         def determine_model_and_vit_model_type(model_type: str, model_config: dict) -> tuple:

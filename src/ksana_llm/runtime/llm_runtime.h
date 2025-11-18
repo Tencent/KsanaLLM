@@ -9,7 +9,7 @@
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/multi_batch_controller/multi_batch_controller.h"
-#include "ksana_llm/runtime/draft_generator/draft_generator_interface.h"
+#include "ksana_llm/runtime/draft_generator/draft_generator_controller.h"
 #include "ksana_llm/runtime/forward_request.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/threadpool.h"
@@ -35,7 +35,7 @@ class LlmRuntime {
   void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller);
 
   // Set draft generator
-  void SetDraftGenerator(std::shared_ptr<DraftGeneratorInterface> draft_generator);
+  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> controller);
 
   // Set generation controller
   void SetGenerationController(std::shared_ptr<GenerationController> controller) {
@@ -167,7 +167,7 @@ class LlmRuntime {
   // The sampler instance on every device.
   std::vector<std::shared_ptr<Sampler>> samplers_;
 
-  std::shared_ptr<DraftGeneratorInterface> draft_generator_ = nullptr;
+  std::shared_ptr<DraftGeneratorController> draft_generator_controller_ = nullptr;
 
   std::shared_ptr<GenerationController> generation_controller_ = nullptr;
 

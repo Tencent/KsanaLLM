@@ -33,6 +33,8 @@ inline void PrepareCommonModelAttributes(const nlohmann::json &config_json, Mode
   } else {
     model_config.pad_id = config_json.value("pad_token_id", 0);
   }
+  model_config.reg_id = config_json.value("reg_token_id", 0);
+  model_config.num_register_token = config_json.value("num_register_token", 0);
 
   model_config.max_position_embeddings = config_json.value("max_position_embeddings", 2048);
   if (!config_json.contains("tie_word_embeddings")) {

@@ -195,7 +195,8 @@ void WeightInstance::CheckTieEmbeddings(int weight_file_size) {
   // under the model path.
   for (const auto& entry : std::filesystem::directory_iterator(model_config_.path)) {
     std::string index_filename = entry.path().filename().string();
-    if (index_filename.size() > 11 && index_filename.substr(index_filename.size() - 11) == ".index.json") {
+    if (index_filename.size() > 11 && index_filename.substr(index_filename.size() - 11) == ".index.json" &&
+        index_filename.substr(6) != ".etag.") {
       std::ifstream file(entry.path());
       nlohmann::json weights_index_json;
       file >> weights_index_json;
