@@ -103,6 +103,30 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         formatted_messages.append("Assistant:")
         return "\n".join(formatted_messages)
     
+    # Reference: 
+    # https://github.com/sgl-project/sglang/blob/v0.5.5.post1/python/sglang/srt/entrypoints/openai/serving_chat.py#L1015
+    def _get_enable_thinking_from_request(self, request: ChatCompletionRequest) -> bool:
+        """Extracts the 'enable_thinking' flag from request chat_template_kwargs.
+
+        NOTE: This parameter is only useful for models that support enable_thinking
+        flag, such as Qwen3.
+
+        Args:
+            request_obj: The request object (or an item from a list of requests).
+        Returns:
+            The boolean value of 'enable_thinking' if found, otherwise False.
+        """
+        if hasattr(request, "chat_template_kwargs") and request.chat_template_kwargs:
+            # For Qwen3 models, `enable_thinking` is supported.
+            if self.config.reasoning_parser in ["qwen3", "glm45"]:
+                return request.chat_template_kwargs.get("enable_thinking", False)
+            # For DeepSeek-V3.1 models, `thinking` is supported.
+            elif self.config.reasoning_parser in ["deepseek_v3"]:
+                return request.chat_template_kwargs.get("thinking", False)
+            else:
+                return False
+        return False
+
     def _convert_to_ksana_request(self, request: ChatCompletionRequest) -> Dict[str, Any]:
 
         converter = RequestConverter(self.config, self.tokenizer)
@@ -117,7 +141,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             request_dict,
             api_type="chat",
         )
-        
+
         return ksana_request
     
     def _count_tokens(self, text: str) -> int:
@@ -226,7 +250,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         tool_choice_auto = (
             not tool_choice_function_name
             and self._should_stream_with_auto_tool_parsing(request))
-        
+
         # Judge if we need to judge accumulated tokens
         previous_token_ids = []
         delta_text = ""  # 初始化 delta_text 变量
@@ -251,6 +275,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         if self.reasoning_parser:
             reasoning_parser = self.reasoning_parser(tokenizer)
+            reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or 
+                                              self._get_enable_thinking_from_request(request))
+
         if tool_choice_auto and self.tool_parser:
             tool_parsers: list[Optional[ToolParser]] = [
                 self.tool_parser(tokenizer)
@@ -268,7 +295,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                 if output_data is None:
                     continue
-                
+
                 if isinstance(output_data, tuple):
                     output_index, ksana_python_output = output_data
                 else:
@@ -373,7 +400,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                         # calc delta_token_ids
                         output_tokenids = choice_tokens[prev_token_length: ]
-                        
+
                         tool_parser_instance = tool_parsers[i]
 
                         if full_text and len(full_text) > prev_length:
@@ -392,7 +419,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
                         # handle streaming deltas for tools with named tool_choice
                         if tool_choice_function_name:
-                            if (self.reasoning_parser
+                            if (self.reasoning_parser and reasoning_parser._in_reasoning
                                     and not reasoning_parser.is_reasoning_end(
                                         previous_token_ids)):
                                 assert reasoning_parser is not None
@@ -443,8 +470,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 ])
                         elif request and request.tool_choice == "required":
                             fn_name_returned = function_name_returned[i]
-
-                            if self.reasoning_parser:
+                            # TODO(winminkong): change to streaming parser function
+                            if self.reasoning_parser and reasoning_parser._in_reasoning:
                                 _, content = \
                                 reasoning_parser.extract_reasoning_content(
                                     current_text
@@ -460,7 +487,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 function_name_returned=fn_name_returned,
                                 tool_call_idx=history_tool_call_cnt
                             )
-                            
+
                             if delta_message:
                                 chunk_data = {
                                     "id": request_id,
@@ -480,7 +507,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 history_tool_call_cnt += 1
                                 tools_streamed[i] = True
                         # auto tool choice and reasoning parser enabled, extract reasoning content
-                        elif tool_choice_auto and self.reasoning_parser:
+                        elif tool_choice_auto and self.reasoning_parser and reasoning_parser._in_reasoning:
                             assert reasoning_parser is not None
                             assert tool_parser_instance is not None
                             assert added_content_delta_arr is not None
@@ -513,6 +540,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                         delta_message.content = None
                                     else:
                                         current_text = ""
+
                                 # When encountering think end id in delta_token_ids,
                                 # set reasoning status to end.
                                 # Remove the text and token ids related
@@ -528,7 +556,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                         delta_message.content = None
                                     else:
                                         current_text = ""
-
                             # handle tool calls only after reasoning is done,
                             else:
                                 delta_token_ids = list(output_tokenids)
@@ -948,6 +975,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 if self.reasoning_parser is not None:
                     try:
                         reasoning_parser = self.reasoning_parser(tokenizer)
+                        reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or 
+                                                          self._get_enable_thinking_from_request(request))
                     except RuntimeError as e:
                         logger.exception("Error in reasoning parser creation.")
                         continue
@@ -956,7 +985,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 else:
                     reasoning_content = None
                     content = full_output_text
-                
+
                 #Dealing with tool calls
                 if (not self.config.enable_auto_tool_choice or not self.tool_parser) and \
                     (not isinstance (request.tool_choice,
@@ -992,6 +1021,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     # temporary tool call class
                     # TODO(ethanyczeng): support Mistral tool call class 
                     assert content is not None
+
                     tool_calls = TypeAdapter(
                         list[FunctionDefinition]).validate_json(content)
                     tool_call_ids = []
@@ -1022,7 +1052,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         reasoning_content=reasoning_content,
                         content=content
                     )
-                
+
                 elif request.tools and (request.tool_choice == "auto" or request.tool_choice is None) \
                      and self.config.enable_auto_tool_choice and self.tool_parser:
                     # auto tool choice enabled
@@ -1134,6 +1164,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 ErrorType.INTERNAL_SERVER_ERROR,
                 HTTPStatus.INTERNAL_SERVER_ERROR
             )
+
     def post_process_tool_calls(self,
         tool_calls: Union[List[ToolCall], List[DeltaToolCall]],
         history_tool_call_cnt: int = 0

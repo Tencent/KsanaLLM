@@ -566,7 +566,7 @@ class KsanaOpenAIServing:
             return tokenizer.decode(token_id)
         except (AttributeError, TypeError, UnicodeDecodeError):
             return f"<token_id:{token_id}>"
-    
+
     async def _preprocess_completion(
         self,
         request: CompletionLikeRequest,

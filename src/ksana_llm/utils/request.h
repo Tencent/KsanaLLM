@@ -62,6 +62,9 @@ struct SamplingConfig {
   std::string json_schema;
   bool enable_structured_output = false;
 
+  // Enable reasoning. For reasoning model, the current method for controlling structured output.
+  bool enable_thinking = true;
+
   // Check and adjust sampling config arguments.
   Status VerifyArgs();
 

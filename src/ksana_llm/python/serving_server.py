@@ -57,8 +57,7 @@ class LLMServer:
                 reasoning_parser_instance = reasoning_parser_class(self.model.tokenizer)
                 if reasoning_parser_instance is None:
                     raise ValueError(f"Failed to create reasoning parser instance for: {self.reasoning_parser}")
-                think_end_token_id = reasoning_parser_instance.end_token_id
-                reasoning_config = ReasoningConfig(think_end_token_id=think_end_token_id)
+                reasoning_config = ReasoningConfig(think_end_token_id=reasoning_parser_instance.think_end_token_id)
             except (ImportError, ValueError, AttributeError, TypeError) as e:
                 raise RuntimeError(f"Failed to create reasoning config: {e}") from e
 

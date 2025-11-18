@@ -387,7 +387,10 @@ class DeepSeekV3Test : public testing::Test {
     })";
 
     StructuredGeneratorConfig config(StructuredConstraintType::JSON, json_schema);
-    auto structured_generator = structured_generator_factory_->CreateGenerator(config);
+    ReasoningConfig reasoning_config;
+    reasoning_config.think_end_token_id = 128799;
+    structured_generator_factory_->SetReasoningConfig(reasoning_config);
+    auto structured_generator = structured_generator_factory_->CreateGenerator(config, false);
 
     SamplingRequest grammar_sample_req = sample_req;
     grammar_sample_req.structured_generator = structured_generator;

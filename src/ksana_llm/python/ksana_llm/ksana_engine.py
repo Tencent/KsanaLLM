@@ -230,6 +230,8 @@ class KsanaLLMEngine:
                                                 "length_penalty", 1.0),
             stop_strings=_get_sampling_value(sampling_config,
                                                 "stop_strings", []),
+            enable_thinking=_get_sampling_value(sampling_config,
+                                                "enable_thinking", True),
             stop_token_ids=stop_token_ids,
             ignore_eos=ignore_eos
         )
@@ -328,6 +330,9 @@ class KsanaLLMEngine:
         )
         sampling_config.stop_strings = _get_generation_value(
             generation_config, "stop_strings", []
+        )
+        sampling_config.enable_thinking = _get_generation_value(
+            generation_config, "enable_thinking", True
         )
 
         def _check_do_sample_params():

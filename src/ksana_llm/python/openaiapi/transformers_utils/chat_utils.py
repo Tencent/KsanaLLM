@@ -719,7 +719,7 @@ def apply_hf_chat_template(
             "does not define one.")
 
     try:
-        
+
         return tokenizer.apply_chat_template(
             conversation=conversation,  # type: ignore[arg-type]
             tools=tools,  # type: ignore[arg-type]

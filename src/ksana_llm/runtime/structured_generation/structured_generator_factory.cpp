@@ -14,7 +14,7 @@
 namespace ksana_llm {
 
 std::shared_ptr<StructuredGeneratorInterface> StructuredGeneratorFactory::CreateGenerator(
-    const StructuredGeneratorConfig& config) {
+    const StructuredGeneratorConfig& config, const bool enable_thinking) {
   std::lock_guard<std::mutex> lock(registry_mutex_);
 
   if (config.constraint_type == StructuredConstraintType::NONE) {
@@ -29,9 +29,10 @@ std::shared_ptr<StructuredGeneratorInterface> StructuredGeneratorFactory::Create
 
   auto inner_generator = it->second->CreateGenerator(config);
 
-  // TODO(ethanyczeng): true means start in reasoning phase, may need to be configurable in future
   if (!reasoning_config_.Empty() && inner_generator) {
-    return std::make_shared<ReasoningStructuredGenerator>(inner_generator, reasoning_config_.think_end_token_id, true);
+    KLLM_LOG_DEBUG << "Structured generator enable thinking: " << enable_thinking;
+    return std::make_shared<ReasoningStructuredGenerator>(inner_generator, reasoning_config_.think_end_token_id,
+                                                          enable_thinking);
   }
 
   return inner_generator;

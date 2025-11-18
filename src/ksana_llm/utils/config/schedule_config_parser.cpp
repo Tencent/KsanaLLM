@@ -85,7 +85,6 @@ void ScheduleConfigParser::Reset() {
   expert_parallel_config_ = {};
   connector_config_ = {};
   runtime_config_ = {};
-  reasoning_config_ = {};
 }
 
 Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const ModelConfig &model_config) {

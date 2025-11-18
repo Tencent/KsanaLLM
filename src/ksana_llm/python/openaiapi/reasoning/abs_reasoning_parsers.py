@@ -29,6 +29,12 @@ class ReasoningParser:
 
     def __init__(self, tokenizer: AnyTokenizer):
         self.model_tokenizer = tokenizer
+        self.think_start_token = "<think>"
+        self.think_end_token = "</think>"
+        self._buffer = ""
+        self.stripped_think_start = False
+        self._in_reasoning = False
+        self.stream_reasoning = True
 
     @cached_property
     def vocab(self) -> dict[str, int]:
@@ -64,8 +70,9 @@ class ReasoningParser:
         list[int]
             The extracted content from the input_ids.
         """
-
-    @abstractmethod
+    
+    # Reference:
+    # https://github.com/sgl-project/sglang/blob/v0.5.5.post1/python/sglang/srt/parser/reasoning_parser.py#L36
     def extract_reasoning_content(
             self, model_output: str
     ) -> tuple[Optional[str], Optional[str]]:
@@ -84,7 +91,27 @@ class ReasoningParser:
             A tuple containing the reasoning content and the content.
         """
 
-    @abstractmethod
+        in_reasoning = self._in_reasoning or self.think_start_token in model_output
+
+        if not in_reasoning:
+            return None, model_output
+
+        # The model_output is considered to be in a reasoning block.
+        processed_text = model_output.replace(self.think_start_token, "").strip()
+
+        if self.think_end_token not in processed_text:
+            # Assume reasoning was truncated before `</think>` token
+            return processed_text, None
+
+        # Extract reasoning content
+        splits = processed_text.split(self.think_end_token, maxsplit=1)
+        reasoning_text = splits[0]
+        normal_text = splits[1].strip()
+
+        return reasoning_text, normal_text
+    
+    # Reference:
+    # https://github.com/sgl-project/sglang/blob/v0.5.5.post1/python/sglang/srt/parser/reasoning_parser.py#L62
     def extract_reasoning_content_streaming(
         self,
         previous_text: str,
@@ -101,6 +128,52 @@ class ReasoningParser:
         the current tokens/diffs, but also the information about what has
         previously been parsed and extracted (see constructor)
         """
+
+        self._buffer += delta_text
+        current_text = self._buffer
+
+        # If the current text is a prefix of the think token, keep buffering
+        if any(
+            token.startswith(current_text) and token != current_text
+            for token in [self.think_start_token, self.think_end_token]
+        ):
+            return None
+
+        # Strip `<think>` token if present
+        if not self.stripped_think_start and self.think_start_token in current_text:
+            current_text = current_text.replace(self.think_start_token, "")
+            self.stripped_think_start = True
+            self._in_reasoning = True
+
+        # Handle end of reasoning block
+        if self._in_reasoning and self.think_end_token in current_text:
+            end_idx = current_text.find(self.think_end_token)
+
+            reasoning_text = current_text[:end_idx]
+
+            self._buffer = ""
+            self._in_reasoning = False
+            normal_text = current_text[end_idx + len(self.think_end_token) :]
+
+            # Don't use rstrip here for reasoning_text
+            return DeltaMessage(reasoning_content=reasoning_text,
+                                content=normal_text)
+
+        # Continue with reasoning content
+        if self._in_reasoning:
+            if self.stream_reasoning:
+                # Stream the content immediately
+                self._buffer = ""
+                return DeltaMessage(reasoning_content=current_text)
+            else:
+                return None
+
+        # If we're not in a reasoning block return as normal text
+        if not self._in_reasoning:
+            self._buffer = ""
+            return DeltaMessage(content=current_text)
+
+        return None
 
 
 class ReasoningParserManager:

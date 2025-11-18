@@ -22,7 +22,8 @@ void GenerationController::InitGenerationState(std::vector<std::shared_ptr<Infer
     }
 
     try {
-      auto structured_generator = structured_generator_factory_->CreateGenerator(req->structured_generator_config);
+      auto structured_generator = structured_generator_factory_->CreateGenerator(req->structured_generator_config,
+                                                                                 req->sampling_config.enable_thinking);
       if (!structured_generator) {
         KLLM_LOG_WARNING << "Failed to create structured generator for request " << req->req_id;
         continue;

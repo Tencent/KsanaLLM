@@ -39,7 +39,8 @@ class GeneratorCreator {
 class StructuredGeneratorFactory {
  public:
   StructuredGeneratorFactory() {}
-  std::shared_ptr<StructuredGeneratorInterface> CreateGenerator(const StructuredGeneratorConfig& config);
+  std::shared_ptr<StructuredGeneratorInterface> CreateGenerator(const StructuredGeneratorConfig& config,
+                                                                const bool enable_thinking);
 
   bool IsConstraintTypeSupported(StructuredConstraintType constraint_type);
 
