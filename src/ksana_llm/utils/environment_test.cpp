@@ -968,17 +968,24 @@ TEST_F(EnvironmentTest, InitializeKVCacheConfigs) {
 
   auto& attn_backend_config = env_.schedule_config_parser_.runtime_config_.attn_backend_config;
   auto& block_manager_config = env_.schedule_config_parser_.block_manager_config_;
+  auto& batch_scheduler_config = env_.schedule_config_parser_.batch_scheduler_config_;
   // 设置每个block包含的token数量
   attn_backend_config.block_token_num = 16;
+  block_manager_config.device_allocator_config.block_token_num = 16;
 
   // 创建测试用的ModelConfig
   ModelConfig model_config;
   model_config.num_layer = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
   model_config.weight_data_type = DataType::TYPE_FP16;
 
+  // 约束 max_step_tokens
+  batch_scheduler_config.launch_block_threshold = 2;
+  batch_scheduler_config.max_step_token_num = 1e9;  // 极大值
+
   // Case 1: Models using MLA with auto KV cache
   model_config.type = "deepseek_v3";
   attn_backend_config.kv_cache_dtype_str = "auto";
+  attn_backend_config.block_token_num = 16;
   model_config.use_mla = true;
   model_config.mla_config.kv_lora_rank = 32;
   model_config.mla_config.qk_rope_head_dim = 64;
@@ -997,6 +1004,15 @@ TEST_F(EnvironmentTest, InitializeKVCacheConfigs) {
   env_.CalculateBlockNumber();
   // Expect at least one block
   EXPECT_GT(env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num, 0);
+  // 由于 block 不足, max_step_token_num 也应对应下降
+  EXPECT_LT(batch_scheduler_config.max_step_token_num, 1e9);
+  if (env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num >
+      batch_scheduler_config.launch_block_threshold) {
+    size_t usable_block_num = env_.schedule_config_parser_.block_manager_config_.device_allocator_config.blocks_num -
+                              batch_scheduler_config.launch_block_threshold;
+    EXPECT_EQ(batch_scheduler_config.max_step_token_num,
+              usable_block_num * block_manager_config.device_allocator_config.block_token_num);
+  }
 
   // Case 2: Models using MLA with fp8_e4m3 KV cache
   model_config.type = "deepseek_v3";

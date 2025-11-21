@@ -873,6 +873,21 @@ Status ScheduleConfigParser::CalculateBlockNumber() {
   }
   KLLM_LOG_INFO << "Reset device_blocks_num:" << device_blocks_num << ", host_block_num:" << host_blocks_num;
 
+  // If the number of available device blocks is less than the launch threshold,
+  // inference cannot be performed due to insufficient resources.
+  if (device_blocks_num <= batch_scheduler_config_.launch_block_threshold) {
+    KLLM_THROW("KsanaLLM has insufficient blocks available; unable to perform inference.");
+  }
+
+  size_t usable_tokens = (device_blocks_num - batch_scheduler_config_.launch_block_threshold) *
+                         block_manager_config_.device_allocator_config.block_token_num;
+  if (usable_tokens < batch_scheduler_config_.max_step_token_num) {
+    KLLM_LOG_ERROR << fmt::format(
+        "Since available device blocks are insufficient, max_step_token_num is reduced from {} to {}",
+        batch_scheduler_config_.max_step_token_num, usable_tokens);
+    batch_scheduler_config_.max_step_token_num = usable_tokens;
+  }
+
   block_manager_config_.device_allocator_config.blocks_num = device_blocks_num;
   block_manager_config_.host_allocator_config.blocks_num = host_blocks_num;
 
