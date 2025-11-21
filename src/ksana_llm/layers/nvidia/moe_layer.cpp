@@ -97,8 +97,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   // 多机 + DP + EP 才使用deepep
   // TODO(jinxcwu) 后续需要修改到更高层的配置中，例如context
   using_deepep_ = runtime_config.parallel_basic_config.expert_world_size > 1 &&
-                  runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
-                  runtime_config.parallel_basic_config.expert_parallel_size > 1;
+                  (runtime_config.parallel_basic_config.attn_data_parallel_size ==
+                   runtime_config.parallel_basic_config.expert_parallel_size);
 
   // Initialize GroupedTopkLayer
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();

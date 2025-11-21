@@ -87,8 +87,6 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
   RuntimeConfig runtime_config;
   Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
   req->kv_cache_blocks.assign(runtime_config.parallel_basic_config.attn_tensor_parallel_size, {});
-  req->RebuildBlockPtrs();
-  req->ResetPrefillingTokens();
 
   // To avoid Mock requests being categorized as SingleTokenForward requests, we
   // calculate the Mock request total length as: Mock total length = MTP token
@@ -99,9 +97,15 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
   if (req->output_tokens.size() > mock_request_length) {
     req->output_tokens.resize(mock_request_length);
   }
+
+  req->RebuildBlockPtrs();
+  req->ResetPrefillingTokens();
   if (req->GetPlanningSequenceLen() > mock_request_length) {
     req->forwarding_tokens.resize(mock_request_length);
   }
+  // Reset finished flag to allow MockRequest to be scheduled again
+  req->finished = false;
+  req->finish_status = Status();
   batch_state_->mock_queue.push_back(req);
   return Status();
 }

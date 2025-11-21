@@ -442,11 +442,9 @@ Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
     Singleton<Environment>::GetInstance()->GetCacheManagerConfig(cache_manager_config);
     infer_req->block_token_num = cache_manager_config.block_token_num;
     infer_req->model_instance = model_instances_[0];
-    infer_req->infer_stage = InferStage::kContext;
-    infer_req->step = 0;
-    infer_req->kv_cached_token_num = 0;
     infer_req->req_id = mock_req->req_id;
     infer_req->is_mock_req = true;
+    infer_req->ResetPrefillingTokens();
   }
 
   for (auto& infer_req : infer_request_group) {

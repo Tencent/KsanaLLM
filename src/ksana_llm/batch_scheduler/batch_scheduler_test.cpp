@@ -157,7 +157,6 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
   test_case.RunTestNoSwapTriggered();
 }
 
-
 TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
   enable_prefix_cache_ = true;
   CommonSetUp();
@@ -214,5 +213,94 @@ TEST_F(BatchSchedulerTest, CreateMockRequest) {
 
   schedule_output_group = batch_scheduler->Schedule(0);
   EXPECT_EQ(schedule_output_group->RunningSize(), 1);
+
+  auto mock_requests = batch_scheduler->GetMockRequest();
+  auto mock_req = mock_requests[0];
+
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+  const size_t mock_request_length = runtime_config.mtp_step_num + 1 + 1;
+
+  // Verify initial state after MockRequest creation
+  EXPECT_EQ(mock_req->kv_cache_blocks.size(), tp_num);
+  EXPECT_EQ(mock_req->infer_stage, InferStage::kContext);
+  EXPECT_EQ(mock_req->step, 0);
+  EXPECT_EQ(mock_req->kv_cached_token_num, 0);
+  EXPECT_FALSE(mock_req->finished);
+  EXPECT_TRUE(mock_req->finish_status.OK());
+
+  // Verify tokens size is reasonable
+  EXPECT_LE(mock_req->output_tokens.size(), mock_request_length + 10);
 }
 
+// Test MockRequest continuous scheduling cycle
+TEST_F(BatchSchedulerTest, MockRequestContinuousSchedulingTest) {
+  KLLM_LOG_INFO << "BatchSchedulerTest: MockRequestContinuousSchedulingTest";
+
+  int dp_num = 1;
+  int tp_num = 1;
+  int ep_world_size = 2;
+  CommonSetUp(dp_num, tp_num, ep_world_size);
+
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+
+  // First schedule - no running requests
+  auto schedule_output1 = batch_scheduler->Schedule(0);
+  EXPECT_EQ(schedule_output1->RunningSize(), 0);
+
+  // Second schedule - MockRequest should be scheduled
+  auto schedule_output2 = batch_scheduler->Schedule(0);
+  EXPECT_EQ(schedule_output2->RunningSize(), 1);
+
+  // Get the scheduled mock request
+  ASSERT_GT(schedule_output2->outputs.size(), 0);
+  auto& running_reqs = schedule_output2->outputs[0]->running_reqs;
+  ASSERT_EQ(running_reqs.size(), 1);
+  auto scheduled_mock_req = running_reqs[0];
+  EXPECT_TRUE(scheduled_mock_req->is_mock_req);
+
+  // Simulate inference completion by marking as finished
+  scheduled_mock_req->finished = true;
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+  const size_t mock_request_length = runtime_config.mtp_step_num + 1 + 1;
+
+  for (size_t i = 0; i < mock_request_length; i++) {
+    scheduled_mock_req->output_tokens.push_back(i);
+  }
+
+  // Update with generation result
+  GenerationOutputGroup gen_output;
+  gen_output.BuildFromScheduleOutputGroup(*schedule_output2);
+  batch_scheduler->UpdateWithGenerationResult(0, gen_output);
+
+  // Third schedule - MockRequest should be rescheduled after recompute
+  auto schedule_output3 = batch_scheduler->Schedule(0);
+
+  // Verify MockRequest can be scheduled again (not stuck due to finished flag)
+  // This verifies the fix in continuous_batching.cpp:107-109
+  int schedule_attempts = 0;
+  const int max_attempts = 10;
+  bool mock_req_rescheduled = false;
+
+  while (schedule_attempts < max_attempts) {
+    auto output = batch_scheduler->Schedule(0);
+    if (output->RunningSize() > 0) {
+      for (const auto& sched_out : output->outputs) {
+        if (sched_out != nullptr) {
+          for (const auto& req : sched_out->running_reqs) {
+            if (req->is_mock_req) {
+              mock_req_rescheduled = true;
+              break;
+            }
+          }
+        }
+      }
+      if (mock_req_rescheduled) break;
+    }
+    schedule_attempts++;
+  }
+
+  EXPECT_TRUE(mock_req_rescheduled)
+      << "MockRequest should be reschedulable after recompute, verifying finished flag reset";
+}
