@@ -9,6 +9,7 @@
 
 #ifdef ENABLE_CUDA
 #  include "csrc/kernels/nvidia/flash_mla/flash_mla.h"
+#  include "csrc/kernels/nvidia/flash_mla/flash_sparse_mla.h"
 #  include "csrc/kernels/nvidia/flash_mla/kernels/params.h"
 #  include "csrc/utils/nvidia/cuda_utils.h"
 #  include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
@@ -116,16 +117,41 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   if (model_config_.use_mla) {
     num_splits =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
-    for (size_t i = 0; i < GetDecodeTokenNumThreshold(); i++) {
-      llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
-      const size_t q_len = i + 1;
-      const size_t head_num_per_tp =
-          model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
-      GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, /*num_heads_k*/ 1, rank_);
-      const size_t tile_scheduler_metadata_tensor_num =
-          flash_mla_workspace_map.num_sm_parts * llm_kernels::nvidia::TileSchedulerMetaDataSize;
-      tile_scheduler_metadatas.emplace_back(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-                                            std::vector<size_t>{tile_scheduler_metadata_tensor_num}, rank_);
+    const size_t head_num_per_tp =
+        model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
+    for (size_t q_len = 1; q_len <= GetDecodeTokenNumThreshold(); q_len++) {
+      if (model_config_.use_dsa) {
+        const auto decoding_attn_impl_meta =
+            llm_kernels::nvidia::GetAttnImplMeta(q_len * head_num_per_tp, /*num_heads_k*/ 1, head_num_per_tp,
+                                                 runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA,
+                                                 /*is_sparse_attn*/ true);
+        tile_scheduler_metadatas.emplace_back(
+            MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+            std::vector<size_t>{static_cast<size_t>(decoding_attn_impl_meta.num_sm_parts),
+                                llm_kernels::nvidia::TileSchedulerMetaDataSize},
+            rank_);
+      } else {
+        llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
+        llm_kernels::nvidia::GetNumSmParts(flash_mla_workspace_map, q_len * head_num_per_tp, /*num_heads_k*/ 1, rank_);
+        tile_scheduler_metadatas.emplace_back(
+            MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+            std::vector<size_t>{static_cast<size_t>(flash_mla_workspace_map.num_sm_parts),
+                                llm_kernels::nvidia::TileSchedulerMetaDataSize},
+            rank_);
+      }
+    }
+    if (model_config_.use_dsa) {
+      // DeepSeek Sparse MLA also uses flashmla for prefill tokens
+      // Set `q_len = 1` since `num_sm_parts` is inversely proportional to `q_len`
+      const auto decoding_attn_impl_meta = llm_kernels::nvidia::GetAttnImplMeta(
+          /*q_len=1*/ head_num_per_tp, /*num_heads_k*/ 1, head_num_per_tp,
+          runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA,
+          /*is_sparse_attn*/ true);
+      tile_scheduler_metadatas.emplace_back(
+          MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+          std::vector<size_t>{static_cast<size_t>(decoding_attn_impl_meta.num_sm_parts),
+                              llm_kernels::nvidia::TileSchedulerMetaDataSize},
+          rank_);
     }
   }
 #endif
@@ -1217,15 +1243,35 @@ void ModelInput::PrepareFlashMla(input_info& input) {
   llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
   const size_t head_num_per_tp =
       model_config_.head_num / runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
-  GetNumSmParts(flash_mla_workspace_map, input.q_seq_len * head_num_per_tp, 1, rank_);
-  input.tile_scheduler_metadata = tile_scheduler_metadatas[input.q_seq_len - 1];
-  flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
-  const size_t batch_size = input.dp_reqs.size();
+  const size_t batch_size = input.q_seq_len == 0 ? 1 : input.dp_reqs.size();
+  input.tile_scheduler_metadata =
+      tile_scheduler_metadatas[input.q_seq_len == 0 ? GetDecodeTokenNumThreshold() : input.q_seq_len - 1];
   input.num_splits = num_splits.GetView({batch_size + 1}, num_splits.shape[0]);
   num_splits.shape[0] += input.num_splits.GetElementNumber();
-  flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
-  InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, batch_size,
-                       context_->GetH2DStreams()[rank_].Get());
+  if (model_config_.use_dsa) {
+    if (input.q_seq_len == 0) {
+      // For flash input, adjust `num_sm_parts` according to the current number of context tokens
+      const auto decoding_attn_impl_meta =
+          llm_kernels::nvidia::GetAttnImplMeta(dp_context_tokens * head_num_per_tp, /*num_heads_k*/ 1, head_num_per_tp,
+                                               runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA,
+                                               /*is_sparse_attn*/ true);
+      input.tile_scheduler_metadata.shape[0] = decoding_attn_impl_meta.num_sm_parts;
+    }
+    // Treat context tokens as a single request, and decode tokens as multiple requests with the same `q_seq_len`
+    llm_kernels::nvidia::InvokeGetSparseMlaMetadata(
+        /*seqlens_k_ptr*/ nullptr, batch_size,
+        (input.q_seq_len == 0 ? dp_context_tokens : input.q_seq_len) * head_num_per_tp,
+        /*num_heads_k*/ 1, head_num_per_tp, runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_DS_MLA,
+        model_config_.dsa_config.index_topk, context_->GetH2DStreams()[rank_].Get(),
+        input.tile_scheduler_metadata.GetPtr<int>(), input.num_splits.GetPtr<int>());
+  } else {
+    llm_kernels::nvidia::FlashMlaWorkspaceMap flash_mla_workspace_map;
+    flash_mla_workspace_map.num_sm_parts = input.tile_scheduler_metadata.shape[0];
+    flash_mla_workspace_map.tile_scheduler_metadata_ptr = input.tile_scheduler_metadata.GetPtr<int>();
+    flash_mla_workspace_map.num_splits_ptr = input.num_splits.GetPtr<int>();
+    llm_kernels::nvidia::InvokeGetMlaMetadata(input.input_length.GetPtr<int>(), flash_mla_workspace_map, batch_size,
+                                              context_->GetH2DStreams()[rank_].Get());
+  }
 #endif
 }
 
@@ -1236,6 +1282,9 @@ void ModelInput::PreparePrefill() {
   }
 
   PROFILE_EVENT_SCOPE(PreparePrefill, "PreparePrefill", rank_);
+  if (model_config_.use_dsa) {
+    PrepareFlashMla(flash_input);
+  }
   PrepareUseCache(flash_input);
   if (use_cache) {
     PrepareFlexibleCache(flash_input);

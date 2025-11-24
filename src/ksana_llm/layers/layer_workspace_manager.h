@@ -52,8 +52,6 @@ class LayerWorkspaceManager {
     return workspace_buffer_;
   }
 
-  std::shared_ptr<Tensor> GetWorkspaceBuffer() const { return workspace_buffer_; }
-
  private:
   int rank_;
   std::shared_ptr<Tensor> workspace_buffer_ = nullptr;

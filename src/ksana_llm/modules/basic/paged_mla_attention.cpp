@@ -5,18 +5,23 @@
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
 
 #include "ksana_llm/layers/paged_mla_attention_layer.h"
+#include "ksana_llm/layers/paged_sparse_mla_attention_layer.h"
 
 namespace ksana_llm {
 
 PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
                                      const AttentionCreationConfig& attn_config) {
+  if (attn_config.model_config.use_dsa) {
+    paged_mla_attention_layer_ = std::make_shared<PagedSparseMlaAttentionLayer>();
+  } else {
+    paged_mla_attention_layer_ = std::make_shared<PagedMlaAttentionLayer>();
+  }
+
   const uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   const uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   const uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
   const uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   const uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
-
-  paged_mla_attention_layer_ = std::make_shared<PagedMlaAttentionLayer>();
 
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
@@ -64,31 +69,30 @@ PagedMlaAttention::PagedMlaAttention(const size_t layer_idx, bool is_neox, const
 
   paged_mla_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
                                    creation_context.rank);
-  paged_mla_attention_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspaceBuffer());
-
-  // Initialize bmm module
-  attn_w_uv_bmm_ = std::make_shared<Bmm>(fmt::format("model.layers.{}.self_attn.w_uv.weight", layer_idx),
-                                         creation_context, attn_config.model_config.quant_config.backend);
+  paged_mla_attention_layer_->SetWorkspaceBuffer(
+      creation_context.workspace_mgr->GetWorkspace(paged_mla_attention_layer_->GetWorkspaceSize()));
 }
 
-Status PagedMlaAttention::Forward(std::vector<Tensor>& output_tensors, const std::shared_ptr<ModelInput>& model_input,
-                                  const ModelInput::input_info& page_input,
-                                  std::vector<Tensor>& hidden_buffer_tensors_1, const AttentionForwardContext& attn_ctx,
-                                  std::vector<Tensor>& workspace_buffer, Tensor& decode_q_buffer_tensor,
-                                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor,
-                                  Tensor& k_rope_buffer_tensor) {
-  // Swap the usage of output_tensors and workspace_buffer here to ensure the result of bmm
-  // can be placed in output_tensors
-  STATUS_CHECK_RETURN(paged_mla_attention_layer_->Forward(
-      {hidden_buffer_tensors_1[0], page_input.input_length, page_input.kv_list, page_input.kv_cache_offset,
-       page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, /*qkv_workspace*/ output_tensors[0],
-       model_input->layer_kv_cache_ptr, page_input.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor,
-       kv_buffer_tensor, k_rope_buffer_tensor, page_input.tile_scheduler_metadata, page_input.num_splits},
-      /* output*/ workspace_buffer));
-
-  STATUS_CHECK_RETURN(attn_w_uv_bmm_->Forward(workspace_buffer, output_tensors));
-
-  return Status();
+Status PagedMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input,
+                                  const ModelInput::input_info& page_input, const AttentionForwardContext& attn_ctx,
+                                  std::vector<Tensor>& hidden_buffer_tensors_1, Tensor& decode_q_buffer_tensor,
+                                  Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+                                  Tensor& indices_tensor, std::vector<Tensor>& output_tensors) {
+  if (indices_tensor.GetElementNumber() > 0) {
+    return paged_mla_attention_layer_->Forward(
+        {page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, q_rope_buffer_tensor, k_rope_buffer_tensor,
+         decode_q_buffer_tensor, /*q_ptr*/ hidden_buffer_tensors_1[0], kv_buffer_tensor, page_input.kv_list,
+         page_input.input_length, page_input.kv_cache_offset, model_input->layer_kv_cache_ptr, page_input.block_table,
+         page_input.tile_scheduler_metadata, page_input.num_splits, indices_tensor},
+        output_tensors);
+  } else {
+    return paged_mla_attention_layer_->Forward(
+        {hidden_buffer_tensors_1[0], page_input.input_length, page_input.kv_list, page_input.kv_cache_offset,
+         page_input.rotary_embedding_pos, page_input.rotary_embedding_mask, model_input->layer_kv_cache_ptr,
+         page_input.block_table, decode_q_buffer_tensor, q_rope_buffer_tensor, kv_buffer_tensor, k_rope_buffer_tensor,
+         page_input.tile_scheduler_metadata, page_input.num_splits},
+        output_tensors);
+  }
 }
 
 }  // namespace ksana_llm

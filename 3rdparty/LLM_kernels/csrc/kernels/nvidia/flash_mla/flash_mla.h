@@ -24,12 +24,12 @@
  * Adapted from
  * [FlashMLA Project] https://github.com/deepseek-ai/FlashMLA/blob/main/csrc/flash_api.cpp
  */
+#pragma once
 
 #include <cuda_runtime.h>
 #include <cstdint>
-#include "csrc/utils/quant_type.h"
 
-#pragma once
+#include "csrc/utils/quant_type.h"
 
 namespace llm_kernels {
 namespace nvidia {

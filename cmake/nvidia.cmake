@@ -141,7 +141,7 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         endif()
 
         message(STATUS "Applying DeepGEMM patch...")
-        set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm/deepgemm.patch)
+        set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm.patch)
         if(EXISTS ${DEEPGEMM_PATCH_FILE})
             execute_process(
                 COMMAND ${GIT_EXECUTABLE} apply ${DEEPGEMM_PATCH_FILE}

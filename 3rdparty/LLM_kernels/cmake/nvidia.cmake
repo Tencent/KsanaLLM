@@ -144,6 +144,38 @@ target_compile_definitions(cutlass_c4x INTERFACE
     CUTLASS_PATCH_VERSION=${CUTLASS_C4X_PATCH_VERSION}
 )
 
+# enable flashmla on hopper arch
+if(DEFINED SM AND SM STREQUAL "90a")
+  set(ENABLE_FLASH_MLA "TRUE")
+endif()
+message(STATUS "ENABLE_FLASH_MLA: ${ENABLE_FLASH_MLA}")
+
+# setting flashmla
+if(GIT_FOUND AND (ENABLE_FLASH_MLA STREQUAL "TRUE"))
+  message(STATUS "Running submodule update to fetch FlashMLA")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/FlashMLA
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE GIT_SUBMOD_RESULT)
+
+  if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+    message(FATAL_ERROR "git submodule update --init 3rdparty/FlashMLA failed with ${GIT_SUBMOD_RESULT}, please checkout FlashMLA submodule")
+  endif()
+
+  set(DEEPSEEK_FLASH_MLA_SOURCE_DIR ${PROJECT_SOURCE_DIR}/3rdparty/FlashMLA/csrc)
+
+  message(STATUS "Applying FlashMLA patch")
+  execute_process(COMMAND ${GIT_EXECUTABLE} apply ${PROJECT_SOURCE_DIR}/3rdparty/flashmla.patch
+    WORKING_DIRECTORY ${DEEPSEEK_FLASH_MLA_SOURCE_DIR})
+
+  file(GLOB_RECURSE DEEPSEEK_FLASH_MLA_SOURCES ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/*.cu)
+  # exclude files in sm100 and cutlass
+  list(FILTER DEEPSEEK_FLASH_MLA_SOURCES EXCLUDE REGEX "${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/sm100/.*\\.cu$")
+  list(FILTER DEEPSEEK_FLASH_MLA_SOURCES EXCLUDE REGEX "${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/cutlass/.*$")
+  set(DEEPSEEK_FLASH_MLA_INCLUDES
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}
+    ${DEEPSEEK_FLASH_MLA_SOURCE_DIR}/sm90)
+endif()
+
 set(CUDA_INC_DIRS
   ${CUDA_PATH}/include
 )

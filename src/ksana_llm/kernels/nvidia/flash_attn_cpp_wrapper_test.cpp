@@ -287,8 +287,6 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithSyntheticInputs) {
   };
 
   int success_count = 0;
-  int total_count = test_configs.size();
-
   for (const auto& config : test_configs) {
     if (isPrint) {
       std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
@@ -443,8 +441,6 @@ TEST_F(DirectFlashAttnComparisonTest, TestFA3WithFP8) {
   };
 
   int success_count = 0;
-  int total_count = test_configs.size();
-
   for (const auto& config : test_configs) {
     if (isPrint) {
       std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
@@ -944,8 +940,6 @@ TEST_F(DirectFlashAttnComparisonTest, CompareFA3FP16AndFP8) {
   };
 
   int success_count = 0;
-  int total_count = test_configs.size();
-
   for (const auto& config : test_configs) {
     if (isPrint) {
       std::cout << "\n--- 测试配置: " << config.description << " ---" << std::endl;
@@ -959,7 +953,6 @@ TEST_F(DirectFlashAttnComparisonTest, CompareFA3FP16AndFP8) {
       int total_tokens = config.batch_size * config.seq_len;
       float attn_scale = 1.0f / std::sqrt(static_cast<float>(config.head_size));
       auto options = torch::TensorOptions().dtype(torch::kFloat16).device(device_);
-      auto scale_options = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
       torch::manual_seed(42);
       // torch::randn not support torch::kFloat8_e4m3fn directly
       auto q_tensor = torch::randn({total_tokens, config.num_heads, config.head_size}, options);
@@ -1760,6 +1753,98 @@ TEST_F(DirectFlashAttnComparisonTest, TestAutoModeSelection) {
   if (isPrint) {
     std::cout << "=== AUTO 模式选择逻辑测试完成 ===" << std::endl;
   }
+}
+
+// Performance test is disabled by default
+TEST_F(DirectFlashAttnComparisonTest, DISABLED_TestFA3Perf) {
+  // 检查 FA3 函数指针是否可用
+  if (!ksana_llm::FlashAttentionBackend::mha_fwd_fa3_) {
+    GTEST_SKIP() << "FA3 function not available";
+  }
+
+  // 获取 Environment 单例来修改配置，强制使用 FA3
+  auto env = Singleton<Environment>::GetInstance();
+  if (!env) {
+    GTEST_SKIP() << "Environment singleton not available";
+  }
+
+  // 保存原始配置
+  AttnBackendConfig original_config;
+  env->GetAttnBackendConfig(original_config);
+
+  // 设置强制使用 FA3
+  AttnBackendConfig fa3_config = original_config;
+  fa3_config.flash_attn_impl_choice = AttnBackendConfig::FlashAttnImplChoice::FA3;
+  env->SetAttnBackendConfig(fa3_config);
+
+  torch::manual_seed(42);
+
+  const int warmup = 5;
+  const int iteration = 10;
+
+  const int batch_size = 1;
+  const int num_heads = 128;
+  const int head_size = 192;
+  const int head_size_v = 128;
+  const float attn_scale = 1.0f / std::sqrt(static_cast<float>(head_size));
+  const auto options = torch::TensorOptions().dtype(torch::kBFloat16).device(device_);
+  const auto scale_options = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
+
+  for (const bool use_fp8 : {false, true}) {
+    for (const int seq_len : {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536}) {
+      const int total_tokens = batch_size * seq_len;
+      auto q_tensor = torch::randn({total_tokens, num_heads, head_size}, options);
+      auto k_tensor = torch::randn({total_tokens, num_heads, head_size}, options);
+      auto v_tensor = torch::randn({total_tokens, num_heads, head_size_v}, options);
+      auto out_tensor = torch::empty({total_tokens, num_heads, head_size_v}, options);
+      auto cu_seqlens = CreateCuSeqlens(batch_size, seq_len);
+      torch::Tensor k_descale;
+      torch::Tensor v_descale;
+      if (use_fp8) {
+        q_tensor = q_tensor.to(torch::kFloat8_e4m3fn);
+        k_tensor = k_tensor.to(torch::kFloat8_e4m3fn);
+        v_tensor = v_tensor.to(torch::kFloat8_e4m3fn);
+        k_descale = torch::randn({1, num_heads}, scale_options);
+        v_descale = torch::randn({1, num_heads}, scale_options);
+      }
+
+      MhaVarlenFwdParams params;
+      params.q = q_tensor;
+      params.k = k_tensor;
+      params.v = v_tensor;
+      params.out = out_tensor;
+      params.seqlen_q = cu_seqlens;
+      params.seqlen_k = cu_seqlens;
+      params.max_seqlen_q = static_cast<int64_t>(seq_len);
+      params.max_seqlen_k = static_cast<int64_t>(seq_len);
+      params.softmax_scale = static_cast<double>(attn_scale);
+      if (use_fp8) {
+        params.q_descale = k_descale;
+        params.k_descale = k_descale;
+        params.v_descale = v_descale;
+      }
+      params.is_causal = true;
+
+      for (int i = 0; i < warmup; i++) {
+        InvokeMhaVarlenFwd(params);
+      }
+      cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream(/*rank*/ 0).stream());
+
+      auto begin_time = std::chrono::high_resolution_clock::now();
+      for (int i = 0; i < iteration; i++) {
+        InvokeMhaVarlenFwd(params);
+      }
+      cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream(/*rank*/ 0).stream());
+      auto end_time = std::chrono::high_resolution_clock::now();
+      double duration =
+          std::chrono::duration_cast<std::chrono::microseconds>(end_time - begin_time).count() * 1.f / iteration / 1000;
+      std::cout << "Seq len k: " << total_tokens << ", Execution time of fa3 " << (use_fp8 ? "fp8" : "bf16") << ": "
+                << duration << " ms" << std::endl;
+    }
+  }
+
+  // 恢复原始配置
+  env->SetAttnBackendConfig(original_config);
 }
 
 #endif  // ENABLE_CUDA

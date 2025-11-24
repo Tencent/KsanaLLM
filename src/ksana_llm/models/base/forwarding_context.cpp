@@ -58,12 +58,15 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     const size_t mla_flash_attn_size = std::max((qk_nope_head_dim + qk_rope_head_dim), v_head_dim);
     // shared_buffer is also used to store one of q,k,v
     shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * mla_flash_attn_size);
-    const size_t mla_max_dim = std::max({max_dim, head_num_per_tp * v_head_dim, head_num_per_tp * qk_nope_head_dim,
-                                         head_num_per_tp * mla_flash_attn_size});
+    size_t mla_max_dim = std::max(max_dim, head_num_per_tp * mla_flash_attn_size);
+    if (model_config.use_dsa) {
+      // DeepSeek Sparse MLA applies weight absorption to both prefill and decode tokens
+      mla_max_dim = std::max(mla_max_dim, head_num_per_tp * (kv_lora_rank + qk_rope_head_dim));
+      shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * kv_lora_rank);
+    }
     // For buffer reuse of MlaPageAtten, see MlaPagedAttention for details.
-    const size_t mla_page_attn_size =
-        std::max(kv_lora_rank * (head_num_per_tp * 2 + 1) + qk_rope_head_dim * (head_num_per_tp + 1),
-                 head_num_per_tp * mla_flash_attn_size);
+    // [absorb_q_nope][absorb_q_rope][quant_absorb_q_nope][quant_absorb_q_rope][flash_mla_workspace]
+    const size_t mla_page_attn_size = head_num_per_tp * (kv_lora_rank + qk_rope_head_dim) * 2;
     vocab_size_pad = std::max(vocab_size_pad, mla_page_attn_size);
 
     const size_t token_num_per_dp = max_token_num;

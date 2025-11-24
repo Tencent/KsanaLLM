@@ -67,7 +67,6 @@ TEST_F(LlamaNvidiaFlashMlaTestSuit, FlashMlaKernelTest) {
 
   void* const q = CreateFlashMlaTensor<half>({batch, num_heads, kv_lora_rank + qk_rope_head_dim});
   void* const k_buffer = CreateFlashMlaTensor<half>({block_num, page_size, 1, kv_lora_rank + qk_rope_head_dim});
-  void* const v_buffer = k_buffer;
   void* const req_to_token = CreateFlashMlaTensor<int>({batch, max_blocks_per_seq});
   void* const b_seqlen = CreateFlashMlaTensor<int>({batch});
   void* const attn_out = CreateFlashMlaTensor<half>({batch, num_heads, num_kv_splits, kv_lora_rank + 1});
@@ -130,7 +129,6 @@ TEST_F(LlamaNvidiaFlashMlaTestSuit, FP8FlashMlaKernelTest) {
 
   void* const quant_q = CreateFlashMlaTensor<uint8_t>({batch * q_seq_len, num_heads, kv_lora_rank + qk_rope_head_dim});
   void* const k_buffer = CreateFlashMlaTensor<uint8_t>({block_num, page_size, 1, kv_lora_rank + qk_rope_head_dim});
-  void* const v_buffer = k_buffer;
   void* const req_to_token = CreateFlashMlaTensor<int>({batch, max_blocks_per_seq});
   void* const b_seqlen = CreateFlashMlaTensor<int>({batch});
   void* const attn_out =

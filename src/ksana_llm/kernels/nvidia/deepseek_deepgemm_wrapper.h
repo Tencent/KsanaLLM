@@ -6,14 +6,10 @@
 #include <torch/torch.h>
 #include <memory>
 #include <mutex>
-#include <tuple>
 #include <unordered_map>
 
 #include "ksana_llm/utils/logger.h"
-
-namespace deepseek {
-void ShutdownDeepGemmRuntime();
-}  // namespace deepseek
+#include "ksana_llm/utils/nvidia/deepseek_deepgemm_bridge.h"
 
 namespace ksana_llm {
 namespace nvidia {

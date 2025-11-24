@@ -10,13 +10,13 @@
 #include "ksana_llm/utils/utils.h"
 
 #include "ksana_llm/models/communicator/tp_communicator.h"
+#include "ksana_llm/modules/attention/sparse_mla_indexer.h"
 #include "ksana_llm/modules/basic/bmm.h"
 #include "ksana_llm/modules/basic/flash_mla_attention.h"
 #include "ksana_llm/modules/basic/linear.h"
 #include "ksana_llm/modules/basic/mem_adjuster.h"
 #include "ksana_llm/modules/basic/paged_mla_attention.h"
 #include "ksana_llm/modules/basic/split.h"
-#include "ksana_llm/modules/attention/sparse_mla_indexer.h"
 
 namespace ksana_llm {
 
@@ -26,8 +26,9 @@ struct MlaBuffers {
   TensorBuffer* kv_lora_or_q_nope_rope_buffer;
   TensorBuffer* kv_buffer;
   TensorBuffer* k_rope_buffer;
-  TensorBuffer* decode_q_nope_buffer;
-  TensorBuffer* decode_q_rope_buffer;
+  TensorBuffer* q_nope_buffer;
+  TensorBuffer* q_rope_buffer;
+  TensorBuffer* topk_indices_buffer;
 
   // shared
   TensorBuffer* shared_prefix_kv_buffer;
@@ -36,8 +37,8 @@ struct MlaBuffers {
 class MultiHeadLatentAttention {
  public:
   MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
-                          ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                          IndexerBuffers& indexer_buffers);
+                           ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
+                           IndexerBuffers& indexer_buffers);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
@@ -48,17 +49,6 @@ class MultiHeadLatentAttention {
 
   Status AcquireBuffers(ForwardingContext& forwarding_context);
   Status ReleaseBuffers();
-
- private:
-  Status FlashAttentionForward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& k_buffer,
-                               std::vector<Tensor>& v_buffer, std::vector<Tensor>& output_tensors,
-                               Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
-                               ForwardingContext& forwarding_context);
-
-  Status PagedAttentionForward(std::vector<Tensor>& output_tensor, std::vector<Tensor>& hidden_buffer_tensors_1,
-                               std::vector<Tensor>& paged_buffer_tensors, Tensor& prefill_q_buffer_tensor,
-                               Tensor& q_rope_buffer_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
-                               ForwardingContext& forwarding_context);
 
  private:
   const int layer_idx_;
@@ -88,6 +78,7 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Linear> attn_o_proj_;
   std::shared_ptr<Split> split_;
   std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
+  std::shared_ptr<Bmm> attn_w_uv_bmm_;
   std::shared_ptr<FlashMlaAttention> flash_mla_attention_layers_;
   std::shared_ptr<PagedMlaAttention> paged_mla_attention_layers_;
   std::shared_ptr<MemAdjuster> mem_adjuster_;

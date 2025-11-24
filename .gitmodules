@@ -7,3 +7,6 @@
 [submodule "3rdparty/c4x/cutlass"]
 	path = 3rdparty/LLM_kernels/3rdparty/c4x/cutlass
 	url = https://github.com/NVIDIA/cutlass.git
+[submodule "3rdparty/LLM_kernels/3rdparty/FlashMLA"]
+	path = 3rdparty/LLM_kernels/3rdparty/FlashMLA
+	url = https://github.com/deepseek-ai/FlashMLA.git

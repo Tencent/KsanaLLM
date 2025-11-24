@@ -230,7 +230,7 @@ struct BufferMeta {
     ParseNpyHeader(f_ptr, header_len, loaded_data_shape);
 
     const size_t size =
-        std::accumulate(loaded_data_shape.begin(), loaded_data_shape.end(), 1, std::multiplies<size_t>());
+        std::accumulate(loaded_data_shape.begin(), loaded_data_shape.end(), 1ul, std::multiplies<size_t>());
     void* data_cpu = malloc(size * sizeof(T));
     void* data = data_cpu;
 
@@ -326,7 +326,7 @@ class NvidiaTestSuitBase : public testing::Test {
   template <typename T>
   BufferMeta CreateBuffer(const MemoryType mtype, const std::vector<size_t> shape, const bool is_random_init = false,
                           const float min_val = -1, const float max_val = 1) {
-    size_t n_elmts = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
+    size_t n_elmts = std::accumulate(shape.begin(), shape.end(), 1ul, std::multiplies<size_t>());
     size_t buf_size = sizeof(T) * n_elmts;
 
     void* data = nullptr;

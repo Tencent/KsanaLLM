@@ -16,9 +16,7 @@ SparseMlaIndexer::SparseMlaIndexer(int layer_idx, LayerCreationContext& creation
                                    ModelCreationConfig& model_creation_config, IndexerBuffers& indexer_buffers)
     : layer_idx_(layer_idx),
       tensor_parallel_size_(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size),
-      indexer_buffers_(indexer_buffers),
-      context_(creation_context.context),
-      rank_(creation_context.rank) {
+      indexer_buffers_(indexer_buffers) {
   auto& attn_config = model_creation_config.attn_config;
   auto& model_config = attn_config.model_config;
   auto& runtime_config = creation_context.runtime_config;
@@ -68,8 +66,6 @@ Status SparseMlaIndexer::CreateBuffers(BufferManager* buffer_mgr, const Attentio
                                        const RuntimeConfig& runtime_config, IndexerBuffers& indexer_buffers) {
   const DataType weight_type = attn_config.model_config.weight_data_type;
   const size_t max_token_num = runtime_config.max_step_token_num;
-  const size_t max_batch_size = runtime_config.max_batch_size;
-  const size_t max_seq_len = runtime_config.max_seq_len;
 
   // Get dimensions from config
   const size_t index_n_heads = attn_config.model_config.dsa_config.index_n_heads;
@@ -94,41 +90,32 @@ Status SparseMlaIndexer::CreateBuffers(BufferManager* buffer_mgr, const Attentio
   indexer_buffers.weights_buffer =
       buffer_mgr->CreateBufferTensor("indexer_buffers.weights_buffer", {weights_buffer_size}, weight_type);
 
-  // TopK indices buffer: [max_token_num, index_topk]
-  const size_t topk_indices_buffer_size = max_token_num * index_topk;
-  indexer_buffers.topk_indices_buffer =
-      buffer_mgr->CreateBufferTensor("indexer_buffers.topk_indices_buffer", {topk_indices_buffer_size}, TYPE_INT32);
-
   // Calculate buffer sizes and total memory usage
   // 注意：不要调用 GetTensors()，因为它会获取锁而不释放
   // 应该使用 TensorBuffer 内部提供的方法或者在 CreateBuffers 中使用 scope
   size_t q_indexer_buffer_bytes = 0;
   size_t k_indexer_buffer_bytes = 0;
   size_t weights_buffer_bytes = 0;
-  size_t topk_indices_buffer_bytes = 0;
 
   {
     CREATE_BUFFER_SCOPE(q_tensors, indexer_buffers.q_indexer_buffer);
     CREATE_BUFFER_SCOPE(k_tensors, indexer_buffers.k_indexer_buffer);
     CREATE_BUFFER_SCOPE(w_tensors, indexer_buffers.weights_buffer);
-    CREATE_BUFFER_SCOPE(t_tensors, indexer_buffers.topk_indices_buffer);
 
     q_indexer_buffer_bytes = q_tensors[0].GetTotalBytes();
     k_indexer_buffer_bytes = k_tensors[0].GetTotalBytes();
     weights_buffer_bytes = w_tensors[0].GetTotalBytes();
-    topk_indices_buffer_bytes = t_tensors[0].GetTotalBytes();
   }
 
-  const size_t total_memory_bytes =
-      q_indexer_buffer_bytes + k_indexer_buffer_bytes + weights_buffer_bytes + topk_indices_buffer_bytes;
+  const size_t total_memory_bytes = q_indexer_buffer_bytes + k_indexer_buffer_bytes + weights_buffer_bytes;
 
   KLLM_LOG_INFO << fmt::format(
       "IndexerBuffers created: index_n_heads={}, index_head_dim={}, rope_head_dim={}, index_topk={}, "
       "q_indexer_buffer_size={:.2f}MB, k_indexer_buffer_size={:.2f}MB, weights_buffer_size={:.2f}MB, "
-      "topk_indices_buffer_size={:.2f}MB, total_memory_usage={:.2f}MB",
+      "total_memory_usage={:.2f}MB",
       index_n_heads, index_head_dim, qk_rope_head_dim, index_topk, q_indexer_buffer_bytes / (1024.0 * 1024.0),
       k_indexer_buffer_bytes / (1024.0 * 1024.0), weights_buffer_bytes / (1024.0 * 1024.0),
-      topk_indices_buffer_bytes / (1024.0 * 1024.0), total_memory_bytes / (1024.0 * 1024.0));
+      total_memory_bytes / (1024.0 * 1024.0));
 
   return Status();
 }
@@ -220,6 +207,9 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, Tensor& topk
       skip_tokens += current_tokens;
     }
   }
+
+  // Correctly set the output shape
+  topk_indices.shape = {total_tokens, index_topk_};
 
   KLLM_LOG_DEBUG << fmt::format("SparseMlaIndexer Forward completed: layer={}", layer_idx_);
 

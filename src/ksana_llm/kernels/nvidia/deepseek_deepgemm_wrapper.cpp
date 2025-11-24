@@ -4,13 +4,8 @@
 
 #include "ksana_llm/kernels/nvidia/deepseek_deepgemm_wrapper.h"
 
-#include <torch/torch.h>
-
 #include "ksana_llm/utils/memory_utils.h"
-#include "ksana_llm/utils/nvidia/deepseek_deepgemm_bridge.h"
-
 #include "csrc/utils/nvidia/cuda_utils.h"
-#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/nvidia/cuda_utils.h"
 
 using namespace llm_kernels::utils;

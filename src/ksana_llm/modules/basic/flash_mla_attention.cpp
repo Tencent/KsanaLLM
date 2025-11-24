@@ -5,18 +5,23 @@
 #include "ksana_llm/modules/basic/flash_mla_attention.h"
 
 #include "ksana_llm/layers/flash_mla_attention_layer.h"
+#include "ksana_llm/layers/flash_sparse_mla_attention_layer.h"
 
 namespace ksana_llm {
 
 FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const LayerCreationContext& creation_context,
                                      const AttentionCreationConfig& attn_config) {
+  if (attn_config.model_config.use_dsa) {
+    flash_mla_attention_layer_ = std::make_shared<FlashSparseMlaAttentionLayer>();
+  } else {
+    flash_mla_attention_layer_ = std::make_shared<FlashMlaAttentionLayer>();
+  }
+
   uint32_t qk_rope_head_dim = attn_config.model_config.mla_config.qk_rope_head_dim;
   uint32_t qk_nope_head_dim = attn_config.model_config.mla_config.qk_nope_head_dim;
   uint32_t q_lora_rank = attn_config.model_config.mla_config.q_lora_rank;
   uint32_t kv_lora_rank = attn_config.model_config.mla_config.kv_lora_rank;
   uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
-
-  flash_mla_attention_layer_ = std::make_shared<FlashMlaAttentionLayer>();
 
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
   // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
@@ -83,49 +88,60 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
       fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
 }
 
-Status FlashMlaAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
-                                  const std::shared_ptr<ModelInput>& model_input, std::vector<Tensor>& k_buffer,
-                                  std::vector<Tensor>& v_buffer, const AttentionForwardContext& attn_ctx,
-                                  Tensor& q_nope_rope_tensor, Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
-                                  Tensor& prefix_kv_buffer_tensor, std::vector<Tensor>& output_tensors) {
-  // When prefix cache hits, the following proj must be applied after fetching the prefix from kv cache
-  if (/*dp_total_prefix_tokens*/ attn_ctx.forward_shape.shape[11] == 0) {
-    // The quantized result of kv_buffer is stored in the workspace_buffer shared across layers,
-    // and immediately required by v_head_proj, so no layer operations can be inserted between them
-    STATUS_CHECK_RETURN(kv_b_nope_proj_->Forward(kv_buffer_tensor, output_tensors));
-    STATUS_CHECK_RETURN(v_head_proj_->Forward(kv_buffer_tensor, v_buffer));
+Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input,
+                                  const AttentionForwardContext& attn_ctx, std::vector<Tensor>& k_buffer,
+                                  std::vector<Tensor>& v_buffer, Tensor& context_q_nope_rope_tensor,
+                                  Tensor& context_q_nope_tensor, Tensor& context_q_rope_tensor,
+                                  Tensor& kv_buffer_tensor, Tensor& k_rope_buffer_tensor,
+                                  Tensor& prefix_kv_buffer_tensor, Tensor& indices_tensor,
+                                  std::vector<Tensor>& output_tensors) {
+  if (indices_tensor.GetElementNumber() > 0) {
+    return flash_mla_attention_layer_->Forward(
+        {model_input->flash_input.rotary_embedding_pos, model_input->flash_input.rotary_embedding_mask,
+         context_q_rope_tensor, k_rope_buffer_tensor, context_q_nope_tensor, /*q_ptr*/ k_buffer[0], kv_buffer_tensor,
+         model_input->flash_input.kv_list, model_input->dp_input_prefix_uint64_tensor,
+         model_input->dp_prefill_q_offset_uint64_tensor, model_input->flash_input.kv_cache_offset,
+         model_input->layer_kv_cache_ptr, model_input->flash_input.block_table,
+         model_input->flash_input.tile_scheduler_metadata, model_input->flash_input.num_splits, indices_tensor},
+        output_tensors);
+  } else {
+    // When prefix cache hits, the following proj must be applied after fetching the prefix from kv cache
+    if (/*dp_total_prefix_tokens*/ attn_ctx.forward_shape.shape[11] == 0) {
+      // The quantized result of kv_buffer is stored in the workspace_buffer shared across layers,
+      // and immediately required by v_head_proj, so no layer operations can be inserted between them
+      STATUS_CHECK_RETURN(kv_b_nope_proj_->Forward(kv_buffer_tensor, output_tensors));
+      STATUS_CHECK_RETURN(v_head_proj_->Forward(kv_buffer_tensor, v_buffer));
+    }
+
+    return flash_mla_attention_layer_->Forward({model_input->dp_input_offset_uint64_tensor,
+                                                model_input->dp_input_offset_int32_tensor,
+                                                model_input->flash_input.kv_list,
+                                                model_input->dp_input_prefix_uint64_tensor,
+                                                model_input->dp_prefill_q_offset_uint64_tensor,
+                                                model_input->dp_prefill_q_offset_int32_tensor,
+                                                model_input->flash_input.kv_cache_offset,
+                                                model_input->flash_input.rotary_embedding_pos,
+                                                model_input->flash_input.rotary_embedding_mask,
+                                                model_input->dp_src_flexible_rotary_embedding_pos,
+                                                model_input->dp_dst_flexible_rotary_embedding_pos,
+                                                model_input->dp_flexible_rotary_embedding_mask,
+                                                model_input->dp_dst_flexible_kv_cache_tensor,
+                                                model_input->dp_src_flexible_kv_cache_tensor,
+                                                model_input->dp_dst_flexible_token_idx_tensor,
+                                                model_input->dp_src_flexible_token_idx_tensor,
+                                                model_input->dp_flexible_offset_uint64_tensor,
+                                                attn_ctx.forward_shape,
+                                                model_input->layer_kv_cache_ptr,
+                                                model_input->flash_input.block_table,
+                                                context_q_nope_rope_tensor,
+                                                kv_buffer_tensor,
+                                                k_rope_buffer_tensor,
+                                                kv_b_nope_proj_weight_,
+                                                v_head_proj_weight_,
+                                                prefix_kv_buffer_tensor,
+                                                k_buffer[0],
+                                                v_buffer[0]},
+                                               output_tensors);
   }
-
-  STATUS_CHECK_RETURN(flash_mla_attention_layer_->Forward({model_input->dp_input_offset_uint64_tensor,
-                                                           model_input->dp_input_offset_int32_tensor,
-                                                           model_input->flash_input.kv_list,
-                                                           model_input->dp_input_prefix_uint64_tensor,
-                                                           model_input->dp_prefill_q_offset_uint64_tensor,
-                                                           model_input->dp_prefill_q_offset_int32_tensor,
-                                                           model_input->flash_input.kv_cache_offset,
-                                                           model_input->flash_input.rotary_embedding_pos,
-                                                           model_input->flash_input.rotary_embedding_mask,
-                                                           model_input->dp_src_flexible_rotary_embedding_pos,
-                                                           model_input->dp_dst_flexible_rotary_embedding_pos,
-                                                           model_input->dp_flexible_rotary_embedding_mask,
-                                                           model_input->dp_dst_flexible_kv_cache_tensor,
-                                                           model_input->dp_src_flexible_kv_cache_tensor,
-                                                           model_input->dp_dst_flexible_token_idx_tensor,
-                                                           model_input->dp_src_flexible_token_idx_tensor,
-                                                           model_input->dp_flexible_offset_uint64_tensor,
-                                                           attn_ctx.forward_shape,
-                                                           model_input->layer_kv_cache_ptr,
-                                                           model_input->flash_input.block_table,
-                                                           q_nope_rope_tensor,
-                                                           kv_buffer_tensor,
-                                                           k_rope_buffer_tensor,
-                                                           kv_b_nope_proj_weight_,
-                                                           v_head_proj_weight_,
-                                                           prefix_kv_buffer_tensor,
-                                                           k_buffer[0],
-                                                           v_buffer[0]},
-                                                          output_tensors));
-
-  return Status();
 }
 }  // namespace ksana_llm

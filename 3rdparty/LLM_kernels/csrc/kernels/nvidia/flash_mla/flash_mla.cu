@@ -70,23 +70,14 @@ size_t ApplyWorkspaceBuffer(void* workspace_ptr, FlashMlaWorkspaceMap& workspace
                             int q_seq_per_hk, int head_size_v, cudaStream_t stream = nullptr) {
   const int total_num_splits = batch_size + workspace_param.num_sm_parts;
 
-  size_t tile_scheduler_metadata_size = sizeof(int) * workspace_param.num_sm_parts * TileSchedulerMetaDataSize;
-  size_t num_splits_size = sizeof(int) * (batch_size + 1);
   size_t softmax_lse_size = sizeof(float) * batch_size * num_heads * q_seq_per_hk;
   size_t softmax_lse_accum_size = sizeof(float) * total_num_splits * num_heads * q_seq_per_hk;
   size_t out_accum_size = sizeof(float) * total_num_splits * num_heads * q_seq_per_hk * head_size_v;
   void* workspace_align_ptr = reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(workspace_ptr) + 1023) & ~1023);
-  tile_scheduler_metadata_size = (tile_scheduler_metadata_size + 1023) & ~1023;
-  num_splits_size = (num_splits_size + 1023) & ~1023;
   softmax_lse_size = (softmax_lse_size + 1023) & ~1023;
   softmax_lse_accum_size = (softmax_lse_accum_size + 1023) & ~1023;
   out_accum_size = (out_accum_size + 1023) & ~1023;
   char* workspace = reinterpret_cast<char*>(workspace_align_ptr);
-  workspace_param.tile_scheduler_metadata_ptr = reinterpret_cast<int*>(workspace);
-  workspace += tile_scheduler_metadata_size;
-
-  workspace_param.num_splits_ptr = reinterpret_cast<int*>(workspace);
-  workspace += num_splits_size;
 
   workspace_param.softmax_lse_ptr = reinterpret_cast<float*>(workspace);
   workspace += softmax_lse_size;
@@ -98,7 +89,6 @@ size_t ApplyWorkspaceBuffer(void* workspace_ptr, FlashMlaWorkspaceMap& workspace
   workspace += out_accum_size;
 
   size_t total_size = workspace - reinterpret_cast<char*>(workspace_align_ptr);
-  // cudaMemsetAsync(workspace_align_ptr, 0, total_size, stream);
   return total_size;
 }
 
@@ -217,7 +207,7 @@ void InvokeFlashMla(CACHE_T* q, CACHE_T* k_buffer, const int seqlen_q_ori, float
     params.descale_k = k_scale;
   }
 
-  assert(head_size == 576);
+  assert(head_size_k == 576);
   if constexpr (std::is_same<SCALAR_T, half>::value) {
     if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
       run_mha_fwd_splitkv_mla<cutlass::float_e4m3_t, cutlass::half_t, 576>(params, stream);

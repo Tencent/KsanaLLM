@@ -25,7 +25,6 @@ struct IndexerBuffers {
   TensorBuffer* q_indexer_buffer;     // for wq_b output
   TensorBuffer* k_indexer_buffer;     // for wk output
   TensorBuffer* weights_buffer;       // for weights_proj output
-  TensorBuffer* topk_indices_buffer;  // for topk indices
 };
 
 // Sparse MLA Indexer module
@@ -55,10 +54,10 @@ class SparseMlaIndexer {
   IndexerBuffers& indexer_buffers_;
 
   // Model parameters (actively used)
-  int n_heads_;     // number of index heads
-  int head_dim_;    // index head dimension
-  int index_topk_;  // top-k value
-  int block_size_;  // block size for quantization
+  size_t n_heads_;     // number of index heads
+  size_t head_dim_;    // index head dimension
+  size_t index_topk_;  // top-k value
+  size_t block_size_;  // block size for quantization
 
   // Layers
   std::shared_ptr<Linear> wq_b_;          // Query projection (q_lora_rank -> n_heads * head_dim)
@@ -69,10 +68,6 @@ class SparseMlaIndexer {
   // Flash and paged indexer layers
   std::shared_ptr<FlashSparseMlaIndexer> flash_sparse_mla_indexer_;
   std::shared_ptr<PagedSparseMlaIndexer> paged_sparse_mla_indexer_;
-
-  // Context and rank for layer operations
-  std::shared_ptr<Context> context_;
-  int rank_;
 };
 
 }  // namespace ksana_llm

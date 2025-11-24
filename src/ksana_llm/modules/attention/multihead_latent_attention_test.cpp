@@ -14,14 +14,11 @@
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/samplers/sampler.h"
 #include "ksana_llm/utils/attention_backend/attention_backend_manager.h"
-#include "ksana_llm/utils/calc_intvec_hash.h"
-#include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/get_custom_weight_name.h"
 #include "ksana_llm/utils/memory_allocator.h"
 #include "ksana_llm/utils/search_path.h"
 #include "ksana_llm/utils/singleton.h"
 #include "tests/test.h"
-#include "ksana_llm/utils/nvidia/deepseek_deepgemm_bridge.h"
 
 using namespace ksana_llm;
 
@@ -219,16 +216,20 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
       StreamSynchronize(context_->GetComputeStreams()[rank_]);
       Memcpy(input_data.data(), hidden_buffer_tensors_1[0].template GetPtr<void>(),
              sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
+      // Reset dtype
+      hidden_buffer_tensors_1[0].dtype = model_config_.weight_data_type;
     }
     std::vector<float> output;
     if (model_config_.use_dsa) {
       // DSA (Sparse MLA with Indexer) test - values to be filled after test run
       if (is_multi_token_forward) {
         // Prefill phase (no prefix cache for DSA test)
-        output = {-1976, 2096, -3392, 776, 126, -576};
+        // The numerical difference here is due to sparse mla applies weight absorption for prefill tokens,
+        // while in this test, weights w_uk_t/w_uv and kv_b_nope_proj/v_head_proj are not equivalent
+        output = {1416, 65.5, -1248, -2672, 856, -692};
       } else {
         // Decode phase
-        output = {-288, -408, 1328, -2048, 2528, -1968};
+        output = {552, 944, 366, -49.25, -77.5, -568};
       }
     } else if (is_multi_token_forward) {
       if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
@@ -304,13 +305,12 @@ class TestWeight : public BaseWeight {
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uk_t.weight", i)] = {16, 128, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uv.weight", i)] = {16, 512, 128};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_nope_rope_proj.weight", i)] = {2048, 3072};
-
       // Add indexer weights
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight", i)] = {8192, 1536};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight_scale_inv", i)] = {64, 12};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight", i)] = {128, 7168};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight_scale_inv", i)] = {1, 56};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.weights_proj.weight", i)] = {64, 7168};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight", i)] = {128, 2048};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight_scale_inv", i)] = {1, 16};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.weights_proj.weight", i)] = {64, 2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.weight", i)] = {128};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.bias", i)] = {128};
     }
@@ -373,8 +373,7 @@ class MlaTest : public testing::Test {
       model_config.dsa_config.index_topk = 2048;
       // Update the environment's model config
       env->SetModelConfig(model_config);
-      // TODO(yfnjin): Change to "fp8_ds_mla" after merging all the DeepSeek-V3.2 code
-      env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "auto";
+      env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "fp8_ds_mla";
     }
     env->InitializeBlockManagerConfig();
     BlockManagerConfig block_manager_config;
