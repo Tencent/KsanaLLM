@@ -6,7 +6,7 @@ list(FILTER TRT_ALL_REDUCE_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_kernel_trt_all_reduce STATIC ${TRT_ALL_REDUCE_SRCS})
 set_property(TARGET llm_kernels_nvidia_kernel_trt_all_reduce PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_trt_all_reduce PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(llm_kernels_nvidia_kernel_trt_all_reduce PUBLIC -lcuda -lcudart -lnccl -lnvidia-ml
+target_link_libraries(llm_kernels_nvidia_kernel_trt_all_reduce PUBLIC -lcuda -lcudart ${NCCL_LIBRARIES} -lnvidia-ml
   llm_kernels_nvidia_utils)
 
 # for test

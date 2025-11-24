@@ -35,6 +35,7 @@
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/others/sglang/main/elementwise/concat_mla.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
+#include "csrc/kernels/nvidia/others/vllm/main/tokenweave/tokenweave_fused_kernels.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
@@ -727,7 +728,7 @@ void RunTrtAllReduce(void* input, const int rank, const int token_num, const int
   params.use_oneshot = true;
   params.stream = stream;
   params.pattern = llm_kernels::nvidia::AllReduceFusionPattern::kAllReduce;
-  llm_kernels::nvidia::allreduce_fusion_op(params);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::allreduce_fusion_op(params));
 }
 #define RUN_TRT_ALLREDUCE(T)                                                                                 \
   template void RunTrtAllReduce<T>(void*, const int, const int, const int, const std::vector<void*>&, void*, \
@@ -757,7 +758,7 @@ void RunTrtFusedAllReduceResidualNorm(void* input, const int rank, const int tok
   params.norm_out = norm_out_ptr;
   params.stream = stream;
   params.pattern = llm_kernels::nvidia::AllReduceFusionPattern::kARResidualRMSNorm;
-  llm_kernels::nvidia::allreduce_fusion_op(params);
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::allreduce_fusion_op(params));
 }
 #define RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(T)                                                                       \
   template void RunTrtFusedAllReduceResidualNorm<T>(void*, const int, const int, const int, const std::vector<void*>&, \
@@ -766,6 +767,34 @@ RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(float);
 RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(half);
 RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM(__nv_bfloat16);
 #undef RUN_TRT_FUSED_ALLREDUCE_RESIDUAL_NORM
+
+template <typename T>
+void RunTokenWeaveFusedAllReduceResidual(int64_t mcptr, void* residual, void* signal_pads, int rank, int world_size,
+                                         int num_tokens, int hidden_size, cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FusedRsAgCta<T>(mcptr, residual, signal_pads, rank, world_size, num_tokens,
+                                                             hidden_size, stream));
+}
+#define RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL(T) \
+  template void RunTokenWeaveFusedAllReduceResidual<T>(int64_t, void*, void*, int, int, int, int, cudaStream_t)
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL(float);
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL(half);
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL(__nv_bfloat16);
+#undef RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL
+
+template <typename T>
+void RunTokenWeaveFusedAllReduceResidualNorm(int64_t mcptr, void* residual, void* const weight, void* signal_pads,
+                                             int rank, int world_size, float epsilon, int num_tokens, int hidden_size,
+                                             cudaStream_t stream) {
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FusedRsLmAgCta<T>(mcptr, residual, weight, signal_pads, rank, world_size,
+                                                               epsilon, num_tokens, hidden_size, stream));
+}
+#define RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL_NORM(T)                                                             \
+  template void RunTokenWeaveFusedAllReduceResidualNorm<T>(int64_t, void*, void* const, void*, int, int, float, int, \
+                                                           int, cudaStream_t)
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL_NORM(float);
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL_NORM(half);
+RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL_NORM(__nv_bfloat16);
+#undef RUN_TOKEN_WEAVE_FUSED_ALLREDUCE_RESIDUAL_NORM
 
 template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream) {

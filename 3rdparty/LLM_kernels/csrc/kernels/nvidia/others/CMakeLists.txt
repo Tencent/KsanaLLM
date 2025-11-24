@@ -2,3 +2,4 @@
 
 add_subdirectory(tensorrt-llm)
 add_subdirectory(sglang)
+add_subdirectory(vllm)

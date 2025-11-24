@@ -49,7 +49,7 @@ ModelCommunicator::ModelCommunicator(Tensor* input, int rank, const RuntimeConfi
 #ifdef ENABLE_CUDA
 
 void ModelCommunicator::InitTensorParaCustomAllReduceSumLayer(Tensor* input, const RuntimeConfig& runtime_config) {
-  if (!context_->ext->IsSupportedP2PAccess()) {
+  if (!context_->ext->IsP2PAccessSupported()) {
     return;
   }
   size_t max_size = input->GetTotalBytes();
@@ -124,7 +124,7 @@ Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, st
 Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
                                     bool is_multi_token_forward, bool use_custom) {
 #ifdef ENABLE_CUDA
-  // custom all reduct mayed hanged in dynamic buffer mode, disable it temporarily. Reopen it after this bug fixed.
+  // custom all reduce may hang in dynamic buffer mode, disable it temporarily. Reopen it after this bug fixed.
   if (CheckIfUseCustomReduceSum(input_tensors, use_custom)) {
     STATUS_CHECK_RETURN(tp_custom_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
   } else {
@@ -160,7 +160,7 @@ bool ModelCommunicator::CheckIfUseCustomReduceSum(const std::vector<Tensor>& inp
     return false;
   }
 #ifdef ENABLE_CUDA
-  if (!context_->ext->IsSupportedP2PAccess()) {
+  if (!context_->ext->IsP2PAccessSupported()) {
     return false;
   }
 #endif

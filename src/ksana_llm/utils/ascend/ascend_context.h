@@ -20,6 +20,8 @@ struct AscendContextExtension {
 
   std::vector<HcclComm>& GetHCCLComm() { return hccl_params_; }
 
+  const bool IsMulticastSupported() const { return false; }
+
  private:
   ContextT<T>* base_ptr_ = nullptr;
 

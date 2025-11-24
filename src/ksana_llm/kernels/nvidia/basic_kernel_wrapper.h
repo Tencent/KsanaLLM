@@ -233,6 +233,31 @@ void RunTrtFusedAllReduceResidualNorm(void* input, const int rank, const int tok
                                       void* residual_in_ptr, void* residual_out_ptr, void* norm_out_ptr,
                                       cudaStream_t stream);
 
+/**
+ * @brief Fused AllReduce + Residual
+ *        Operation: residual += AllReduce(mcptr)
+ *
+ * @param mcptr Multicast pointer storing the input to be reduced
+ * @param signal_pads Synchronization buffer across devices
+ */
+template <typename T>
+void RunTokenWeaveFusedAllReduceResidual(int64_t mcptr, void* residual, void* signal_pads, int rank, int world_size,
+                                         int num_tokens, int hidden_size, cudaStream_t stream);
+
+/**
+ * @brief Fused AllReduce + Residual + RMSNorm
+ *        Operations:
+ *        1. residual += AllReduce(input)
+ *        2. input = RMSNorm(residual, weight, epsilon)
+ *
+ * @param mcptr Multicast pointer storing the input to be reduced
+ * @param signal_pads Synchronization buffer across devices
+ */
+template <typename T>
+void RunTokenWeaveFusedAllReduceResidualNorm(int64_t mcptr, void* residual, void* const weight, void* signal_pads,
+                                             int rank, int world_size, float epsilon, int num_tokens, int hidden_size,
+                                             cudaStream_t stream);
+
 template <typename T>
 void InvokeSigmoidActivation(void* input, const size_t size, const float scale, cudaStream_t& stream);
 

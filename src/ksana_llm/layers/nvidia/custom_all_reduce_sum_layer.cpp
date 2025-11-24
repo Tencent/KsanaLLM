@@ -66,15 +66,17 @@ Status CustomAllReduceSumLayer::Init(const std::vector<std::any>& parameters, co
 
   // is full nvlink on each device
   is_full_nvlink_ = context_->ext->IsFullNvLink();
+  ModelConfig model_config;
+  Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
   // Enable trt allreduce only when `tp_size == 2` and group all reduce is not used
-  if ((enable_trt_reduce_ = (world_size_ == 2 && !is_group_custom_all_reduce_))) {
+  // TODO(yfnjin): Temporarily disable trt reduce for mla-based models due to precision issues
+  enable_trt_reduce_ = (world_size_ == 2 && !is_group_custom_all_reduce_ && !model_config.use_mla);
+  if (enable_trt_reduce_) {
     // When nvlink is not available, lower the threshold for using trt allreduce
     if (!is_full_nvlink_) {
       TRT_REDUCE_THRESHOLD = 128;
     }
 
-    ModelConfig model_config;
-    Singleton<Environment>::GetInstance()->GetModelConfig(model_config);
     // For DeepSeek-V3, roughly 28MB of extra memory is allocated
     AllocTrtAllReduceWorkspace(rank_, /*max_token_num*/ TRT_REDUCE_THRESHOLD,
                                /*hidden_dim*/ model_config.hidden_units, GetTypeSize(inter_data_type_),
@@ -101,6 +103,10 @@ Status CustomAllReduceSumLayer::Forward(const std::vector<Tensor>& input_tensors
 void CustomAllReduceSumLayer::Clear() {
   if (reduce_op_ != nullptr) {
     delete static_cast<llm_kernels::nvidia::CustomAllreduce*>(reduce_op_);
+  }
+  if (enable_trt_reduce_) {
+    FreeTrtAllReduceWorkspace(rank_, context_->ext->GetTrtAllReduceBuffers(), context_->ext->GetTrtAllReduceFlags(),
+                              context_->ext->GetTrtAllReduceWorkspaces(), context_->GetComputeStreams()[rank_].Get());
   }
 }
 

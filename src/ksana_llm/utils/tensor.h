@@ -3,13 +3,11 @@
 ==============================================================================*/
 #pragma once
 
-#include <filesystem>
 #include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "c10/core/ScalarType.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -28,7 +26,7 @@ class Tensor {
 
   // Initialize the tensor, if data_ptr is not null, it will be used as data buffer.
   Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
-         Stream* stream, bool lazy_allocate = false, const std::string& name = "");
+         Stream* stream = nullptr, bool lazy_allocate = false, const std::string& name = "");
 
   Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, bool lazy_allocate = false,
          const std::string& name = "")
@@ -37,10 +35,6 @@ class Tensor {
   Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id,
          bool lazy_allocate = false, const std::string& name = "")
       : Tensor(location, dtype, shape, device_id, nullptr, nullptr, lazy_allocate, name) {}
-
-  Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t>& shape, int device_id, void* data_ptr,
-         bool lazy_allocate = false, const std::string& name = "")
-      : Tensor(location, dtype, shape, device_id, data_ptr, nullptr, lazy_allocate, name) {}
 
   ~Tensor();
 

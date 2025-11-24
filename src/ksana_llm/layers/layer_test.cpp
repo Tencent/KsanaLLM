@@ -2,13 +2,16 @@
 
 ==============================================================================*/
 #include <algorithm>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <set>
+#include <thread>
 
 #include "3rdparty/half/include/half.hpp"
 #include "ksana_llm/layers/activation_layer.h"
 #include "ksana_llm/layers/add_layer.h"
+#include "ksana_llm/layers/all_reduce_residual_add_norm_layer.h"
 #include "ksana_llm/layers/assemble_tokens_hidden_layer.h"
 #include "ksana_llm/layers/attention_layer.h"
 #include "ksana_llm/layers/batched_matmul_layer.h"
@@ -1460,8 +1463,7 @@ TEST_F(LayerTest, GroupedTopkLayerTest) {
   };
   runtime_config.is_profile_mode = true;
   EXPECT_TRUE(
-    grouped_topk_layer_profile_mode.Init(parameters_with_fixed_experts, runtime_config, context_, kDeviceRank)
-          .OK());
+      grouped_topk_layer_profile_mode.Init(parameters_with_fixed_experts, runtime_config, context_, kDeviceRank).OK());
   EXPECT_TRUE(grouped_topk_layer_profile_mode.Forward(input_tensors, output_tensors).OK());
   Memcpy(ids_host.data(), topk_ids.GetPtr<void>(), topk_ids.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
 
@@ -2034,6 +2036,106 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
 
   // 有缓存，创建多次耗时不应该增加太多
   EXPECT_TRUE(2 * duration12.count() > duration23.count());
+#endif
+}
+
+TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
+  int device_count = 0;
+  GetDeviceCount(&device_count);
+  if (device_count < 2) {
+    GTEST_SKIP() << "Skip all reduce test since device count less than 2";
+  }
+  device_count = std::min(2, device_count);
+
+#ifdef ENABLE_CUDA
+  using dtype = half_float::half;
+
+  for (int rank = 0; rank < device_count; rank++) {
+    int multicast_supported = 0;
+    CU_CHECK(cuDeviceGetAttribute(&multicast_supported, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, rank));
+    if (!multicast_supported) {
+      GTEST_SKIP() << "Skip all reduce test since device does not support multicast";
+    }
+  }
+
+  auto context = std::make_shared<Context>(device_count, 1, 1);
+  // Force multicast for testing
+  context->ext->is_multicast_enable_ = true;
+  NvlsMcastMemory::GetInstance()->Initialize(device_count);
+
+  const float rms_norm_eps = 1e-6;
+  const size_t token_num = 4;
+  const size_t hidden_size = 1024;
+
+  auto RunAllReduce = [&](const int rank) {
+    SetDevice(rank);
+    std::default_random_engine eng;
+    std::uniform_real_distribution<float> random_range(-1, 1);
+
+    Tensor rms_norm_weight(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {hidden_size}, rank);
+    std::vector<dtype> rms_norm_weight_host(hidden_size);
+    for (auto& val : rms_norm_weight_host) {
+      val = static_cast<dtype>(random_range(eng));
+    }
+    MemcpyAsync(rms_norm_weight.GetPtr<void>(), rms_norm_weight_host.data(), rms_norm_weight.GetTotalBytes(),
+                MEMCPY_HOST_TO_DEVICE, context->GetComputeStreams()[rank]);
+
+    AllReduceResidualAddNormLayer all_reduce_residual_add_norm_layer;
+    EXPECT_TRUE(
+        all_reduce_residual_add_norm_layer.Init({rms_norm_eps, rms_norm_weight}, runtime_config, context, rank).OK());
+
+    // Wait NCCL init
+    static_cast<void>(context->ext->GetNCCLParam());
+    Tensor input(MemoryLocation::LOCATION_MULTICAST, TYPE_FP16, {token_num, hidden_size}, rank);
+    // Init multicast memory before forwarding
+    NvlsMcastMemory::GetInstance()->InitMcastMemory(rank);
+    Tensor residual(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {token_num, hidden_size}, rank);
+    std::vector<dtype> input_host(token_num * hidden_size);
+    for (auto& val : input_host) {
+      val = static_cast<dtype>(random_range(eng));
+    }
+    MemcpyAsync(input.GetPtr<void>(), input_host.data(), input.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context->GetComputeStreams()[rank]);
+    std::vector<dtype> residual_host(token_num * hidden_size);
+    for (auto& val : residual_host) {
+      val = static_cast<dtype>(random_range(eng));
+    }
+    MemcpyAsync(residual.GetPtr<void>(), residual_host.data(), residual.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context->GetComputeStreams()[rank]);
+
+    // Reduce + Residual
+    std::vector<Tensor> outputs{residual};
+    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward({input}, outputs).OK());
+    // Verify output
+    std::vector<dtype> output_host(token_num * hidden_size);
+    MemcpyAsync(output_host.data(), outputs[0].GetPtr<void>(), outputs[0].GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
+                context->GetComputeStreams()[rank]);
+    StreamSynchronize(context->GetComputeStreams()[rank]);
+    for (size_t i = 0; i < token_num * hidden_size; i++) {
+      EXPECT_NEAR(output_host[i], input_host[i] * context->GetTensorParallelSize() + residual_host[i], 1e-3);
+    }
+
+    // Reduce + Residual + Norm
+    outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {token_num, hidden_size}, rank);
+    EXPECT_TRUE(all_reduce_residual_add_norm_layer.Forward({input, residual}, outputs).OK());
+    // Validate the first few elements
+    MemcpyAsync(output_host.data(), outputs[0].GetPtr<void>(), outputs[0].GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
+                context->GetComputeStreams()[rank]);
+    std::vector<float> output_ref_host{0.58203,  -0.88671, 0.00791,  0.16882,  0.03298,
+                                       0.108398, -0.10589, -0.30102, -0.31982, 1.52344};
+    StreamSynchronize(context->GetComputeStreams()[rank]);
+    for (size_t i = 0; i < output_ref_host.size(); i++) {
+      EXPECT_NEAR(output_host[i], output_ref_host[i], 1e-3);
+    }
+  };
+
+  std::vector<std::unique_ptr<std::thread>> run_threads;
+  for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
+    run_threads.emplace_back(std::make_unique<std::thread>(RunAllReduce, cur_rank));
+  }
+  for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
+    run_threads[cur_rank]->join();
+  }
 #endif
 }
 

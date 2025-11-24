@@ -10,10 +10,9 @@
 #include "ksana_llm/models/common/common_model.h"
 #include "ksana_llm/modules/attention/multihead_latent_attention.h"
 #include "ksana_llm/modules/attention/sparse_mla_indexer.h"
-
 #include "ksana_llm/modules/basic/add_norm.h"
+#include "ksana_llm/modules/basic/all_reduce_fused_norm_add.h"
 #include "ksana_llm/modules/basic/layernorm.h"
-
 #include "ksana_llm/modules/basic/linear.h"
 #include "ksana_llm/modules/basic/moe.h"
 #include "ksana_llm/modules/ffn/two_layered_ffn.h"
@@ -43,6 +42,8 @@ class DeepSeekV3DecoderLayer {
   std::shared_ptr<Layernorm> input_layernorm_;
   std::shared_ptr<AddNorm> pre_attention_add_norm_;
   std::shared_ptr<AddNorm> post_attention_add_norm_;
+  std::shared_ptr<FusedAllReduceNormAdd> fused_all_reduce_norm_add_pre_attn_;
+  std::shared_ptr<FusedAllReduceNormAdd> fused_all_reduce_norm_add_post_attn_;
   std::shared_ptr<Add> add_;
   std::shared_ptr<TpCommunicator> tp_comm_;
 

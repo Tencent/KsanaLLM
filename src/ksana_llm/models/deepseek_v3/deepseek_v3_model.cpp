@@ -40,17 +40,22 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
   g_mla_tensor_parallel_barrier.Init(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size);
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
-  pre_attention_add_norm_ = std::make_shared<AddNorm>(
-      layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
-
   input_layernorm_ = std::make_shared<Layernorm>(
       layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
+  pre_attention_add_norm_ = std::make_shared<AddNorm>(
+      layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context);
+  fused_all_reduce_norm_add_pre_attn_ = std::make_shared<FusedAllReduceNormAdd>(
+      layer_prefix + ".input_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps, creation_context,
+      ReduceFuseType::kPreAttn);
 
   add_ = std::make_shared<Add>(creation_context);
 
   post_attention_add_norm_ =
       std::make_shared<AddNorm>(layer_prefix + ".post_attention_layernorm.weight",
                                 model_creation_config.layernorm_config.layernorm_eps, creation_context);
+  fused_all_reduce_norm_add_post_attn_ = std::make_shared<FusedAllReduceNormAdd>(
+      layer_prefix + ".post_attention_layernorm.weight", model_creation_config.layernorm_config.layernorm_eps,
+      creation_context, ReduceFuseType::kPostAttn);
 
   if (is_moe) {
     shared_mlp_ = std::make_shared<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
@@ -86,11 +91,16 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
 
   const size_t org_token_size = residual_buffer[0].shape[0];
   const size_t token_hidden_stat_bytes = residual_buffer[0].GetTotalBytes() / org_token_size;
-  if (need_add_residual_before_attn) {  // Adding the residual should have been done after mlp in the previous layer for
-                                        // better performance.
+  if (!need_add_residual_before_attn) {  // Adding the residual should have been done after mlp in the previous layer
+                                         // for better performance.
+    input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
+  } else if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
     pre_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
   } else {
-    input_layernorm_->Forward(residual_buffer, hidden_buffer_tensors_0);
+    // Mlp/moe all reduce
+    STATUS_CHECK_RETURN(fused_all_reduce_norm_add_pre_attn_->Forward(
+        reduce_buffer_tensors, residual_buffer, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context,
+        /*need_add_residual*/ true));
   }
 
   // Mla
@@ -98,14 +108,16 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   mla_->ReleaseBuffers();
   g_mla_tensor_parallel_barrier.arrive_and_wait();
-  // Mla all reduce
+
   if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
     std::swap(reduce_buffer_tensors, hidden_buffer_tensors_0);
+    post_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
   } else {
-    tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
+    // Mla all reduce
+    STATUS_CHECK_RETURN(fused_all_reduce_norm_add_post_attn_->Forward(
+        reduce_buffer_tensors, residual_buffer, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context,
+        /*need_add_residual*/ true));
   }
-
-  post_attention_add_norm_->Forward({hidden_buffer_tensors_0[0], residual_buffer[0]}, hidden_buffer_tensors_0);
 
   const size_t dp_group_id = forwarding_context.GetModelInput()->attn_dp_group_id_;
   const int dp_token_offset = forwarding_context.GetModelInput()->attn_dp_group_offsets_[dp_group_id];
@@ -134,13 +146,6 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
   ReleaseMoeBuffers();
 
-  // Mlp/moe all reduce
-  // TODO(zakwang): 非 MOE 层会执行 TP 分卡，后续去除 AllReduce 逻辑时，需要将这些层在各卡上完整持有
-  if (!enable_full_shared_expert_) {
-    PROFILE_EVENT_SCOPE(DS_CommonAllReduce, "DS_CommonAllReduce", forwarding_context.GetCurrentRank());
-    tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context);
-  }
-
   // When using Expert-Parallel (EP) parallelism, Data-Parallel (DP) parallelism is enabled by default.
   // Since under EP, the MOE portion only computes the current DP data, so the data needs to be restored to the complete
   // length when MOE computation is finished.
@@ -158,8 +163,15 @@ Status DeepSeekV3DecoderLayer::Forward(std::vector<Tensor>& residual_buffer, con
   // need_add_residual_after_mlp==false: residual is expected to be added before attn in the next layer for better
   // performance.
   if (need_add_residual_after_mlp) {
-    STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
+    if (forwarding_context.GetModelCommunicator() && enable_full_shared_expert_) {
+      STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], residual_buffer[0], residual_buffer));
+    } else {
+      STATUS_CHECK_RETURN(fused_all_reduce_norm_add_pre_attn_->Forward(
+          reduce_buffer_tensors, residual_buffer, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context,
+          /*need_add_residual*/ true, /*need_apply_norm*/ false));
+    }
   }
+
   return Status();
 }
 

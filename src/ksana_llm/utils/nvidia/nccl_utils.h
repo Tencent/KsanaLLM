@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 #include <nccl.h>
+#include <nvml.h>
 
 #include "fmt/core.h"
 #include "ksana_llm/utils/device_types.h"
@@ -15,26 +16,33 @@
 
 namespace ksana_llm {
 
-// clang-format off
-#define NCCL_CHECK(cmd)                                                                                               \
-    do {                                                                                                              \
-        ncclResult_t r = cmd;                                                                                         \
-        if (r != ncclSuccess) {                                                                                       \
-            KLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__);  \
-            exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
-        }                                                                                                             \
-    } while (0)
+#define NCCL_CHECK(cmd)                                                                                        \
+  do {                                                                                                         \
+    ncclResult_t r = cmd;                                                                                      \
+    if (r != ncclSuccess) {                                                                                    \
+      KLLM_LOG_ERROR << fmt::format("NCCL runtime error:{} {}:{}", ncclGetErrorString(r), __FILE__, __LINE__); \
+      exit(RetCode::RET_INVALID_ARGUMENT);                                                                     \
+    }                                                                                                          \
+  } while (0)
 
-  #define NCCL_CHECK_CALL(cmd, call)                                                                                  \
-  do {                                                                                                                \
-        ncclResult_t r = cmd;                                                                                         \
-        if (r != ncclSuccess) {                                                                                       \
-            KLLM_LOG_ERROR << fmt::format("NCCL {} runtime error:{} {}:{}", call, ncclGetErrorString(r), __FILE__,    \
-            __LINE__);                                                                                                \
-            exit(RetCode::RET_INVALID_ARGUMENT);                                                                      \
-        }                                                                                                             \
-    } while (0)
-// clang-format on
+#define NCCL_CHECK_CALL(cmd, call)                                                                           \
+  do {                                                                                                       \
+    ncclResult_t r = cmd;                                                                                    \
+    if (r != ncclSuccess) {                                                                                  \
+      KLLM_LOG_ERROR << fmt::format("NCCL {} runtime error:{} {}:{}", call, ncclGetErrorString(r), __FILE__, \
+                                    __LINE__);                                                               \
+      exit(RetCode::RET_INVALID_ARGUMENT);                                                                   \
+    }                                                                                                        \
+  } while (0)
+
+#define NVML_CHECK(cmd)                                                                                     \
+  do {                                                                                                      \
+    nvmlReturn_t r = cmd;                                                                                   \
+    if (r != NVML_SUCCESS) {                                                                                \
+      KLLM_LOG_ERROR << fmt::format("NVML runtime error:{} {}:{}", nvmlErrorString(r), __FILE__, __LINE__); \
+      exit(RetCode::RET_INVALID_ARGUMENT);                                                                  \
+    }                                                                                                       \
+  } while (0)
 
 struct NCCLParam {
   int rank{0};

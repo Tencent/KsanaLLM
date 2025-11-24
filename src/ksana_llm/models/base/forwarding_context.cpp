@@ -6,10 +6,6 @@
 
 #include "ksana_llm/utils/singleton.h"
 
-#ifdef ENABLE_CUDA
-#  include "ksana_llm/kernels/nvidia/flash_attn_cpp_wrapper.h"
-#endif
-
 namespace ksana_llm {
 void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, const size_t batch_size,
                                               const size_t max_token_num, const DataType& weight_type) {
@@ -94,8 +90,6 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
                        {"shared_buffer", {shared_buffer_size}}};
 
   // TODO(robertyuan): This buffer is too large
-  // TODO(jinxcwu): Move all env to environment
-  // Use double-checking to avoid cases where environment variables are configured for non-MLA models.
   if (model_config.use_mla) {
     buffers_shape_map["kv_cache_buffer"] = {0};
   } else {
@@ -117,13 +111,15 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
 
   // NOTE(karlluo): all create tensor used dynamic memory pool
   hidden_buffer_0 = buffer_mgr->CreateBufferTensor("hidden_buffer_0", buffers_shape_map["hidden_buffer_0"], weight_type,
-                                                   ksana_llm::LOCATION_DEVICE);
+                                                   MemoryLocation::LOCATION_DEVICE);
   hidden_buffer_1 = buffer_mgr->CreateBufferTensor("hidden_buffer_1", buffers_shape_map["hidden_buffer_1"], weight_type,
-                                                   ksana_llm::LOCATION_DEVICE);
-  shared_buffer = buffer_mgr->CreateBufferTensor("shared_buffer", buffers_shape_map["shared_buffer"], weight_type,
-                                                 ksana_llm::LOCATION_DEVICE);
+                                                   MemoryLocation::LOCATION_DEVICE);
+  // When using multicast, place shared_buffer (used for allreduce) at the multicast address
+  shared_buffer = buffer_mgr->CreateBufferTensor(
+      "shared_buffer", buffers_shape_map["shared_buffer"], weight_type,
+      context->ext->IsMulticastSupported() ? MemoryLocation::LOCATION_MULTICAST : MemoryLocation::LOCATION_DEVICE);
   kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
-                                                   ksana_llm::LOCATION_DEVICE, stream);
+                                                   MemoryLocation::LOCATION_DEVICE, stream);
 
   // mtp_hidden_buffer_tensors will used across main forward and nextn forward
   TensorBuffer* mtp_hidden_buffer =
@@ -238,6 +234,15 @@ void ForwardingContext::Init(std::shared_ptr<Context> context, int rank, const M
 
 void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest*>& forward_reqs, RunMode run_mode) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
+
+  if (context_->ext->IsMulticastSupported()) {
+#ifdef ENABLE_CUDA
+    // Initialize unicast/multicast pointers in parallel across all ranks
+    // This must be done after allocating multicast memory
+    NvlsMcastMemory::GetInstance()->InitMcastMemory(rank_);
+#endif
+  }
+
   model_input_->ParseFromRequests(forward_reqs, run_mode);
 
   // create forward shape tensor

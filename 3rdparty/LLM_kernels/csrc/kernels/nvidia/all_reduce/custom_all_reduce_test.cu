@@ -41,15 +41,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-#define NCCLCHECK(cmd)                                                                      \
-  do {                                                                                      \
-    ncclResult_t r = cmd;                                                                   \
-    if (r != ncclSuccess) {                                                                 \
-      printf("Failed, NCCL error %s:%d '%s'\n", __FILE__, __LINE__, ncclGetErrorString(r)); \
-      exit(EXIT_FAILURE);                                                                   \
-    }                                                                                       \
-  } while (0)
-
 __global__ void dummy_kernel() {
   for (int i = 0; i < 100; i++) __nanosleep(1000000);  // 100ms
 }

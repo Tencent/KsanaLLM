@@ -173,6 +173,20 @@ void NvidiaContextExtension<T>::Initialize() {
     thread.join();
   }
 
+  // For performance reasons, enable multicast only when using more than 4 GPUs
+  is_multicast_enable_ = (base_ptr_->tensor_parallel_size_ > 4);
+  for (size_t worker_id = 0; worker_id < base_ptr_->tensor_parallel_size_ && is_multicast_enable_; ++worker_id) {
+    int multicast_supported = 0;
+    CU_CHECK(cuDeviceGetAttribute(&multicast_supported, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, worker_id));
+    is_multicast_enable_ &= (multicast_supported != 0);
+  }
+  if (is_multicast_enable_) {
+    // Init nvls mcast memory if required
+    NvlsMcastMemory::GetInstance()->Initialize(base_ptr_->tensor_parallel_size_);
+  }
+  KLLM_LOG_INFO << fmt::format("is_p2p_enable: {}, is_full_nvlink: {}, is_multicast_enable: {}", is_p2p_enable_,
+                               is_full_nvlink_, is_multicast_enable_);
+
   // init nccl async
   std::thread([this]() { InitNcclParam(); }).detach();
 

@@ -54,9 +54,7 @@ template void RandomGPUBuffer(unsigned long* data_ptr, const size_t n_elems, con
 template void RandomGPUBuffer(uint32_t* data_ptr, const size_t n_elems, const float max_val, const float min_val);
 
 template <typename T>
-__global__ void ResetGPUBufferWithStepKernel(T* buffer, const size_t size,
-                                             const float max_val,
-                                             const float min_val,
+__global__ void ResetGPUBufferWithStepKernel(T* buffer, const size_t size, const float max_val, const float min_val,
                                              const float val_step) {
   const int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   for (size_t index = idx; index < size; index += blockDim.x * gridDim.x) {
@@ -66,21 +64,18 @@ __global__ void ResetGPUBufferWithStepKernel(T* buffer, const size_t size,
 }
 
 template <typename T>
-void ResetGPUBufferWithStep(T* data_ptr, size_t n_elems, const float max_val,
-                            const float min_val, const float val_step) {
+void ResetGPUBufferWithStep(T* data_ptr, size_t n_elems, const float max_val, const float min_val,
+                            const float val_step) {
   constexpr int32_t random_tile_size = DEFAULT_CUDA_BLOCK_HALF_THREADS_NUM;
-  ResetGPUBufferWithStepKernel<T><<<random_tile_size, random_tile_size>>>(
-      data_ptr, n_elems, max_val, min_val, val_step);
+  ResetGPUBufferWithStepKernel<T>
+      <<<random_tile_size, random_tile_size>>>(data_ptr, n_elems, max_val, min_val, val_step);
 }
 
-template void ResetGPUBufferWithStep(float* data_ptr, const size_t n_elems,
-                                     const float max_val, const float min_val,
+template void ResetGPUBufferWithStep(float* data_ptr, const size_t n_elems, const float max_val, const float min_val,
                                      const float step);
-template void ResetGPUBufferWithStep(half* data_ptr, const size_t n_elems,
-                                     const float max_val, const float min_val,
+template void ResetGPUBufferWithStep(half* data_ptr, const size_t n_elems, const float max_val, const float min_val,
                                      const float step);
-template void ResetGPUBufferWithStep(__nv_bfloat16* data_ptr,
-                                     const size_t n_elems, const float max_val,
+template void ResetGPUBufferWithStep(__nv_bfloat16* data_ptr, const size_t n_elems, const float max_val,
                                      const float min_val, const float step);
 
 template <typename T_INPUT, typename T_STEP>

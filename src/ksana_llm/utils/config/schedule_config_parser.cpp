@@ -597,6 +597,10 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
     batch_scheduler_config_.max_step_token_num = batch_scheduler_config_.max_token_len;
   }
 
+  // Align max_step_token_num to tp_size for even token distribution across ranks
+  batch_scheduler_config_.max_step_token_num =
+      RoundUp(batch_scheduler_config_.max_step_token_num, runtime_config_.parallel_basic_config.tensor_parallel_size);
+
   runtime_config_.parallel_basic_config.moe_tensor_para_size =
       runtime_config_.parallel_basic_config.tensor_parallel_size /
       runtime_config_.parallel_basic_config.expert_parallel_size;

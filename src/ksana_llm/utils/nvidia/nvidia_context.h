@@ -42,9 +42,10 @@ class NvidiaContextExtension {
   std::vector<void*>& GetTrtAllReduceFlags() { return trt_reduce_flags_; }
   std::vector<void*>& GetTrtAllReduceWorkspaces() { return trt_reduce_workspaces_; }
 
-  bool IsFullNvLink() { return is_full_nvlink_; }
+  const bool IsFullNvLink() const { return is_full_nvlink_; }
 
-  const bool IsSupportedP2PAccess() { return is_p2p_enable_; }
+  const bool IsP2PAccessSupported() const { return is_p2p_enable_; }
+  const bool IsMulticastSupported() const { return is_multicast_enable_; }
 
   uint32_t GetComputeCapacity() { return sm_; }
   uint32_t GetCudaVersion() { return cuda_ver_; }
@@ -108,6 +109,9 @@ class NvidiaContextExtension {
   std::atomic_bool init_done_{false};
 
   bool is_p2p_enable_{false};
+  // NVLink4 provides multicast support
+  // Refer to http://docs.nvidia.com/networking/software/accelerator-software/index.html#nvidia-sharp
+  bool is_multicast_enable_{false};
 };
 
 template <>

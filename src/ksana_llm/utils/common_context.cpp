@@ -21,7 +21,7 @@ ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_
   int device_num;
   GetDeviceCount(&device_num);
   KLLM_CHECK_WITH_INFO(
-      device_num >= tensor_parallel_size_,
+      device_num >= static_cast<int>(tensor_parallel_size_),
       fmt::format("{} tensor_parallel_size should not bigger than devices num: {}", tensor_parallel_size_, device_num));
 
   memory_manage_streams_.reserve(tensor_parallel_size_);
@@ -35,7 +35,7 @@ ContextT<T>::ContextT(const size_t tensor_parallel_size, const size_t attn_data_
   d2h_streams_.reserve(tensor_parallel_size_);
   d2d_streams_.reserve(tensor_parallel_size_);
   comm_streams_.reserve(tensor_parallel_size_);
-  for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
+  for (size_t worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     InitStreams(worker_id);
   }
 
@@ -58,7 +58,7 @@ template <int T>
 ContextT<T>::~ContextT() {
   DestroyExtension();
 
-  for (int worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
+  for (size_t worker_id = 0; worker_id < tensor_parallel_size_; ++worker_id) {
     memory_manage_streams_[worker_id].Destroy();
     compute_streams_[worker_id].Destroy();
     comm_nodes_streams_[worker_id].Destroy();

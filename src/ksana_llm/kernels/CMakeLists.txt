@@ -14,7 +14,7 @@ if(WITH_CUDA)
   list(FILTER nvidia_kernels_SRCS EXCLUDE REGEX ".*test.cpp")
 
   list(APPEND nvidia_kernels_LIBS -lcudart llm_kernels_nvidia_kernel_paged_attention
-    llm_kernels_nvidia_kernel_embedding
+    llm_kernels_nvidia_kernel_embedding llm_kernels_nvidia_kernel_tokenweave
     llm_kernels_nvidia_kernel_layernorm llm_kernels_nvidia_kernel_gemm_wrapper
     llm_kernels_nvidia_kernel_add llm_kernels_nvidia_kernel_add_mul llm_kernels_nvidia_kernel_activation
     llm_kernels_nvidia_kernel_assemble_tokens_hidden llm_kernels_nvidia_kernel_cast

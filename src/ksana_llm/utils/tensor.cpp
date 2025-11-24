@@ -7,16 +7,16 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
-#include <stdexcept>
 #include <string>
-#include <unordered_map>
 
 #include "3rdparty/LLM_kernels/csrc/utils/common.h"
 #include "ksana_llm/utils/common_device.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
 #include "ksana_llm/utils/ret_code.h"
-#include "ksana_llm/utils/status.h"
+#ifdef ENABLE_CUDA
+#  include "ksana_llm/utils/nvidia/cuda_utils.h"
+#endif
 
 namespace ksana_llm {
 
@@ -34,10 +34,6 @@ Tensor::Tensor(MemoryLocation location, DataType dtype, const std::vector<size_t
   if (dtype == DataType::TYPE_INVALID) {
     // For dummy tensor, with type TYPE_INVALID, checker is disabled.
     return;
-  }
-
-  if (this->shape.empty()) {
-    KLLM_THROW("Tensor could not be created with empty shape");
   }
 
   if (data_ptr != nullptr) {
@@ -112,8 +108,19 @@ void Tensor::AcquireImpl() {
           Malloc(&data_ptr, total_bytes);
         }
       }
+#ifdef ENABLE_CUDA
+    } else if (location == MemoryLocation::LOCATION_MULTICAST) {
+      // NOTE: Use singleton to access NvlsMcastMemory without modifying base APIs
+      auto nvls_mcast_memory = NvlsMcastMemory::GetInstance();
+      KLLM_CHECK(nvls_mcast_memory->GetNvlsHandles()[device_id] == nullptr);
+      nvls_mcast_memory->AllocMcastMemory(device_id, GetTotalBytes());
+      // Set to the unicast pointer for this rank
+      data_ptr = reinterpret_cast<void*>(nvls_mcast_memory->GetNvlsHandles()[device_id]->uc_ptr);
+#endif
     } else if (location == MemoryLocation::LOCATION_HOST) {
       HostAlloc(&data_ptr, total_bytes);
+    } else {
+      KLLM_THROW(fmt::format("Unexpected memory location: {}", location));
     }
   }
 }
@@ -155,6 +162,10 @@ void Tensor::ReleaseImpl() {
           Free(data_ptr);
         }
       }
+#ifdef ENABLE_CUDA
+    } else if (location == MemoryLocation::LOCATION_MULTICAST) {
+      NvlsMcastMemory::GetInstance()->FreeMcastMemory(device_id);
+#endif
     } else if (location == MemoryLocation::LOCATION_HOST) {
       HostFree(data_ptr);
     }

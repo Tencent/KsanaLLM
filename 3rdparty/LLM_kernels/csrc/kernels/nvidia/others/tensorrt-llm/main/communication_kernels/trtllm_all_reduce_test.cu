@@ -16,21 +16,11 @@
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
-
 using namespace llm_kernels::utils;
 
 namespace llm_kernels {
 namespace nvidia {
 namespace test {
-
-#define NCCLCHECK(cmd)                                                                      \
-  do {                                                                                      \
-    ncclResult_t r = cmd;                                                                   \
-    if (r != ncclSuccess) {                                                                 \
-      printf("Failed, NCCL error %s:%d '%s'\n", __FILE__, __LINE__, ncclGetErrorString(r)); \
-      exit(EXIT_FAILURE);                                                                   \
-    }                                                                                       \
-  } while (0)
 
 class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
  public:
@@ -85,7 +75,7 @@ class LlamaNvidiaTrtllmAllReduceTestSuit : public NvidiaTestSuitBase {
     for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
       run_threads.emplace_back(std::make_unique<std::thread>(Initialize, cur_rank));
     }
-    for (int cur_rank = 0; cur_rank < device_count; ++cur_rank) {
+    for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
       run_threads[cur_rank]->join();
     }
   }

@@ -99,7 +99,7 @@ list(FILTER MACHETE_SRCS EXCLUDE REGEX ".*test.cu")
 add_library(llm_kernels_nvidia_kernel_machete STATIC ${MACHETE_SRCS} ${MACHETE_INSTANTIATIONS})
 set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET llm_kernels_nvidia_kernel_machete PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(llm_kernels_nvidia_kernel_machete PUBLIC fmt -lcuda -lcudart -lnccl -lnvidia-ml 
+target_link_libraries(llm_kernels_nvidia_kernel_machete PUBLIC fmt -lcuda -lcudart
     llm_kernels_nvidia_utils)
 target_link_libraries(llm_kernels_nvidia_kernel_machete PRIVATE cutlass_c3x)
 

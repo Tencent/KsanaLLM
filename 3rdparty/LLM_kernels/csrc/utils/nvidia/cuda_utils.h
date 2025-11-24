@@ -6,21 +6,54 @@
 
 #include <cublasLt.h>
 #include <cublas_v2.h>
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <nccl.h>
 #include <nvml.h>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include "csrc/utils/nvidia/assert.h"
 
+#include "csrc/utils/nvidia/assert.h"
 #ifdef ENABLE_FP8
 #  include "cuda_fp8_utils.h"
 #endif
 
 namespace llm_kernels {
 namespace utils {
+
+#define CUCHECK(cmd)                                                               \
+  do {                                                                             \
+    CUresult retval = cmd;                                                         \
+    if (retval != CUDA_SUCCESS) {                                                  \
+      const char* error_string;                                                    \
+      cuGetErrorString(retval, &error_string);                                     \
+      printf("Failed: Cuda error %s:%d '%s'\n", __FILE__, __LINE__, error_string); \
+      exit(EXIT_FAILURE);                                                          \
+    }                                                                              \
+  } while (0)
+
+#define NVMLCHECK(cmd)                                                                        \
+  do {                                                                                        \
+    nvmlReturn_t retval = cmd;                                                                \
+    if (retval != NVML_SUCCESS) {                                                             \
+      printf("Failed: NVML error %s:%d '%s'\n", __FILE__, __LINE__, nvmlErrorString(retval)); \
+      exit(EXIT_FAILURE);                                                                     \
+    }                                                                                         \
+  } while (0)
+
+#define NCCLCHECK(cmd)                                                                      \
+  do {                                                                                      \
+    ncclResult_t r = cmd;                                                                   \
+    if (r != ncclSuccess) {                                                                 \
+      printf("Failed, NCCL error %s:%d '%s'\n", __FILE__, __LINE__, ncclGetErrorString(r)); \
+      exit(EXIT_FAILURE);                                                                   \
+    }                                                                                       \
+  } while (0)
 
 constexpr int32_t NVIDIA_VOLTA_GPU_COMPUTE_CAPABILITY = 70;
 constexpr int32_t NVIDIA_AGX_XAVIER_GPU_COMPUTE_CAPABILITY = 72;
