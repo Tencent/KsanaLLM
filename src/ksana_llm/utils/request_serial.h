@@ -23,10 +23,11 @@ struct TargetRequestSerial {
   std::vector<int> token_id;
   std::vector<std::pair<int, int>> slice_pos;
   std::string token_reduce_mode;
+  int input_top_logprobs_num;
 
-  MSGPACK_DEFINE_MAP(target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode);
+  MSGPACK_DEFINE_MAP(target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode, input_top_logprobs_num);
   NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(TargetRequestSerial, target_name, cutoff_layer, token_id, slice_pos,
-                                              token_reduce_mode);
+                                              token_reduce_mode, input_top_logprobs_num);
 };
 
 struct EmbeddingSliceSerial {
@@ -75,10 +76,11 @@ struct TargetResponseSerial {
 
 struct ResponseSerial {
   std::vector<int> input_token_ids;
+  std::vector<std::vector<std::vector<std::pair<int, float>>>> input_top_logprobs;
   std::vector<TargetResponseSerial> response;
 
-  MSGPACK_DEFINE_MAP(input_token_ids, response);
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ResponseSerial, input_token_ids, response);
+  MSGPACK_DEFINE_MAP(input_token_ids, input_top_logprobs, response);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ResponseSerial, input_token_ids, input_top_logprobs, response);
 };
 
 // Forward response interface

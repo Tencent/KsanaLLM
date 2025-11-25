@@ -31,6 +31,8 @@ struct SamplingDeviceParameter {
   int vocab_size = 0;
   int max_topK = 0;
   int bs = 0;
+  // The max number of input tokens logprobs of reqs.
+  int max_input_top_logprobs_num = 0;
 };
 
 class BaseSampling {

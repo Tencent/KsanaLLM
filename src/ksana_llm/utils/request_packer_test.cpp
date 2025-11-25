@@ -52,6 +52,7 @@ TEST_F(RequestPackerTest, SimpleUnpack) {
   target.target_name = "logits";
   target.slice_pos.emplace_back(0, 0);  // [0, 0]
   target.token_reduce_mode = "GATHER_TOKEN_ID";
+  target.input_top_logprobs_num = 0;
   request.request_target.push_back(target);
   batch_request.requests.push_back(request);
 
@@ -67,6 +68,7 @@ TEST_F(RequestPackerTest, SimpleUnpack) {
   ASSERT_EQ(ksana_python_inputs[0]->request_target[target.target_name].slice_pos, target.slice_pos);
   ASSERT_EQ(ksana_python_inputs[0]->request_target[target.target_name].token_reduce_mode,
             TokenReduceMode::GATHER_TOKEN_ID);
+  ASSERT_EQ(ksana_python_inputs[0]->request_target[target.target_name].input_top_logprobs_num, 0);
 }
 
 // Test for complex unpacking: multiple requests and multiple targets.
@@ -76,10 +78,12 @@ TEST_F(RequestPackerTest, ComplexUnpack) {
   target.slice_pos.emplace_back(0, 1);    // [0, 1]
   target.slice_pos.emplace_back(-2, -2);  // [-2, -2]
   target.token_reduce_mode = "GATHER_TOKEN_ID";
+  target.input_top_logprobs_num = 0;
   TargetRequestSerial target2;
   target2.target_name = "layernorm";
   target2.slice_pos.emplace_back(2, 3);  // [2, 3]
   target2.token_reduce_mode = "GATHER_ALL";
+  target2.input_top_logprobs_num = 0;
   request.request_target.push_back(target);
   request.request_target.push_back(target2);
   batch_request.requests.push_back(request);
@@ -193,16 +197,28 @@ TEST_F(RequestPackerTest, WrongInput) {
             std::string::npos);
 
   target.slice_pos.back().second = -1;
+  target.input_top_logprobs_num = -1;
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
   request_bytes.assign(sbuf.data(), sbuf.size());
-  ASSERT_NE(
-      request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
-          .GetMessage()
-          .find("Get the last position is not supported for logits in the 'GATHER_TOKEN_ID' token reduction mode."),
-      std::string::npos);
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
+                .GetMessage()
+                .find("Specifying input_top_logprobs_num for logits output is not supported. it should be >= 0."),
+            std::string::npos);
   target.slice_pos.pop_back();
 
+  target.input_top_logprobs_num = 2;
+  target.token_reduce_mode = "GATHER_ALL";
+  sbuf.clear();
+  msgpack::pack(sbuf, batch_request);
+  request_bytes.assign(sbuf.data(), sbuf.size());
+  ASSERT_NE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/x-msgpack")
+                .GetMessage()
+                .find("Specifying return input_top_logprobs_num > 0 for logits output with GATHER_ALL "
+                      "token_reduce_mode is not supported"),
+            std::string::npos);
+
+  target.token_reduce_mode = "GATHER_TOKEN_ID";
   target.token_id = std::vector<int>{2};
   sbuf.clear();
   msgpack::pack(sbuf, batch_request);
@@ -305,6 +321,7 @@ TEST_F(RequestPackerTest, LogitsGatherAllTest) {
   target.target_name = "logits";
   target.slice_pos.emplace_back(0, 0);      // [0, 0]
   target.token_reduce_mode = "GATHER_ALL";  // Using GATHER_ALL mode for logits
+  target.input_top_logprobs_num = 0;
   request.request_target.push_back(target);
   batch_request.requests.push_back(request);
 

@@ -78,6 +78,7 @@ class SamplerTest : public testing::Test {
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
     sample_req.sampling_config = &sampling_config_;
     sample_req.last_step_token_num = last_step_token_num_;
+    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
     return sample_req;
   }
 
@@ -306,6 +307,64 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
 #endif
 
   sampling_config_.logprobs_num = 0;
+}
+
+TEST_F(SamplerTest, InputLogprobsSamplerTest) {
+#ifdef ENABLE_TOPS
+  GTEST_SKIP_("ZiXiao not support this test temporary.");
+#endif
+  SamplingRequest sample_req = GetSamlingRequest();
+
+  sample_req.sampling_config->temperature = 0.8f;
+  sample_req.sampling_config->logprobs_num = 0;
+  std::map<std::string, ksana_llm::TargetDescribe> request_target;
+  ksana_llm::TargetDescribe target_describe;
+  target_describe.slice_pos.push_back({0, 2});  // 获取前三个 token 的 logits
+  target_describe.token_reduce_mode = TokenReduceMode::GATHER_TOKEN_ID;
+  target_describe.input_top_logprobs_num = 2;
+  request_target["logits"] = target_describe;
+  sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+  sample_req.logits_custom_length = 3;
+  sample_req.sampling_token_num = sample_req.logits_custom_length;
+  std::vector<float> logits_buf_cpu = {0.0, 1.0, 2.0, 1.5, 0.7, 1.8};
+  SetLogitsBuf(logits_buf_cpu);
+
+  std::map<std::string, PythonTensor> response_map;
+  PythonTensor python_tensor;
+  response_map["logits"] = python_tensor;
+  sample_req.response = &response_map;
+
+  std::vector<SamplingRequest> sample_reqs = {sample_req};
+
+  // logprobs is not supported in ACL.
+#ifdef ENABLE_CUDA
+  sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
+  // 验证 CalcInputLogprobs 计算结果
+  EXPECT_EQ(sample_req.logits_custom_length, (*sample_req.logprobs).size());
+  EXPECT_EQ(target_describe.input_top_logprobs_num, (*sample_req.logprobs)[0].size());
+
+  if (!sample_req.logprobs->empty()) {
+    MemcpyAsync(logits_buf_cpu.data(), logits_buf_, sample_req.sampling_token_num * sizeof(float),
+                MEMCPY_DEVICE_TO_HOST, context_->GetH2DStreams()[device_id_]);
+    StreamSynchronize(context_->GetH2DStreams()[device_id_]);
+
+    EXPECT_NEAR(-10.37f, logits_buf_cpu[0], 1e-2);
+    EXPECT_NEAR(-9.12f, logits_buf_cpu[1], 1e-2);
+    EXPECT_NEAR(-7.87f, logits_buf_cpu[2], 1e-2);
+
+    const auto &logprobs_result = (*sample_req.logprobs);
+    EXPECT_EQ(sample_req.logits_custom_length, logprobs_result.size());
+    EXPECT_EQ(target_describe.input_top_logprobs_num, logprobs_result[0].size());
+    EXPECT_EQ(2, logprobs_result[0][0].first);
+    EXPECT_NEAR(-7.87f, logprobs_result[0][0].second, 1e-2);
+    EXPECT_EQ(5, logprobs_result[0][1].first);
+    EXPECT_NEAR(-8.12f, logprobs_result[0][1].second, 1e-2);
+    EXPECT_EQ(1, logprobs_result[1][0].first);
+    EXPECT_NEAR(-10.37f, logprobs_result[1][0].second, 1e-2);
+    EXPECT_EQ(0, logprobs_result[1][1].first);
+    EXPECT_NEAR(-10.37f, logprobs_result[1][1].second, 1e-2);
+  }
+#endif
 }
 
 TEST_F(SamplerTest, MTPSampleTest) {

@@ -197,6 +197,7 @@ class LlamaTest : public testing::Test {
     sample_req.logits_buf = std::vector<float*>{llama->GetLogitsPtr(schedule_id)};
     SamplingConfig sampling_config;
     sample_req.sampling_config = &sampling_config;
+    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 

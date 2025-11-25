@@ -128,12 +128,14 @@ def show_response(result):
         for batch_result in result["responses"]:
             if isinstance(batch_result, dict) and "response" in batch_result:
                 input_token_ids = batch_result["input_token_ids"]
+                input_top_logprobs = batch_result["input_top_logprobs"]
                 for response in batch_result["response"]:
                     target = response["target_name"]
                     python_tensor = response["tensor"]
                     print(
                         f"input_token_ids : {input_token_ids}, target : {target}, "
-                        f"tensor : \n{python_tensor_to_numpy(python_tensor)}"
+                        f"tensor : \n{python_tensor_to_numpy(python_tensor)},"
+                        f"input_top_logprobs : {input_top_logprobs}"
                     )
         print(f"message: \"{result['message']}\", code: {result['code']}")
     else:
@@ -178,6 +180,8 @@ if __name__ == "__main__":
                             # "slice_pos" : [[0,0],[2,5],[7,7]], # Set sorted intervals (negative indices are allowed)
                             "token_reduce_mode": "GATHER_ALL",  # For "layernorm", "transformer" and "logits"
                             # "token_reduce_mode" : "GATHER_TOKEN_ID", # Only for "logits"
+                            # Only for "logits". Set the number of input token top logprobs to return.
+                            "input_top_logprobs_num" : 0,
                         },
                     ],
                 },

@@ -254,6 +254,7 @@ class DeepSeekV3Test : public testing::Test {
     sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
     sample_req.ngram_dict = &ngram_dict;
     sample_req.logits_buf = std::vector<float *>{deepseek_v3->GetLogitsPtr(multi_batch_id)};
+    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
     SamplingConfig sample_config;
     sample_config.num_beams = 1;
     sample_config.topk = 1;

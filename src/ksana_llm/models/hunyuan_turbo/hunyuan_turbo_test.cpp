@@ -197,6 +197,7 @@ class HunyuanTurboTest : public testing::Test {
     sample_config.no_repeat_ngram_size = 0;
     sample_config.encoder_no_repeat_ngram_size = 0;
     sample_req.sampling_config = &sample_config;
+    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
 
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;

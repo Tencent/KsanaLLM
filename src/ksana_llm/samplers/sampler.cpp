@@ -307,7 +307,9 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
           size_t req_logits_offset = (sampling_reqs[i].logits_offset + probs_index) * vocab_size;
           // Add destination and source pointers for copying.
           dst_ptr_vector.push_back(probs_output[i].data() + probs_index);
-          src_ptr_vector.push_back(sampling_reqs[i].logits_buf[rank_] + req_logits_offset + input_tokens[index + 1]);
+          // For any part that exceeds the input token size, directly take the value of the zeroth position.
+          size_t token_idx_offset = (index + 1) < input_tokens.size() ? input_tokens[index + 1] : 0;
+          src_ptr_vector.push_back(sampling_reqs[i].logits_buf[rank_] + req_logits_offset + token_idx_offset);
           probs_index++;
         }
       }
@@ -366,7 +368,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
   const size_t max_logits_num =
       batch_schedule_config_.max_batch_size * batch_schedule_config_.max_decode_tokens_per_req;
 
-  for (const auto& sampling_req : sampling_reqs) {
+  for (auto& sampling_req : sampling_reqs) {
     SamplingConfig* const sampling_config = sampling_req.sampling_config;
     STATUS_CHECK_RETURN(sampling_config->VerifyArgs());
     sampling_device_parameter.logits_softmax |= sampling_req.logits_custom_length > 0;
@@ -394,6 +396,13 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     use_top_k |= sampling_config->topk > 1;
     use_top_p |= sampling_config->topp != 1.0f;
     use_temperature |= sampling_config->temperature != 1.0f;
+    auto it = sampling_req.request_target->find("logits");
+    if (it != sampling_req.request_target->end()) {
+      int input_top_logprobs_num = it->second.input_top_logprobs_num;
+      sampling_req.input_top_logprobs_num = input_top_logprobs_num;
+      sampling_device_parameter.max_input_top_logprobs_num =
+          std::max(sampling_device_parameter.max_input_top_logprobs_num, input_top_logprobs_num);
+    }
 
     const int vocab_size = batch_schedule_config_.max_vocab_size;
     if (sampling_config->repetition_penalty != 1.0f) {
@@ -427,6 +436,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
 
   // top_p and temperature are applyed on the logits after softmax.
   sampling_device_parameter.logits_softmax |= use_top_p | use_temperature;
+  sampling_device_parameter.logits_softmax &= (sampling_device_parameter.max_input_top_logprobs_num == 0);
   SamplingParameterToDevice(use_top_k, use_top_p, use_temperature, sampling_device_parameter, stream);
   return Status();
 }
@@ -457,6 +467,39 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
     KLLM_THROW("Softmax is not supported on NPU.");
 #endif
   }
+
+  if (sampling_device_parameter.max_input_top_logprobs_num > 0) {
+    int max_top_num = sampling_device_parameter.max_input_top_logprobs_num;
+    std::vector<std::vector<std::pair<int, float>>> input_top_logprobs_res(
+        sampling_device_parameter.bs, std::vector<std::pair<int, float>>(max_top_num));
+#ifdef ENABLE_CUDA
+    CalcInputLogprobs(device_logits, sampling_device_parameter.device_temperatures,
+                      sampling_device_parameter.vocab_size, sampling_device_parameter.bs, input_top_logprobs_res,
+                      max_top_num);
+#else
+    KLLM_THROW("Input logprobs calculation is not supported on NPU.");
+#endif
+    int pruned_len = 0;
+    for (size_t req_index = 0; req_index < sampling_reqs.size(); ++req_index) {
+      auto& sampling_req = sampling_reqs[req_index];
+      if (sampling_req.enable_mtp_sampler) {
+        KLLM_LOG_WARNING << "MTP sampler not support input_top_logprobs, please set mtp_step_num = 0";
+        continue;
+      }
+      sampling_req.logprobs->clear();
+      if (sampling_req.logits_custom_length <= 0) {
+        sampling_req.logprobs->emplace_back();
+      } else {
+        for (int i = 0; i < sampling_req.logits_custom_length; ++i) {
+          sampling_req.logprobs->emplace_back(
+              input_top_logprobs_res[pruned_len + i].begin(),
+              input_top_logprobs_res[pruned_len + i].begin() + sampling_req.input_top_logprobs_num);
+        }
+        pruned_len += sampling_req.logits_custom_length;
+      }
+    }
+  }
+
   // Get the next tokens based on logits and the sampling parameters.
   if (sampling_device_parameter.do_sampling) {
     STATUS_CHECK_RETURN(topk_sampling_->Forward(device_logits, device_output_tokens_, nullptr,

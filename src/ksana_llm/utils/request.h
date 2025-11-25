@@ -113,6 +113,8 @@ struct TargetDescribe {
   std::vector<std::pair<int, int>> slice_pos;
   // The reduction operation mode for each token_id when returning values.
   TokenReduceMode token_reduce_mode;
+  // The number of top logprobs to return for each token in the input.
+  int input_top_logprobs_num = 0;
 };
 
 struct KsanaPythonInput {
@@ -187,6 +189,9 @@ class Request {
 
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
+
+  // The number of top logprobs to return for each token in the input.
+  int input_top_logprobs_num = 0;
 
   // Embedding slice used to refit input embedding
   EmbeddingSlice& input_refit_embedding;
@@ -284,6 +289,9 @@ struct KsanaPythonOutput {
 
   // The result of request_target.
   std::map<std::string, PythonTensor> response;
+
+  // The top logprobs of input tokens.
+  std::vector<std::vector<std::pair<int, float>>> input_top_logprobs;
 
   // The finish status of this request.
   Status finish_status;

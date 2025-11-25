@@ -69,6 +69,7 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
     for (auto [l, r] : it->second.slice_pos) {
       logits_custom_length += (r - l + 1);
     }
+    input_top_logprobs_num = it->second.input_top_logprobs_num;
   }
 
   // Process structed generation config
@@ -98,7 +99,7 @@ KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
   for (const auto& [output, req_logprobs, total_score] : req->output_group) {
     std::vector<int> req_output = {output.begin() + input_tokens.size(), output.end()};
     output_tokens.emplace_back(req_output);
-    if (req->sampling_config.logprobs_num > 0) {
+    if (req->sampling_config.logprobs_num > 0 || req->input_top_logprobs_num > 0) {
       logprobs.emplace_back(req_logprobs);
     }
   }
@@ -181,12 +182,16 @@ Status KsanaPythonInput::VerifyRequestTarget() {
       if (!target_desc.token_id.empty()) {
         KLLM_THROW(fmt::format("Specifying token_id for {} output is not supported.", target_name));
       }
-      // Ensure the GATHER_TOKEN_ID reduce mode does not use the last logits, as it might be unsupported or
-      // not intended.
-      if (target_desc.token_reduce_mode == TokenReduceMode::GATHER_TOKEN_ID && !target_desc.slice_pos.empty() &&
-          target_desc.slice_pos.back().second + 1 == input_tokens_num) {
+
+      if (target_desc.input_top_logprobs_num < 0) {
+        KLLM_THROW(fmt::format("Specifying input_top_logprobs_num for {} output is not supported. it should be >= 0.",
+                               target_name));
+      }
+
+      if (target_desc.input_top_logprobs_num > 0 && target_desc.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
         KLLM_THROW(
-            fmt::format("Get the last position is not supported for {} in the 'GATHER_TOKEN_ID' token reduction mode.",
+            fmt::format("Specifying return input_top_logprobs_num > 0 for {} output with GATHER_ALL token_reduce_mode "
+                        "is not supported.",
                         target_name));
       }
     }

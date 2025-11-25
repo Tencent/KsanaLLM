@@ -282,6 +282,9 @@ void Max(float* out, float* a, float* b, int n, int device_rank);
 void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, int logprobs_num, float* logprobs,
                   int64_t* token_ids);
 
+void CalcInputLogprobs(float* logits, float* temperatures, int vocab_size, int bs,
+                       std::vector<std::vector<std::pair<int, float>>>& input_top_logprobs_res, int max_top_num);
+
 #ifdef ENABLE_FP8
 // The input address of each token must be aligned to 16-byte.
 // This alignment is required by the underlying CUDA kernels (v2 version) that utilize vectorized data access.

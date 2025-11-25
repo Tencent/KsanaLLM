@@ -980,6 +980,35 @@ void CalcLogprobs(float* logits, float* temperatures, int vocab_size, int bs, in
   memcpy(token_ids, logits_idx.data_ptr<int64_t>(), logprobs_num * bs * sizeof(int64_t));
 }
 
+void CalcInputLogprobs(float* logits, float* temperatures, int vocab_size, int bs,
+                       std::vector<std::vector<std::pair<int, float>>>& input_top_logprobs_res, int max_top_num) {
+  auto options = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kFloat32);
+  auto input_logits_tensor = torch::from_blob(logits, {bs, vocab_size}, options);
+
+  if (temperatures != nullptr) {
+    auto temperatures_tensor = torch::from_blob(temperatures, {bs}, options);
+    input_logits_tensor = input_logits_tensor.div_(temperatures_tensor.unsqueeze_(1));
+  }
+  input_logits_tensor = input_logits_tensor.log_softmax(-1);
+  CUDA_CHECK(
+      cudaMemcpy(logits, input_logits_tensor.data_ptr(), bs * vocab_size * sizeof(float), cudaMemcpyDeviceToDevice));
+
+  auto top_ret = input_logits_tensor.topk(max_top_num, 1);
+  auto top_values_tensor = std::get<0>(top_ret).contiguous().to(torch::kCPU).view({-1});
+  auto top_indices_tensor = std::get<1>(top_ret).contiguous().to(torch::kCPU).view({-1});
+  std::vector<float> input_top_logprobs(bs * max_top_num);
+  std::vector<int64_t> input_top_ids(bs * max_top_num);
+  memcpy(input_top_logprobs.data(), top_values_tensor.data_ptr<float>(), bs * max_top_num * sizeof(float));
+  memcpy(input_top_ids.data(), top_indices_tensor.data_ptr<int64_t>(), bs * max_top_num * sizeof(int64_t));
+
+  for (int i = 0; i < bs; ++i) {
+    for (int j = 0; j < max_top_num; ++j) {
+      input_top_logprobs_res[i][j] =
+          std::make_pair(input_top_ids[i * max_top_num + j], input_top_logprobs[i * max_top_num + j]);
+    }
+  }
+}
+
 template <typename T>
 Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
               void* buffer_ptr) {

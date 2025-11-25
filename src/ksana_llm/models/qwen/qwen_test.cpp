@@ -215,6 +215,8 @@ class QwenTest : public testing::Test {
     sample_req.logits_buf = std::vector<float *>{qwen->GetLogitsPtr(multi_batch_id)};
     SamplingConfig sample_config;
     sample_req.sampling_config = &sample_config;
+    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
+
 
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;

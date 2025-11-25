@@ -66,6 +66,9 @@ struct SamplingRequest {
   // Flag to control whether to skip ngram_no_repeat sampling and output logprobs calculation during sampling used in
   // MTP mode to disable constraints for draft token generation
   bool enable_mtp_sampler = false;
+
+  // Number of top logprobs to return for input tokens
+  int input_top_logprobs_num = 0;
 };
 
 }  // namespace ksana_llm

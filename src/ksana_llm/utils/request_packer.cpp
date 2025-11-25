@@ -54,9 +54,11 @@ KsanaPythonInput RequestPacker::GetKsanaPythonInput(const RequestSerial& req) {
   }
   ksana_python_input.input_refit_embedding.pos = req.input_refit_embedding.pos;
   ksana_python_input.input_refit_embedding.embeddings = req.input_refit_embedding.embeddings;
-  for (const auto& [target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode] : req.request_target) {
+  for (const auto& [target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode, input_top_logprobs_num] :
+       req.request_target) {
     ksana_python_input.request_target.emplace(
-        target_name, TargetDescribe{cutoff_layer, token_id, slice_pos, GetTokenReduceMode(token_reduce_mode)});
+        target_name, TargetDescribe{cutoff_layer, token_id, slice_pos, GetTokenReduceMode(token_reduce_mode),
+                                    input_top_logprobs_num});
   }
   // Verify the request target and throw an exception if anything is invalid.
   ksana_python_input.VerifyRequestTarget();
@@ -69,6 +71,7 @@ ResponseSerial RequestPacker::GetResponseSerial(const std::shared_ptr<KsanaPytho
                                                 const KsanaPythonOutput& ksana_python_output) {
   ResponseSerial rsp;
   rsp.input_token_ids = ksana_python_input->input_tokens;
+  rsp.input_top_logprobs = ksana_python_output.logprobs;
   for (const auto& [target_name, tensor] : ksana_python_output.response) {
     rsp.response.push_back(TargetResponseSerial{
         target_name, PythonTensorSerial{base64::encode_into<std::string>(tensor.data.begin(), tensor.data.end()),
@@ -119,9 +122,11 @@ Status RequestPacker::UnpackMsgpack(const std::string& request_bytes,
     }
     ksana_python_input.input_refit_embedding.pos = req.input_refit_embedding.pos;
     ksana_python_input.input_refit_embedding.embeddings = req.input_refit_embedding.embeddings;
-    for (const auto& [target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode] : req.request_target) {
+    for (const auto& [target_name, cutoff_layer, token_id, slice_pos, token_reduce_mode, input_top_logprobs_num] :
+         req.request_target) {
       ksana_python_input.request_target.emplace(
-          target_name, TargetDescribe{cutoff_layer, token_id, slice_pos, GetTokenReduceMode(token_reduce_mode)});
+          target_name, TargetDescribe{cutoff_layer, token_id, slice_pos, GetTokenReduceMode(token_reduce_mode),
+                                      input_top_logprobs_num});
     }
     // Verify the request target and throw an exception if anything is invalid.
     ksana_python_input.VerifyRequestTarget();
