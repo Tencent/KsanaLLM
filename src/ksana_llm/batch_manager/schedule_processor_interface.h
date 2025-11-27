@@ -21,7 +21,7 @@ struct ScheduleResult {
   std::vector<SamplingRequest> sampling_reqs;
   GenerationOutputGroup generation_output_group;
 
-  std::vector<ScheduleOutput *> outputs;  // cache original outputs for later launching
+  std::vector<ScheduleOutput *> outputs;  // keep ref for async info clearing
 };
 
 class ScheduleProcessorInterface {

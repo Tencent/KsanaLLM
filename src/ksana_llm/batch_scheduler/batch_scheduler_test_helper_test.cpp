@@ -227,6 +227,13 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
 
   std::shared_ptr<CacheManagerInterface>& GetCacheManager(int attn_dp_idx) { return dummy_cache_mgr_; }
 
+  bool TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, ScheduleOutput& merged_schedule_output,
+                                        std::vector<std::shared_ptr<InferRequest>>& stopped_reqs) override {
+    assert(merged_schedule_output.IsLaunchable());
+    merged_schedule_output.LaunchScheduleOutput();
+    return true;
+  }
+
   void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup& generation_output) override {
     assert(generation_output.reqs.size() == 1);                       // only support one dp
     assert(generation_output.reqs[0].size() == running_reqs.size());  //
@@ -362,6 +369,7 @@ class FixPrefixBatchScheduler : public BatchSchedulerInterface {
                    << ", kv_cache_blocks=" << KvCaches2Str(infer_req->kv_cache_blocks);
     infer_req->finished = true;
     infer_req->Notify();
+    infer_req->Stop();
     return;
     // Free blocks after prefix blocks
     auto& kv_cache_blocks = infer_req->kv_cache_blocks;
@@ -443,7 +451,11 @@ TEST_F(BatchSchedulerEnvironmentSimulatorTest, FixPrefixCacheScheduleTest) {
   int device_num = 4;
   size_t splitfuse_token_num = 0;
   FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, splitfuse_token_num);
-  FixPrefixBatchScheduler batch_scheduler(test_case.GetEnvSimulator(), prefix_block_num * block_token_num, device_num);
-  test_case.SetBatchScheduler(&batch_scheduler);
+  std::shared_ptr<BatchSchedulerInterface> batch_scheduler = std::make_shared<FixPrefixBatchScheduler>(
+      test_case.GetEnvSimulator(), prefix_block_num * block_token_num, device_num);
+  std::shared_ptr<ScheduleProcessorInterface> schedule_processor = std::make_shared<TestScheduleProcessor>(false, 1);
+  schedule_processor->Initialize(batch_scheduler, nullptr, nullptr);
+  test_case.SetBatchScheduler(batch_scheduler);
+  test_case.SetScheduleProcessor(schedule_processor);
   test_case.RunTestNoSwapTriggered();
 }

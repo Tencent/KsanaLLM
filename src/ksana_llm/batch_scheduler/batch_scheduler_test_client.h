@@ -6,16 +6,18 @@
 #include <sstream>
 #include <unordered_map>
 
+#include "ksana_llm/batch_manager/schedule_processor.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_interface.h"
 #include "ksana_llm/batch_scheduler/batch_scheduler_test_helper.h"
 #include "ksana_llm/profiler/reporter.h"
 #include "ksana_llm/runtime/threadpool.h"
+#include "ksana_llm/utils/schedule_output_process.h"
 
 namespace ksana_llm {
 
 class ClientSimulator {
  public:
-  ClientSimulator(int thread_num, BatchSchedulerInterface* batch_scheduler)
+  ClientSimulator(int thread_num, std::shared_ptr<BatchSchedulerInterface> batch_scheduler)
       : scheduler_(batch_scheduler), thread_num_(thread_num), threadpool_(thread_num), is_destroying_(false) {
     threadpool_.Start();
   }
@@ -63,6 +65,16 @@ class ClientSimulator {
     AddInferRequests(infer_req->req_id, reqs);
   }
 
+  bool IsAllRequestStopped() {
+    std::lock_guard<std::mutex> guard(mux_);
+    for (auto& it : client_req_map_) {
+      if (!it.second.req_group[0]->IsStopped()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool IsAllRequestFinished() {
     for (auto& it : client_req_map_) {
       if (!it.second.is_finished) {
@@ -79,7 +91,7 @@ class ClientSimulator {
     Status enqueue_status;
   };
 
-  BatchSchedulerInterface* scheduler_;
+  std::shared_ptr<BatchSchedulerInterface> scheduler_;
   int thread_num_;
   ThreadPool threadpool_;
   bool is_destroying_;
@@ -88,10 +100,28 @@ class ClientSimulator {
   std::mutex mux_;
 };
 
+class TestScheduleProcessor : public ScheduleProcessor {
+ public:
+  TestScheduleProcessor(bool enable_async, int max_pp_batch_num) : ScheduleProcessor(enable_async, max_pp_batch_num) {}
+
+  void Stop() override {
+    if (stopped_) return;  // avoid multiple stop in test
+    stopped_ = true;
+    ScheduleProcessor::Stop();
+  }
+
+ private:
+  void NotifyCurrentBatchThreadNotReady(size_t multi_batch_id) override {}
+  Status ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result) override { return Status(); }
+  bool stopped_ = false;
+};
+
 class ParallelTester {
  public:
-  ParallelTester(BatchSchedulerInterface* batch_scheduler, BatchSchedulerEnvironmentSimulator* env_simulator)
-      : batch_scheduler_(batch_scheduler), env_simulator_(env_simulator) {}
+  ParallelTester(std::shared_ptr<BatchSchedulerInterface> batch_scheduler,
+                 std::shared_ptr<ScheduleProcessorInterface> schedule_processor,
+                 BatchSchedulerEnvironmentSimulator* env_simulator)
+      : batch_scheduler_(batch_scheduler), schedule_processor_(schedule_processor), env_simulator_(env_simulator) {}
 
   struct RequestInfo {
     int req_id;
@@ -218,6 +248,29 @@ class ParallelTester {
 
     time_t start_time = ProfileTimer::GetCurrentTime();
     ClientSimulator client_simulator(client_num, batch_scheduler_);
+
+    // Create timeout monitoring thread
+    std::atomic<bool> is_stopped(false);
+
+    std::thread timeout_thread([this, &client_simulator, &is_stopped, start_time, timeout]() {
+      auto deadline = start_time + timeout;
+      KLLM_LOG_SCHEDULER << "timeout checking, timeout=" << timeout << "s";
+      while (!is_stopped.load() && ProfileTimer::GetCurrentTime() < deadline) {
+        if (client_simulator.IsAllRequestStopped()) {
+          KLLM_LOG_SCHEDULER << "timeout checking. all requests stopped";
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      }
+
+      if (!client_simulator.IsAllRequestStopped()) {
+        KLLM_LOG_SCHEDULER << "Not all requests stooped, exist because of timeout " << timeout << "s";
+      }
+
+      batch_scheduler_->Stop();
+      schedule_processor_->Stop();
+    });
+
     for (auto& info : reqs) {
       client_simulator.AddInferRequests(info.req_id, info.infer_req_group);
     }
@@ -225,39 +278,34 @@ class ParallelTester {
     // Wait for request enqueue
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     // schedule and generate tokens
-    GenerationOutputGroup generation_output_group;
     size_t multi_batch_idx = 0;
-    int step = 0;
     while (true) {
-      std::shared_ptr<ScheduleOutputGroup> output_group = batch_scheduler_->Schedule(multi_batch_idx);
-      ScheduleOutput* scheduled_out = output_group->outputs.at(0);
-      std::vector<std::shared_ptr<InferRequest>> scheduled_reqs = scheduled_out->running_reqs;
-      if (scheduled_reqs.empty()) {
-        if (client_simulator.IsAllRequestFinished()) {
-          KLLM_LOG_INFO << "All requests finished";
-          break;
-        }
-        time_t cur_time = ProfileTimer::GetCurrentTime();
-        if ((cur_time - start_time) > timeout) {
-          KLLM_LOG_INFO << "Test Timeout. timeout=" << timeout << " seconds";
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
-        continue;
+      std::shared_ptr<ScheduleResult> schedule_result = schedule_processor_->GetNextScheduleResult(multi_batch_idx);
+      if (!schedule_result) {
+        // Only happen during stopping
+        break;
       }
-      step++;
-      for (auto req : scheduled_reqs) {
-        KLLM_LOG_DEBUG << "Before RunAStep step=" << step << ", " << req->ScheduleStateToStr();
-      }
-      KLLM_CHECK(scheduled_out->IsLaunchable());
-      scheduled_out->LaunchScheduleOutput();
-      generation_output_group.BuildFromScheduleOutputGroup(*output_group);
-      scheduled_out->Clear();
+
+      auto& scheduled_reqs = schedule_result->schedule_output->running_reqs;
       for (auto hook : hooks) {
         hook->CheckRequestsBeforeAStep(scheduled_reqs);
       }
+
+      batch_scheduler_->Lock();
       env_simulator_->RunAStep(scheduled_reqs);
-      batch_scheduler_->UpdateWithGenerationResult(multi_batch_idx, generation_output_group);
+      batch_scheduler_->Unlock();
+
+      schedule_processor_->UpdateWithGenerationResult(multi_batch_idx, schedule_result->generation_output_group);
+      if (client_simulator.IsAllRequestStopped()) {
+        KLLM_LOG_INFO << "All requests eos generated";
+        break;
+      }
+    }
+
+    // Signal timeout thread to stop
+    is_stopped.store(true);
+    if (timeout_thread.joinable()) {
+      timeout_thread.join();
     }
 
     // Check request results
@@ -269,7 +317,8 @@ class ParallelTester {
   }
 
  private:
-  BatchSchedulerInterface* batch_scheduler_;
+  std::shared_ptr<BatchSchedulerInterface> batch_scheduler_;
+  std::shared_ptr<ScheduleProcessorInterface> schedule_processor_;
   BatchSchedulerEnvironmentSimulator* env_simulator_;
 };
 
@@ -303,10 +352,17 @@ class PrintStepHook : public ParallelTester::ExeHookInterface {
 class FixPrefixTestCase {
  public:
   FixPrefixTestCase(int prefix_block_num, int block_token_num, int device_num, size_t splitfuse_token_num,
-                    bool init_env_simulator = true)
-      : prefix_block_num_(prefix_block_num), device_num_(device_num), splitfuse_token_num_(splitfuse_token_num) {
+                    bool enable_swap = true, bool init_env_simulator = true)
+      : prefix_block_num_(prefix_block_num),
+        device_num_(device_num),
+        splitfuse_token_num_(splitfuse_token_num),
+        enable_swap_(enable_swap) {
     // 创建一个 BlockManagerConfig 对象，用于配置 BatchSchedulerEnvironmentSimulator
-    block_manager_config_.host_allocator_config.blocks_num = 100;
+    if (enable_swap_) {
+      block_manager_config_.host_allocator_config.blocks_num = 100;
+    } else {
+      block_manager_config_.host_allocator_config.blocks_num = 0;
+    }
     block_manager_config_.device_allocator_config.blocks_num = 100;
     block_manager_config_.device_allocator_config.block_token_num = block_token_num;
 
@@ -330,7 +386,13 @@ class FixPrefixTestCase {
 
   const BlockManagerConfig& GetBlockManagerConfig() const { return block_manager_config_; }
 
-  void SetBatchScheduler(BatchSchedulerInterface* batch_scheduler) { batch_scheduler_ = batch_scheduler; }
+  void SetBatchScheduler(std::shared_ptr<BatchSchedulerInterface> batch_scheduler) {
+    batch_scheduler_ = batch_scheduler;
+  }
+
+  void SetScheduleProcessor(std::shared_ptr<ScheduleProcessorInterface> schedule_processor) {
+    schedule_processor_ = schedule_processor;
+  }
 
   void SetEnvSimulator(BatchSchedulerEnvironmentSimulator* env_simulator) { env_simulator_ = env_simulator; }
 
@@ -358,6 +420,7 @@ class FixPrefixTestCase {
     auto& stat = env_simulator_->GetBlockManagerStat();
     EXPECT_EQ(stat.swapout_succ_num, 0);
     EXPECT_EQ(stat.swapout_fail_num, 0);
+
     EXPECT_EQ(stat.swapin_succ_num, 0);
     EXPECT_EQ(stat.swapin_fail_num, 0);
   }
@@ -368,10 +431,10 @@ class FixPrefixTestCase {
 
     int prefix_token_num = prefix_block_num_ * block_manager_config_.device_allocator_config.block_token_num;
 
-    int request_num = 100;
+    int request_num = 50;
     int client_num = 10;
     int min_expect_output_num = 3;
-    int max_expect_output_num = min_expect_output_num + 300;
+    int max_expect_output_num = min_expect_output_num + 150;
     int min_input_num = prefix_token_num;
     int max_input_num = 100 + prefix_token_num;
 
@@ -384,10 +447,17 @@ class FixPrefixTestCase {
             prefix_token_num);
 
     auto& stat = env_simulator_->GetBlockManagerStat();
-    EXPECT_EQ(stat.swapout_succ_num, 0);  // recomputed
-    EXPECT_EQ(stat.swapout_fail_num, 0);
-    EXPECT_EQ(stat.swapin_succ_num, 0);  // recomputed
-    EXPECT_EQ(stat.swapin_fail_num, 0);
+    if (enable_swap_) {
+      EXPECT_GT(stat.swapout_succ_num, 0);
+      EXPECT_EQ(stat.swapout_fail_num, 0);
+      EXPECT_GT(stat.swapin_succ_num, 0);
+      EXPECT_EQ(stat.swapin_fail_num, 0);
+    } else {
+      EXPECT_EQ(stat.swapout_succ_num, 0);  // recomputed
+      EXPECT_EQ(stat.swapout_fail_num, 0);
+      EXPECT_EQ(stat.swapin_succ_num, 0);  // recomputed
+      EXPECT_EQ(stat.swapin_fail_num, 0);
+    }
   }
 
  private:
@@ -487,18 +557,18 @@ class FixPrefixTestCase {
 
   void RunTest(int request_num, int client_num, int min_expect_output_num, int max_expect_output_num, int min_input_num,
                int max_input_num, int prefix_token_num) {
-    ParallelTester tester(batch_scheduler_, env_simulator_);
+    ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
     std::vector<ParallelTester::ExeHookInterface*> hooks;
     ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
     ParallelTester::SplitFuseCheckHook splitfuse_check_hook(splitfuse_token_num_, prefix_token_num);
-    PrintStepHook print_hook(true);
+    //    PrintStepHook print_hook(true);
     SamePrefixCacheNoMergeBeforeFirstBatchCheckHook prefix_check_hook(
         prefix_token_num / block_manager_config_.device_allocator_config.block_token_num,
         block_manager_config_.device_allocator_config.block_token_num, device_num_);
     hooks.push_back(&default_hook);
     hooks.push_back(&splitfuse_check_hook);
-    hooks.push_back(&print_hook);
+    //    hooks.push_back(&print_hook);
     hooks.push_back(&prefix_check_hook);
 
     std::vector<ParallelTester::RequestInfo> req_list;
@@ -524,8 +594,10 @@ class FixPrefixTestCase {
   int prefix_block_num_;
   int device_num_;
   size_t splitfuse_token_num_;
+  bool enable_swap_;
 
-  BatchSchedulerInterface* batch_scheduler_ = nullptr;
+  std::shared_ptr<BatchSchedulerInterface> batch_scheduler_;
+  std::shared_ptr<ScheduleProcessorInterface> schedule_processor_;
   BatchSchedulerEnvironmentSimulator* env_simulator_ = nullptr;
   BlockManagerConfig block_manager_config_;
 

@@ -26,6 +26,8 @@ class BaseScheduleStrategy {
   // Get the next infer reqs that ready to run.
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>>& waiting_reqs) = 0;
 
+  virtual void UpdateAsyncState() = 0;
+
   void SetBatchState(std::shared_ptr<BatchState> batch_state);
 
   // Set the cache manager instance of scheduler strategy.

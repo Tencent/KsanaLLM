@@ -22,17 +22,6 @@
 
 namespace ksana_llm {
 
-bool RemoveRequestFromQueue(std::vector<std::shared_ptr<InferRequest>> &req_queue,
-                            const std::shared_ptr<InferRequest> &req) {
-  auto it = std::find(req_queue.begin(), req_queue.end(), req);
-  if (it != req_queue.end()) {
-    KLLM_CHECK((*it)->req_id == req->req_id);
-    req_queue.erase(it);
-    return true;
-  }
-  return false;
-}
-
 ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfig &batch_scheduler_config,
                                                        const RuntimeConfig &runtime_config)
     : BaseScheduleStrategy(batch_scheduler_config, runtime_config) {
@@ -152,18 +141,30 @@ void ContinuousBatchingStrategy::DetermineDraftNum(std::shared_ptr<InferRequest>
 }
 
 void ContinuousBatchingStrategy::RecomputeRequest(std::shared_ptr<InferRequest> req) {
+  auto it = batch_state_->async_recomputed_reqs.find(req->req_id);
+  if (it != batch_state_->async_recomputed_reqs.end()) {
+    // planned to be recomputed in async, skip
+    return;
+  }
+
   REPORT_COUNTER("recompute_request_num", 1);
   if (!req->HasInflightTask()) {
     // No task is running, recompute immediately
     SyncRecomputeRequest(req);
   } else {
+    KLLM_LOG_SCHEDULER << "Put req_id=" << req->req_id << " to async recompute queue";
     batch_state_->async_recomputed_reqs[req->req_id] = req;
   }
 }
 
 void ContinuousBatchingStrategy::SyncRecomputeRequest(std::shared_ptr<InferRequest> req) {
-  KLLM_LOG_SCHEDULER << "SyncRecomputeRequest req id is: " << req->req_id
-                     << " kv_comm_request_id: " << req->kv_comm_request_id;
+  static size_t total_recomputed_token_num = 0;
+  total_recomputed_token_num += req->output_tokens.size();
+  KLLM_LOG_INFO << "SyncRecomputeRequest req id is: " << req->req_id
+                << " kv_comm_request_id: " << req->kv_comm_request_id
+                << ", intput_tokens.size()=" << req->input_tokens.size()
+                << ", output_tokens.size()=" << req->output_tokens.size()
+                << ", total_recomputed_token_num=" << total_recomputed_token_num;
 
   // Add request to the beginning of waiting queue.
   req->kv_cache_blocks.assign(runtime_config_.parallel_basic_config.attn_tensor_parallel_size, {});
@@ -207,6 +208,8 @@ void ContinuousBatchingStrategy::SyncStopRequest(std::shared_ptr<InferRequest> r
     }
     batch_state_->schedule_output->finish_req_ids[req->attn_dp_group_id].push_back(req->req_id);
   }
+  KLLM_LOG_SCHEDULER << "Stopped req_id=" << req->req_id << ", finished=" << req->finished
+                     << ", ret_status=" << ret_status.GetCode() << ", batch_state=" << *batch_state_;
 }
 
 bool ContinuousBatchingStrategy::ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req) {
@@ -224,15 +227,34 @@ bool ContinuousBatchingStrategy::ProcessAsyncStoppedRequest(std::shared_ptr<Infe
   return true;
 }
 
-bool ContinuousBatchingStrategy::ProcessAsyncRecomputeRequest(std::shared_ptr<InferRequest> &req) {
+void ContinuousBatchingStrategy::RecoverAsyncRecomputedRequests() {
+  for (auto &it : batch_state_->async_recomputed_reqs) {
+    const auto &req = it.second;
+    if (req->IsStopped()) {
+      continue;
+    }
+
+    ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
+    if (remaining_workload.prefill_token_num > 0) {
+      batch_state_->waiting_queue.push_back(req);
+    } else {
+      batch_state_->decoding_queue.push_back(req);
+    }
+  }
+  batch_state_->async_recomputed_reqs.clear();
+}
+
+bool ContinuousBatchingStrategy::ProcessAsyncRecomputeRequest(const std::shared_ptr<InferRequest> &req) {
   auto it = batch_state_->async_recomputed_reqs.find(req->req_id);
   if (it == batch_state_->async_recomputed_reqs.end()) {
     return false;
   }
 
-  KLLM_CHECK(!req->HasInflightTask());
-  KLLM_LOG_SCHEDULER << "Processing async recompute request " << req->req_id;
-  SyncRecomputeRequest(req);
+  if (!req->IsStopped()) {
+    KLLM_CHECK(!req->HasInflightTask());
+    KLLM_LOG_SCHEDULER << "Processing async recompute request " << req->req_id;
+    SyncRecomputeRequest(req);
+  }
 
   batch_state_->async_recomputed_reqs.erase(it);
   return true;
@@ -247,16 +269,28 @@ void ContinuousBatchingStrategy::RemoveRequestFromBatchState(const std::shared_p
       RemoveRequestFromQueue(batch_state_->waiting_queue, req)) {
     return;
   }
-  KLLM_LOG_FATAL << "Request " << req->req_id << " not found in batch state";
+  auto it = batch_state_->async_recomputed_reqs.find(req->req_id);
+  if (it != batch_state_->async_recomputed_reqs.end()) {
+    batch_state_->async_recomputed_reqs.erase(it);
+    return;
+  }
+
+  auto swap_it = batch_state_->async_swapout_reqs.find(req->req_id);
+  if (swap_it != batch_state_->async_swapout_reqs.end()) {
+    batch_state_->async_swapout_reqs.erase(swap_it);
+    return;
+  }
+
+  KLLM_LOG_FATAL << "Request " << req->req_id << " not found in batch state. " << batch_state_->ToString(true);
   // TODO(robertyuan): request maybe moved to another batch state.
 }
 
-void ContinuousBatchingStrategy::EstimateRequestPlanningWorkload(std::shared_ptr<InferRequest> req) {
+void ContinuousBatchingStrategy::EstimateRequestPlanningWorkload(const std::shared_ptr<InferRequest> &req) {
   if (req->HasInflightTask()) {
     // Estimate task generation result
     // TODO(robertyuan): replace with GenerationResultEstimator
     if (req->GetInflightTask().workload.sampling_token_num > 0) {
-      size_t max_draft_token_num = 2;
+      size_t max_draft_token_num = batch_scheduler_config_.mtp_step_num;
       req->SetInflightTaskGenResultEstimation(kStepGenerateTokenNum, max_draft_token_num);
     }
   }
@@ -270,6 +304,9 @@ void ContinuousBatchingStrategy::ResetRequest(std::shared_ptr<InferRequest> req,
 
   req->finish_status = ret_status;
   req->finished = terminate;
+  if (terminate) {
+    req->Stop();
+  }
   req->RebuildBlockPtrs();
 
   cache_manager_->DestroyFinishedRequest(req->req_id);
@@ -330,6 +367,7 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
     if (step_token_num + req_token_num > dp_max_step_token_num_ ||
         total_sampling_token_num + req->sampling_token_num > dp_max_logits_num_ || req_num >= dp_max_batch_size_) {
       scheduler_ticktok_->Unlock();
+      ++it;
       continue;
     }
     step_not_kv_cached_token_num += not_kv_cached_token_num;
@@ -353,8 +391,12 @@ std::pair<size_t, size_t> ContinuousBatchingStrategy::CheckRunningQueueStepToken
 void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs) {
   KLLM_LOG_SCHEDULER << "update running requests size:" << running_reqs.size();
 
+  bool has_block_freed = false;
   for (auto req : running_reqs) {
     // All req here should be decode now.
+    if (req->IsStopped()) {
+      continue;
+    }
     req->infer_stage = InferStage::kDecode;
     req->UpdateAfterInflightTaskFinished();
     req->ResetInflightTask();
@@ -364,9 +406,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     ReportRequestProgressInfo(req);
 
     if (ProcessAsyncStoppedRequest(req)) {
-      continue;
-    }
-    if (ProcessAsyncRecomputeRequest(req)) {
+      has_block_freed = true;
       continue;
     }
 
@@ -380,6 +420,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
       KLLM_LOG_SCHEDULER << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
       RemoveRequestFromBatchState(req);
       RecomputeRequest(req);
+      has_block_freed = true;
       continue;
     }
 
@@ -415,6 +456,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
         RecomputeMockRequest(req);
       }
       RemoveRequestFromBatchState(req);
+      has_block_freed = true;
       continue;
     }
 
@@ -425,6 +467,7 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
 
       StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."), RequestState::kRunning);
       RemoveRequestFromBatchState(req);
+      has_block_freed = true;
       continue;
     }
 
@@ -435,16 +478,36 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
       StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in running."), RequestState::kRunning);
       RemoveRequestFromBatchState(req);
       REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+      has_block_freed = true;
       continue;
     }
 
     // Not finished, notify streaming iterator.
     req->NotifyStep();
-
-    KLLM_LOG_SCHEDULER << "schedule_state=" << req->ScheduleStateToStr()
-                       << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
-                       << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
   }
+
+  if (batch_state_->async_recomputed_reqs.size() > 0) {
+    if (has_block_freed) {
+      // Some blocks freed, do not recompute async requests.
+      RecoverAsyncRecomputedRequests();
+    } else {
+      for (const auto &req : running_reqs) {
+        ProcessAsyncRecomputeRequest(req);
+      }
+    }
+  }
+  if (batch_state_->async_swapout_reqs.size() > 0) {
+    if (has_block_freed) {
+      // Some blocks freed, do not recompute async requests.
+      RecoverAsyncSwapoutRequests();
+    } else {
+      for (const auto &req : running_reqs) {
+        ProcessAsyncSwapoutRequest(req);
+      }
+    }
+  }
+
+  KLLM_LOG_SCHEDULER << "After updating, batch_state_=" << *batch_state_;
 }
 
 void ContinuousBatchingStrategy::ProcessDecodingQueue() {
@@ -452,6 +515,10 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
   KLLM_LOG_SCHEDULER << "ProcessDecodingQueue invoked: " << *batch_state_
                      << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                      << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
+
+  if (!batch_state_->swapin_pending_requests.empty()) {
+    MergePendingSwapinRequests(false, true);
+  }
 
   // Estimate inflight task result and update planning workloads
   for (auto &req : batch_state_->decoding_queue) {
@@ -467,74 +534,66 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
   }
 
   size_t alloc_failed_req_num = 0;
-  for (auto req : passed_reqs) {
+  for (auto it = passed_reqs.begin(); it != passed_reqs.end();) {
+    const auto &req = *it;
     KLLM_CHECK(req->GetPlanningWorkload().prefill_token_num == 0);  // Decoding requests only
     const size_t max_required_token_num = GetMaxRequiredTokenNum(req->GetPlanningSequenceLen());
     const size_t req_step_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
-    size_t forwarded_token_num = req->GetPlanningSequenceLen() - req->GetPlanningQueryLen();
 
     Status status = cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks);
     if (status.OK()) {
       DetermineDraftNum(req);
       batch_state_->schedule_output->running_reqs.push_back(req);
+      ++it;
       continue;
     }
 
-    KLLM_LOG_ERROR << "Alllocate blocks error, info: " << status.GetMessage();
+    // decoding request can not run due to block limitation, disable split fuse to free some blocks
+    size_t recomputing_waiting_task_num = 0;
+    if (!batch_state_->waiting_queue.empty() && batch_scheduler_config_.split_fuse_token_num > 0) {
+      std::vector<std::shared_ptr<InferRequest>> recomputing_reqs;
+      for (auto &waiting_req : batch_state_->waiting_queue) {
+        if (!waiting_req->kv_cache_blocks[0].empty()) {
+          recomputing_reqs.push_back(waiting_req);
+        }
+      }
+
+      recomputing_waiting_task_num = recomputing_reqs.size();
+      for (const auto &req : recomputing_reqs) {
+        RemoveRequestFromQueue(batch_state_->waiting_queue, req);
+        RecomputeRequest(req);
+      }
+      batch_scheduler_config_.split_fuse_token_num = 0;
+      KLLM_LOG_WARNING << "Split fuse disabled due to allocation failure. " << recomputing_reqs.size()
+                       << " chunked prefilling requests will be recomputed";
+    }
+
+    if (recomputing_waiting_task_num > 0) {
+      // Try to allocate again
+      continue;
+    }
+
+    // If waiting queue cannot release any blocks and no asyn recopmute/stop tasks, try to recompute some decoding
+    // tasks;
+    // TODO(robertyuan): optimize choice to balance wasted computing and decoding in future
+    if ((recomputing_waiting_task_num == 0) && (batch_state_->async_stoped_reqs.size() == 0) &&
+        (batch_state_->async_recomputed_reqs.size() == 0) && (batch_state_->async_swapout_reqs.size() == 0) &&
+        (batch_state_->swapout_pending_requests.size() == 0) && (batch_state_->decoding_queue.size() > 1)) {
+      if (batch_scheduler_config_.preempt_mode == SWAP) {
+        SwapoutRequest(req);
+      } else {
+        RecomputeRequest(req);
+      }
+      RemoveRequestFromQueue(batch_state_->decoding_queue, req);
+      ++it;
+      continue;
+    }
+
+    KLLM_LOG_SCHEDULER << "Alllocate blocks error, info: " << status.GetMessage();
     alloc_failed_req_num++;
-  }
-
-  if (alloc_failed_req_num == 0) {
-    return;
-  }
-
-  // No more blocks, skip waiting_req launch.
-  batch_state_->step_sched_finish = true;
-  KLLM_LOG_SCHEDULER << "No more free blocks for " << alloc_failed_req_num << " decoding reqs, skip waiting queue."
-                     << *batch_state_;
-
-  if (batch_state_->schedule_output->running_reqs.size() > 0) {
-    return;
-  }
-
-  // If no decoding request can run due to block limitation, disable split fuse to free some blocks
-  size_t recomputing_waiting_task_num = 0;
-  if (!batch_state_->waiting_queue.empty() && batch_scheduler_config_.split_fuse_token_num > 0) {
-    std::vector<std::shared_ptr<InferRequest>> recomputing_reqs;
-    for (auto &waiting_req : batch_state_->waiting_queue) {
-      if (!waiting_req->kv_cache_blocks[0].empty()) {
-        recomputing_reqs.push_back(waiting_req);
-      }
-    }
-    KLLM_LOG_WARNING << fmt::format(
-        "Split fuse disabled due to allocation failure. {} chunked prefilling requests will be recomputed",
-        recomputing_reqs.size());
-    recomputing_waiting_task_num = recomputing_reqs.size();
-    for (auto req : recomputing_reqs) {
-      RemoveRequestFromQueue(batch_state_->waiting_queue, req);
-      RecomputeRequest(req);
-    }
-    batch_scheduler_config_.split_fuse_token_num = 0;
-    KLLM_LOG_WARNING << "Split fuse has been disabled.";
-  }
-
-  KLLM_LOG_SCHEDULER << "recomputing_waiting_task_num=" << recomputing_waiting_task_num
-                     << ", async_stoped_reqs.size()=" << batch_state_->async_stoped_reqs.size()
-                     << ", async_recomputed_reqs.size()=" << batch_state_->async_recomputed_reqs.size();
-  // If waiting queue cannot release any blocks and no asyn recopmute/stop tasks, try to recompute some decoding tasks;
-  if ((recomputing_waiting_task_num == 0) && (batch_state_->async_stoped_reqs.size() == 0) &&
-      (batch_state_->async_recomputed_reqs.size() == 0)) {
-    size_t recompute_min_cost = std::numeric_limits<size_t>::max();
-    std::shared_ptr<InferRequest> recompute_min_cost_req;
-    for (auto req : passed_reqs) {
-      size_t forwarded_token_num = req->GetPlanningSequenceLen() - req->GetPlanningQueryLen();
-      if (recompute_min_cost > forwarded_token_num) {
-        recompute_min_cost = forwarded_token_num;
-        recompute_min_cost_req = req;
-      }
-    }
-    RemoveRequestFromQueue(batch_state_->decoding_queue, recompute_min_cost_req);
-    RecomputeRequest(recompute_min_cost_req);
+    // No more blocks, skip waiting_req launch.
+    batch_state_->step_sched_finish = true;
+    ++it;
   }
 }
 
@@ -544,7 +603,6 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
                      << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
                      << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
 
-  const size_t decode_request_num = batch_state_->schedule_output->running_reqs.size();
   std::vector<std::shared_ptr<InferRequest>> passed_reqs;
   auto [step_token_num, step_not_kv_cached_token_num] =
       CheckRunningQueueStepTokens(batch_state_->schedule_output->running_reqs, passed_reqs);
@@ -597,7 +655,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
     // Check timeout, no finished req in waiting queue.
     if (CheckRequestTimeout(req)) {
-      KLLM_LOG_SCHEDULER << "req timeout in waiting:" << req;
+      KLLM_LOG_SCHEDULER << "req timeout in waiting:" << req->req_id
+                         << ", schedule_time_in_ms=" << batch_state_->schedule_time_in_ms
+                         << ", req.timestamp_in_us/1000=" << req->timestamp_in_us / 1000
+                         << ", waiting_timeout_in_ms=" << batch_scheduler_config_.waiting_timeout_in_ms;
 
       StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in waiting."), RequestState::kWaiting);
       it = batch_state_->waiting_queue.erase(it);
@@ -797,9 +858,12 @@ void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferReque
   ProcessDecodingQueue();
   auto running_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
   REPORT_METRIC("batch_scheduler_running_queue_time_us", running_queue_end_us - start_us);
+  ProcessSwappedQueue();
+  auto swapped_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
+  REPORT_METRIC("batch_scheduler_swapped_queue_time_us", swapped_queue_end_us - running_queue_end_us);
   ProcessWaitingQueue();
   auto waiting_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
-  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", waiting_queue_end_us - running_queue_end_us);
+  REPORT_METRIC("batch_scheduler_waiting_queue_time_us", waiting_queue_end_us - swapped_queue_end_us);
   ProcessTransferQueue();
   auto transfer_queue_end_us = ProfileTimer::GetCurrentTimeInUs();
   REPORT_METRIC("batch_scheduler_transfer_queue_time_us", transfer_queue_end_us - waiting_queue_end_us);
@@ -838,6 +902,240 @@ void ContinuousBatchingStrategy::ReportRequestProgressInfo(const std::shared_ptr
     REPORT_COUNTER("computed_token_num", computed_token_num);
     req->computed_token_num = req->kv_cached_token_num;
   }
+}
+
+void ContinuousBatchingStrategy::SwapoutRequest(std::shared_ptr<InferRequest> req) {
+  REPORT_COUNTER("swapout_request_num", 1);
+  if (!req->HasInflightTask()) {
+    // No task is running, start swapout immediately
+    SyncSwapoutRequest(req);
+  } else {
+    KLLM_LOG_SCHEDULER << "Put req_id=" << req->req_id << " to async swapout queue";
+    batch_state_->async_swapout_reqs[req->req_id] = req;
+  }
+}
+
+void ContinuousBatchingStrategy::SyncSwapoutRequest(std::shared_ptr<InferRequest> req) {
+  // Merge all swapin request before swapout.
+  if (!batch_state_->swapin_pending_requests.empty()) {
+    KLLM_LOG_DEBUG << "Pending swapin requests exists, merge it first.";
+    MergePendingSwapinRequests(true, false);
+  }
+  KLLM_LOG_INFO << "swapout req_id=" << req->req_id;
+  size_t free_block_num = 0;
+  size_t swapped_block_num = 0;
+  std::vector<int> swapout_memory_blocks;
+  Status status =
+      cache_manager_->SwapoutRequestAsync(req->req_id, swapped_block_num, free_block_num, swapout_memory_blocks);
+  if (status.OK()) {
+    req->RebuildBlockPtrs();
+    batch_state_->swapout_pending_requests[req->req_id] = req;
+
+    // Record swapout operation.
+    if (req->attn_dp_group_id == batch_state_->schedule_output->swapout_req_block_ids.size()) {
+      batch_state_->schedule_output->swapout_req_block_ids.push_back(std::unordered_map<int64_t, std::vector<int>>());
+    }
+    batch_state_->schedule_output->swapout_req_block_ids[req->attn_dp_group_id][req->req_id] = swapout_memory_blocks;
+  } else {
+    KLLM_LOG_ERROR << "SyncSwapoutRequest error, recompute req_id=" << req->req_id;
+    SyncRecomputeRequest(req);
+  }
+}
+
+void ContinuousBatchingStrategy::RecoverAsyncSwapoutRequests() {
+  for (auto &it : batch_state_->async_swapout_reqs) {
+    const auto &req = it.second;
+    if (req->IsStopped()) {
+      continue;
+    }
+    batch_state_->decoding_queue.push_back(req);
+  }
+  batch_state_->async_swapout_reqs.clear();
+}
+
+bool ContinuousBatchingStrategy::ProcessAsyncSwapoutRequest(const std::shared_ptr<InferRequest> &req) {
+  auto it = batch_state_->async_swapout_reqs.find(req->req_id);
+  if (it == batch_state_->async_swapout_reqs.end()) {
+    return false;
+  }
+
+  if (!req->IsStopped()) {
+    KLLM_CHECK(!req->HasInflightTask());
+    KLLM_LOG_SCHEDULER << "Processing async swapout request " << req->req_id;
+    SyncSwapoutRequest(req);
+  }
+
+  batch_state_->async_swapout_reqs.erase(it);
+  return true;
+}
+
+void ContinuousBatchingStrategy::UpdateAsyncState() {
+  MergePendingSwapinRequests(false, true);
+  MergePendingSwapoutRequests(false, true);
+}
+
+void ContinuousBatchingStrategy::ProcessSwappedQueue() {
+  PROFILE_EVENT_SCOPE(ProcessSwappedQueue, "ProcessSwappedQueue");
+  KLLM_LOG_DEBUG << "ProcessSwappedQueue invoked:" << *batch_state_
+                 << ", total_free_block_num:" << cache_manager_->GetUsableBlockNumber()
+                 << ", future_free_block_num:" << cache_manager_->GetFutureFreeBlockNumber();
+
+  if (batch_scheduler_config_.preempt_mode != SWAP) {
+    return;
+  }
+
+  // Merge pending swapout requests.
+  Status status = MergePendingSwapoutRequests(false, true);
+  if (!status.OK()) {
+    KLLM_LOG_ERROR << "ProcessSwappedQueue error, info: " << status.GetMessage();
+  }
+
+  if (batch_state_->swapped_queue.empty() || batch_state_->swapout_pending_requests.size() > 0 ||
+      batch_state_->step_sched_finish) {
+    return;
+  }
+
+  for (auto it = batch_state_->swapped_queue.begin(); it != batch_state_->swapped_queue.end();) {
+    auto req = it->second;
+
+    // Check timeout, no finished req in swapped queue.
+    if (CheckRequestTimeout(req)) {
+      KLLM_LOG_DEBUG << "req timeout in swapped: " << req;
+      StopRequest(req, Status(RET_REQUEST_TIMEOUT, "timeout in swapped."), RequestState::kSwapped);
+      it = batch_state_->swapped_queue.erase(it);
+      continue;
+    }
+
+    // Check abort.
+    if (req->aborted) {
+      KLLM_LOG_DEBUG << "req aborted in swapped:" << req;
+      StopRequest(req, Status(RET_REQUEST_TERMINATED, "req aborted in swapped."), RequestState::kSwapped);
+      it = batch_state_->swapped_queue.erase(it);
+      continue;
+    }
+
+    size_t swapin_needed_block_num = 0;
+    cache_manager_->GetRequestNeededBlockNumForOneNextToken(req->req_id, swapin_needed_block_num);
+
+    const size_t swapin_block_threshold =
+        std::ceil(batch_state_->decoding_queue.size() * batch_scheduler_config_.swapin_block_threshold);
+
+    const size_t total_free_block_num = cache_manager_->GetUsableBlockNumber();
+    const size_t max_required_token_num = GetMaxRequiredTokenNum(req->forwarding_tokens.size());
+    const size_t step_needed_block_num = cache_manager_->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
+
+    if (swapin_needed_block_num + step_needed_block_num + swapin_block_threshold <= total_free_block_num) {
+      std::vector<int> swapin_memory_blocks;
+      status = cache_manager_->SwapinRequestAsync(req->req_id, swapin_needed_block_num, req->kv_cache_blocks,
+                                                  swapin_memory_blocks);
+      if (status.OK()) {
+        batch_state_->swapin_pending_requests[req->req_id] = req;
+        it = batch_state_->swapped_queue.erase(it);
+        KLLM_LOG_INFO << "Start async swapin req_id=" << req->req_id;
+        // Record swapin operation.
+        if (req->attn_dp_group_id == batch_state_->schedule_output->swapin_req_block_ids.size()) {
+          batch_state_->schedule_output->swapin_req_block_ids.push_back(
+              std::unordered_map<int64_t, std::vector<int>>());
+        }
+        batch_state_->schedule_output->swapin_req_block_ids[req->attn_dp_group_id][req->req_id] = swapin_memory_blocks;
+        continue;
+      }
+
+      KLLM_LOG_ERROR << "Swap in request error, info: " << status.GetMessage();
+      ++it;
+    }
+
+    // Swapped job still existed, skip launch waiting.
+    batch_state_->step_sched_finish = true;
+    KLLM_LOG_DEBUG << "Swapped queue not empty, skip processing waiting_queue." << *batch_state_;
+    break;
+  }
+}
+
+Status ContinuousBatchingStrategy::MergePendingSwapinRequests(bool blocking, bool early_stop) {
+  if (batch_state_->swapin_pending_requests.empty()) {
+    return Status();
+  }
+  size_t swapin_left_req_num = 0;
+  do {
+    std::vector<int64_t> swapin_req_ids;
+    Status status = cache_manager_->WaitSwapinRequests(swapin_req_ids, swapin_left_req_num, blocking);
+    if (!status.OK()) {
+      KLLM_LOG_ERROR << "Error MergePendingSwapinRequests WaitSwapinRequests failed. swapin_req_ids:" << swapin_req_ids
+                     << ", info: " << status.GetMessage();
+      return status;
+    }
+    if (!swapin_req_ids.empty()) {
+      KLLM_LOG_SCHEDULER << "finished swapin request size:" << swapin_req_ids.size();
+    }
+    for (int64_t req_id : swapin_req_ids) {
+      auto it = batch_state_->swapin_pending_requests.find(req_id);
+      if (it == batch_state_->swapin_pending_requests.end()) {
+        KLLM_LOG_ERROR << "The cached swapin req_id:" << req_id << " is not found in pending queue.";
+        continue;
+      }
+
+      auto &req = it->second;
+      status = cache_manager_->MergeSwapinRequest(req->req_id, req->kv_cache_blocks);
+      if (!status.OK()) {
+        KLLM_LOG_SCHEDULER << "Error MergeSwapinRequest " << *req << ", info: " << status.GetMessage();
+        return status;
+      }
+
+      // Record merged swapin request.
+      batch_state_->merged_swapin_req_ids.push_back(req->req_id);
+
+      KLLM_LOG_INFO << "Swapin finished. req_id=" << req->req_id;
+
+      batch_state_->decoding_queue.push_back(req);
+      batch_state_->swapin_pending_requests.erase(it);
+    }
+  } while (!early_stop && swapin_left_req_num > 0);
+
+  return Status();
+}
+
+Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bool early_stop) {
+  // Wait all requests done.
+  if (batch_state_->swapout_pending_requests.empty()) {
+    return Status();
+  }
+
+  size_t swapout_left_req_num = 0;
+  do {
+    std::vector<int64_t> swapout_req_ids;
+    Status status = cache_manager_->WaitSwapoutRequests(swapout_req_ids, swapout_left_req_num, blocking);
+    if (!status.OK()) {
+      KLLM_LOG_SCHEDULER << "multi_batch_id=" << batch_state_->multi_batch_id_
+                         << "Error MergePendingSwapoutRequests WaitSwapoutRequests failed. swapout_req_ids:"
+                         << swapout_req_ids << ", info: " << status.GetMessage();
+      return status;
+    }
+
+    for (int64_t req_id : swapout_req_ids) {
+      auto it = batch_state_->swapout_pending_requests.find(req_id);
+      if (it == batch_state_->swapout_pending_requests.end()) {
+        KLLM_LOG_ERROR << "The cached swapout req_id:" << req_id << " is not found in pending queue.";
+        continue;
+      }
+
+      auto &req = it->second;
+      status = cache_manager_->MergeSwapoutRequest(req->req_id);
+      if (!status.OK()) {
+        KLLM_LOG_ERROR << "The cached swapout :" << *req << " failed.";
+        return status;
+      }
+
+      // Record merged swapout request.
+      batch_state_->merged_swapout_req_ids.push_back(req->req_id);
+
+      batch_state_->swapped_queue[req->req_id] = req;
+      batch_state_->swapout_pending_requests.erase(it);
+      KLLM_LOG_INFO << "Swapout finished. req_id=" << req->req_id;
+    }
+  } while (!early_stop && swapout_left_req_num > 0);
+
+  return Status();
 }
 
 }  // namespace ksana_llm

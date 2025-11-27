@@ -87,7 +87,7 @@ struct WorkerInferRequest {
 // The scheduler output of every step.
 struct ScheduleOutput {
   // Make it empty again, but keep runing reqs, called only on master node.
-  void Reset() {
+  void ResetDataForWorkers() {
     finish_req_ids.clear();
     merged_swapout_req_ids.clear();
     merged_swapin_req_ids.clear();
@@ -97,6 +97,9 @@ struct ScheduleOutput {
 
   bool IsLaunchable() {
     for (auto req : running_reqs) {
+      if (req->IsStopped()) {
+        continue;
+      }
       if (req->HasInflightTask()) {
         return false;
       }
@@ -116,14 +119,19 @@ struct ScheduleOutput {
       return;
     }
     for (const auto& req : running_reqs) {
-      if (req->finished) continue;  // request may be finished in async mode.
+      if (req->IsStopped()) continue;  // request may be finished in async mode.
       req->LaunchPlanningTask();
     }
   }
 
   // Make it empty again, called only on worker node.
   void Clear() {
-    Reset();
+    ResetDataForWorkers();
+    running_reqs.clear();
+    worker_running_reqs.clear();
+  }
+
+  void ClearRunningReqs() {
     running_reqs.clear();
     worker_running_reqs.clear();
   }
@@ -399,5 +407,15 @@ class ScheduleOutputPool {
   // Recv buffer.
   BlockingQueue<ScheduleOutput*> schedule_output_recv_buffers_;
 };
+
+inline bool RemoveRequestFromQueue(std::vector<std::shared_ptr<InferRequest>>& req_queue,
+                                   const std::shared_ptr<InferRequest>& req) {
+  auto it = std::find(req_queue.begin(), req_queue.end(), req);
+  if (it != req_queue.end()) {
+    req_queue.erase(it);
+    return true;
+  }
+  return false;
+}
 
 }  // namespace ksana_llm

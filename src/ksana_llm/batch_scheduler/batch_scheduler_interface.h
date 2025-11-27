@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "ksana_llm/cache_manager/cache_manager_interface.h"
@@ -18,6 +19,9 @@ class BatchSchedulerInterface {
 
   // Get the next infer reqs that ready to run.
   virtual std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) = 0;
+
+  virtual bool TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, ScheduleOutput &planned_schedule_output,
+                                                std::vector<std::shared_ptr<InferRequest>> &stopped_reqs) = 0;
 
   virtual void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup &generation_output) = 0;
 
@@ -36,6 +40,12 @@ class BatchSchedulerInterface {
   virtual void WaitUntilHaveReqs(size_t multi_batch_id) = 0;
 
   virtual void Stop() = 0;
+
+  void Lock() { schedule_mutex_.lock(); }
+  void Unlock() { schedule_mutex_.unlock(); }
+
+ protected:
+  std::mutex schedule_mutex_;
 };
 
 }  // namespace ksana_llm

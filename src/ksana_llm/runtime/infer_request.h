@@ -349,7 +349,11 @@ class InferRequest {
 
   std::string ScheduleStateToStr() const;
 
+  bool IsStopped() const { return is_stopped_; }
+  void Stop() { is_stopped_ = true; }
+
  private:
+  bool is_stopped_ = false;
   std::vector<int> prefilling_tokens_;
   ScheduleTask inflight_task_;
   size_t inflight_task_estimated_generated_token_num_ = 0;

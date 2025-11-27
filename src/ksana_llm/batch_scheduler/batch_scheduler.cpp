@@ -139,27 +139,40 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
 }
 
 bool BatchScheduler::IsIdle(size_t multi_batch_id) {
-  bool waiting_buffer_empty = false;
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
-    waiting_buffer_empty = waiting_reqs_.empty();
+    if (!waiting_reqs_.empty()) {
+      return false;
+    }
   }
 
-  bool batch_state_queue_empty = true;
   for (auto& dp_batch_states : batch_states_) {
     auto& batch_state = dp_batch_states[multi_batch_id];
     std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
-    batch_state_queue_empty = batch_state_queue_empty && batch_state->decoding_queue.empty() &&
-                              batch_state->waiting_queue.empty() && batch_state->transfer_queue.empty();
+    bool batch_state_queue_empty = batch_state->decoding_queue.empty() && batch_state->waiting_queue.empty() &&
+                                   batch_state->transfer_queue.empty();
+
+    bool have_free_block = batch_state->async_recomputed_reqs.size() == 0;
+    // have request and have space
+    if ((!batch_state_queue_empty) && have_free_block) {
+      return false;
+    }
   }
 
-  return (waiting_buffer_empty && batch_state_queue_empty);
+  return true;
 }
 
 void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
   while (IsIdle(multi_batch_id) && !terminating_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
     ReportTotalState();
+    {
+      std::lock_guard<std::mutex> guard(schedule_mutex_);
+      for (size_t i = 0; i < dp_num_; i++) {
+        schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
+        schedule_strategies_[i]->UpdateAsyncState();
+      }
+    }
   }
 }
 
@@ -293,11 +306,51 @@ void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, s
   }
 }
 
+bool BatchScheduler::TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, ScheduleOutput& planned_schedule_output,
+                                                      std::vector<std::shared_ptr<InferRequest>>& stopped_reqs) {
+  stopped_reqs.clear();
+  std::lock_guard<std::mutex> guard(schedule_mutex_);
+  if (!planned_schedule_output.IsLaunchable()) {
+    return false;
+  }
+
+  stopped_reqs.reserve(planned_schedule_output.running_reqs.size());
+  // Remove finished requests in async mode
+  for (auto it = planned_schedule_output.running_reqs.begin(); it != planned_schedule_output.running_reqs.end();) {
+    auto req = *it;
+    KLLM_LOG_SCHEDULER << req->ScheduleStateToStr();
+    if (req->IsStopped()) {
+      RemoveRequestFromQueue(planned_schedule_output.running_reqs, req);
+      stopped_reqs.push_back(req);
+      KLLM_LOG_SCHEDULER << "Drop finished req=" << req->req_id;
+    } else {
+      ++it;
+    }
+  }
+
+  if (planned_schedule_output.running_reqs.empty()) {
+    return true;
+  }
+
+  std::vector<ScheduleOutput*> outputs;
+  for (size_t i = 0; i < dp_num_; ++i) {
+    outputs.push_back(batch_states_[i][multi_batch_id]->schedule_output);
+  }
+  MergeScheduleInfoForWorkers(outputs, planned_schedule_output);
+
+  // Launch running_reqs in schedule output
+  KLLM_CHECK(planned_schedule_output.IsLaunchable());
+  planned_schedule_output.LaunchScheduleOutput();
+  return true;
+}
+
 void BatchScheduler::UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup& generation_output) {
   std::lock_guard<std::mutex> guard(schedule_mutex_);
+  uint64_t schedule_time_in_ms = GetCurrentTimeInMs();
   // Update running requests before workload balance
   for (size_t i = 0; i < dp_num_; i++) {
     schedule_strategies_[i]->SetBatchState(batch_states_[i][multi_batch_id]);
+    batch_states_[i][multi_batch_id]->schedule_time_in_ms = schedule_time_in_ms;
     schedule_strategies_[i]->UpdateRunningRequests(generation_output.reqs[i]);
   }
 }
@@ -306,7 +359,8 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   PROFILE_EVENT_SCOPE(Schedule_, fmt::format("Schedule_{}", multi_batch_id));
   std::lock_guard<std::mutex> guard(schedule_mutex_);
 
-  KLLM_LOG_DEBUG << "Try scheduler multi_batch_id=" << multi_batch_id << ", waiting_reqs_size:" << waiting_reqs_.size();
+  KLLM_LOG_SCHEDULER << "Try scheduler multi_batch_id=" << multi_batch_id
+                     << ", waiting_reqs_size:" << waiting_reqs_.size();
   Singleton<LayerProgressTracker>::GetInstance()->ResetState();
 
   // ADP Balance: Apply balance strategy before normal balance
@@ -375,6 +429,7 @@ void BatchScheduler::ReportTotalState() {
   }
 
   size_t total_running_size = 0;
+  size_t total_decoding_size = 0;
   size_t total_waiting_size = 0;
   size_t total_transfer_size = 0;
   {
@@ -387,6 +442,7 @@ void BatchScheduler::ReportTotalState() {
         auto& batch_state = batch_states[multi_batch_id];
         std::lock_guard<std::mutex> guard(batch_state->queue_mutex);
         total_running_size += batch_state->schedule_output->running_reqs.size();
+        total_decoding_size += batch_state->decoding_queue.size();
         total_waiting_size += batch_state->waiting_queue.size();
         total_transfer_size += batch_state->transfer_queue.size();
       }
@@ -402,9 +458,11 @@ void BatchScheduler::ReportTotalState() {
     total_free_blocks_num += cache_manager->GetUsableBlockNumber();
   }
   size_t total_block_num = total_used_blocks_num + total_free_blocks_num;
-  KLLM_LOG_INFO << "running_req_num=" << total_running_size << ", waiting_req_num=" << total_waiting_size
-                << ", transfer_req_num=" << total_transfer_size << ", free_block_num=" << total_free_blocks_num
-                << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "%";
+  KLLM_LOG_INFO << "running_req_num=" << total_running_size << ", decoding_req_num=" << total_decoding_size
+                << ", waiting_req_num=" << total_waiting_size << ", transfer_req_num=" << total_transfer_size
+                << ", free_block_num=" << total_free_blocks_num
+                << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "% (" << total_used_blocks_num
+                << "/" << total_block_num << ")";
 }
 
 Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,

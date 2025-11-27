@@ -61,18 +61,77 @@ struct BatchState {
     schedule_time_in_ms = GetCurrentTimeInMs();
     step_sched_finish = false;
 
-    // Reset all swap info.
-    schedule_output->Reset();
     schedule_output->multi_batch_id += 1;
   }
 
-  std::string ToString() const {
+  std::string ToString(bool include_details = false) const {
     std::ostringstream oss;
-    oss << " BatchState(multi_batch_id:" << multi_batch_id_
-        << ", schedule_output.running_queue_size:" << schedule_output->running_reqs.size()
-        << ", waiting_queue_size:" << waiting_queue.size()
-        << ", decoding_queue_size:" << decoding_queue.size()
-        << ", transfer_queue_size:" << transfer_queue.size() << ", step_sched_finish:" << step_sched_finish << ") ";
+    oss << " BatchState(multi_batch_id:" << multi_batch_id_ << ", waiting_queue_size:" << waiting_queue.size()
+        << ", decoding_queue_size:" << decoding_queue.size();
+    if (transfer_queue.size() > 0) {
+      oss << ", transfer_queue_size:" << transfer_queue.size();
+    }
+    if (async_stoped_reqs.size() > 0) {
+      oss << ", async_stop_req_size:" << async_stoped_reqs.size();
+    }
+    if (async_recomputed_reqs.size() > 0) {
+      oss << ", async_recompute_req_size:" << async_recomputed_reqs.size();
+    }
+    if (async_swapout_reqs.size() > 0) {
+      oss << ", async_swapout_reqs_size:" << async_swapout_reqs.size();
+    }
+    if (swapped_queue.size() > 0) {
+      oss << ", swapped_queue_size:" << swapped_queue.size();
+    }
+    if (swapin_pending_requests.size() > 0) {
+      oss << ", swapin_pending_requests_size:" << swapin_pending_requests.size();
+    }
+    if (swapout_pending_requests.size() > 0) {
+      oss << ", swapout_pending_requests_size:" << swapout_pending_requests.size();
+    }
+
+    oss << ", step_sched_finish:" << step_sched_finish << ") ";
+
+    if (include_details) {
+      oss << ", waiting_queue:[";
+      for (const auto& req : waiting_queue) {
+        oss << req->req_id << " ";
+      }
+      oss << "], decoding_queue:[";
+      for (const auto& req : decoding_queue) {
+        oss << req->req_id << " ";
+      }
+      oss << "]";
+      if (transfer_queue.size() > 0) {
+        oss << ", transfer_queue:[";
+        for (const auto& req : transfer_queue) {
+          oss << req->req_id << " ";
+        }
+        oss << "]";
+      }
+      if (swapped_queue.size() > 0) {
+        oss << ", swapped_queue:[";
+        for (const auto& req : swapped_queue) {
+          oss << req.second->req_id << " ";
+        }
+        oss << "]";
+      }
+
+      if (async_recomputed_reqs.size() > 0) {
+        oss << ", async_recomputed_reqs:[";
+        for (const auto& req : async_recomputed_reqs) {
+          oss << req.second->req_id << " ";
+        }
+        oss << "]";
+      }
+      if (async_swapout_reqs.size() > 0) {
+        oss << ", async_swapout_reqs:[";
+        for (const auto& req : async_swapout_reqs) {
+          oss << req.second->req_id << " ";
+        }
+        oss << "]";
+      }
+    }
     return oss.str();
   }
 
@@ -105,6 +164,17 @@ struct BatchState {
   };
   std::unordered_map<int64_t, StoppedReqInfo> async_stoped_reqs;
   std::unordered_map<int64_t, std::shared_ptr<InferRequest>> async_recomputed_reqs;
+  std::unordered_map<int64_t, std::shared_ptr<InferRequest>> async_swapout_reqs;
+
+  std::vector<int64_t> merged_swapout_req_ids;
+  std::vector<int64_t> merged_swapin_req_ids;
+
+  // The swapped queue, sorted map.
+  std::map<int, std::shared_ptr<InferRequest>> swapped_queue;
+
+  // The pending requests used for swap in/out, unordered.
+  std::unordered_map<int, std::shared_ptr<InferRequest>> swapin_pending_requests;
+  std::unordered_map<int, std::shared_ptr<InferRequest>> swapout_pending_requests;
 
   // To guard queue.
   std::mutex queue_mutex;

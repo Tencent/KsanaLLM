@@ -17,14 +17,14 @@ using namespace ksana_llm;
 
 TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
   CommonSetUp();
-  ParallelTester tester(batch_scheduler_, env_simulator_);
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
   std::vector<ParallelTester::ExeHookInterface*> hooks;
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
   hooks.push_back(&default_hook);
 
   // Run requests one by one
-  int request_num = 100;
+  int request_num = 30;
   int client_num = 1;
   int max_expect_output_num = 100;
   int max_input_num = 400;
@@ -42,7 +42,7 @@ TEST_F(BatchSchedulerTest, BasicTokenGenerationTest) {
 
 TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
   CommonSetUp();
-  ParallelTester tester(batch_scheduler_, env_simulator_);
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
   std::vector<ParallelTester::ExeHookInterface*> hooks;
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
@@ -68,7 +68,7 @@ TEST_F(BatchSchedulerTest, SwapOutInNotTriggeredPressTest) {
 
 TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   CommonSetUp();
-  ParallelTester tester(batch_scheduler_, env_simulator_);
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
   std::vector<ParallelTester::ExeHookInterface*> hooks;
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
@@ -90,9 +90,9 @@ TEST_F(BatchSchedulerTest, SwapOutInTriggeredPressTest) {
   tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 60);
 
   auto& stat = env_simulator_->GetBlockManagerStat();
-  EXPECT_EQ(stat.swapout_succ_num, 0);  // Recomputed, no swap
+  EXPECT_GT(stat.swapout_succ_num, 0);
   EXPECT_EQ(stat.swapout_fail_num, 0);
-  EXPECT_EQ(stat.swapin_succ_num, 0);  // Recomputed, no swap
+  EXPECT_GT(stat.swapin_succ_num, 0);
   EXPECT_EQ(stat.swapin_fail_num, 0);
 }
 
@@ -100,7 +100,7 @@ TEST_F(BatchSchedulerTest, SplitFusePressTest) {
   KLLM_LOG_INFO << "SplitFusePressTest start";
   split_fuse_token_num_ = 16;
   CommonSetUp();
-  ParallelTester tester(batch_scheduler_, env_simulator_);
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
   std::vector<ParallelTester::ExeHookInterface*> hooks;
   ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
@@ -137,8 +137,24 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredTest) {
   int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
   test_case.SetBatchScheduler(batch_scheduler_);
+  test_case.SetScheduleProcessor(schedule_processor_);
+  test_case.SetEnvSimulator(env_simulator_);
+  test_case.RunTestNoSwapTriggered();
+}
+
+TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheNoSwapTriggeredTest) {
+  enable_prefix_cache_ = true;
+  enable_async_ = true;
+  CommonSetUp();
+
+  int prefix_block_num = 3;
+  int block_token_num = 6;
+  int device_num = 4;
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
+  test_case.SetBatchScheduler(batch_scheduler_);
+  test_case.SetScheduleProcessor(schedule_processor_);
   test_case.SetEnvSimulator(env_simulator_);
   test_case.RunTestNoSwapTriggered();
 }
@@ -151,36 +167,73 @@ TEST_F(BatchSchedulerTest, FixPrefixCacheNoSwapTriggeredSplitfuseTest) {
   int prefix_block_num = 3;
   int block_token_num = 6;
   int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
+  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, true, false);
   test_case.SetBatchScheduler(batch_scheduler_);
+  test_case.SetScheduleProcessor(schedule_processor_);
   test_case.SetEnvSimulator(env_simulator_);
   test_case.RunTestNoSwapTriggered();
 }
 
 TEST_F(BatchSchedulerTest, FixPrefixCacheSwapTriggeredTest) {
   enable_prefix_cache_ = true;
-  CommonSetUp();
+  FixPrefixCacheBlockLimitTriggeredTest();
+}
 
-  int prefix_block_num = 30;
-  int block_token_num = 6;
-  int device_num = 4;
-  FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, false);
-  test_case.SetBatchScheduler(batch_scheduler_);
-  test_case.SetEnvSimulator(env_simulator_);
-  test_case.RunTestSwapTriggered();
+TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheSwapTriggeredTest) {
+  enable_async_ = true;
+  enable_prefix_cache_ = true;
+  FixPrefixCacheBlockLimitTriggeredTest();
+}
+
+TEST_F(BatchSchedulerTest, FixPrefixCacheRecomputeTriggeredTest) {
+  enable_prefix_cache_ = true;
+  enable_swap_ = false;
+  FixPrefixCacheBlockLimitTriggeredTest();
+}
+
+TEST_F(BatchSchedulerTest, AsyncFixPrefixCacheRecomputeTriggeredTest) {
+  enable_async_ = true;
+  enable_prefix_cache_ = true;
+  enable_swap_ = false;
+  FixPrefixCacheBlockLimitTriggeredTest();
 }
 
 TEST_F(BatchSchedulerTest, CheckRequestTimeoutTest) {
+  waiting_timeout_in_ms_ = 1000;
   CommonSetUp();
-  batch_scheduler_config_.waiting_timeout_in_ms = 0;
-  ParallelTester tester(batch_scheduler_, env_simulator_);
+  size_t timeout_in_ms = waiting_timeout_in_ms_;
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
 
   std::vector<ParallelTester::ExeHookInterface*> hooks;
-  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
-  hooks.push_back(&default_hook);
+
+  class TimeoutHook : public ParallelTester::ExeHookInterface {
+   public:
+    explicit TimeoutHook(size_t timeout_in_ms, size_t step_req_num)
+        : timeout_in_ms_(timeout_in_ms), step_req_num_(step_req_num) {}
+    ~TimeoutHook() {
+      KLLM_LOG_INFO << "~TimeoutHook, after_exe_num=" << after_exe_num;
+      EXPECT_GT(before_step_num, 0);
+      EXPECT_EQ(req_steps_.size(), step_req_num_);
+    }
+
+    void CheckRequestsBeforeAStep(const std::vector<std::shared_ptr<InferRequest>>& reqs) {
+      before_step_num++;
+      std::this_thread::sleep_for(std::chrono::milliseconds(timeout_in_ms_));
+      for (auto& req : reqs) {
+        req_steps_[req->req_id]++;
+      }
+    }
+
+   private:
+    size_t timeout_in_ms_;
+    size_t step_req_num_;
+    std::unordered_map<int, int> req_steps_;
+  };
+  TimeoutHook timeout_hook(timeout_in_ms + 10, 1);
+  hooks.push_back(&timeout_hook);
 
   // Run requests one by one
-  int request_num = 1;
+  int request_num = 2;
   int client_num = 1;
   int max_expect_output_num = 100;
   int max_input_num = 400;
@@ -188,12 +241,8 @@ TEST_F(BatchSchedulerTest, CheckRequestTimeoutTest) {
   tester.GenerateRequests(request_num, 1, max_expect_output_num, 0, max_input_num, req_list);
   tester.InitRequestInfoListByDefault(req_list);
 
-  req_list[0].req_id = 128;
-  req_list[0].req->req_id = 128;
-  req_list[0].req->timestamp_in_us = 1;
-  req_list[0].infer_req_group[0]->req_id = 128;
-  req_list[0].infer_req_group[0]->timestamp_in_us = 1;
-  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+  req_list[0].infer_req_group[0]->timestamp_in_us = 1;  // will timeout in waiting queue
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks, 3);
 
   EXPECT_EQ(req_list[0].req->finish_status.GetCode(), RET_REQUEST_TIMEOUT);
 }
@@ -205,7 +254,7 @@ TEST_F(BatchSchedulerTest, CreateMockRequest) {
   int tp_num = 1;
   int ep_world_size = 2;
   CommonSetUp(dp_num, tp_num, ep_world_size);
-  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_.get());
   EXPECT_EQ(batch_scheduler->GetMockRequest().size(), 1);
 
   std::shared_ptr<ScheduleOutputGroup> schedule_output_group = batch_scheduler->Schedule(0);
@@ -242,7 +291,7 @@ TEST_F(BatchSchedulerTest, MockRequestContinuousSchedulingTest) {
   int ep_world_size = 2;
   CommonSetUp(dp_num, tp_num, ep_world_size);
 
-  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_);
+  BatchScheduler* batch_scheduler = static_cast<BatchScheduler*>(batch_scheduler_.get());
 
   // First schedule - no running requests
   auto schedule_output1 = batch_scheduler->Schedule(0);

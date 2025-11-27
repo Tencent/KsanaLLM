@@ -537,8 +537,9 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
 class BatchSchedulerEnvironmentSimulator {
  public:
   BatchSchedulerEnvironmentSimulator(const BlockManagerConfig& block_manager_config, int tp_num,
-                                     std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group)
-      : tp_num_(tp_num) {
+                                     std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group,
+                                     size_t step_time_cost_us = 2)
+      : tp_num_(tp_num), step_time_cost_us_(step_time_cost_us) {
     block_allocator_group_ = block_allocator_group;
     block_manager_config_ = block_manager_config;
     ProfilerConfig profiler_config;
@@ -600,7 +601,7 @@ class BatchSchedulerEnvironmentSimulator {
       req->sampling_result_tokens.clear();
     }
     // Assumption: A step is slower than swapout
-    std::this_thread::sleep_for(std::chrono::microseconds(2));
+    std::this_thread::sleep_for(std::chrono::microseconds(step_time_cost_us_));
   }
 
   bool IsRequestFinished(std::shared_ptr<InferRequest>& req) { return req->output_tokens.back() == GetEndId(); }
@@ -700,6 +701,7 @@ class BatchSchedulerEnvironmentSimulator {
   // <req_1, {<0, seed1>, <8, seed2>}> means req_1 will use seed1 to generate token from 0 to 8-1, seed2 for 8 to end.
   std::unordered_map<int, std::vector<std::pair<int, int>>> req_generation_seeds_;
   int tp_num_;
+  size_t step_time_cost_us_;
 };
 
 }  // namespace ksana_llm

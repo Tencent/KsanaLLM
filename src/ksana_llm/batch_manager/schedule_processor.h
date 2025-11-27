@@ -30,10 +30,9 @@ class ScheduleProcessor : public ScheduleProcessorInterface {
   void AsyncScheduleThread(size_t multi_batch_id);
   std::shared_ptr<ScheduleResult> Schedule(size_t multi_batch_id);
 
-  void ProcessLaunchableScheduleResult(size_t multi_batch_id, std::shared_ptr<ScheduleResult> result);
-
-  // Internal helper method: processes schedule data.
-  Status ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result);
+  virtual void NotifyCurrentBatchThreadNotReady(size_t multi_batch_id);
+  // Internal helper method: processes data for next forwarding.
+  virtual Status ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result);
 
  private:
   std::atomic<bool> terminated_{false};
@@ -41,7 +40,8 @@ class ScheduleProcessor : public ScheduleProcessorInterface {
   const bool enable_async_;
   const size_t max_pp_batch_num_;
   // To guard planning results.
-  std::mutex planning_result_mutex;
+  std::mutex planning_result_mutex_;
+  std::condition_variable planning_result_cv_;
   std::vector<std::thread> async_sched_threads_;
   std::vector<std::shared_ptr<ScheduleResult>> planning_sched_results_;
   std::vector<BlockingQueue<std::shared_ptr<ScheduleResult>>> sched_result_queue_;

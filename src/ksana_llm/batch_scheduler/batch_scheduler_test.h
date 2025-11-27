@@ -23,6 +23,9 @@ class BatchSchedulerTest : public testing::Test {
   void SetUp() override {
     enable_prefix_cache_ = false;
     split_fuse_token_num_ = 0;
+    enable_async_ = false;
+    waiting_timeout_in_ms_ = 600000;
+    enable_swap_ = true;
   }
 
   void CommonSetUp(int dp_num = 1, int tp_num = 4, int ep_world_size = 1) {
@@ -63,15 +66,34 @@ class BatchSchedulerTest : public testing::Test {
     KLLM_LOG_INFO << "enable_prefix_cache=" << cache_manager_config.enable_prefix_caching
                   << ", split_fuse_num=" << batch_scheduler_config_.split_fuse_token_num;
     batch_scheduler_ =
-        new BatchScheduler(batch_scheduler_config_, runtime_config_, ep_world_size_ > 1, model_instances);
+        std::make_shared<BatchScheduler>(batch_scheduler_config_, runtime_config_, ep_world_size_ > 1, model_instances);
 
     cache_manager = CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group);
     cache_manager->InitializeCachedBlocks();
     batch_scheduler_->SetCacheManager(cache_manager, 0);
+    schedule_processor_ = std::make_shared<TestScheduleProcessor>(batch_scheduler_config_.enable_async,
+                                                                  batch_scheduler_config_.max_pp_batch_num);
+    schedule_processor_->Initialize(batch_scheduler_, nullptr, nullptr);
+  }
+
+  void FixPrefixCacheBlockLimitTriggeredTest() {
+    CommonSetUp();
+
+    int prefix_block_num = 30;
+    int block_token_num = 6;
+    int device_num = 4;
+    FixPrefixTestCase test_case(prefix_block_num, block_token_num, device_num, split_fuse_token_num_, enable_swap_,
+                                false);
+    test_case.SetBatchScheduler(batch_scheduler_);
+    test_case.SetScheduleProcessor(schedule_processor_);
+    test_case.SetEnvSimulator(env_simulator_);
+    test_case.RunTestSwapTriggered();
   }
 
   void TearDown() override {
-    delete batch_scheduler_;
+    batch_scheduler_->Stop();
+    schedule_processor_->Stop();
+
     delete env_simulator_;
     DestroyScheduleOutputPool();
   }
@@ -79,22 +101,28 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   void InitDefaultConfig() {
     int device_block_num = 100;
-    block_manager_config_.host_allocator_config.blocks_num =
-        device_block_num * runtime_config_.parallel_basic_config.tensor_parallel_size * 2;
+    if (enable_swap_) {
+      block_manager_config_.host_allocator_config.blocks_num =
+          device_block_num * runtime_config_.parallel_basic_config.tensor_parallel_size * 2;
+      batch_scheduler_config_.preempt_mode = SWAP;
+    } else {
+      block_manager_config_.host_allocator_config.blocks_num = 0;
+      batch_scheduler_config_.preempt_mode = RECOMPUTE;
+    }
     block_manager_config_.device_allocator_config.blocks_num = device_block_num;
     block_manager_config_.device_allocator_config.block_token_num = 6;
 
     batch_scheduler_config_.schedule_strategy = static_cast<ScheduleStrategy>(0);
-    batch_scheduler_config_.waiting_timeout_in_ms = 600000;
+    batch_scheduler_config_.waiting_timeout_in_ms = waiting_timeout_in_ms_;
     batch_scheduler_config_.max_waiting_queue_len = 256;
     batch_scheduler_config_.max_step_token_num = 4096;
     batch_scheduler_config_.max_batch_size = 8;
     batch_scheduler_config_.max_token_len = 1024;
     batch_scheduler_config_.swapout_block_threshold = 1.0;
-    batch_scheduler_config_.swapin_block_threshold = 2.0;
-    batch_scheduler_config_.launch_block_threshold = 2.0;
-    batch_scheduler_config_.preempt_mode = static_cast<PreemptMode>(0);
+    batch_scheduler_config_.swapin_block_threshold = 3.0;
+    batch_scheduler_config_.launch_block_threshold = 4.0;
     batch_scheduler_config_.split_fuse_token_num = split_fuse_token_num_;
+    batch_scheduler_config_.enable_async = enable_async_;
 
     cache_manager_config.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
     cache_manager_config.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
@@ -105,7 +133,8 @@ class BatchSchedulerTest : public testing::Test {
  protected:
   // 定义一个 BlockManager 指针，用于在测试用例中使用
   BatchSchedulerEnvironmentSimulator* env_simulator_ = nullptr;
-  BatchSchedulerInterface* batch_scheduler_ = nullptr;
+  std::shared_ptr<BatchSchedulerInterface> batch_scheduler_ = nullptr;
+  std::shared_ptr<ScheduleProcessorInterface> schedule_processor_ = nullptr;
 
   std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group = nullptr;
   std::shared_ptr<CacheManagerInterface> cache_manager = nullptr;
@@ -118,6 +147,9 @@ class BatchSchedulerTest : public testing::Test {
 
   bool enable_prefix_cache_;
   size_t split_fuse_token_num_;
+  bool enable_async_;
+  size_t waiting_timeout_in_ms_;
+  bool enable_swap_ = true;
 };
 
 }  // namespace ksana_llm

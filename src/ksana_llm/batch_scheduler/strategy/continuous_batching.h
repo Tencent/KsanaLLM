@@ -22,6 +22,8 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
   virtual void Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) override;
 
+  virtual void UpdateAsyncState() override;
+
  private:
   // True if request timeout.
   inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
@@ -35,7 +37,7 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // In asynchronous mode, inflighting request may be in other queues.
   void RemoveRequestFromBatchState(const std::shared_ptr<InferRequest> &req);
 
-  void EstimateRequestPlanningWorkload(std::shared_ptr<InferRequest> req);
+  void EstimateRequestPlanningWorkload(const std::shared_ptr<InferRequest> &req);
 
   // Reset the req and cache status, destroy swap or finish req
   // If terminated is true, the request is terminated, and will notify to stop this request.
@@ -46,22 +48,35 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   void RecomputeRequest(std::shared_ptr<InferRequest> req);
   void SyncRecomputeRequest(std::shared_ptr<InferRequest> req);
   Status RecomputeMockRequest(std::shared_ptr<InferRequest> &req);
-  bool ProcessAsyncRecomputeRequest(std::shared_ptr<InferRequest> &req);
+  bool ProcessAsyncRecomputeRequest(const std::shared_ptr<InferRequest> &req);
+
+  void SwapoutRequest(std::shared_ptr<InferRequest> req);
+  void SyncSwapoutRequest(std::shared_ptr<InferRequest> req);
 
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
   void SyncStopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
-  bool ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req);
 
-  // Check the running queue to determine whether it exceeds the max_step_token_num.
-  // return [step_token_with_kv_cache, step_token_without_kv_cache]
+  void RecoverAsyncRecomputedRequests();
+  bool ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req);
+  void RecoverAsyncSwapoutRequests();
+  bool ProcessAsyncSwapoutRequest(const std::shared_ptr<InferRequest> &req);
+
+  // Check the running queue to determine whether it exceeds the
+  // max_step_token_num. return [step_token_with_kv_cache,
+  // step_token_without_kv_cache]
   std::pair<size_t, size_t> CheckRunningQueueStepTokens(const std::vector<std::shared_ptr<InferRequest>> &checking_reqs,
                                                         std::vector<std::shared_ptr<InferRequest>> &passed_reqs);
 
   // Schedule the running/swapped/waiting queue.
   void ProcessDecodingQueue();
+  void ProcessSwappedQueue();
   void ProcessWaitingQueue();
   void ProcessTransferQueue();
+
+  Status MergePendingSwapinRequests(bool blocking, bool early_stop);
+  Status MergePendingSwapoutRequests(bool blocking, bool early_stop);
+
   /**
    * @brief 处理prefill节点的传输队列
    *
@@ -108,8 +123,9 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   size_t dp_max_decode_batch_size_;
   size_t dp_max_logits_num_;
 
-  // Current active dp group id, only ranks where (active_dp_group_id % world_size == rank % world_size)
-  // will be scheduled
+  // Current active dp group id, only ranks where (active_dp_group_id %
+  // world_size
+  // == rank % world_size) will be scheduled
   size_t active_dp_group_id_ = 0;
 };
 

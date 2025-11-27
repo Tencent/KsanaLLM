@@ -14,7 +14,9 @@ void DeepCopySamplingRequest(SamplingRequest& original);
 std::shared_ptr<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>> DeepCopyForwardRequest(
     const std::vector<std::shared_ptr<InferRequest>>& reqs);
 
-void MergeScheduleOutputGroup(std::shared_ptr<ScheduleOutputGroup>& schedule_output_group,
-                              ScheduleOutput& merged_schedule_output);
+void MergeScheduleOutputGroupRunningRequests(std::shared_ptr<ScheduleOutputGroup>& schedule_output_group,
+                                             ScheduleOutput& merged_schedule_output);
+
+void MergeScheduleInfoForWorkers(const std::vector<ScheduleOutput*>& outputs, ScheduleOutput& merged_schedule_output);
 
 }  // namespace ksana_llm

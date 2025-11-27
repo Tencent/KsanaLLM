@@ -5,7 +5,6 @@
 
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "ksana_llm/batch_scheduler/batch_scheduler_balance_reqs_algo.h"
@@ -35,6 +34,9 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   // Get the next infer reqs that ready to run.
   std::shared_ptr<ScheduleOutputGroup> Schedule(size_t multi_batch_id) override;
+
+  bool TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, ScheduleOutput &planned_schedule_output,
+                                        std::vector<std::shared_ptr<InferRequest>> &stopped_reqs) override;
 
   void UpdateWithGenerationResult(size_t multi_batch_id, const GenerationOutputGroup &generation_output) override;
 
@@ -120,8 +122,6 @@ class BatchScheduler : public BatchSchedulerInterface {
   // NOTE(karlluo, jackyjtang): The thread pool is not thread safe, so we need to be temp variable
   // group of all strategy schedule outputs
   std::shared_ptr<ScheduleOutputGroup> schedule_output_group_;
-
-  std::mutex schedule_mutex_;
 
   bool terminating_ = false;
   std::vector<std::shared_ptr<InferRequest>> mock_request_group_;

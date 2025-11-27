@@ -38,6 +38,7 @@ class TestBatchScheduler : public BatchScheduler {
 class BalanceReqsTest : public BatchSchedulerTest {
  protected:
   void SetUp() override {
+    BatchSchedulerTest::SetUp();
     setenv("KLLM_LOG_LEVEL", "SCHEDULER", 1);
     InitLoguru();
   }

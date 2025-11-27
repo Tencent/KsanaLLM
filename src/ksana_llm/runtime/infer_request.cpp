@@ -128,12 +128,7 @@ size_t InferRequest::GetPlanningSequenceLen() const {
     return planning_workload_.prefill_start_offset + planning_workload_.GetTokenNum();
   }
   // Decoding
-  if (inflight_task_.IsEmpty()) {
-    return forwarding_tokens.size() + planning_workload_.GetTokenNum();
-  } else {
-    return forwarding_tokens.size() + inflight_task_estimated_generated_token_num_ +
-           inflight_task_estimated_draft_token_num_ + planning_workload_.GetTokenNum();
-  }
+  return forwarding_tokens.size() + planning_workload_.GetTokenNum();
 }
 
 size_t InferRequest::GetPlanningQueryLen() const { return planning_workload_.GetTokenNum(); }
@@ -287,8 +282,10 @@ void InferRequest::ResetPrefillingTokens() {
 
 void InferRequest::SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num) {
   KLLM_CHECK(!inflight_task_.IsEmpty());
-  inflight_task_estimated_generated_token_num_ = generated_token_num;
-  inflight_task_estimated_draft_token_num_ = draft_token_num;
+  planning_workload_.generated_token_num = generated_token_num;
+  planning_workload_.draft_token_num = draft_token_num;
+  remaining_workload_.generated_token_num = generated_token_num;
+  remaining_workload_.draft_token_num = draft_token_num;
 }
 
 void InferRequest::SetRemainingWorkload(const ScheduleTaskWorkload &workload) { remaining_workload_ = workload; }
@@ -311,6 +308,7 @@ void InferRequest::SetPlanningTask() {
 
 void InferRequest::UpdateAfterInflightTaskFinished() {
   output_mutex.lock();
+
   if (inflight_task_.workload.draft_token_num > 0) {
     // replace draft tokens with accepted tokens.
     forwarding_tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num + accepted_tokens.size());
@@ -406,14 +404,15 @@ void InferRequest::LaunchPlanningTask() {
   }
   sampling_token_num = inflight_task_.workload.sampling_token_num;
   forwarding_tokens_draft_num = inflight_task_.workload.draft_token_num;
-
+  KLLM_LOG_SCHEDULER << ScheduleStateToStr();
   assert(inflight_task_.workload.GetTokenNum() > 0);
   assert(forwarding_tokens.size() > kv_cached_token_num);
 }
 
 std::string InferRequest::ScheduleStateToStr() const {
   std::stringstream ss;
-  ss << " schedule_state={ req_id=" << req_id << ", inflight_task_=" << inflight_task_.workload.ToString()
+  ss << " schedule_state={ req_id=" << req_id << ", is_stopped=" << is_stopped_
+     << ", inflight_task_=" << inflight_task_.workload.ToString()
      << ", planning_task_=" << planning_task_.workload.ToString()
      << ", remaining_workload_=" << remaining_workload_.ToString()
      << ", planning_workload_= " << planning_workload_.ToString()

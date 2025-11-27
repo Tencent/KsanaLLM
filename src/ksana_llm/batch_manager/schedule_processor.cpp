@@ -36,9 +36,11 @@ std::shared_ptr<ScheduleResult> ScheduleProcessor::GetNextScheduleResult(size_t 
   if (terminated_) {
     return nullptr;
   }
-  KLLM_CHECK(result->schedule_output->IsLaunchable());
-  ProcessLaunchableScheduleResult(multi_batch_id, result);
 
+  std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
+  KLLM_CHECK(
+      batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs));
+  ProcessScheduleDataInternal(multi_batch_id, *result);
   return result;
 }
 
@@ -48,36 +50,67 @@ void ScheduleProcessor::UpdateWithGenerationResult(size_t multi_batch_id,
 
   // Async mode, check if there are any launchable schedule results
   if (enable_async_) {
-    std::shared_ptr<ScheduleResult> result;
-    {
-      std::lock_guard<std::mutex> lock(planning_result_mutex);
-      if (planning_sched_results_[multi_batch_id] != nullptr) {
-        assert(planning_sched_results_[multi_batch_id]->schedule_output->IsLaunchable());
-        result = planning_sched_results_[multi_batch_id];
-        planning_sched_results_[multi_batch_id] = nullptr;
+    std::lock_guard<std::mutex> lock(planning_result_mutex_);
+    if (planning_sched_results_[multi_batch_id] != nullptr) {
+      std::shared_ptr<ScheduleResult> result = planning_sched_results_[multi_batch_id];
+      std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
+      KLLM_CHECK(
+          batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs));
+      if (!result->schedule_output->running_reqs.empty()) {
+        KLLM_LOG_SCHEDULER << "Put result running_reqs size=" << result->schedule_output->running_reqs.size();
+        ProcessScheduleDataInternal(multi_batch_id, *result);
+        sched_result_queue_[multi_batch_id].Put(result);
+      } else {
+        KLLM_LOG_SCHEDULER << "Drop result because running_reqs is empty";
       }
-    }
-    if (result) {
-      ProcessLaunchableScheduleResult(multi_batch_id, result);
-      sched_result_queue_[multi_batch_id].Put(result);
+      for (const auto& req : stopped_reqs) {
+        RemoveRequestFromQueue(result->generation_output_group.reqs[req->attn_dp_group_id], req);
+      }
+      planning_sched_results_[multi_batch_id] = nullptr;
+      // Notify waiting AsyncScheduleThread that the planning result has been consumed
+      planning_result_cv_.notify_one();
     }
   }
 }
 
 void ScheduleProcessor::AsyncScheduleThread(size_t multi_batch_id) {
   while (!terminated_) {
+    // Check if there's existing planning result that needs to be consumed first
+    {
+      std::unique_lock<std::mutex> lock(planning_result_mutex_);
+      // Wait until planning_sched_results_[multi_batch_id] is nullptr or thread is terminated
+      planning_result_cv_.wait(
+          lock, [this, multi_batch_id]() { return planning_sched_results_[multi_batch_id] == nullptr || terminated_; });
+    }
+
+    if (terminated_) {
+      break;
+    }
+
     std::shared_ptr<ScheduleResult> result = Schedule(multi_batch_id);
     if (terminated_) {
       sched_result_queue_[multi_batch_id].Put(nullptr);
       return;
     }
-    if (result->schedule_output->IsLaunchable()) {
-      ProcessLaunchableScheduleResult(multi_batch_id, result);
-      sched_result_queue_[multi_batch_id].Put(result);
+
+    std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
+    if (batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs)) {
+      if (!result->schedule_output->running_reqs.empty()) {
+        KLLM_LOG_SCHEDULER << "Put result running_reqs size=" << result->schedule_output->running_reqs.size();
+        ProcessScheduleDataInternal(multi_batch_id, *result);
+        sched_result_queue_[multi_batch_id].Put(result);
+      } else {
+        KLLM_LOG_SCHEDULER << "Drop result because running_reqs is empty";
+      }
     } else {
-      std::lock_guard<std::mutex> lock(planning_result_mutex);
-      assert(planning_sched_results_[multi_batch_id] == nullptr);
-      planning_sched_results_[multi_batch_id] = result;
+      if (result->schedule_output->running_reqs.size() > 0) {
+        std::lock_guard<std::mutex> lock(planning_result_mutex_);
+        assert(planning_sched_results_[multi_batch_id] == nullptr);
+        planning_sched_results_[multi_batch_id] = result;
+      }
+    }
+    for (const auto& req : stopped_reqs) {
+      RemoveRequestFromQueue(result->generation_output_group.reqs[req->attn_dp_group_id], req);
     }
   }
 }
@@ -93,7 +126,7 @@ std::shared_ptr<ScheduleResult> ScheduleProcessor::Schedule(size_t multi_batch_i
     if (schedule_output_group->RunningSize() == 0) {
       // No running requests, need to wait
       // TODO(robertyuan): NotifyCurrentBatchThreadNotReady will block this thread with inflight tasks
-      multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);
+      NotifyCurrentBatchThreadNotReady(multi_batch_id);
       if (batch_scheduler_->IsIdle(multi_batch_id)) {
         batch_scheduler_->WaitUntilHaveReqs(multi_batch_id);
       } else {
@@ -110,37 +143,24 @@ std::shared_ptr<ScheduleResult> ScheduleProcessor::Schedule(size_t multi_batch_i
   }
 
   result = std::make_shared<ScheduleResult>();
+  result->outputs = schedule_output_group->outputs;
 
   // 3. Merge schedule results
   result->schedule_output = std::make_shared<ScheduleOutput>();
-  MergeScheduleOutputGroup(schedule_output_group, *(result->schedule_output));
+  MergeScheduleOutputGroupRunningRequests(schedule_output_group, *(result->schedule_output));
 
   // 4. There are running requests, process the data
   result->generation_output_group.BuildFromScheduleOutputGroup(*schedule_output_group);
-  result->outputs = schedule_output_group->outputs;
+
+  //  schedule output in schedule_output_group have been used, clear running_reqs to avoid blocking schedule.
+  for (auto& scheduled_out : schedule_output_group->outputs) {
+    scheduled_out->ClearRunningReqs();
+  }
   return result;
 }
 
-void ScheduleProcessor::ProcessLaunchableScheduleResult(size_t multi_batch_id, std::shared_ptr<ScheduleResult> result) {
-  // Remove finished requests in async mode
-  for (auto it = result->schedule_output->running_reqs.begin(); it != result->schedule_output->running_reqs.end();) {
-    auto req = *it;
-    if (req->finished) {
-      it = result->schedule_output->running_reqs.erase(it);
-    } else {
-      ++it;
-    }
-  }
-
-  // Launch running_reqs in schedule output
-  for (auto& scheduled_out : result->outputs) {
-    KLLM_CHECK(scheduled_out->IsLaunchable());
-    scheduled_out->LaunchScheduleOutput();
-    scheduled_out->Clear();  // Information have been copied to result.schedule_output, clear it
-  }
-
-  // Todo(robertyuan): Seperate ForwardRequest and SamplingRequest building logic to accelerate in async mode
-  ProcessScheduleDataInternal(multi_batch_id, *result);
+void ScheduleProcessor::NotifyCurrentBatchThreadNotReady(size_t multi_batch_id) {
+  multi_batch_controller_->NotifyCurrentBatchThreadNotReady(multi_batch_id);
 }
 
 Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result) {
@@ -152,6 +172,8 @@ Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, Sch
   // Set multi_batch_id
   result.schedule_output->multi_batch_id = multi_batch_id;
 
+  // Disable scheduler to avoid changing InferRequest members.
+  batch_scheduler_->Lock();
   llm_runtime_->ReorderInferRequests(result.schedule_output->running_reqs);
 
   // Create ForwardRequests
@@ -170,12 +192,17 @@ Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, Sch
     tokens += result.schedule_output->running_reqs[i]->forwarding_tokens.size() -
               result.schedule_output->running_reqs[i]->kv_cached_token_num;
   }
+  batch_scheduler_->Unlock();
+
   result.schedule_output->hidden_token_num = tokens;
   return Status();
 }
 
 void ScheduleProcessor::Stop() {
   terminated_ = true;
+
+  // Notify all waiting threads to wake up and check terminated_ flag
+  planning_result_cv_.notify_all();
 
   // Stop async threads
   for (auto& thread : async_sched_threads_) {
