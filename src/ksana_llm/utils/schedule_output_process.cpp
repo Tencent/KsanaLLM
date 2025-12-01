@@ -5,31 +5,6 @@
 
 namespace ksana_llm {
 
-void DeepCopySamplingRequest(SamplingRequest& original) {
-  if (original.request_target) {
-    original.request_target = std::make_shared<std::map<std::string, TargetDescribe>>(*original.request_target);
-  }
-  if (original.logprobs) {
-    original.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(*original.logprobs);
-  }
-  if (original.input_tokens) {
-    original.input_tokens = std::make_shared<std::vector<int>>(*original.input_tokens);
-  }
-  if (original.forwarding_tokens) {
-    original.forwarding_tokens = std::make_shared<std::vector<int>>(*original.forwarding_tokens);
-  }
-}
-
-std::shared_ptr<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>> DeepCopyForwardRequest(
-    const std::vector<std::shared_ptr<InferRequest>>& reqs) {
-  auto deep_copy_forwarding_tokens = std::make_shared<std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>>>();
-  deep_copy_forwarding_tokens->reserve(reqs.size());
-  for (const auto& req : reqs) {
-    (*deep_copy_forwarding_tokens)[req->req_id] = std::make_shared<std::vector<int>>(req->forwarding_tokens);
-  }
-  return deep_copy_forwarding_tokens;
-}
-
 void MergeScheduleOutputGroupRunningRequests(std::shared_ptr<ScheduleOutputGroup>& schedule_output_group,
                                              ScheduleOutput& merged_schedule_output) {
   const size_t outputs_size = schedule_output_group->outputs.size();

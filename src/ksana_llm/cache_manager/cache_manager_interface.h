@@ -61,10 +61,10 @@ class CacheManagerInterface {
                                    std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) = 0;
 
   // Update the token ids of this request.
-  // This method will update request memory blocks if the origin block is merged.
+  // This method will update request memory blocks if the origin block is merged and set block_merged as true
   virtual Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
-                                     size_t shareable_kvcache_token_num,
-                                     std::vector<std::vector<int>>& req_block_ids) = 0;
+                                     size_t shareable_kvcache_token_num, std::vector<std::vector<int>>& req_block_ids,
+                                     bool& block_merged) = 0;
 
   // Get the freeable/needed block num if swap out/in a request.
   virtual Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) = 0;

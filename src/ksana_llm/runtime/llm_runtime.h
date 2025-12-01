@@ -29,13 +29,19 @@ class LlmRuntime {
   ~LlmRuntime() { threadpool_.Stop(); }
 
   // Set cache manager, used to operate the kv cache block.
-  void SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers);
+  void SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers) {
+    cache_managers_ = cache_managers;
+  }
 
   // Set the multi_batch contorller.
-  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller);
+  void SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
+    multi_batch_controller_ = controller;
+  }
 
   // Set draft generator
-  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> controller);
+  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> controller) {
+    draft_generator_controller_ = controller;
+  }
 
   // Set generation controller
   void SetGenerationController(std::shared_ptr<GenerationController> controller) {
@@ -45,7 +51,7 @@ class LlmRuntime {
   // Execute one schedule output in parallel.
   // epilogue is used only for distributed master node, to process lm head and sampler.
   Status Step(ScheduleOutput *schedule_output, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-              std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
+              std::vector<SamplingRequest *> &sampling_reqs, bool epilogue);
 
   // Reorder the infer_request list, placing the requests from the Multi-Token Forwarding at the front
   // and the requests from the Single-Token Forwarding at the back.
@@ -113,10 +119,7 @@ class LlmRuntime {
 
   // Build sampling request.
   void BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                            std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
-
-  void DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>> &running_reqs,
-                                       std::vector<SamplingRequest> &sampling_reqs);
+                            std::vector<SamplingRequest *> &sampling_reqs, bool enable_main_layers_sampler = true);
 
   virtual void Forward(size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
                        bool epilogue, RunMode run_mode = RunMode::kMain);
@@ -124,11 +127,12 @@ class LlmRuntime {
  private:
   // Execute the sampling.
   virtual void Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>> &reqs,
-                        std::vector<SamplingRequest> &sampling_reqs, bool enable_main_layers_sampler = true);
+                        std::vector<SamplingRequest *> &sampling_reqs, bool enable_main_layers_sampler = true);
 
-  std::shared_ptr<WaitGroup> PrepareMtpInfoAsync(const std::vector<std::shared_ptr<InferRequest>> &reqs);
+  std::shared_ptr<WaitGroup> PrepareMtpInfoAsync(const size_t multi_batch_id,
+                                                 const std::vector<std::shared_ptr<InferRequest>> &reqs);
   Status MtpForward(const size_t multi_batch_id, std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-                    std::vector<SamplingRequest> &sampling_reqs, std::vector<std::shared_ptr<InferRequest>> &reqs,
+                    std::vector<SamplingRequest *> &sampling_reqs, std::vector<std::shared_ptr<InferRequest>> &reqs,
                     const bool epilogue);
 
   void GenerateDraftToken(std::vector<std::shared_ptr<InferRequest>> &reqs);
@@ -138,10 +142,10 @@ class LlmRuntime {
 
   Status StepOnChief(ScheduleOutput *schedule_output,
                      std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-                     std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
+                     std::vector<SamplingRequest *> &sampling_reqs, bool epilogue);
   Status StepOnWorker(ScheduleOutput *schedule_output,
                       std::map<ModelInstance *, std::vector<ForwardRequest *>> &grouped_reqs,
-                      std::vector<SamplingRequest> &sampling_reqs, bool epilogue);
+                      std::vector<SamplingRequest *> &sampling_reqs, bool epilogue);
 
  private:
   const size_t mtp_step_num_ = 0;
@@ -150,7 +154,7 @@ class LlmRuntime {
     InferRequest *infer_req;
     size_t order_pos;
   };
-  std::unordered_map<decltype(ForwardRequest::req_id), MtpPrepareData> mtp_prepared_data_;
+  std::vector<std::unordered_map<decltype(ForwardRequest::req_id), MtpPrepareData>> mtp_prepared_data_;
 
   // The cache manager inference used for inference engine.
   std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers_;

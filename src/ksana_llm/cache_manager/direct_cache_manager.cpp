@@ -163,7 +163,7 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
 
 Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
                                                size_t shareable_kvcache_token_num,
-                                               std::vector<std::vector<int>>& req_block_ids) {
+                                               std::vector<std::vector<int>>& req_block_ids, bool& block_merged) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     KLLM_LOG_ERROR << "Error in UpdateRequestTokens for req id " << req_id << " is not exist.";

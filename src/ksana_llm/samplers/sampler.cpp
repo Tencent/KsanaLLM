@@ -87,8 +87,9 @@ Sampler::~Sampler() {
   }
 }
 
-void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
-                                     const int vocab_size, const float repetition_penalty, Stream& stream) {
+void Sampler::ApplyRepetitionPenalty(float* logits, const std::vector<int>* input_tokens,
+                                     std::vector<int>* output_tokens, const int vocab_size,
+                                     const float repetition_penalty, Stream& stream) {
   // inv_repetition_penalties_ is filled with 1.0f
   std::fill(inv_repetition_penalties_.begin(), inv_repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalties is inv_repetition_penalty.
@@ -215,13 +216,13 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
-void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest*>& sampling_reqs, Stream& stream) {
   std::vector<std::vector<float>> probs_output(sampling_reqs.size());
   auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
   StreamSynchronize(stream);
   copy_probs_after_synchronize();
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
-    auto& req = sampling_reqs[i];
+    auto& req = *sampling_reqs[i];
     req.sampling_result_tokens->insert(req.sampling_result_tokens->end(),
                                        host_output_tokens_.begin() + req.logits_offset,
                                        host_output_tokens_.begin() + req.logits_offset + req.sampling_token_num);
@@ -243,30 +244,30 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
   }
 }
 
-Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest*>& sampling_reqs, float* device_logits,
                                         SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
   for (auto& sampling_req : sampling_reqs) {
     // TODO(winminkong): A batch of requests is judged and calculated only once.
-    if (sampling_req.enable_mtp_sampler) {
+    if (sampling_req->enable_mtp_sampler) {
       // Do not calculate output token logprobs when sample req is mtp req.
       continue;
     }
 
-    auto& logprobs_num = sampling_req.sampling_config->logprobs_num;
+    auto& logprobs_num = sampling_req->sampling_config->logprobs_num;
     if (logprobs_num == 0) {
-      sampling_req.logprobs->emplace_back();
+      sampling_req->logprobs->emplace_back();
       continue;
     }
     int universal_logprobs_num = logprobs_num > kMinLogprobsNum ? logprobs_num : kMinLogprobsNum;
     std::vector<float> logprobs(universal_logprobs_num);
     std::vector<int64_t> token_ids(universal_logprobs_num);
 #ifdef ENABLE_CUDA
-    auto& offset = sampling_req.logits_offset;
+    auto& offset = sampling_req->logits_offset;
     auto& vocab_size = sampling_device_parameter.vocab_size;
     float* device_temperatures_ptr = sampling_device_parameter.device_temperatures == nullptr
                                          ? nullptr
                                          : sampling_device_parameter.device_temperatures + offset;
-    for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
+    for (size_t sampling_index = 0; sampling_index < sampling_req->sampling_token_num; sampling_index++) {
       CalcLogprobs(device_logits + (offset + sampling_index) * vocab_size, device_temperatures_ptr, vocab_size, 1,
                    universal_logprobs_num, logprobs.data(), token_ids.data());
 #endif
@@ -274,7 +275,7 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
       for (int logprobs_index = 0; logprobs_index < universal_logprobs_num; logprobs_index++) {
         logprobs_output.push_back({token_ids[logprobs_index], logprobs[logprobs_index]});
       }
-      sampling_req.logprobs->emplace_back(logprobs_output);
+      sampling_req->logprobs->emplace_back(logprobs_output);
 #ifdef ENABLE_CUDA
     }
 #endif
@@ -283,33 +284,32 @@ Status Sampler::SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_r
 }
 
 // Copies the probabilities from the logits buffer to the output vector for each sampling request.
-std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest*>& sampling_reqs, Stream& stream,
                                                std::vector<std::vector<float>>& probs_output) {
   // Vectors to hold source and destination pointers for copying.
   std::vector<float*> src_ptr_vector;
   std::vector<float*> dst_ptr_vector;
   for (size_t i = 0; i < sampling_reqs.size(); i++) {
-    if (sampling_reqs[i].logits_custom_length > 0) {
-      if (sampling_reqs[i].request_target != nullptr) {
-        auto it = sampling_reqs[i].request_target->find("logits");
-        if (it != sampling_reqs[i].request_target->end()) {
-          if (it->second.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
-            continue;
-          }
+    auto& sampling_req = *sampling_reqs[i];
+    if (sampling_req.logits_custom_length > 0 && sampling_req.request_target != nullptr) {
+      const auto it = sampling_req.request_target->find("logits");
+      if (it != sampling_req.request_target->end()) {
+        if (it->second.token_reduce_mode == TokenReduceMode::GATHER_ALL) {
+          continue;
         }
       }
-      probs_output[i].resize(sampling_reqs[i].logits_custom_length);
-      auto& input_tokens = *sampling_reqs[i].input_tokens;
+      probs_output[i].resize(sampling_req.logits_custom_length);
+      auto& input_tokens = *sampling_req.input_tokens;
       auto& vocab_size = batch_schedule_config_.max_vocab_size;
       size_t probs_index = 0;
-      for (auto [l, r] : sampling_reqs[i].request_target->at("logits").slice_pos) {
+      for (auto [l, r] : sampling_req.request_target->at("logits").slice_pos) {
         for (auto index = l; index <= r; index++) {
-          size_t req_logits_offset = (sampling_reqs[i].logits_offset + probs_index) * vocab_size;
+          size_t req_logits_offset = (sampling_req.logits_offset + probs_index) * vocab_size;
           // Add destination and source pointers for copying.
           dst_ptr_vector.push_back(probs_output[i].data() + probs_index);
           // For any part that exceeds the input token size, directly take the value of the zeroth position.
           size_t token_idx_offset = (index + 1) < input_tokens.size() ? input_tokens[index + 1] : 0;
-          src_ptr_vector.push_back(sampling_reqs[i].logits_buf[rank_] + req_logits_offset + token_idx_offset);
+          src_ptr_vector.push_back(sampling_req.logits_buf[rank_] + req_logits_offset + token_idx_offset);
           probs_index++;
         }
       }
@@ -356,7 +356,7 @@ void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use
   }
 }
 
-Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
+Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest*>& sampling_reqs,
                                                 SamplingDeviceParameter& sampling_device_parameter,
                                                 float*& device_logits, Stream& stream) {
   PROFILE_EVENT_SCOPE(PrepareDeviceLogitsAndParameter, "PrepareDeviceLogitsAndParameter", rank_);
@@ -369,23 +369,23 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
       batch_schedule_config_.max_batch_size * batch_schedule_config_.max_decode_tokens_per_req;
 
   for (auto& sampling_req : sampling_reqs) {
-    SamplingConfig* const sampling_config = sampling_req.sampling_config;
+    SamplingConfig* const sampling_config = sampling_req->sampling_config;
     STATUS_CHECK_RETURN(sampling_config->VerifyArgs());
-    sampling_device_parameter.logits_softmax |= sampling_req.logits_custom_length > 0;
-    sampling_device_parameter.do_sampling |= sampling_req.logits_custom_length == 0;
+    sampling_device_parameter.logits_softmax |= sampling_req->logits_custom_length > 0;
+    sampling_device_parameter.do_sampling |= sampling_req->logits_custom_length == 0;
     // In cases of logits_custom_length and speculative decoding, a single request may correspond to multiple logits
-    sampling_device_parameter.bs += sampling_req.sampling_token_num;
-    float* const logits = sampling_req.logits_buf[rank_];
+    sampling_device_parameter.bs += sampling_req->sampling_token_num;
+    float* const logits = sampling_req->logits_buf[rank_];
     if (device_logits != logits && device_logits != nullptr) {
       return Status(RET_SEGMENT_FAULT, "sampling for different logits not implemented");
     }
     device_logits = logits;
     sampling_device_parameter.vocab_size = batch_schedule_config_.max_vocab_size;
-    const size_t offset = sampling_req.logits_offset;
+    const size_t offset = sampling_req->logits_offset;
     if (offset >= max_logits_num) {
-      return Status(RET_SEGMENT_FAULT, "sampling check sampling_req.logits_offset >= max_logits_num");
+      return Status(RET_SEGMENT_FAULT, "sampling check sampling_req->logits_offset >= max_logits_num");
     }
-    for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
+    for (size_t sampling_index = 0; sampling_index < sampling_req->sampling_token_num; sampling_index++) {
       host_topKs_[offset + sampling_index] = sampling_config->topk;
       host_topPs_[offset + sampling_index] = sampling_config->topp;
       host_temperatures_[offset + sampling_index] = sampling_config->temperature;
@@ -396,41 +396,40 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     use_top_k |= sampling_config->topk > 1;
     use_top_p |= sampling_config->topp != 1.0f;
     use_temperature |= sampling_config->temperature != 1.0f;
-    auto it = sampling_req.request_target->find("logits");
-    if (it != sampling_req.request_target->end()) {
-      int input_top_logprobs_num = it->second.input_top_logprobs_num;
-      sampling_req.input_top_logprobs_num = input_top_logprobs_num;
+    if (const auto it = sampling_req->request_target->find("logits"); it != sampling_req->request_target->end()) {
+      const int input_top_logprobs_num = it->second.input_top_logprobs_num;
+      sampling_req->input_top_logprobs_num = input_top_logprobs_num;
       sampling_device_parameter.max_input_top_logprobs_num =
           std::max(sampling_device_parameter.max_input_top_logprobs_num, input_top_logprobs_num);
     }
 
     const int vocab_size = batch_schedule_config_.max_vocab_size;
     if (sampling_config->repetition_penalty != 1.0f) {
-      for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
-        ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens.get(),
-                               sampling_req.sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
+      for (size_t sampling_index = 0; sampling_index < sampling_req->sampling_token_num; sampling_index++) {
+        ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req->input_tokens,
+                               sampling_req->sampling_result_tokens, vocab_size, sampling_config->repetition_penalty,
                                stream);
       }
     }
 
-    const int input_tokens_size = sampling_req.input_tokens->size();
+    const int input_tokens_size = sampling_req->input_tokens->size();
     // NOTE(winminkong): Do not apply NoRepeatNgram sampling when sample req is mtp req.
-    if (sampling_req.enable_mtp_sampler) {
+    if (sampling_req->enable_mtp_sampler) {
       continue;
     }
     // NOTE(winminkong): When mtp_step_num > 0, the NoRepeatNgram sampling is applied only to the first token generated.
     if (sampling_config->no_repeat_ngram_size > 0) {
       NoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->no_repeat_ngram_size, input_tokens_size,
-                             sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict, vocab_size,
-                             sampling_req.last_step_token_num, stream);
+                             sampling_req->forwarding_tokens, sampling_req->ngram_dict, vocab_size,
+                             sampling_req->last_step_token_num, stream);
     } else if (sampling_config->encoder_no_repeat_ngram_size > 0) {
       EncoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->encoder_no_repeat_ngram_size,
-                                    input_tokens_size, sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict,
+                                    input_tokens_size, sampling_req->forwarding_tokens, sampling_req->ngram_dict,
                                     vocab_size, stream);
     } else if (sampling_config->decoder_no_repeat_ngram_size > 0) {
       DecoderNoRepeatNgramProcessor(logits + offset * vocab_size, sampling_config->decoder_no_repeat_ngram_size,
-                                    input_tokens_size, sampling_req.forwarding_tokens.get(), sampling_req.ngram_dict,
-                                    vocab_size, sampling_req.last_step_token_num, stream);
+                                    input_tokens_size, sampling_req->forwarding_tokens, sampling_req->ngram_dict,
+                                    vocab_size, sampling_req->last_step_token_num, stream);
     }
   }
 
@@ -441,7 +440,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
   return Status();
 }
 
-Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream) {
+Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest*>& sampling_reqs, Stream& stream) {
   if (rank_ != 0) {
     StreamSynchronize(context_->GetComputeStreams()[rank_]);
     return Status();
@@ -481,7 +480,7 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
 #endif
     int pruned_len = 0;
     for (size_t req_index = 0; req_index < sampling_reqs.size(); ++req_index) {
-      auto& sampling_req = sampling_reqs[req_index];
+      auto& sampling_req = *sampling_reqs[req_index];
       if (sampling_req.enable_mtp_sampler) {
         KLLM_LOG_WARNING << "MTP sampler not support input_top_logprobs, please set mtp_step_num = 0";
         continue;
@@ -513,7 +512,7 @@ Status Sampler::Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sa
   return Status();
 }
 
-void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+void Sampler::ApplyGrammarMask(std::vector<SamplingRequest*>& sampling_reqs, float* device_logits,
                                const SamplingDeviceParameter& sampling_device_parameter, Stream& stream) {
   if (!batch_schedule_config_.enable_xgrammar) {
     return;
@@ -529,7 +528,7 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
 
   // Process each sampling request to identify structured-enabled requests
   for (size_t req_idx = 0; req_idx < sampling_reqs.size(); ++req_idx) {
-    auto& req = sampling_reqs[req_idx];
+    auto& req = *sampling_reqs[req_idx];
 
     if (!req.structured_generator || !req.apply_structured_constraint) {
       continue;
@@ -552,7 +551,7 @@ void Sampler::ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, floa
   bool has_active_constraint = false;
   for (size_t i = 0; i < structured_req_num; ++i) {
     size_t req_idx = structured_req_indices[i];
-    auto& req = sampling_reqs[req_idx];
+    auto& req = *sampling_reqs[req_idx];
 
     // Fill the bitmask at position i (not req_idx)
     int32_t* batch_bitmask = host_vocab_mask_.data() + i * bitmask_elements;

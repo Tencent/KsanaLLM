@@ -17,8 +17,6 @@ struct SamplingRequest {
   // The req id of the user's request.
   int64_t req_id;
 
-  int step = 0;
-
   // The custom length for the logits output, allowing for a specific size of logits to be generated.
   size_t logits_custom_length = 0;
 
@@ -27,14 +25,12 @@ struct SamplingRequest {
 
   // The logits buf and offset.
   std::vector<float*> logits_buf;
+
   size_t logits_offset;
 
-  std::shared_ptr<std::vector<int>> input_tokens;
+  const std::vector<int>* input_tokens = nullptr;
 
-  std::shared_ptr<std::vector<int>> forwarding_tokens;
-
-  // NOTE(david): should be modified later, only deepcopy infer_request
-  std::vector<int>* origin_tokens = nullptr;
+  const std::vector<int>* forwarding_tokens = nullptr;
 
   // Generated tokens in this sampling.
   std::vector<int>* sampling_result_tokens = nullptr;
@@ -45,19 +41,19 @@ struct SamplingRequest {
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
-  std::shared_ptr<const std::map<std::string, TargetDescribe>> request_target;
+  const std::map<std::string, TargetDescribe>* request_target = nullptr;
 
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;
 
   // Store token and their corresponding float probability values.
-  std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>> logprobs;
+  std::vector<std::vector<std::pair<int, float>>>* logprobs = nullptr;
 
   // The no_reapete_ngram sampling map
   NgramDict* ngram_dict = nullptr;
 
   // Structured generator for constrained generation, defaults to nullptr (no constraints)
-  std::shared_ptr<StructuredGeneratorInterface> structured_generator;
+  StructuredGeneratorInterface* structured_generator = nullptr;
 
   // Flag to control whether to apply structured constraints during sampling
   // Used in MTP mode to disable constraints for draft token generation

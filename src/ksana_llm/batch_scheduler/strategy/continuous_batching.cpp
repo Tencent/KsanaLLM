@@ -413,8 +413,12 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     req->req_ctx->emplace("status_code", std::to_string(static_cast<int>(req->finish_status.GetCode())));
 
     // Always update cache manager, even if request is finished.
-    Status status = cache_manager_->UpdateRequestTokens(req->req_id, req->forwarding_tokens, req->kv_cached_token_num,
-                                                        req->kv_cache_blocks);
+    bool block_merged = false;
+    const Status status = cache_manager_->UpdateRequestTokens(
+        req->req_id, req->forwarding_tokens, req->kv_cached_token_num, req->kv_cache_blocks, block_merged);
+    if (block_merged) {
+      req->RebuildBlockPtrs();
+    }
 
     if (!status.OK()) {
       KLLM_LOG_SCHEDULER << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();

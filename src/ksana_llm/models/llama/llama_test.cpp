@@ -188,20 +188,22 @@ class LlamaTest : public testing::Test {
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     std::vector<int> sampling_result_tokens;
-    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
+    std::map<std::string, TargetDescribe> request_target;
+    sample_req.input_tokens = &input_ids;
     sample_req.logits_offset = forward_reqs[0]->logits_offset;
     sample_req.sampling_token_num = 1;
     sample_req.sampling_result_tokens = &sampling_result_tokens;
-    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
+    sample_req.logprobs = &logprobs;
     sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = std::vector<float*>{llama->GetLogitsPtr(schedule_id)};
+    sample_req.logits_buf = std::vector<float *>{llama->GetLogitsPtr(schedule_id)};
     SamplingConfig sampling_config;
     sample_req.sampling_config = &sampling_config;
-    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
+    sample_req.request_target = &request_target;
+
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 
-    std::vector<SamplingRequest> sample_reqs = {sample_req};
+    std::vector<SamplingRequest *> sample_reqs = {&sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
     sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(29871, sampling_result_tokens[0]);
@@ -253,11 +255,10 @@ class LlamaTest : public testing::Test {
     forward->infer_stage = InferStage::kContext;
     forward->kv_cached_token_num = 0;
     forward->sampling_token_num = forward->logits_custom_length;
-    std::map<std::string, ksana_llm::TargetDescribe> request_target;
     ksana_llm::TargetDescribe target_describe;
     target_describe.slice_pos.push_back({0, 4});
     request_target["logits"] = target_describe;
-    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward->request_target = &request_target;
 
     std::vector<ForwardRequest *> prompt_probs_forward_reqs = {forward, forward};
     ModelInput model_input(model_config, runtime_config, 0, context_);

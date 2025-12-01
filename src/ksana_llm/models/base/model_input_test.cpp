@@ -200,7 +200,7 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   std::map<std::string, ksana_llm::TargetDescribe> targets_empty = {{"lm_head", target_desc_empty}};
   auto req_targets_empty = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets_empty);
   auto req_empty = std::make_unique<ForwardRequest>();
-  req_empty->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets_empty.get());
+  req_empty->request_target = req_targets_empty.get();
   std::vector<ForwardRequest*> forward_reqs_empty = {req_empty.get()};
   model_input->model_config_.num_layer = 42;
   model_input->PrepareCutoffLayer(forward_reqs_empty);
@@ -212,7 +212,7 @@ TEST_F(ModelInputTest, PrepareCutoffLayerTest) {
   std::map<std::string, ksana_llm::TargetDescribe> targets = {{"lm_head", target_desc}};
   auto req_targets = std::make_shared<std::map<std::string, ksana_llm::TargetDescribe>>(targets);
   auto req = std::make_unique<ForwardRequest>();
-  req->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(*req_targets.get());
+  req->request_target = req_targets.get();
   std::vector<ForwardRequest*> forward_reqs = {req.get()};
   model_input->PrepareCutoffLayer(forward_reqs);
   EXPECT_EQ(model_input->cutoff_layer, 7);

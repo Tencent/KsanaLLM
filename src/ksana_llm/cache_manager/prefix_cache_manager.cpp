@@ -598,7 +598,7 @@ Status PrefixCacheManager::MergeFilledCachedBlocks(PrefixCachedRequest* cached_r
 
 Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_request, size_t block_index,
                                                    PrefixCachedBlock* cached_block,
-                                                   std::vector<std::vector<int>>& req_block_ids) {
+                                                   std::vector<std::vector<int>>& req_block_ids, bool& block_merged) {
   PrefixCachedBlock* shadow_parent =
       (block_index == 0) ? root_cached_block_ : cached_request->cached_blocks[block_index - 1];
 
@@ -610,6 +610,7 @@ Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_r
     // Reset it and move to free list.
     ResetCachedBlock(cached_block);
     free_cached_blocks_.push(cached_block);
+    block_merged = true;
     return Status();
   }
 
@@ -690,7 +691,7 @@ Status PrefixCacheManager::AppendSwapinCachedBlock(PrefixCachedRequest* cached_r
 
 Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
                                                size_t shareable_kvcache_token_num,
-                                               std::vector<std::vector<int>>& req_block_ids) {
+                                               std::vector<std::vector<int>>& req_block_ids, bool& block_merged) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     return Status(RET_RUNTIME_FAILED, FormatStr("Update request token error, req %d is not found.", req_id));
@@ -705,7 +706,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
   }
 
   // Return if block is not full.
-  size_t filled_block_num = shareable_kvcache_token_num / cache_manager_config_.block_token_num;
+  const size_t filled_block_num = shareable_kvcache_token_num / cache_manager_config_.block_token_num;
   if (filled_block_num <= cached_request->shared_block_num) {
     return Status();
   }
@@ -724,7 +725,7 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
            cache_manager_config_.block_token_num * sizeof(int));
 
     // Append new filled block to tree.
-    AppendFilledCachedBlock(cached_request, i, cached_request->cached_blocks[i], req_block_ids);
+    AppendFilledCachedBlock(cached_request, i, cached_request->cached_blocks[i], req_block_ids, block_merged);
   }
   cached_request->shared_block_num = filled_block_num;
 

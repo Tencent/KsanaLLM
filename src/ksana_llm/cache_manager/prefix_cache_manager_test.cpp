@@ -153,7 +153,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   // Generate new token and update request.
   faked_token_generator->GenerateOneToken(1, output_token_ids);
-  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids);
+  bool block_merged = false;
+  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids,
+                                              block_merged);
   EXPECT_TRUE(status.OK());
 
   // All blocks except last should be on tree, check state of every block.
@@ -376,13 +378,13 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   faked_token_generator->GenerateOneToken(1, output_token_ids_3);
 
   // update first request token.
-  status =
-      cache_manager->UpdateRequestTokens(req_id_2, output_token_ids_2, output_token_ids_2.size() - 1, req_block_ids_2);
+  status = cache_manager->UpdateRequestTokens(req_id_2, output_token_ids_2, output_token_ids_2.size() - 1,
+                                              req_block_ids_2, block_merged);
   EXPECT_TRUE(status.OK());
 
   // update second request token, then the 3rd block should be merged.
-  status =
-      cache_manager->UpdateRequestTokens(req_id_3, output_token_ids_3, output_token_ids_3.size() - 1, req_block_ids_3);
+  status = cache_manager->UpdateRequestTokens(req_id_3, output_token_ids_3, output_token_ids_3.size() - 1,
+                                              req_block_ids_3, block_merged);
   EXPECT_TRUE(status.OK());
 
   // Recheck prefix block of req 5, should be changed.
@@ -472,8 +474,8 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   EXPECT_TRUE(status.OK());
 
   // The req 4 have same data with req 2/3.
-  status =
-      cache_manager->UpdateRequestTokens(req_id_4, output_token_ids_4, output_token_ids_4.size() - 1, req_block_ids_4);
+  status = cache_manager->UpdateRequestTokens(req_id_4, output_token_ids_4, output_token_ids_4.size() - 1,
+                                              req_block_ids_4, block_merged);
   EXPECT_TRUE(status.OK());
 
   // Swap in req 2.
@@ -606,7 +608,9 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
 
   // Generate new token and update request.
   faked_token_generator->GenerateOneToken(1, output_token_ids);
-  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids);
+  bool block_merged = false;
+  status = cache_manager->UpdateRequestTokens(req_id, output_token_ids, output_token_ids.size() - 1, req_block_ids,
+                                              block_merged);
   EXPECT_TRUE(status.OK());
   int req_id_2 = 2;
   std::vector<int> dst_prefix16_tokens = output_token_ids;
@@ -682,7 +686,8 @@ TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 
   std::vector<int> output_token_ids;
-  status = cache_manager->UpdateRequestTokens(invalid_id, output_token_ids, 0, req_block_ids);
+  bool block_merged = false;
+  status = cache_manager->UpdateRequestTokens(invalid_id, output_token_ids, 0, req_block_ids, block_merged);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 
   status = cache_manager->UpdateCachedRequestState(invalid_id, RequestState::kWaiting);

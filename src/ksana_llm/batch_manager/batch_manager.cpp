@@ -121,12 +121,7 @@ Status BatchManager::MainProcess(size_t multi_batch_id) {
   // All devices have the same number of blocks.
   SetDevice(0);
   static time_t last_end_time_us = ProfileTimer::GetCurrentTimeInUs();
-
-  std::map<ModelInstance *, std::vector<ForwardRequest *>> grouped_reqs;
-  auto sampling_reqs = std::make_shared<std::vector<SamplingRequest>>();
-
   while (!terminated_) {
-    if (terminated_) break;
     const time_t sched_start_time_ns = ProfileTimer::GetCurrentTimeInNs();
     const time_t sched_start_time_us = ProfileTimer::GetCurrentTimeInUs();
 
@@ -236,7 +231,7 @@ Status BatchManager::WorkerProcess() {
     std::map<ModelInstance *, std::vector<ForwardRequest *>> grouped_reqs;
     llm_runtime_->BuildForwardRequests(schedule_output->worker_running_reqs, grouped_reqs);
 
-    std::vector<SamplingRequest> sampling_reqs;
+    std::vector<SamplingRequest*> sampling_reqs;
 
     Status status = llm_runtime_->Step(schedule_output, grouped_reqs, sampling_reqs, false);
     if (!status.OK()) {

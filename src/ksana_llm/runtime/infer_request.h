@@ -92,7 +92,7 @@ class InferRequest {
   // Update addr ptr of blocks.
   void UpdateBlockPtrs(std::vector<std::vector<void *>> &block_ptrs);
 
-  void RebuildBlockPtrs() { last_block_id_ = -1; }
+  void RebuildBlockPtrs() { reset_forward_request_ = true; }
 
   // Get this infer request's KV occupied devices.
   std::vector<int> GetKVOccupiedDevices();
@@ -287,9 +287,6 @@ class InferRequest {
   // The swappiness future.
   std::future<void> swap_future;
 
-  // The flag for tagging request prefix cache usage
-  bool is_use_prefix_cache = false;
-
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 
@@ -319,8 +316,10 @@ class InferRequest {
   // ForwardRequest's lifecycle is bound to InferRequest's, making smart pointers redundant. Any use of ForwardRequest*
   // requires the guaranteed existence of its associated InferRequest.
   ForwardRequest *GetForwardRequest();
+  SamplingRequest *GetSamplingRequest(const size_t multi_batch_id);
   std::unique_ptr<ForwardRequest> forward_request_;
-  int last_block_id_ = -1;
+  std::unique_ptr<SamplingRequest> sampling_request_;
+  bool reset_forward_request_ = true;
 
  public:
   // Init or Recompute, copy output_tokens to prefilling_tokens_

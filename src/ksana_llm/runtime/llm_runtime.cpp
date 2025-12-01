@@ -31,6 +31,8 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const
   worker_group_ = std::make_shared<WorkerGroup>(context_->GetTensorParallelSize(),
                                                 batch_scheduler_config.max_pp_batch_num, context_);
 
+  mtp_prepared_data_.resize(runtime_config.max_pp_batch_num);
+
   samplers_.resize(context_->GetTensorParallelSize());
   for (size_t worker_id = 0; worker_id < context_->GetTensorParallelSize(); ++worker_id) {
     samplers_[worker_id] = std::make_shared<Sampler>(batch_scheduler_config, worker_id, context_);
@@ -39,30 +41,13 @@ LlmRuntime::LlmRuntime(const BatchSchedulerConfig& batch_scheduler_config, const
   threadpool_.Start();
 }
 
-void LlmRuntime::SetCacheManagers(std::vector<std::shared_ptr<CacheManagerInterface>> cache_managers) {
-  cache_managers_ = cache_managers;
-}
-
-void LlmRuntime::SetMultiBatchController(std::shared_ptr<MultiBatchController> controller) {
-  multi_batch_controller_ = controller;
-}
-
-void LlmRuntime::SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> controller) {
-  if (controller != nullptr) {
-    KLLM_LOG_WARNING << "draft_generator_controller already exists.";
-  }
-  draft_generator_controller_ = controller;
-}
-
 void LlmRuntime::BuildForwardRequests(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
                                       std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs) {
   PROFILE_EVENT_SCOPE(BuildForwardRequests, fmt::format("BuildForwardRequests_{}", multi_batch_id));
-
   grouped_reqs.clear();
   for (auto& req : reqs) {
     ++req->step;
-    ModelInstance* const key = req->model_instance.get();
-    auto& model_reqs = grouped_reqs[key];
+    auto& model_reqs = grouped_reqs[req->model_instance.get()];
     model_reqs.reserve(reqs.size());
     model_reqs.emplace_back(req->GetForwardRequest());
   }
@@ -79,40 +64,12 @@ void LlmRuntime::BuildForwardRequests(std::vector<std::shared_ptr<WorkerInferReq
   }
 }
 
-void LlmRuntime::DeepCopyAndSyncSamplingRequests(const std::vector<std::shared_ptr<InferRequest>>& running_reqs,
-                                                 std::vector<SamplingRequest>& sampling_reqs) {
-  // Create a map of InferRequests for quick lookup
-  std::unordered_map<size_t, std::shared_ptr<InferRequest>> req_map;
-  for (auto& req : running_reqs) {
-    req_map[req->req_id] = req;
-  }
-
-  size_t logits_offset = 0;
-  // Deep copy and synchronize data for each SamplingRequest
-  for (auto& sampling_req : sampling_reqs) {
-    // Find the corresponding InferRequest
-    auto it = req_map.find(sampling_req.req_id);
-    if (it == req_map.end()) {
-      continue;
-    }
-    auto& infer_req = it->second;
-
-    // Synchronize data from InferRequest to SamplingRequest
-    sampling_req.step = infer_req->step;
-    sampling_req.logits_custom_length = infer_req->logits_custom_length;
-    sampling_req.sampling_token_num = infer_req->sampling_token_num;
-    sampling_req.last_step_token_num = infer_req->last_step_token_num;
-    sampling_req.logits_offset = logits_offset;
-    logits_offset += infer_req->sampling_token_num;
-
-    // Deep copy forwarding_tokens - this is the most critical part
-    if (sampling_req.forwarding_tokens && sampling_req.origin_tokens) {
-      // Create a new copy of forwarding_tokens from origin_tokens (the real token data)
-      sampling_req.forwarding_tokens = std::make_shared<std::vector<int>>(*sampling_req.origin_tokens);
-    }
-
-    // Synchronize other related fields
-    sampling_req.sampling_config = &(infer_req->sampling_config);
+void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
+                                      std::vector<SamplingRequest*>& sampling_reqs, bool enable_main_layers_sampler) {
+  PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
+  sampling_reqs.resize(reqs.size());
+  for (size_t i = 0; i < reqs.size(); ++i) {
+    sampling_reqs[i] = reqs[i]->GetSamplingRequest(multi_batch_id);
   }
 }
 
@@ -152,53 +109,17 @@ void LlmRuntime::Forward(size_t multi_batch_id, std::map<ModelInstance*, std::ve
   wg->Wait();
 }
 
-void LlmRuntime::BuildSamplingRequest(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                                      std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
-  PROFILE_EVENT_SCOPE(BuildSamplingRequest_, fmt::format("BuildSamplingRequest_{}", multi_batch_id));
-  sampling_reqs.resize(reqs.size());
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    auto& req = reqs[i];
-    SamplingRequest& sampling_req = sampling_reqs[i];
-    sampling_req.req_id = req->req_id;
-    sampling_req.step = req->step;
-    sampling_req.logits_custom_length = req->logits_custom_length;
-    sampling_req.input_tokens = std::shared_ptr<std::vector<int>>(req, &req->input_tokens);
-    sampling_req.forwarding_tokens = std::shared_ptr<std::vector<int>>(req, &req->forwarding_tokens);
-    sampling_req.origin_tokens = &(req->forwarding_tokens);
-    sampling_req.sampling_token_num = req->sampling_token_num;
-    sampling_req.last_step_token_num = req->last_step_token_num;
-    sampling_req.sampling_result_tokens = &(req->sampling_result_tokens);
-    sampling_req.sampling_result_tokens->clear();
-    sampling_req.response = &(req->response);
-    sampling_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(req->request_target);
-    sampling_req.logprobs = std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>>(req, &req->logprobs);
-    sampling_req.logits_offset = req->logits_offset;
-    sampling_req.logits_buf = req->model_instance->GetLogitsPtr(multi_batch_id);
-    sampling_req.sampling_config = &(req->sampling_config);
-    if (sampling_req.sampling_config->num_beams > 1) {
-      sampling_req.sampling_config->logprobs_num =
-          std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);
-      sampling_req.sampling_config->topk =
-          std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
-    }
-    sampling_req.ngram_dict = &(req->ngram_dict);
-    sampling_req.structured_generator = req->structured_generator;
-    sampling_req.apply_structured_constraint = enable_main_layers_sampler;
-    sampling_req.enable_mtp_sampler = !enable_main_layers_sampler;
-  }
-}
-
 void LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                          std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler) {
+                          std::vector<SamplingRequest*>& sampling_reqs, bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(Sampling, fmt::format("Sampling_{}", multi_batch_id));
 
   // Take the shortcut when all sampling are greedy
   if (int* output_tokens_ptr = reqs.front()->model_instance->GetOutputTokensPtr(multi_batch_id).front();
       output_tokens_ptr != nullptr) {
     for (auto& sampling_req : sampling_reqs) {
-      sampling_req.sampling_result_tokens->insert(
-          sampling_req.sampling_result_tokens->end(), output_tokens_ptr + sampling_req.logits_offset,
-          output_tokens_ptr + sampling_req.logits_offset + sampling_req.sampling_token_num);
+      sampling_req->sampling_result_tokens->insert(
+          sampling_req->sampling_result_tokens->end(), output_tokens_ptr + sampling_req->logits_offset,
+          output_tokens_ptr + sampling_req->logits_offset + sampling_req->sampling_token_num);
     }
   } else {
     auto wg = std::make_shared<WaitGroup>(context_->GetTensorParallelSize(), true);
@@ -223,18 +144,20 @@ void LlmRuntime::Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<Inf
   });
 }
 
-std::shared_ptr<WaitGroup> LlmRuntime::PrepareMtpInfoAsync(const std::vector<std::shared_ptr<InferRequest>>& reqs) {
+std::shared_ptr<WaitGroup> LlmRuntime::PrepareMtpInfoAsync(const size_t multi_batch_id,
+                                                           const std::vector<std::shared_ptr<InferRequest>>& reqs) {
   if (mtp_step_num_ == 0 || !context_->IsChief()) {
     return std::make_shared<WaitGroup>();
   }
 
   auto wg = std::make_shared<WaitGroup>(1);
-  threadpool_.Submit([&, wg]() {
-    mtp_prepared_data_.clear();
-    mtp_prepared_data_.reserve(reqs.size());
+  threadpool_.Submit([&, wg, multi_batch_id]() {
+    auto& batch_prepared_data = mtp_prepared_data_[multi_batch_id];
+    batch_prepared_data.clear();
+    batch_prepared_data.reserve(reqs.size());
     for (size_t i = 0; i < reqs.size(); ++i) {
       const auto& req = reqs[i];
-      auto& prepare_data = mtp_prepared_data_[req->req_id];
+      auto& prepare_data = batch_prepared_data[req->req_id];
       prepare_data.tokens = std::make_shared<std::vector<int>>();
       prepare_data.tokens->reserve(req->forwarding_tokens.size() + mtp_step_num_);
       prepare_data.tokens->assign(req->forwarding_tokens.begin() + 1, req->forwarding_tokens.end());
@@ -248,7 +171,7 @@ std::shared_ptr<WaitGroup> LlmRuntime::PrepareMtpInfoAsync(const std::vector<std
 
 Status LlmRuntime::MtpForward(const size_t multi_batch_id,
                               std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                              std::vector<SamplingRequest>& sampling_reqs,
+                              std::vector<SamplingRequest*>& sampling_reqs,
                               std::vector<std::shared_ptr<InferRequest>>& reqs, const bool epilogue) {
   if (mtp_step_num_ == 0 || !context_->IsChief()) {
     return Status();
@@ -257,8 +180,9 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
   auto& forward_reqs = grouped_reqs.begin()->second;
 
   // update forward request
+  auto& batch_prepared_data = mtp_prepared_data_[multi_batch_id];
   for (auto& forward_req : forward_reqs) {
-    auto& prepared = mtp_prepared_data_[forward_req->req_id];
+    auto& prepared = batch_prepared_data[forward_req->req_id];
     prepared.infer_req->draft_tokens.mtp.clear();
     forward_req->forwarding_tokens = prepared.tokens;
     forward_req->forwarding_tokens->resize(forward_req->forwarding_tokens->size() -
@@ -274,19 +198,19 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
   // update sampling request async
   WaitGroup sampling_wg(1);
   threadpool_.Submit([&]() {
-    std::vector<SamplingRequest> updated_reqs(sampling_reqs.size());
+    std::vector<SamplingRequest*> updated_reqs(sampling_reqs.size());
     for (size_t i = 0; i < forward_reqs.size(); ++i) {
-      updated_reqs[i] = sampling_reqs[mtp_prepared_data_[forward_reqs[i]->req_id].order_pos];
+      updated_reqs[i] = sampling_reqs[batch_prepared_data[forward_reqs[i]->req_id].order_pos];
     }
     for (size_t i = 0; i < updated_reqs.size(); ++i) {
       auto& sampling_req = updated_reqs[i];
       auto& forward_req = *forward_reqs[i];
-      sampling_req.forwarding_tokens = forward_req.forwarding_tokens;
-      sampling_req.sampling_token_num = forward_req.sampling_token_num;
-      sampling_req.logits_offset = forward_req.logits_offset;
-      sampling_req.apply_structured_constraint = false;
-      sampling_req.enable_mtp_sampler = true;
-      sampling_req.sampling_result_tokens->clear();
+      sampling_req->forwarding_tokens = forward_req.forwarding_tokens.get();
+      sampling_req->sampling_token_num = forward_req.sampling_token_num;
+      sampling_req->logits_offset = forward_req.logits_offset;
+      sampling_req->apply_structured_constraint = false;
+      sampling_req->enable_mtp_sampler = true;
+      sampling_req->sampling_result_tokens->clear();
     }
     sampling_reqs = std::move(updated_reqs);
     sampling_wg.Done();
@@ -301,7 +225,7 @@ Status LlmRuntime::MtpForward(const size_t multi_batch_id,
     Sampling(multi_batch_id, reqs, sampling_reqs, false);
 
     for (auto& req : forward_reqs) {
-      auto& infer_req = mtp_prepared_data_[req->req_id].infer_req;
+      auto& infer_req = batch_prepared_data[req->req_id].infer_req;
       infer_req->draft_tokens.mtp.emplace_back(infer_req->sampling_result_tokens.back());
       if (mtp_step != mtp_step_num_ - 1) {
         req->kv_cached_token_num = req->forwarding_tokens->size();
@@ -356,7 +280,7 @@ void LlmRuntime::TransferGeneratedToken(std::vector<std::shared_ptr<InferRequest
 
 Status LlmRuntime::Step(ScheduleOutput* schedule_output,
                         std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                        std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
+                        std::vector<SamplingRequest*>& sampling_reqs, bool epilogue) {
   if (context_->IsChief()) {
     return StepOnChief(schedule_output, grouped_reqs, sampling_reqs, epilogue);
   }
@@ -365,7 +289,7 @@ Status LlmRuntime::Step(ScheduleOutput* schedule_output,
 
 Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
                                std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                               std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
+                               std::vector<SamplingRequest*>& sampling_reqs, bool epilogue) {
   KLLM_LOG_MAIN << "Enter llm runtime StepOnChief. multi_batch_id=" << schedule_output->multi_batch_id
                 << ", epilogue=" << epilogue;
   PROFILE_EVENT_SCOPE(StepOnChief_, fmt::format("StepOnChief_{}_{}", schedule_output->multi_batch_id, epilogue));
@@ -388,7 +312,7 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
     multi_batch_controller_->WaitUntilCurrentBatchCanRun(schedule_output->multi_batch_id);
   }
 
-  auto mtp_prepare_wg = PrepareMtpInfoAsync(schedule_output->running_reqs);
+  auto mtp_prepare_wg = PrepareMtpInfoAsync(schedule_output->multi_batch_id, schedule_output->running_reqs);
   Forward(schedule_output->multi_batch_id, grouped_reqs, epilogue, RunMode::kMain);
 
   // Sampling only in standalone mode or epilogue=true in distributed mode
@@ -415,7 +339,7 @@ Status LlmRuntime::StepOnChief(ScheduleOutput* schedule_output,
 
 Status LlmRuntime::StepOnWorker(ScheduleOutput* schedule_output,
                                 std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
-                                std::vector<SamplingRequest>& sampling_reqs, bool epilogue) {
+                                std::vector<SamplingRequest*>& sampling_reqs, bool epilogue) {
   KLLM_LOG_DEBUG << "llm runtime StepOnWorker invoked multi_batch_id=" << schedule_output->multi_batch_id;
   PROFILE_EVENT_SCOPE(StepOnWorker_, fmt::format("StepOnWorker_{}_{}", schedule_output->multi_batch_id, epilogue));
   // Worker always pass result to next step

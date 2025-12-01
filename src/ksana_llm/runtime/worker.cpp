@@ -82,13 +82,13 @@ void Worker::ForwardAsync(size_t multi_batch_id, std::shared_ptr<BaseModel> mode
 }
 
 Status Worker::Sampling(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
-                        std::vector<SamplingRequest>& sampling_reqs) {
+                        std::vector<SamplingRequest*>& sampling_reqs) {
   PROFILE_EVENT_SCOPE(task_sampling_, fmt::format("task_sampling_{}", multi_batch_id));
   return sampler->Sampling(multi_batch_id, sampling_reqs, context_->GetComputeStreams()[rank_]);
 }
 
 void Worker::SamplingAsync(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
-                           std::vector<SamplingRequest>& sampling_reqs, std::shared_ptr<WaitGroup> wg) {
+                           std::vector<SamplingRequest*>& sampling_reqs, std::shared_ptr<WaitGroup> wg) {
   WorkerTask task;
   task.multi_batch_id = multi_batch_id;
   task.type = WorkerTask::TaskType::kSampling;

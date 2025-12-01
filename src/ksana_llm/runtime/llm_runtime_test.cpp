@@ -2,11 +2,15 @@
 
 ==============================================================================*/
 
-#include "ksana_llm/runtime/llm_runtime.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
+
+#include "ksana_llm/cache_manager/block_allocator/block_allocator_manager.h"
+#include "ksana_llm/cache_manager/direct_cache_manager.h"
+#include "ksana_llm/cache_manager/prefix_cache_manager_test_helper.h"
+#include "ksana_llm/runtime/llm_runtime.h"
 
 using namespace ksana_llm;
 
@@ -24,9 +28,9 @@ class LlmRuntimeMock : public LlmRuntime {
   void Forward(size_t multi_batch_id, std::map<ModelInstance*, std::vector<ForwardRequest*>>& grouped_reqs,
                bool epilogue, RunMode run_mode = RunMode::kMain) override {}
   void Sampling(size_t multi_batch_id, std::vector<std::shared_ptr<InferRequest>>& reqs,
-                std::vector<SamplingRequest>& sampling_reqs, bool enable_main_layers_sampler = true) override {
+                std::vector<SamplingRequest*>& sampling_reqs, bool enable_main_layers_sampler = true) override {
     for (auto& req : sampling_reqs) {
-      req.sampling_result_tokens->emplace_back(kMockSamplingToken);
+      req->sampling_result_tokens->emplace_back(kMockSamplingToken);
     }
   }
 
@@ -226,7 +230,6 @@ TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
   req1->kv_cached_token_num = 10;
   req1->model_instance = model_instance;
   req1->forwarding_tokens = {1, 2, 3, 4, 5};
-  req1->is_use_prefix_cache = true;
   req1->prefix_cache_len = 5;
   req1->attn_dp_group_id = 0;
   reqs.emplace_back(req1);
@@ -238,7 +241,6 @@ TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
   req2->kv_cached_token_num = 20;
   req2->model_instance = model_instance;
   req2->forwarding_tokens = {6, 7, 8};
-  req2->is_use_prefix_cache = false;
   req2->prefix_cache_len = 0;
   req2->attn_dp_group_id = 1;
   reqs.emplace_back(req2);
@@ -260,11 +262,149 @@ TEST_F(LlmRuntimeTest, WorkerBuildForwardRequestsTest) {
   const auto& forward_req1 = results[req1->req_id];
   const auto& forward_req2 = results[req2->req_id];
 
-  EXPECT_EQ(forward_req1->step, 1);
-  EXPECT_EQ(forward_req2->step, 1);
-
   EXPECT_EQ(*forward_req1->forwarding_tokens, req1->forwarding_tokens);
   EXPECT_EQ(*forward_req2->forwarding_tokens, req2->forwarding_tokens);
+}
+
+TEST_F(LlmRuntimeTest, BuildForwardRequestsTest) {
+  BlockAllocatorGroupConfig group_config;
+  group_config.devices = {0};
+  group_config.device_block_num = 1000;
+  group_config.host_block_num = 1000;
+  group_config.block_size = 1024;
+
+  BlockAllocatorManagerConfig block_allocator_manager_config;
+  block_allocator_manager_config[0] = group_config;
+
+  BlockAllocatorCreationFunc block_allocator_creation_fn =
+      [](MemoryLocation location, size_t block_num, size_t block_size, int rank,
+         std::shared_ptr<MemoryAllocatorInterface> memory_allocator, std::shared_ptr<Context> context) {
+        return std::make_shared<FakedBlockAllocator>(location, block_num, block_size, rank, memory_allocator, context);
+      };
+
+  auto memory_allocator = std::make_shared<FakedMemoryAllocator>();
+  BlockAllocatorManager block_allocator_manager(block_allocator_manager_config, memory_allocator, context_,
+                                                block_allocator_creation_fn);
+
+  CacheManagerConfig cache_manager_config;
+  cache_manager_config.block_token_num = 16;
+  cache_manager_config.tensor_para_size = 1;
+
+  auto block_allocator_group = block_allocator_manager.GetBlockAllocatorGroup(0);
+  auto cache_manager = std::make_shared<DirectCacheManager>(cache_manager_config, block_allocator_group);
+
+  ModelConfig model_config;
+  model_config.name = "test_model";
+  std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
+  std::shared_ptr<ModelInstance> model_instance =
+      std::make_shared<ModelInstance>(model_config, runtime_config_, context_, weight_instance);
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+
+  constexpr size_t kRankNum = 1;
+
+  std::vector<std::shared_ptr<InferRequest>> reqs;
+  auto req1 = std::make_shared<InferRequest>(request, 0);
+  req1->req_id = 101;
+  req1->step = 0;
+  req1->model_instance = model_instance;
+  req1->cache_manager = cache_manager;
+  req1->forwarding_tokens = {1, 2, 3};
+  req1->block_token_num = 16;
+  req1->kv_cache_blocks.resize(kRankNum);
+  reqs.emplace_back(req1);
+
+  auto req2 = std::make_shared<InferRequest>(request, 0);
+  req2->req_id = 102;
+  req2->step = 0;
+  req2->model_instance = model_instance;
+  req2->cache_manager = cache_manager;
+  req2->forwarding_tokens = {4, 5, 6};
+  req2->block_token_num = 16;
+  req2->kv_cache_blocks.resize(kRankNum);
+  reqs.emplace_back(req2);
+
+  std::map<ModelInstance*, std::vector<ForwardRequest*>> grouped_reqs;
+  constexpr size_t kMultiBatchId = 0;
+  constexpr size_t kRepeatTimes = 100;
+
+  for (int i = 0; i < kRepeatTimes; ++i) {
+    req1->kv_cache_blocks[0].push_back(i);
+    req2->kv_cache_blocks[0].push_back(i);
+
+    llm_runtime_->BuildForwardRequests(kMultiBatchId, reqs, grouped_reqs);
+  }
+
+  EXPECT_EQ(req1->step, kRepeatTimes);
+  EXPECT_EQ(req2->step, kRepeatTimes);
+
+  EXPECT_EQ(req1->kv_cache_blocks[0].size(), kRepeatTimes);
+  EXPECT_EQ(req2->kv_cache_blocks[0].size(), kRepeatTimes);
+
+  std::map<int64_t, ForwardRequest*> forward_reqs;
+  for (auto& forward_req : grouped_reqs[model_instance.get()]) {
+    forward_reqs[forward_req->req_id] = forward_req;
+  }
+  auto& forward_req1 = forward_reqs[101];
+  auto& forward_req2 = forward_reqs[102];
+
+  auto saved_kv_cache_ptrs_req1 = forward_req1->kv_cache_ptrs;
+  auto saved_kv_cache_ptrs_req2 = forward_req2->kv_cache_ptrs;
+  auto saved_atb_blk_ids_req1 = forward_req1->atb_kv_cache_base_blk_ids;
+  auto saved_atb_blk_ids_req2 = forward_req2->atb_kv_cache_base_blk_ids;
+
+  req1->RebuildBlockPtrs();
+  req2->RebuildBlockPtrs();
+
+  llm_runtime_->BuildForwardRequests(kMultiBatchId, reqs, grouped_reqs);
+
+  forward_reqs.clear();
+  for (auto& forward_req : grouped_reqs[model_instance.get()]) {
+    forward_reqs[forward_req->req_id] = forward_req;
+  }
+  auto& reset_forward_req1 = forward_reqs[101];
+  auto& reset_forward_req2 = forward_reqs[102];
+
+  auto reset_kv_cache_ptrs_req1 = reset_forward_req1->kv_cache_ptrs;
+  auto reset_kv_cache_ptrs_req2 = reset_forward_req2->kv_cache_ptrs;
+  auto reset_atb_blk_ids_req1 = reset_forward_req1->atb_kv_cache_base_blk_ids;
+  auto reset_atb_blk_ids_req2 = reset_forward_req2->atb_kv_cache_base_blk_ids;
+
+  EXPECT_EQ(saved_kv_cache_ptrs_req1.size(), reset_kv_cache_ptrs_req1.size());
+  EXPECT_EQ(saved_kv_cache_ptrs_req2.size(), reset_kv_cache_ptrs_req2.size());
+
+  for (size_t rank = 0; rank < saved_kv_cache_ptrs_req1.size(); ++rank) {
+    EXPECT_EQ(saved_kv_cache_ptrs_req1[rank].size(), reset_kv_cache_ptrs_req1[rank].size());
+    for (size_t i = 0; i < saved_kv_cache_ptrs_req1[rank].size(); ++i) {
+      EXPECT_EQ(saved_kv_cache_ptrs_req1[rank][i], reset_kv_cache_ptrs_req1[rank][i]);
+    }
+  }
+
+  for (size_t rank = 0; rank < saved_kv_cache_ptrs_req2.size(); ++rank) {
+    EXPECT_EQ(saved_kv_cache_ptrs_req2[rank].size(), reset_kv_cache_ptrs_req2[rank].size());
+    for (size_t i = 0; i < saved_kv_cache_ptrs_req2[rank].size(); ++i) {
+      EXPECT_EQ(saved_kv_cache_ptrs_req2[rank][i], reset_kv_cache_ptrs_req2[rank][i]);
+    }
+  }
+
+  EXPECT_EQ(saved_atb_blk_ids_req1.size(), reset_atb_blk_ids_req1.size());
+  EXPECT_EQ(saved_atb_blk_ids_req2.size(), reset_atb_blk_ids_req2.size());
+
+  for (size_t rank = 0; rank < saved_atb_blk_ids_req1.size(); ++rank) {
+    EXPECT_EQ(saved_atb_blk_ids_req1[rank].size(), reset_atb_blk_ids_req1[rank].size());
+    for (size_t i = 0; i < saved_atb_blk_ids_req1[rank].size(); ++i) {
+      EXPECT_EQ(saved_atb_blk_ids_req1[rank][i], reset_atb_blk_ids_req1[rank][i]);
+    }
+  }
+
+  for (size_t rank = 0; rank < saved_atb_blk_ids_req2.size(); ++rank) {
+    EXPECT_EQ(saved_atb_blk_ids_req2[rank].size(), reset_atb_blk_ids_req2[rank].size());
+    for (size_t i = 0; i < saved_atb_blk_ids_req2[rank].size(); ++i) {
+      EXPECT_EQ(saved_atb_blk_ids_req2[rank][i], reset_atb_blk_ids_req2[rank][i]);
+    }
+  }
 }
 
 TEST_F(LlmRuntimeTest, PrepareMtpInfoTest) {
@@ -283,20 +423,21 @@ TEST_F(LlmRuntimeTest, PrepareMtpInfoTest) {
   req2->forwarding_tokens = {3, 4, 5, 6};
   reqs.emplace_back(req2);
 
-  auto wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  constexpr size_t kMultiBatchId = 0;
+  auto wg = llm_runtime_->PrepareMtpInfoAsync(kMultiBatchId, reqs);
   wg->Wait();
-  EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 0);
+  EXPECT_EQ(llm_runtime_->mtp_prepared_data_[kMultiBatchId].size(), 0);
 
   *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 1;
-  wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  wg = llm_runtime_->PrepareMtpInfoAsync(kMultiBatchId, reqs);
   wg->Wait();
-  EXPECT_EQ(llm_runtime_->mtp_prepared_data_.size(), 2);
+  EXPECT_EQ(llm_runtime_->mtp_prepared_data_[kMultiBatchId].size(), 2);
 
-  auto& prepare_1 = llm_runtime_->mtp_prepared_data_[101];
+  auto& prepare_1 = llm_runtime_->mtp_prepared_data_[kMultiBatchId][101];
   EXPECT_EQ(prepare_1.order_pos, 0);
   EXPECT_EQ(*prepare_1.tokens, std::vector<int>({2, 3, 4}));
 
-  auto& prepare_2 = llm_runtime_->mtp_prepared_data_[102];
+  auto& prepare_2 = llm_runtime_->mtp_prepared_data_[kMultiBatchId][102];
   EXPECT_EQ(prepare_2.order_pos, 1);
   EXPECT_EQ(*prepare_2.tokens, std::vector<int>({4, 5, 6}));
 }
@@ -306,17 +447,25 @@ TEST_F(LlmRuntimeTest, MtpForwardTest) {
   auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
   auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
 
+  ModelConfig model_config;
+  model_config.name = "test_model";
+  std::shared_ptr<WeightInstanceInterface> weight_instance = nullptr;
+  std::shared_ptr<ModelInstance> model_instance =
+      std::make_shared<ModelInstance>(model_config, runtime_config_, context_, weight_instance);
+
   std::vector<std::shared_ptr<InferRequest>> reqs;
   auto req1 = std::make_shared<InferRequest>(request, 0);
   req1->req_id = 101;
   req1->forwarding_tokens = {1, 2, 3, 4};
   req1->generated_tokens = {5};
+  req1->model_instance = model_instance;
   reqs.emplace_back(req1);
 
   auto req2 = std::make_shared<InferRequest>(request, 0);
   req2->req_id = 102;
   req2->forwarding_tokens = {3, 4, 5, 6};
   req2->generated_tokens = {7};
+  req2->model_instance = model_instance;
   reqs.emplace_back(req2);
 
   ForwardRequest forward_req1, forward_req2;
@@ -334,15 +483,18 @@ TEST_F(LlmRuntimeTest, MtpForwardTest) {
 
   *const_cast<size_t*>(&(llm_runtime_->mtp_step_num_)) = 2;
 
-  auto wg = llm_runtime_->PrepareMtpInfoAsync(reqs);
+  constexpr size_t kMultiBatchId = 0;
+  auto wg = llm_runtime_->PrepareMtpInfoAsync(kMultiBatchId, reqs);
   wg->Wait();
 
   std::vector<int> samp_res1, samp_res2;
-  std::vector<SamplingRequest> sampling_reqs(reqs.size());
-  sampling_reqs[0].sampling_result_tokens = &req1->sampling_result_tokens;
-  sampling_reqs[1].sampling_result_tokens = &req2->sampling_result_tokens;
+  SamplingRequest samp_req1, samp_req2;
+  std::vector<SamplingRequest*> sampling_reqs;
+  llm_runtime_->BuildSamplingRequest(0, reqs, sampling_reqs, false);
+  sampling_reqs[0]->sampling_result_tokens = &req1->sampling_result_tokens;
+  sampling_reqs[1]->sampling_result_tokens = &req2->sampling_result_tokens;
 
-  llm_runtime_->MtpForward(0, grouped_reqs, sampling_reqs, reqs, true);
+  llm_runtime_->MtpForward(kMultiBatchId, grouped_reqs, sampling_reqs, reqs, true);
 
   constexpr int kSamplingToken = LlmRuntimeMock::kMockSamplingToken;
   EXPECT_EQ(*forward_req1.forwarding_tokens, std::vector<int>({2, 3, 4, 5, kSamplingToken}));

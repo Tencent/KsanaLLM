@@ -181,13 +181,14 @@ class HunyuanTurboTest : public testing::Test {
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     std::vector<int> generated_tokens0, generated_tokens1;
-    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
+    std::map<std::string, TargetDescribe> request_target;
+    sample_req.input_tokens = &input_ids;
     sample_req.sampling_token_num = 1;
     sample_req.logits_offset = forward_reqs[0]->logits_offset;
     sample_req.sampling_result_tokens = &generated_tokens0;
-    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
+    sample_req.logprobs = &logprobs;
     sample_req.ngram_dict = &ngram_dict;
-    sample_req.logits_buf = std::vector<float*>{hunyuan_turbo->GetLogitsPtr(schedule_id)};
+    sample_req.logits_buf = std::vector<float *>{hunyuan_turbo->GetLogitsPtr(schedule_id)};
     SamplingConfig sample_config;
     sample_config.num_beams = 1;
     sample_config.topk = 1;
@@ -197,17 +198,17 @@ class HunyuanTurboTest : public testing::Test {
     sample_config.no_repeat_ngram_size = 0;
     sample_config.encoder_no_repeat_ngram_size = 0;
     sample_req.sampling_config = &sample_config;
-    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
+    sample_req.request_target = &request_target;
 
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;
     decode_sample_req.logits_offset = forward_reqs[1]->logits_offset;
-    decode_sample_req.logits_buf = std::vector<float*>{hunyuan_turbo->GetLogitsPtr(schedule_id)};
+    decode_sample_req.logits_buf = std::vector<float *>{hunyuan_turbo->GetLogitsPtr(schedule_id)};
 
     BatchSchedulerConfig batch_scheduler_config;
     Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
 
-    std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
+    std::vector<SamplingRequest *> sample_reqs = {&sample_req, &decode_sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context_);
     sampler->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id]);
     EXPECT_EQ(311, generated_tokens0[0]);

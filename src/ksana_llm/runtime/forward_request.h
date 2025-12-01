@@ -28,9 +28,6 @@ struct ForwardRequest {
   // The infer stage, context decode or decode.
   InferStage infer_stage = InferStage::kContext;
 
-  // The decode step, 0 for context decode, and then 1, 2, 3...
-  int step = 0;
-
   // The number of tokens whose kv caches have been generated.
   int kv_cached_token_num = 0;
 
@@ -38,8 +35,6 @@ struct ForwardRequest {
   size_t logits_custom_length = 0;
 
   size_t sampling_token_num = 1;
-
-  size_t last_step_token_num = 1;
 
   // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
   int64_t* mrotary_embedding_pos_offset = nullptr;
@@ -49,16 +44,12 @@ struct ForwardRequest {
   // 2. tokens need to be processed, their kv-caches are generated during computation
   std::shared_ptr<std::vector<int>> forwarding_tokens;
 
-  // Record the address of the infer forward token in the asynchronous process,
-  // to facilitate the quick acquisition of the generation result information after deep copy
-  std::vector<int>* origin_tokens;
-
   // Embedding slice used to refit input embedding
   EmbeddingSlice* input_refit_embedding;
 
   // The key is the request target, which can only be a predefined set of requestable targets {embedding_lookup,
   // layernorm, transformer, logits}.
-  std::shared_ptr<const std::map<std::string, TargetDescribe>> request_target;
+  const std::map<std::string, TargetDescribe>* request_target;
 
   // The result of request_target.
   std::map<std::string, PythonTensor>* response = nullptr;
@@ -82,9 +73,6 @@ struct ForwardRequest {
   // A vector containing pointers to FlexibleCachedCopyTask objects, which represent tasks that involve copying data
   // flexibly between different memory regions.
   std::vector<FlexibleCachedCopyTask>* flexible_cached_copy_tasks = nullptr;
-
-  // The flag for tagging request prefix cache usage
-  bool is_use_prefix_cache = false;
 
   // The prefix cache tokens number
   int prefix_cache_len = 0;

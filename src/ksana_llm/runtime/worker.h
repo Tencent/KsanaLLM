@@ -37,7 +37,7 @@ struct WorkerTask {
 
   // Sampling task parameters
   std::shared_ptr<Sampler> sampler;
-  std::vector<SamplingRequest>* sampling_reqs;
+  std::vector<SamplingRequest*>* sampling_reqs;
 };
 
 // The worker executed on every device.
@@ -97,9 +97,10 @@ class Worker {
                  std::vector<ForwardRequest*>& forward_reqs, bool epilogue, RunMode run_mode = RunMode::kMain);
 
   void SamplingAsync(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
-                     std::vector<SamplingRequest>& sampling_reqs, std::shared_ptr<WaitGroup> wg);
+                     std::vector<SamplingRequest*>& sampling_reqs, std::shared_ptr<WaitGroup> wg);
 
-  Status Sampling(size_t multi_batch_id, std::shared_ptr<Sampler> sampler, std::vector<SamplingRequest>& sampling_reqs);
+  Status Sampling(size_t multi_batch_id, std::shared_ptr<Sampler> sampler,
+                  std::vector<SamplingRequest*>& sampling_reqs);
 
  private:
   // Thread loop function that processes tasks

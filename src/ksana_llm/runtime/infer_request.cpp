@@ -171,44 +171,76 @@ std::vector<int> InferRequest::GetKVOccupiedDevices() {
 }
 
 ForwardRequest *InferRequest::GetForwardRequest() {
-  forward_request_ = std::make_unique<ForwardRequest>();
-  forward_request_->req_id = req_id;
-  forward_request_->req_ctx = req_ctx;
-  forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
-  forward_request_->input_refit_embedding = &input_refit_embedding;
-  forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
-  forward_request_->response = &response;
-  forward_request_->origin_tokens = &forwarding_tokens;
-  forward_request_->sampling_config = &sampling_config;
+  if (forward_request_ == nullptr || reset_forward_request_) {
+    reset_forward_request_ = false;
+    forward_request_ = std::make_unique<ForwardRequest>();
+    forward_request_->req_id = req_id;
+    forward_request_->req_ctx = req_ctx;
+    forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
+    forward_request_->input_refit_embedding = &input_refit_embedding;
+    forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+    forward_request_->response = &response;
+    forward_request_->sampling_config = &sampling_config;
+    forward_request_->request_target = &request_target;
+    forward_request_->cache_manager = cache_manager;
+    forward_request_->is_cudagraph_capture_request = is_cudagraph_capture_request;
+    forward_request_->kv_cache_ptrs.resize(kv_cache_blocks.size());
+    forward_request_->atb_kv_cache_base_blk_ids.resize(kv_cache_blocks.size());
+  }
+
   forward_request_->forwarding_tokens =
       std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens) *) {});
-  forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
-  forward_request_->cache_manager = cache_manager;
-  forward_request_->is_cudagraph_capture_request = is_cudagraph_capture_request;
-
-  forward_request_->kv_cache_ptrs.resize(kv_cache_blocks.size());
-  forward_request_->atb_kv_cache_base_blk_ids.resize(kv_cache_blocks.size());
-
   forward_request_->infer_stage = infer_stage;
-  forward_request_->step = step;
   forward_request_->kv_cached_token_num = kv_cached_token_num;
   forward_request_->logits_custom_length = logits_custom_length;
   forward_request_->sampling_token_num = sampling_token_num;
-  forward_request_->last_step_token_num = last_step_token_num;
   forward_request_->logits_offset = logits_offset;
-  forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;
   forward_request_->block_checksums = &block_checksums;
   forward_request_->checksummed_block_num = &checksummed_block_num;
 
   UpdateBlockPtrs(forward_request_->kv_cache_ptrs);
+
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
   AppendFlatKVCacheBlkIds(model_instance->GetLayerNum(), kv_cache_blocks, forward_request_->atb_kv_cache_base_blk_ids,
                           cache_manager);
 #endif
 
   return forward_request_.get();
+}
+
+SamplingRequest *InferRequest::GetSamplingRequest(const size_t multi_batch_id) {
+  if (sampling_request_ == nullptr) {
+    sampling_request_ = std::make_unique<SamplingRequest>();
+    sampling_request_->req_id = req_id;
+    sampling_request_->logits_custom_length = logits_custom_length;
+    sampling_request_->input_tokens = &input_tokens;
+    sampling_request_->sampling_result_tokens = &sampling_result_tokens;
+    sampling_request_->response = &response;
+    sampling_request_->request_target = &request_target;
+    sampling_request_->logprobs = &logprobs;
+    sampling_request_->sampling_config = &sampling_config;
+
+    if (sampling_request_->sampling_config->num_beams > 1) {
+      sampling_request_->sampling_config->logprobs_num =
+          std::max(sampling_request_->sampling_config->logprobs_num, sampling_request_->sampling_config->num_beams);
+      sampling_request_->sampling_config->topk =
+          std::max(sampling_request_->sampling_config->topk, sampling_request_->sampling_config->num_beams);
+    }
+    sampling_request_->ngram_dict = &ngram_dict;
+    sampling_request_->structured_generator = structured_generator.get();
+  }
+  sampling_request_->logits_buf = model_instance->GetLogitsPtr(multi_batch_id);
+  sampling_request_->forwarding_tokens = &forwarding_tokens;
+  sampling_request_->logits_offset = logits_offset;
+  sampling_request_->sampling_token_num = sampling_token_num;
+  sampling_request_->sampling_result_tokens->clear();
+  sampling_request_->enable_mtp_sampler = false;
+  sampling_request_->apply_structured_constraint = true;
+  sampling_request_->last_step_token_num = last_step_token_num;
+
+  return sampling_request_.get();
 }
 
 #if defined(ENABLE_ACL) || defined(ENABLE_CUDA)

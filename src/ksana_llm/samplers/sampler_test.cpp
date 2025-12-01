@@ -67,18 +67,18 @@ class SamplerTest : public testing::Test {
 
   SamplingRequest GetSamlingRequest() {
     SamplingRequest sample_req;
-    sample_req.input_tokens = std::make_shared<std::vector<int>>(token_ids_);
+    sample_req.input_tokens = &token_ids_;
     sample_req.sampling_token_num = sampling_token_num_;
     sample_req.sampling_result_tokens = &sampling_result_tokens_;
-    sample_req.forwarding_tokens = std::make_shared<std::vector<int>>(forward_token_ids_);
+    sample_req.forwarding_tokens = &forward_token_ids_;
     sampling_result_tokens_.clear();
     sample_req.logits_offset = 0;
-    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs_);
+    sample_req.logprobs = &logprobs_;
     sample_req.ngram_dict = &ngram_dict_;
     sample_req.logits_buf = {reinterpret_cast<float *>(logits_buf_)};
     sample_req.sampling_config = &sampling_config_;
     sample_req.last_step_token_num = last_step_token_num_;
-    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
+    sample_req.request_target = &request_target_;
     return sample_req;
   }
 
@@ -115,6 +115,7 @@ class SamplerTest : public testing::Test {
   size_t last_step_token_num_ = 1;
   size_t sampling_token_num_ = 1;
   int max_batch_size_ = 4;
+  std::map<std::string, TargetDescribe> request_target_;
 
   // Parameters used for default initialization of sample_req.
   void *logits_buf_ = nullptr;
@@ -189,7 +190,7 @@ TEST_F(SamplerTest, ArgMaxSamplerTest) {
   std::vector<float> logits_buf_cpu(vocab_size_);
   logits_buf_cpu[6] = 1.f;
   SetLogitsBuf(logits_buf_cpu);
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
@@ -214,7 +215,7 @@ TEST_F(SamplerTest, ArgMaxEqualSamplerTest) {
   logits_buf_cpu[3] = 1.f;
   logits_buf_cpu[10] = 1.f;
   SetLogitsBuf(logits_buf_cpu);
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, (*sample_req.sampling_result_tokens).size());
@@ -227,7 +228,7 @@ TEST_F(SamplerTest, TemperatureAutoVerifyTest) {
 #endif
   // When the temperature is 0, it should be automatically corrected to 1 to avoid division by zero exception.
   SamplingRequest sample_req = GetSamlingRequest();
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   float *device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
@@ -252,7 +253,7 @@ TEST_F(SamplerTest, LogitsTargetGatherAllTest) {
   target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 logits
   target_describe.token_reduce_mode = TokenReduceMode::GATHER_ALL;
   request_target["logits"] = target_describe;
-  sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+  sample_req.request_target = &request_target;
 
   // 设置 logits_custom_length
   sample_req.logits_custom_length = 2;  // 对应 slice_pos 中的 token 数量
@@ -267,7 +268,7 @@ TEST_F(SamplerTest, LogitsTargetGatherAllTest) {
   logits_buf_cpu[6] = 1.0f;  // 第一个 token 的第 6 个 logit 设为 1.0
 
   SetLogitsBuf(logits_buf_cpu);
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   // 执行 Sampling
   sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
@@ -291,7 +292,7 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
 
   // set logprobs num to enable logprobs
   sampling_config_.logprobs_num = 2;
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   sampler_->Sampling(0, sample_reqs, context_->GetComputeStreams()[device_id_]);
   EXPECT_EQ(1, sample_req.logprobs->size());
@@ -299,11 +300,11 @@ TEST_F(SamplerTest, LogprobsSamplerTest) {
   // logprobs is not supported in ACL.
 #ifdef ENABLE_CUDA
   // Default logprobs num is 5, later will be changed.
-  EXPECT_EQ(5, (*sample_req.logprobs.get())[0].size());
-  EXPECT_EQ(2, (*sample_req.logprobs.get())[0][0].first);
-  EXPECT_NEAR(-8.374043f, (*sample_req.logprobs.get())[0][0].second, 1e-6);
-  EXPECT_EQ(5, (*sample_req.logprobs.get())[0][1].first);
-  EXPECT_NEAR(-8.574042f, (*sample_req.logprobs.get())[0][1].second, 1e-6);
+  EXPECT_EQ(5, (*sample_req.logprobs)[0].size());
+  EXPECT_EQ(2, (*sample_req.logprobs)[0][0].first);
+  EXPECT_NEAR(-8.374043f, (*sample_req.logprobs)[0][0].second, 1e-6);
+  EXPECT_EQ(5, (*sample_req.logprobs)[0][1].first);
+  EXPECT_NEAR(-8.574042f, (*sample_req.logprobs)[0][1].second, 1e-6);
 #endif
 
   sampling_config_.logprobs_num = 0;
@@ -323,7 +324,7 @@ TEST_F(SamplerTest, InputLogprobsSamplerTest) {
   target_describe.token_reduce_mode = TokenReduceMode::GATHER_TOKEN_ID;
   target_describe.input_top_logprobs_num = 2;
   request_target["logits"] = target_describe;
-  sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+  sample_req.request_target = &request_target;
   sample_req.logits_custom_length = 3;
   sample_req.sampling_token_num = sample_req.logits_custom_length;
   std::vector<float> logits_buf_cpu = {0.0, 1.0, 2.0, 1.5, 0.7, 1.8};
@@ -334,7 +335,7 @@ TEST_F(SamplerTest, InputLogprobsSamplerTest) {
   response_map["logits"] = python_tensor;
   sample_req.response = &response_map;
 
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
 
   // logprobs is not supported in ACL.
 #ifdef ENABLE_CUDA
@@ -377,7 +378,7 @@ TEST_F(SamplerTest, MTPSampleTest) {
   KLLM_LOG_INFO << "vocab_size_ = " << vocab_size_;
   SetLogitsBuf(logits_buf_cpu);
   SamplingRequest sample_req = GetSamlingRequest();
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
   float *device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
 
@@ -390,9 +391,10 @@ TEST_F(SamplerTest, MTPSampleTest) {
   }
 
   // For NoRepeatNgram
-  sample_reqs[0].last_step_token_num = 2;
-  sample_reqs[0].forwarding_tokens->push_back(6);
-  sample_reqs[0].forwarding_tokens->push_back(7);
+  sample_reqs[0]->last_step_token_num = 2;
+  token_ids_.push_back(6);
+  token_ids_.push_back(7);
+  sample_reqs[0]->forwarding_tokens = &token_ids_;
   sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
                                             context_->GetComputeStreams()[device_id_]);
   std::vector<float> norepeat_ngrams = sampler_->GetNorepeatNgrams();
@@ -406,7 +408,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
   // Test ApplyGrammarMask when enable_xgrammar is false (default behavior)
   SamplingRequest sample_req = GetSamlingRequest();
 
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
   std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
   SetLogitsBuf(logits_buf_cpu);
 
@@ -415,7 +417,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskDisabledTest) {
   sampling_device_parameter.vocab_size = vocab_size_;
 
   // Test with no grammar matcher (should return early due to enable_xgrammar=false)
-  sample_reqs[0].structured_generator = nullptr;
+  sample_reqs[0]->structured_generator = nullptr;
   sampler_->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
                              context_->GetComputeStreams()[device_id_]);
 
@@ -435,7 +437,7 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
   auto grammar_sampler = std::make_shared<DerivedSampler>(grammar_config, device_id_, context_);
 
   SamplingRequest sample_req = GetSamlingRequest();
-  std::vector<SamplingRequest> sample_reqs = {sample_req};
+  std::vector<SamplingRequest *> sample_reqs = {&sample_req};
   std::vector<float> logits_buf_cpu(vocab_size_, 1.0f);
   SetLogitsBuf(logits_buf_cpu);
 
@@ -444,12 +446,12 @@ TEST_F(SamplerTest, ApplyGrammarMaskEnabledTest) {
   sampling_device_parameter.vocab_size = vocab_size_;
 
   // Test with no grammar matcher (should return early due to empty grammar_req_indices)
-  sample_reqs[0].structured_generator = nullptr;
+  sample_reqs[0]->structured_generator = nullptr;
   grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
                                     context_->GetComputeStreams()[device_id_]);
 
   // Test with MTP (should be skipped even if grammar matcher exists)
-  sample_reqs[0].sampling_token_num = 2;
+  sample_reqs[0]->sampling_token_num = 2;
   grammar_sampler->ApplyGrammarMask(sample_reqs, device_logits, sampling_device_parameter,
                                     context_->GetComputeStreams()[device_id_]);
 

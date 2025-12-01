@@ -41,7 +41,6 @@ class ScheduleOutputTest : public testing::Test {
     infer_req->infer_stage = InferStage::kContext;
     infer_req->step = 3;
     infer_req->kv_cache_blocks = {{101, 103, 105}, {101, 103, 105}};
-    infer_req->is_use_prefix_cache = false;
     infer_req->prefix_cache_len = 10;
   }
 
@@ -68,10 +67,6 @@ class ScheduleOutputTest : public testing::Test {
     }
 
     if (infer_req->kv_cache_blocks != worker_infer_req->kv_cache_blocks) {
-      return false;
-    }
-
-    if (infer_req->is_use_prefix_cache != worker_infer_req->is_use_prefix_cache) {
       return false;
     }
 

@@ -18,7 +18,7 @@ struct ScheduleResult {
   std::shared_ptr<ScheduleOutput> schedule_output;
   std::map<ModelInstance *, std::vector<ForwardRequest *>> grouped_reqs;
   std::unordered_map<int64_t, std::shared_ptr<std::vector<int>>> deep_copy_forwarding_tokens;
-  std::vector<SamplingRequest> sampling_reqs;
+  std::vector<SamplingRequest*> sampling_reqs;
   GenerationOutputGroup generation_output_group;
 
   std::vector<ScheduleOutput *> outputs;  // keep ref for async info clearing

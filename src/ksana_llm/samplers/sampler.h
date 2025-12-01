@@ -23,25 +23,25 @@ class Sampler {
   Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int rank, std::shared_ptr<Context> context);
   ~Sampler();
 
-  Status Sampling(size_t multi_batch_id, std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
-  Status SamplingAndCalcLogprobs(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+  Status Sampling(size_t multi_batch_id, std::vector<SamplingRequest*>& sampling_reqs, Stream& stream);
+  Status SamplingAndCalcLogprobs(std::vector<SamplingRequest*>& sampling_reqs, float* device_logits,
                                  SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
   void SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
                                  SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
-  Status PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sampling_reqs,
+  Status PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest*>& sampling_reqs,
                                          SamplingDeviceParameter& sampling_device_parameter, float*& device_logits,
                                          Stream& stream);
 
   // Copies the probabilities from the logits buffer to the output vector for each sampling request.
-  std::function<void()> CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
+  std::function<void()> CopyProbsOutput(std::vector<SamplingRequest*>& sampling_reqs, Stream& stream,
                                         std::vector<std::vector<float>>& probs_output);
 
-  void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* output_tokens,
+  void ApplyRepetitionPenalty(float* logits, const std::vector<int>* input_tokens, std::vector<int>* output_tokens,
                               const int vocab_size, const float repetition_penalty, Stream& stream);
 
-  void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs, Stream& stream);
+  void CopyProbsOutputToRequests(std::vector<SamplingRequest*>& sampling_reqs, Stream& stream);
 
   void GetNgrams(const int ngram_size, const int cur_output_size, const std::vector<int>* output_tokens,
                  NgramDict* ngram_dict);
@@ -63,7 +63,7 @@ class Sampler {
                                      size_t last_step_token_num, Stream& stream);
 
   // Apply grammar constraints to logits for requests with grammar matchers
-  void ApplyGrammarMask(std::vector<SamplingRequest>& sampling_reqs, float* device_logits,
+  void ApplyGrammarMask(std::vector<SamplingRequest*>& sampling_reqs, float* device_logits,
                         const SamplingDeviceParameter& sampling_device_parameter, Stream& stream);
 
   // Apply token bitmask selectively to grammar-enabled requests only

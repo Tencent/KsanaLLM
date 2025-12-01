@@ -26,8 +26,14 @@ target_link_libraries(run_model_performance PUBLIC model_performance yaml-cpp
   -Wl,--no-whole-archive
 )
 
-add_executable(run_communcation_performance ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_communication_performance.cpp)
-target_link_libraries(run_communcation_performance PUBLIC model_performance)
+add_executable(run_communication_performance ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_communication_performance.cpp)
+target_link_libraries(run_communication_performance PUBLIC model_performance yaml-cpp
+  -Wl,--whole-archive
+  data_hub
+  layers
+  kernels
+  -Wl,--no-whole-archive
+)
 
 
 # for test
@@ -43,7 +49,7 @@ if(WITH_CUDA)
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/communication_performance_runner_test.cpp)
   cpp_test(communication_performance_runner_test
     SRCS ${communication_performance_runner_test_SRCS}
-    DEPS model_performance)
+    DEPS models model_performance)
 
   file(GLOB run_model_performance_test_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/model_performance/run_model_performance_test.cpp)

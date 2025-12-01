@@ -33,9 +33,6 @@ struct WorkerInferRequest {
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
 
-  // The flag for tagging request prefix cache usage
-  bool is_use_prefix_cache = false;
-
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 
@@ -154,7 +151,6 @@ struct ScheduleOutput {
         result += Vector2Str(v) + ", ";
       }
       result += "\n";
-      result += "        is_use_prefix_cache:" + std::to_string(req->is_use_prefix_cache) + "\n";
       result += "        kv_cached_token_num:" + std::to_string(req->kv_cached_token_num) + "\n";
       result += "        mrotary_embedding_pos_offset:" + std::to_string(req->mrotary_embedding_pos_offset) + "\n";
       result += "        attn_dp_group_id:" + std::to_string(req->attn_dp_group_id) + "\n";

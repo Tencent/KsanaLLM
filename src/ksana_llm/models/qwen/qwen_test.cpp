@@ -206,17 +206,17 @@ class QwenTest : public testing::Test {
     std::vector<std::vector<std::pair<int, float>>> logprobs;
     std::vector<float> prompt_probs;
     std::vector<int> generated_tokens0, generated_tokens1;
-    sample_req.input_tokens = std::make_shared<std::vector<int>>(input_ids);
+    std::map<std::string, TargetDescribe> request_target;
+    sample_req.input_tokens = &input_ids;
     sample_req.sampling_token_num = 1;
     sample_req.logits_offset = forward_reqs[0]->logits_offset;
     sample_req.sampling_result_tokens = &generated_tokens0;
-    sample_req.logprobs = std::make_shared<std::vector<std::vector<std::pair<int, float>>>>(logprobs);
+    sample_req.logprobs = &logprobs;
     sample_req.ngram_dict = &ngram_dict;
     sample_req.logits_buf = std::vector<float *>{qwen->GetLogitsPtr(multi_batch_id)};
     SamplingConfig sample_config;
     sample_req.sampling_config = &sample_config;
-    sample_req.request_target = std::make_shared<const std::map<std::string, TargetDescribe>>();
-
+    sample_req.request_target = &request_target;
 
     SamplingRequest decode_sample_req = sample_req;
     decode_sample_req.sampling_result_tokens = &generated_tokens1;
@@ -228,7 +228,7 @@ class QwenTest : public testing::Test {
     // Adjust the vocab size
     batch_scheduler_config.max_vocab_size = model_config.vocab_size;
 
-    std::vector<SamplingRequest> sample_reqs = {sample_req, decode_sample_req};
+    std::vector<SamplingRequest *> sample_reqs = {&sample_req, &decode_sample_req};
     std::shared_ptr<Sampler> sampler = std::make_shared<Sampler>(batch_scheduler_config, device_id, context);
     sampler->Sampling(0, sample_reqs, context->GetComputeStreams()[device_id]);
     std::cout << fmt::format("generated_tokens0: {}, generated_tokens1: {}", generated_tokens0[0], generated_tokens1[0])

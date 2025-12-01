@@ -163,7 +163,7 @@ class ForwardTest : public testing::Test {
     target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 logits
     target_describe.token_reduce_mode = GetTokenReduceMode("GATHER_ALL");
     request_target["logits"] = target_describe;
-    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward->request_target =&request_target;
 
     // 初始化 response 成员变量
     std::map<std::string, PythonTensor> response_map;
@@ -282,7 +282,7 @@ class ForwardTest : public testing::Test {
     target_describe.slice_pos.push_back({0, 1});  // 获取前两个 token 的 layernorm
     target_describe.token_reduce_mode = GetTokenReduceMode("GATHER_ALL");
     request_target["layernorm"] = target_describe;
-    forward->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward->request_target =&request_target;
 
     // 初始化 response 成员变量
     std::map<std::string, PythonTensor> response_map;

@@ -20,7 +20,7 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest() {
     forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
     forward_request_->forwarding_tokens =
         std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens)*) {});
-    forward_request_->request_target = std::make_shared<const std::map<std::string, TargetDescribe>>(request_target);
+    forward_request_->request_target = &request_target;
     forward_request_->logits_custom_length = 0;
     forward_request_->is_cudagraph_capture_request = false;
     forward_request_->cache_manager = cache_manager;
@@ -31,9 +31,7 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest() {
   }
 
   forward_request_->infer_stage = infer_stage;
-  forward_request_->step = step;
   forward_request_->kv_cached_token_num = kv_cached_token_num;
-  forward_request_->is_use_prefix_cache = is_use_prefix_cache;
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;
 
@@ -189,9 +187,6 @@ size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_ou
       serialized_bytes += v.size() * sizeof(int);
     }
 
-    // is_use_prefix_cache
-    serialized_bytes += sizeof(bool);
-
     // prefix_cache_len
     serialized_bytes += sizeof(int);
 
@@ -246,10 +241,6 @@ Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std
     // kv_cache_blocks
     SerializeVectorOfVector(req->kv_cache_blocks, data + offset, inner_bytes);
     offset += inner_bytes;
-
-    // is_use_prefix_cache
-    std::memcpy(data + offset, &req->is_use_prefix_cache, sizeof(bool));
-    offset += sizeof(bool);
 
     // prefix_cache_len
     std::memcpy(data + offset, &req->prefix_cache_len, sizeof(int));
@@ -316,10 +307,6 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
     DeserializeVectorOfVector(data + offset, kv_cache_blocks, inner_bytes);
     req->kv_cache_blocks = kv_cache_blocks;
     offset += inner_bytes;
-
-    // is_use_prefix_cache
-    req->is_use_prefix_cache = *reinterpret_cast<bool*>(data + offset);
-    offset += sizeof(bool);
 
     // prefix_cache_len
     req->prefix_cache_len = *reinterpret_cast<int*>(data + offset);
