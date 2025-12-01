@@ -38,6 +38,7 @@ namespace ksana_llm {
 // attention.query_key_value + r +  x : model.layers.x.attention.query_key_value.weight.r.bin
 // mlp.gate_proj +  rank r  + layer x : model.layers.x.mlp.gate_proj.weight.r.bin
 // mlp.up_proj   +  rank r  + layer x : model.layers.x.mlp.up_proj.weight.r.bin
+// mlp.gate_up_proj + rank r + layer x: model.layers.x.mlp.gate_up_proj.weight.r.bin (optional)
 // mlp.down_proj +  rank r  + layer x : model.layers.x.mlp.down_proj.weight.r.bin
 // norm                               : model.final_layernorm.weight
 // lm_head                            : model.lm_head.weight
@@ -82,16 +83,24 @@ void CommonWeight<T>::SetEmbeddingsConfig() {
 }
 
 template <typename T>
-bool CommonWeight<T>::ShouldUseFusedGateUpWeights() {
+bool CommonWeight<T>::ShouldUseFusedGateUpWeights(const std::vector<std::string>& weight_name_list) {
 #ifdef ENABLE_CUDA
-  // If using quant and checkpoint is FP8-serialized (with weight_scale tensors),
-  // disable fused gate_up to avoid missing scales during matmul because safetensors
-  // does not have this scale data
+  // When using quantization and the checkpoint is FP8-serialized (with weight_scale tensors),
+  // if gate_up_proj weights and scales are missing, disable fused gate_up.
+  // This prevents missing scale data during matmul, since safetensors does not store these scales.
+  bool has_gate_up_proj = false;
+  for (auto weight_name : weight_name_list) {
+    if (weight_name.find("gate_up_proj") != std::string::npos) {
+      has_gate_up_proj = true;
+      break;
+    }
+  }
   bool is_checkpoint_fp8_serialized = model_config_.quant_config.is_checkpoint_fp8_serialized;
   bool is_quant = model_config_.is_quant;
-  if (is_quant && is_checkpoint_fp8_serialized) {
+  if (is_quant && is_checkpoint_fp8_serialized && !has_gate_up_proj) {
     return false;
   }
+
   const std::vector<std::string> enabled_type_list = {"deepseek_v3", "deepseek_v32", "kimi_k2",
                                                       "qwen3",       "qwen",         "llama"};
   std::string unified_model_type = model_config_.type;
@@ -176,7 +185,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
                                             const std::vector<std::string>& weight_name_list,
                                             const std::vector<std::string>& custom_name_list) {
   SetDevice(rank_);
-  const bool use_fused_gate_up_weights = ShouldUseFusedGateUpWeights();
+  const bool use_fused_gate_up_weights = ShouldUseFusedGateUpWeights(weight_name_list);
   KLLM_LOG_DEBUG << "use_fused_gate_up_weights: " << use_fused_gate_up_weights;
   for (size_t idx = 0; idx < weight_name_list.size(); ++idx) {
     // tensor_para_offset 用于标记读取 weights_data 时是否做分卡处理:
@@ -187,6 +196,7 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
     //     mlp.down_proj:            先转置,再按 axis=0 切分
     //     mlp.up_proj:              先按 axis=0 切分, 再转置
     //     mlp.gate_proj:            先按 axis=0 切分, 再转置
+    //     mlp.gate_up_proj:         先按 axis=0 切分, 再转置 (optional)
     //     lm_head:                  不做分卡处理, 需转置
     //     norm:                     不做分卡处理
     //     embedding:                不做分卡处理
@@ -357,6 +367,14 @@ Status CommonWeight<T>::LoadWeightsFromFile(const std::shared_ptr<BaseFileTensor
                   tensor_name.find("mlp.gate_proj.weight") != std::string::npos ||
                   tensor_name.find("mlp.shared_expert.up_proj.weight") != std::string::npos ||
                   tensor_name.find("mlp.shared_expert.gate_proj.weight") != std::string::npos)) {
+        // use_fused_gate_up_weights为true时，模型权重格式及加载方式说明：
+        // 1. 支持两种互斥的权重格式（不会同时存在）：
+        //    - 非量化模型：gate_proj 与 up_proj (分离权重)
+        //    - 量化模型：gate_up_proj (融合权重)
+        //
+        // 2. 不同权重格式的加载方式：
+        //    - 分离权重（gate_proj + up_proj）：使用 LoadMlpUpGateTensor 进行在线融合
+        //    - 融合权重（gate_up_proj）：使用 LoadRegularTensor 直接加载
         LoadMlpUpGateTensor(weight_ptr, tensor_name, weight_shape, weight_data_type, transpose_first,
                             tensor_para_offset);
       } else {
@@ -652,7 +670,21 @@ Status CommonWeight<T>::LoadRegularTensor(void* weight_ptr, std::string tensor_n
 
       MemcpyAsync(weights_map_[tensor_name].GetPtr<void>() + half_len, weight_ptr + half_len * rank_, half_len,
                   MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+    } else if (tensor_name.find("gate_up_proj.weight") != std::string::npos &&
+               model_config_.type.find("qwen") != std::string::npos && model_config_.is_moe == false) {
+      // For qwen non-moe models, gate_up_proj is stored as [gate_proj, up_proj] concatenated along axis 0
+      // Layout in file: [gate_proj_rank0, gate_proj_rank1, ..., up_proj_rank0, up_proj_rank1, ...]
+      // We need to load gate_proj_rankN to the first half, up_proj_rankN to the second half
+      // TODO(ryanyhuang): Consider extending to support other model types in the future
+      KLLM_LOG_DEBUG << fmt::format("Reordering gate_up_proj weight: {} for rank {}", tensor_name, rank_);
+      size_t half_len = weights_map_[tensor_name].GetTotalBytes() / 2;
+      size_t all_half = half_len * tensor_para_size;
 
+      MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + half_len * rank_, half_len,
+                  MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+
+      MemcpyAsync(weights_map_[tensor_name].GetPtr<void>() + half_len, weight_ptr + all_half + half_len * rank_,
+                  half_len, MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     } else {
       MemcpyAsync(weights_map_[tensor_name].GetPtr<void>(), weight_ptr + tensor_para_offset,
                   weights_map_[tensor_name].GetTotalBytes() - sub_bytes, MEMCPY_HOST_TO_DEVICE,

@@ -55,6 +55,7 @@ if(WITH_STANDALONE_TEST)
   # 调用 cpp_test
   cpp_test(fake_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/fake_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   cpp_test(expert_para_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common_moe/common_moe_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS}  LIBS ${MODELS_TEST_LIBS} data_hub)
+  cpp_test(common_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/common_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   cpp_test(llama_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/llama/llama_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS} ${TORCH_LIBRARIES})
   cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
   if(WITH_CUDA)

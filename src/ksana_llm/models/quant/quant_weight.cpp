@@ -1002,7 +1002,8 @@ template <typename T>
 Status QuantWeight<T>::BindFp8E4m3Scale(const int num_heads, const int num_kv_heads) {
   // KLLM_LOG_INFO << "Start binding scale";
   SetDevice(rank_);
-  std::vector<std::string> names = {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.down_proj.", ".self_attn.o_proj."};
+  std::vector<std::string> names = {".mlp.gate_proj.", ".mlp.up_proj.", ".mlp.gate_up_proj.", ".mlp.down_proj.",
+                                    ".self_attn.o_proj."};
   for (auto name : names) {
     BindFp8E4m3ScaleOfProjWeight(name);
   }

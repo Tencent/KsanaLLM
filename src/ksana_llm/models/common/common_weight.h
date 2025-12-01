@@ -72,7 +72,15 @@ class CommonWeight : public BaseWeight {
   Status PrepareLoadOpMeta(size_t& tensor_para_offset, std::vector<size_t>& weight_shape, bool& transpose_first,
                            const std::string& tensor_name);
 
-  bool ShouldUseFusedGateUpWeights();
+  /**
+   * @brief Check whether fused gate_up_proj should be used.
+   *
+   * This function checks if the model should use fused gate_up_proj for better performance.
+   *
+   * @param weight_name_list List of weight names to check
+   * @return true if fused gate_up_proj should be used, false otherwise
+   */
+  bool ShouldUseFusedGateUpWeights(const std::vector<std::string>& weight_name_list);
 
   void ChunkGateWeight();
 
