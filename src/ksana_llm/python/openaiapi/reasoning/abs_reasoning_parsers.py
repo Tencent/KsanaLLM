@@ -156,7 +156,7 @@ class ReasoningParser:
             normal_text = current_text[end_idx + len(self.think_end_token) :]
 
             # Don't use rstrip here for reasoning_text
-            return DeltaMessage(reasoning_content=reasoning_text,
+            return DeltaMessage(reasoning_content=reasoning_text.rstrip(),
                                 content=normal_text)
 
         # Continue with reasoning content

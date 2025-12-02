@@ -243,6 +243,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         # Determine if we need to use Named tool parser
         if isinstance(request.tool_choice, ChatCompletionNamedToolChoiceParam):
             tool_choice_function_name = request.tool_choice.function.name
+            last_step_delta_content = [""] * num_choices
         else:
             tool_choice_function_name = None
 
@@ -440,15 +441,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                         list(output_tokenids)):
                                     if delta_message and delta_message.content:
                                         # This need to be added to next `delta_text`
-                                        current_text = delta_message.content
+                                        last_step_delta_content[i] = delta_message.content
                                         delta_message.content = None
                                     else:
-                                        current_text = ""
+                                        last_step_delta_content[i] = ""
                             else:
                                 # Just to add remaining `content`
-                                if self.reasoning_parser:
-                                    delta_text = previous_text + delta_text
-                                    current_text = ""
+                                if self.reasoning_parser and last_step_delta_content[i]:
+                                    delta_text = last_step_delta_content[i] + delta_text
+                                    last_step_delta_content[i] = ""
 
                                 if function_name_returned[i]:
                                     delta_tool_call = DeltaToolCall(

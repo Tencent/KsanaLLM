@@ -92,12 +92,11 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
             return False
         
         # Find all occurrences of think_end_token_id
-        for i, token_id in enumerate(input_ids):
+        for token_id in input_ids:
             if token_id == self.think_end_token_id:
-                if i + 1 < len(input_ids) and input_ids[i + 1] == self.end_confirmation_token_id:
-                    # Cache the result to avoid future expensive computations
-                    self._reasoning_ended = True
-                    return True
+                # Cache the result to avoid future expensive computations
+                self._reasoning_ended = True
+                return True
         
         return False
 
