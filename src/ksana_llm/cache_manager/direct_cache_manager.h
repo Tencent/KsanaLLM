@@ -91,7 +91,8 @@ class DirectCacheManager : public CacheManagerInterface,
                              bool& block_merged) override;
 
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
-                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) override {}
+                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
+                           size_t& req_flexible_cache_len) override {}
   // Get the freeable/needed block num if swap out/in a request.
   Status GetRequestFreeableBlockNum(int64_t req_id, size_t& block_num) override;
   Status GetRequestNeededBlockNumForOneNextToken(int64_t req_id, size_t& block_num) override;

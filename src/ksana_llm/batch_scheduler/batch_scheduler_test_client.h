@@ -210,12 +210,12 @@ class ParallelTester {
                         int max_input_num, std::vector<ParallelTester::RequestInfo>& reqs) {
     KLLM_CHECK_WITH_INFO(
         min_expect_output_num < max_expect_output_num,
-        FormatStr("min_expect_output_num % should be larger than 0 and less than max_expect_output_num %d.",
+        FormatStr("min_expect_output_num %d should be larger than 0 and less than max_expect_output_num %d.",
                   min_expect_output_num, max_expect_output_num));
 
     KLLM_CHECK_WITH_INFO(
         min_input_num < max_input_num,
-        FormatStr("min_input_num % should be less than max_input_num %d.", min_input_num, max_input_num));
+        FormatStr("min_input_num %d should be less than max_input_num %d.", min_input_num, max_input_num));
 
     std::srand(10);
     for (int i = 0; i < request_num; i++) {
@@ -263,12 +263,14 @@ class ParallelTester {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
       }
 
-      if (!client_simulator.IsAllRequestStopped()) {
-        KLLM_LOG_SCHEDULER << "Not all requests stooped, exist because of timeout " << timeout << "s";
+      // Only call Stop() if actually timed out (not stopped normally)
+      if (!is_stopped.load() && !client_simulator.IsAllRequestStopped()) {
+        KLLM_LOG_SCHEDULER << "Not all requests stopped, exit because of timeout " << timeout << "s";
+        batch_scheduler_->Stop();
+        schedule_processor_->Stop();
+      } else {
+        KLLM_LOG_SCHEDULER << "All requests completed normally";
       }
-
-      batch_scheduler_->Stop();
-      schedule_processor_->Stop();
     });
 
     for (auto& info : reqs) {

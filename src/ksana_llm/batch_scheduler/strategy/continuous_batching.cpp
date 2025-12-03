@@ -800,8 +800,13 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
         }
 
         // The flexible cache handling could be placed prior to the split_fuse break. Try moving it after testing.
-        cache_manager_->UpdateFlexibleCache(req->req_id, req->forwarding_tokens, shared_token_num,
-                                            req->flexible_cached_copy_tasks);
+        cache_manager_->UpdateFlexibleCache(req->req_id, req->GetPrefillingTokens(), shared_token_num,
+                                            req->flexible_cached_copy_tasks, req->flexible_cache_len);
+        if (req->flexible_cached_copy_tasks.size() > 0) {
+          REPORT_COUNTER("flexible_cache_hit_req_num", static_cast<size_t>(1));
+          REPORT_COUNTER("flexible_cache_hit_token_num", req->flexible_cached_copy_tasks.size());
+        }
+
         continue;
       } else {
         // decrease counter if failed, thread-safe, no timing-control needed.

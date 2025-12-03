@@ -22,6 +22,7 @@ class BatchSchedulerTest : public testing::Test {
 
   void SetUp() override {
     enable_prefix_cache_ = false;
+    enable_flexible_cache_ = false;
     split_fuse_token_num_ = 0;
     enable_async_ = false;
     waiting_timeout_in_ms_ = 600000;
@@ -128,6 +129,9 @@ class BatchSchedulerTest : public testing::Test {
     cache_manager_config.tensor_para_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
     cache_manager_config.swap_threadpool_size = 8;
     cache_manager_config.enable_prefix_caching = enable_prefix_cache_;
+    if (enable_flexible_cache_) {
+      cache_manager_config.min_flexible_cache_num = cache_manager_config.block_token_num * 4;
+    }
   }
 
  protected:
@@ -146,6 +150,7 @@ class BatchSchedulerTest : public testing::Test {
   int ep_world_size_;
 
   bool enable_prefix_cache_;
+  bool enable_flexible_cache_;
   size_t split_fuse_token_num_;
   bool enable_async_;
   size_t waiting_timeout_in_ms_;

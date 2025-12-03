@@ -194,7 +194,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       // pass 0 params to use default value
       rotary_embedding_cuda->SetInput(reinterpret_cast<int64_t*>(flexible_rotary_embedding_pos_ptr),
                                       reinterpret_cast<int64_t*>(flexible_rotary_embedding_mask_ptr), nullptr,
-                                      k_tensor.data_ptr(), total_tokens, stream, 0, 0, 0, /* is_reverse */ true);
+                                      k_tensor.data_ptr(), total_tokens, stream, 0, 0, 0, 0, /* is_reverse */ true);
       CUDA_CHECK_LAST_ERROR(rotary_embedding_cuda->Forward<SCALAR_T>());
     }
 

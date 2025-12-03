@@ -58,7 +58,8 @@ class CacheManagerInterface {
                                        std::vector<std::vector<int>>& req_block_ids) = 0;
 
   virtual void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
-                                   std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) = 0;
+                                   std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
+                                   size_t& req_flexible_cache_len) = 0;
 
   // Update the token ids of this request.
   // This method will update request memory blocks if the origin block is merged and set block_merged as true

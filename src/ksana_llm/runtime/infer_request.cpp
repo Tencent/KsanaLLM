@@ -195,6 +195,7 @@ ForwardRequest *InferRequest::GetForwardRequest() {
   forward_request_->logits_custom_length = logits_custom_length;
   forward_request_->sampling_token_num = sampling_token_num;
   forward_request_->logits_offset = logits_offset;
+  // The flexible cache follows the end of the prefix cache, so it can be included in the cached length of req prefix.
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;
   forward_request_->block_checksums = &block_checksums;

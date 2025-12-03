@@ -224,7 +224,8 @@ class PrefixCacheManager : public CacheManagerInterface,
   void EraseFlexibleCacheMap(PrefixCachedBlock* cached_block);
   void InsertFlexibleCacheMap(PrefixCachedBlock* cached_block);
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
-                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks);
+                           std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
+                           size_t& req_flexible_cache_len);
   int GetPrefixLen(PrefixCachedBlock* block);
 
  private:

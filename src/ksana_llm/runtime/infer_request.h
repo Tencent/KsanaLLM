@@ -290,6 +290,9 @@ class InferRequest {
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 
+  // The flexible cache tokens number
+  size_t flexible_cache_len = 0;
+
   // A vector containing pointers to FlexibleCachedCopyTask objects, which represent tasks that involve copying data
   // flexibly between different memory regions.
   std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;

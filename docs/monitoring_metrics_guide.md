@@ -144,6 +144,19 @@ batch_scheduler_time_us =
 平均每次命中节省的block数 = prefix_cache_hit_block_num / prefix_cache_hit_req_num
 ```
 
+#### 4.2 灵活缓存（Flexible Cache）
+| 指标名称                        | 类型    | 单位 | 说明                  | 计算方式                               |
+| --------------------------------- | --------- | ------ | ----------------------- | ---------------------------------------- |
+| `flexible_cache_hit_req_num`      | Counter | 个   | 灵活缓存命中的请求数  | 使用了灵活缓存的请求数累加             |
+| `flexible_cache_hit_token_num`    | Counter | 个   | 灵活缓存命中的token数 | 通过灵活缓存复用的token数累加          |
+
+**灵活缓存效率计算**：
+
+```
+灵活缓存命中率 = flexible_cache_hit_req_num / forward_req_total_num
+平均每次命中节省的token数 = flexible_cache_hit_token_num / flexible_cache_hit_req_num
+```
+
 ### 5. 推测解码指标（Speculative Decoding Metrics）
 
 

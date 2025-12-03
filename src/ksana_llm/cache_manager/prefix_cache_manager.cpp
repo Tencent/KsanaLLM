@@ -244,9 +244,16 @@ int PrefixCacheManager::GetPrefixLen(PrefixCachedBlock* block) {
  * This function searches for the longest prefix match and extends it to form a longer matching sequence
  * within the provided token IDs. It then copies the matched data blocks into the flexible cache task list
  * for subsequent processing.
+ * 
+ * @param req_id The request id
+ * @param token_ids The input tokens of request
+ * @param shared_token_num The prefix cache length of request
+ * @param flexible_cached_copy_tasks Request member. The information of queried flexible cache tokens will be stored here
+ * @param req_flexible_cache_len Request member. The total num of queried flexible cache tokens will be stored here
  */
 void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
-                                             std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks) {
+                                             std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
+                                             size_t& req_flexible_cache_len) {
   // Check if the minimum flexible cache size is set and greater than 0
   size_t min_flexible_cache_num = cache_manager_config_.min_flexible_cache_num;
   if (min_flexible_cache_num == 0) {
@@ -378,6 +385,7 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
         cached_request->cached_blocks[(shared_token_num + idx) / block_token_num]->memory_block_ids,
         cached_blocks[cached_blocks_idx]->memory_block_ids);
   }
+  req_flexible_cache_len = flexible_cached_copy_tasks.size();
 }
 
 void PrefixCacheManager::EraseFlexibleCacheMap(PrefixCachedBlock* cached_block) {

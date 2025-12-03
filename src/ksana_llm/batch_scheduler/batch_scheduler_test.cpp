@@ -247,6 +247,46 @@ TEST_F(BatchSchedulerTest, CheckRequestTimeoutTest) {
   EXPECT_EQ(req_list[0].req->finish_status.GetCode(), RET_REQUEST_TIMEOUT);
 }
 
+TEST_F(BatchSchedulerTest, FlexibleCacheTaskTest) {
+  enable_prefix_cache_ = true;
+  enable_flexible_cache_ = true;
+
+  int dp_num = 1;
+  int tp_num = 1;
+  int ep_world_size = 1;
+  CommonSetUp(dp_num, tp_num, ep_world_size);
+  ParallelTester tester(batch_scheduler_, schedule_processor_, env_simulator_);
+
+  std::vector<ParallelTester::ExeHookInterface*> hooks;
+  ParallelTester::DefaultResultCheckHook default_hook(env_simulator_);
+  hooks.push_back(&default_hook);
+
+  int request_num = 1;
+  int client_num = 1;
+  int max_expect_output_num = 2;
+  int input_num = 300;
+  int del_token_idx = 40;
+  std::vector<int> input_tokens(input_num);
+  std::iota(input_tokens.begin(), input_tokens.end(), 1);
+
+  std::vector<ParallelTester::RequestInfo> req_list;
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, input_num, input_num + 1, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  const auto& req_0 = req_list[0].infer_req_group[0];
+  req_0->input_tokens.assign(input_tokens.begin(), input_tokens.end());
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  req_list.clear();
+  tester.GenerateRequests(request_num, 1, max_expect_output_num, input_num, input_num + 1, req_list);
+  tester.InitRequestInfoListByDefault(req_list);
+  const auto& req_1 = req_list[0].infer_req_group[0];
+  req_1->input_tokens.assign(input_tokens.begin(), input_tokens.end());
+  req_1->input_tokens.erase(req_1->input_tokens.begin() + del_token_idx);
+  tester.DoParallelRequestAndCheck(client_num, req_list, hooks);
+
+  EXPECT_EQ(req_1->flexible_cache_len, 257);
+}
+
 TEST_F(BatchSchedulerTest, CreateMockRequest) {
   KLLM_LOG_INFO << "BatchSchedulerTest: CreateMockRequest";
 
