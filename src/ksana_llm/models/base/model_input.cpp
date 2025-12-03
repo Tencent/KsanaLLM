@@ -1537,49 +1537,36 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest*>& forward_req
 #endif
 }
 
-// TODO(qiannan): consider prefix cache len
 // Prepare cumulative sequence length arrays for both flash (prefill) and paged (decode) inputs
 void ModelInput::PrepareCuSeqLen(input_info& input, bool is_paged) {
   if (!model_config_.use_dsa || input.dp_reqs.empty()) {
     return;
   }
   PROFILE_EVENT_SCOPE(PrepareCuSeqLen, "PrepareCuSeqLen", rank_);
-
+  std::vector<int> cur_seq_len_start_host(input.total_dp_input_ids_len);
+  std::vector<int> cur_seq_len_end_host(input.total_dp_input_ids_len);
   const size_t batch_size = input.dp_reqs.size();
 
-  // Prepare cumulative_seq_lens array
-  std::vector<int> cumulative_seq_lens(batch_size + 1, 0);
-  for (size_t i = 0; i < batch_size; ++i) {
-    cumulative_seq_lens[i + 1] = cumulative_seq_lens[i] + input.dp_reqs[i]->GetInputIdsLength();
-  }
-
-  // Calculate cur_seq_len_start and cur_seq_len_end with unified batch-first iteration
-  std::vector<int> cur_seq_len_start_host(cumulative_seq_lens.back());
-  std::vector<int> cur_seq_len_end_host(cumulative_seq_lens.back());
-
+  int token_idx = 0;
+  int cumulative_seq_lens = 0;
   for (size_t b = 0; b < batch_size; ++b) {
     const auto& req = input.dp_reqs[b];
-    const int token_begin = cumulative_seq_lens[b];
-    const int token_end = cumulative_seq_lens[b + 1];
-    const size_t input_ids_len = token_end - token_begin;
-
+    const size_t input_length = req->forwarding_tokens->size();
+    // Skip prefix token(include flexible cache token)
+    const size_t skip_token_num = std::max(req->kv_cached_token_num, req->prefix_cache_len);
+    const size_t input_ids_len = input_length - skip_token_num;
     for (size_t i = 0; i < input_ids_len; ++i) {
-      const int idx = token_begin + i;
-      const int local_idx = idx - token_begin;
-
       if (is_paged) {
-        // Paged: start is always 0, end is cumulative visible length
-        const size_t skip_token_num = std::max(req->kv_cached_token_num, req->prefix_cache_len);
-        cur_seq_len_start_host[idx] = 0;
-        cur_seq_len_end_host[idx] = skip_token_num + local_idx + 1;
+        cur_seq_len_start_host[token_idx] = 0;
+        cur_seq_len_end_host[token_idx] = skip_token_num + i + 1;
       } else {
-        // Flash: start points to sequence beginning, end increments within sequence
-        cur_seq_len_start_host[idx] = token_begin;
-        cur_seq_len_end_host[idx] = token_begin + local_idx + 1;
+        cur_seq_len_start_host[token_idx] = cumulative_seq_lens;
+        cur_seq_len_end_host[token_idx] = cumulative_seq_lens + skip_token_num + i + 1;
       }
+      token_idx++;
     }
+    cumulative_seq_lens += input_length;
   }
-
   // Set tensor shapes and copy data to device
   input.cur_seq_len_start = cur_seq_len_start.GetView({cur_seq_len_start_host.size()}, cur_seq_len_start.shape[0]);
   cur_seq_len_start.shape[0] += input.cur_seq_len_start.GetElementNumber();

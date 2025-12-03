@@ -55,10 +55,12 @@ Status FlashSparseMlaIndexer::Forward(const std::shared_ptr<ModelInput>& model_i
                                                                 model_input->flash_input.kv_cache_offset,
                                                                 model_input->dp_prefill_q_offset_uint64_tensor,
                                                                 model_input->dp_input_prefix_uint64_tensor,
+                                                                model_input->dp_input_offset_uint64_tensor,
                                                                 model_input->flash_input.block_table,
                                                                 model_input->flash_input.cur_seq_len_start,
                                                                 model_input->flash_input.cur_seq_len_end,
-                                                                model_input->layer_indexer_kv_cache_ptr},
+                                                                model_input->layer_indexer_kv_cache_ptr,
+                                                                attn_ctx.forward_shape},
                                                                output_tensors));
   return Status();
 }

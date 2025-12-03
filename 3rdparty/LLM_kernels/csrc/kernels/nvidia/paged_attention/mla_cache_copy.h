@@ -33,6 +33,10 @@ void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_lis
                                 int block_size, int batch_size, int total_len, int k_stride_size, int v_stride_size,
                                 cudaStream_t stream);
 
+void MlaIndexerKVReverseCacheCopy(__nv_fp8_e4m3* k_dst, float* v_dst, void** k_list, void** v_list, size_t* seq_len_offset,
+                             int* block_offsets, int block_size, int batch_size, int total_len, int k_stride_size,
+                             int v_stride_size, cudaStream_t stream);
+
 void MlaIndexerPagedKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_list, void** v_list, int* input_lengths,
                                 int* block_offsets, int block_size, int batch_size, int req_q_len, int k_stride_size,
                                 int v_stride_size, cudaStream_t stream);

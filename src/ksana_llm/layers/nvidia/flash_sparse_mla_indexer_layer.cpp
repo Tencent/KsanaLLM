@@ -33,16 +33,19 @@ struct FlashMlaInputData {
   const Tensor& rotary_mask;
   const Tensor& indexer_kv_list_tensor;
   const Tensor& indexer_kv_cache_offset_tensor;
-  const Tensor& seqlens_without_prefix_tensor;
-  const Tensor& prefix_offsets_tensor;
+  const Tensor& without_prefix_offset_tensor;  // dp_prefill_q_offset: new tokens cumsum
+  const Tensor& prefix_offsets_tensor;         // dp_input_prefix: prefix cumsum
+  const Tensor& seq_len_offset_tensor;         // dp_input_offset: full sequence cumsum
   const Tensor* block_table_tensor;
   const Tensor* cur_seq_len_start_tensor;
   const Tensor* cur_seq_len_end_tensor;
   const Tensor* layer_indexer_kv_cache_ptr_tensor;
+  const Tensor* forward_shape_tensor;
 
-  size_t total_tokens;
+  size_t total_q_tokens;  // new tokens without prefix
   int batch_size;
   int64_t prefill_token_count;
+  int total_prefix_tokens;  // prefix tokens
   cudaStream_t stream;
 };
 
@@ -111,9 +114,9 @@ Status FlashSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tens
 template <typename SCALAR_T>
 static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
                                                      std::shared_ptr<Context> context, int rank) {
-  if (input_tensors.size() < 13) {
+  if (input_tensors.size() < 15) {
     KLLM_THROW(
-        fmt::format("FlashSparseMlaIndexerLayer requires at least 13 input tensors, got {}", input_tensors.size()));
+        fmt::format("FlashSparseMlaIndexerLayer requires at least 15 input tensors, got {}", input_tensors.size()));
   }
   auto input_iter = input_tensors.cbegin();
 
@@ -125,12 +128,22 @@ static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   const Tensor& rotary_mask = *input_iter++;                           // 4: rotary mask
   const Tensor& indexer_kv_list_tensor = *input_iter++;                // 5: indexer_kv_list
   const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 6: indexer_kv_cache_offset
-  const Tensor& seqlens_without_prefix_tensor = *input_iter++;         // 7: seqlens_without_prefix
-  const Tensor& prefix_offsets_tensor = *input_iter++;                 // 8: prefix_offsets
-  const Tensor* block_table_tensor = &(*input_iter++);                 // 9: block_table
-  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 10: cur_seq_len_start
-  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 11: cur_seq_len_end
-  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 12: layer_indexer_kv_cache_ptr
+  const Tensor& without_prefix_offset_tensor = *input_iter++;          // 7: dp_prefill_q_offset (without_prefix)
+  const Tensor& prefix_offsets_tensor = *input_iter++;                 // 8: dp_input_prefix (prefix)
+  const Tensor& seq_len_offset_tensor = *input_iter++;                 // 9: dp_input_offset (seq_len)
+  const Tensor* block_table_tensor = &(*input_iter++);                 // 10: block_table
+  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 11: cur_seq_len_start
+  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 12: cur_seq_len_end
+  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 13: layer_indexer_kv_cache_ptr
+  const Tensor* forward_shape_tensor = &(*input_iter++);               // 14: forward_shape
+
+  // 从 forward_shape 获取 total_prefix_tokens (shape[12]) 和 batch_size (shape[8])
+  int total_prefix_tokens = 0;
+  int batch_size = 0;
+  if (forward_shape_tensor != nullptr && forward_shape_tensor->shape.size() > 11) {
+    batch_size = static_cast<int>(forward_shape_tensor->shape[7]);
+    total_prefix_tokens = static_cast<int>(forward_shape_tensor->shape[11]);
+  }
 
   // 使用聚合初始化创建对象
   FlashMlaInputData<SCALAR_T> data{.q_tensor = q_tensor,
@@ -140,15 +153,18 @@ static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
                                    .rotary_mask = rotary_mask,
                                    .indexer_kv_list_tensor = indexer_kv_list_tensor,
                                    .indexer_kv_cache_offset_tensor = indexer_kv_cache_offset_tensor,
-                                   .seqlens_without_prefix_tensor = seqlens_without_prefix_tensor,
+                                   .without_prefix_offset_tensor = without_prefix_offset_tensor,
                                    .prefix_offsets_tensor = prefix_offsets_tensor,
+                                   .seq_len_offset_tensor = seq_len_offset_tensor,
                                    .block_table_tensor = block_table_tensor,
                                    .cur_seq_len_start_tensor = cur_seq_len_start_tensor,
                                    .cur_seq_len_end_tensor = cur_seq_len_end_tensor,
                                    .layer_indexer_kv_cache_ptr_tensor = layer_indexer_kv_cache_ptr_tensor,
-                                   .total_tokens = q_tensor.shape[0],
-                                   .batch_size = static_cast<int>(seqlens_without_prefix_tensor.shape[0] - 1),
+                                   .forward_shape_tensor = forward_shape_tensor,
+                                   .total_q_tokens = q_tensor.shape[0],
+                                   .batch_size = batch_size,
                                    .prefill_token_count = static_cast<int64_t>(q_tensor.shape[0]),
+                                   .total_prefix_tokens = total_prefix_tokens,
                                    .stream = context->GetComputeStreams()[rank].Get()};
 
   return data;
@@ -184,22 +200,25 @@ static Status ApplyRoPE(SCALAR_T* q_ptr, SCALAR_T* k_ptr, const Tensor& rotary_p
   return Status();
 }
 
-static void PrepareQuantWorkspace(size_t total_tokens, FlashQuantWorkspace& workspace,
+static void PrepareQuantWorkspace(size_t total_q_tokens, size_t total_tokens, FlashQuantWorkspace& workspace,
                                   std::shared_ptr<Tensor> workspace_buffer, int n_heads, int head_dim,
                                   int quant_block_size, int block_size) {
   // Calculate FP8 quantization buffer sizes
-  size_t q_fp8_bytes = total_tokens * n_heads * head_dim;
+  // total_q_tokens = new tokens without prefix
+  // total_tokens = total_q_tokens + total_prefix_tokens (all tokens for computation)
+  size_t q_fp8_bytes = total_q_tokens * n_heads * head_dim;
   size_t q_scale_groups = DivRoundUp(head_dim, quant_block_size);
   KLLM_CHECK_WITH_INFO(q_scale_groups == 1,
                        fmt::format("q_scale_groups must be 1 for weight scaling, got {}", q_scale_groups));
-  size_t q_scale_bytes = total_tokens * n_heads * q_scale_groups * sizeof(float);
+  size_t q_scale_bytes = total_q_tokens * n_heads * q_scale_groups * sizeof(float);
+  // K/V buffers need to accommodate all tokens (new + prefix)
   size_t k_fp8_bytes = total_tokens * head_dim;
   size_t k_scale_bytes = total_tokens * q_scale_groups * sizeof(float);
 
   // Calculate logits space requirements for DeepGEMM
   const int block_kv = 256;
   const int seq_len_alignment = 4;
-  const int aligned_seq_len = RoundUp(static_cast<int>(total_tokens), seq_len_alignment);
+  const int aligned_seq_len = RoundUp(static_cast<int>(total_q_tokens), seq_len_alignment);
   const int aligned_seq_len_kv = RoundUp(static_cast<int>(total_tokens) + block_kv, seq_len_alignment);
   size_t logits_bytes = static_cast<size_t>(aligned_seq_len) * static_cast<size_t>(aligned_seq_len_kv) * sizeof(float);
 
@@ -227,15 +246,15 @@ static void PrepareQuantWorkspace(size_t total_tokens, FlashQuantWorkspace& work
 }
 
 template <typename SCALAR_T>
-static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, FlashQuantWorkspace& workspace, size_t total_tokens,
+static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, FlashQuantWorkspace& workspace, size_t total_q_tokens,
                          cudaStream_t stream, int n_heads, int head_dim, int quant_block_size) {
-  // Quantize Q: [total_tokens, n_heads, head_dim]
-  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(q_ptr, workspace.q_fp8_ptr, workspace.q_scale_ptr, total_tokens * n_heads,
+  // Quantize Q: [total_q_tokens, n_heads, head_dim]
+  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(q_ptr, workspace.q_fp8_ptr, workspace.q_scale_ptr, total_q_tokens * n_heads,
                                             head_dim,
                                             /*is_column_major=*/false, stream, quant_block_size);
 
-  // Quantize K: [total_tokens, head_dim]
-  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(k_ptr, workspace.k_fp8_ptr, workspace.k_scale_ptr, total_tokens, head_dim,
+  // Quantize K: [total_q_tokens, head_dim]
+  InvokePerTokenGroupQuantFp8E4m3<SCALAR_T>(k_ptr, workspace.k_fp8_ptr, workspace.k_scale_ptr, total_q_tokens, head_dim,
                                             /*is_column_major=*/false, stream, quant_block_size);
 
   KLLM_LOG_DEBUG << "FP8 quantization completed";
@@ -243,14 +262,14 @@ static Status QuantizeQK(SCALAR_T* q_ptr, SCALAR_T* k_ptr, FlashQuantWorkspace& 
 }
 
 template <typename SCALAR_T>
-static Status ApplyWeightScaling(SCALAR_T* weights_ptr, FlashQuantWorkspace& workspace, size_t total_tokens,
+static Status ApplyWeightScaling(SCALAR_T* weights_ptr, FlashQuantWorkspace& workspace, size_t total_q_tokens,
                                  cudaStream_t stream, int n_heads, float softmax_scale) {
   // Apply weight scaling: weights = weights * n_heads**-0.5 * q_scale * softmax_scale
   // Result is stored back in q_scale_ptr (reusing memory)
   float n_heads_inv_sqrt = 1.0f / std::sqrt(static_cast<float>(n_heads));
-  CUDA_CHECK_LAST_ERROR(
-      llm_kernels::nvidia::InvokeWeightScale<SCALAR_T>(weights_ptr, workspace.q_scale_ptr, n_heads_inv_sqrt,
-                                                       softmax_scale, static_cast<int>(total_tokens), n_heads, stream));
+  CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeWeightScale<SCALAR_T>(
+      weights_ptr, workspace.q_scale_ptr, n_heads_inv_sqrt, softmax_scale, static_cast<int>(total_q_tokens), n_heads,
+      stream));
   KLLM_LOG_DEBUG << "Weight scaling completed";
 
   return Status();
@@ -270,34 +289,49 @@ static Status StoreKVCache(const FlashMlaInputData<SCALAR_T>& input_data, FlashQ
   const int v_stride_size = 1;  // k_scale_groups = 1
 
   KLLM_LOG_DEBUG << fmt::format(
-      "MlaIndexerFlashKVCacheCopy params: layer_index={}, layer_block_num={}, row_stride={}, "
-      "batch_size={}, total_tokens={}, block_size={}, k_stride={}, v_stride={}",
-      layer_index, layer_block_num, row_stride, input_data.batch_size, input_data.total_tokens, block_size,
-      k_stride_size, v_stride_size);
+      "IndexerFlashKVCacheCopy params: layer_index={}, layer_block_num={}, row_stride={}, "
+      "batch_size={}, total_q_tokens={}, total_prefix_tokens={}, block_size={}, k_stride={}, v_stride={}",
+      layer_index, layer_block_num, row_stride, input_data.batch_size, input_data.total_q_tokens,
+      input_data.total_prefix_tokens, block_size, k_stride_size, v_stride_size);
 
   KLLM_CHECK_WITH_INFO(indexer_k_list != nullptr && indexer_v_list != nullptr, "indexer k/v list pointers are null");
   KLLM_CHECK_WITH_INFO(
       layer_index < static_cast<int>(input_data.indexer_kv_list_tensor.shape[0]),
       fmt::format("layer_index {} >= tensor shape[0] {}", layer_index, input_data.indexer_kv_list_tensor.shape[0]));
 
-  // Store K and V to KV cache
+  // Step 1: Store new K and V to KV cache (only new tokens without prefix)
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaIndexerFlashKVCacheCopy(
       reinterpret_cast<__nv_fp8_e4m3*>(workspace.k_fp8_ptr), workspace.k_scale_ptr, indexer_k_list, indexer_v_list,
       input_data.prefix_offsets_tensor.template GetPtr<size_t>(),
-      input_data.seqlens_without_prefix_tensor.template GetPtr<size_t>(),
+      input_data.without_prefix_offset_tensor.template GetPtr<size_t>(),
       input_data.indexer_kv_cache_offset_tensor.template GetPtr<int>(), static_cast<int>(block_size),
-      input_data.batch_size, static_cast<int>(input_data.total_tokens), k_stride_size, v_stride_size,
+      input_data.batch_size, static_cast<int>(input_data.total_q_tokens), k_stride_size, v_stride_size,
       input_data.stream));
-  KLLM_LOG_DEBUG << "KV cache copy completed";
+  KLLM_LOG_DEBUG << "KV cache copy (new tokens) completed";
+  // Step 2: If prefix cache exists, extract all KV (new + prefix) from cache blocks
+  if (input_data.total_prefix_tokens > 0) {
+    const size_t total_tokens = input_data.total_q_tokens + input_data.total_prefix_tokens;
 
+    KLLM_LOG_DEBUG << fmt::format(
+        "Extracting all KV from cache: total_q_tokens={}, total_prefix_tokens={}, total_tokens={}",
+        input_data.total_q_tokens, input_data.total_prefix_tokens, total_tokens);
+
+    // Extract all tokens (new + prefix) from cache to the beginning of K/V buffers
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::MlaIndexerKVReverseCacheCopy(
+        reinterpret_cast<__nv_fp8_e4m3*>(workspace.k_fp8_ptr), workspace.k_scale_ptr, indexer_k_list, indexer_v_list,
+        input_data.seq_len_offset_tensor.template GetPtr<size_t>(),  // seq_len_offset: ALL tokens cumsum
+        input_data.indexer_kv_cache_offset_tensor.template GetPtr<int>(), static_cast<int>(block_size),
+        input_data.batch_size, static_cast<int>(total_tokens), k_stride_size, v_stride_size, input_data.stream));
+    KLLM_LOG_DEBUG << "All KV cache reverse copy (new + prefix) completed";
+  }
   return Status();
 }
 
 template <typename SCALAR_T>
 static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, FlashQuantWorkspace& workspace, int rank,
-                               int n_heads, int head_dim) {
-  const int seq_len = static_cast<int>(input_data.total_tokens);
-  const int seq_len_kv = static_cast<int>(input_data.total_tokens);
+                               int n_heads, int head_dim, int total_tokens) {
+  const int seq_len = static_cast<int>(input_data.total_q_tokens);
+  const int seq_len_kv = total_tokens;
 
   KLLM_CHECK_WITH_INFO(input_data.cur_seq_len_start_tensor != nullptr && input_data.cur_seq_len_end_tensor != nullptr,
                        "cur_seq_len tensors must be provided from model input");
@@ -350,8 +384,8 @@ static Status ComputeMqaLogits(const FlashMlaInputData<SCALAR_T>& input_data, Fl
   // Call DeepGEMM wrapper
   auto wrapper = ksana_llm::nvidia::DeepSeekDeepGEMMWrapper::GetInstance(rank);
   wrapper->Fp8MqaLogits(q_torch, kv_fp8, weights_torch, cur_seq_len_start_torch, cur_seq_len_end_torch,
-                       logits_torch_aligned,
-                       /*clean_logits=*/true);
+                        logits_torch_aligned,
+                        /*clean_logits=*/true);
 
   return Status();
 }
@@ -367,13 +401,13 @@ static Status SelectTopK(const FlashMlaInputData<SCALAR_T>& input_data, const Fl
       input_data.cur_seq_len_start_tensor->template GetPtr<int32_t>(),  // cur_seq_len_start
       input_data.cur_seq_len_end_tensor->template GetPtr<int32_t>(),    // cur_seq_len_end
       topk_indices.template GetPtr<int32_t>(),                          // topk_indices
-      input_data.total_tokens,                                          // total_tokens
-      static_cast<int64_t>(workspace.aligned_seq_len_kv),               // aligned_seq_len_kv
-      static_cast<int64_t>(1),                                          // topk
+      input_data.total_q_tokens,                                        // numRows
+      static_cast<int64_t>(workspace.aligned_seq_len_kv),               // stride0
+      static_cast<int64_t>(1),                                          // stride1
       input_data.stream));                                              // stream
 
-  KLLM_LOG_DEBUG << fmt::format("TopK selection completed for total_tokens={}, topk={}, seq_len_kv={}",
-                                input_data.total_tokens, index_topk, input_data.total_tokens);
+  KLLM_LOG_DEBUG << fmt::format("TopK selection completed for total_q_tokens={}, topk={}, seq_len_kv={}",
+                                input_data.total_q_tokens, index_topk, input_data.total_q_tokens);
 
   return Status();
 }
@@ -385,8 +419,9 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
   FlashMlaInputData<SCALAR_T> input_data = ParseInputTensors<SCALAR_T>(input_tensors, context_, rank_);
   Tensor& topk_indices = output_tensors[0];
 
-  KLLM_LOG_DEBUG << fmt::format("FlashSparseMlaIndexerLayer Forward: total_tokens={}, prefill_tokens={}",
-                                input_data.total_tokens, input_data.prefill_token_count);
+  KLLM_LOG_DEBUG << fmt::format(
+      "FlashSparseMlaIndexerLayer Forward: total_q_tokens={}, prefill_tokens={}, total_prefix_tokens={}",
+      input_data.total_q_tokens, input_data.prefill_token_count, input_data.total_prefix_tokens);
 
   // Get pointers
   SCALAR_T* q_ptr = input_data.q_tensor.template GetPtr<SCALAR_T>();
@@ -398,23 +433,24 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
                       input_data.stream, rotary_embedding_cuda_, n_heads_, head_dim_);
 
   // Step 3: Prepare workspace
+  const size_t total_tokens = input_data.total_q_tokens + input_data.total_prefix_tokens;
   FlashQuantWorkspace workspace;
-  PrepareQuantWorkspace(input_data.total_tokens, workspace, workspace_buffer_, n_heads_, head_dim_, quant_block_size_,
-                        block_size_);
+  PrepareQuantWorkspace(input_data.total_q_tokens, total_tokens, workspace, workspace_buffer_, n_heads_, head_dim_,
+                        quant_block_size_, block_size_);
 
   // Step 4: Quantize Q/K
-  QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_, head_dim_,
+  QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_q_tokens, input_data.stream, n_heads_, head_dim_,
                        quant_block_size_);
 
   // Step 5: Store KV to cache (only the storage part, quantization is already done)
   StoreKVCache<SCALAR_T>(input_data, workspace, layer_index_, block_size_, head_dim_);
 
   // Step 6: Apply weight scaling
-  ApplyWeightScaling<SCALAR_T>(weights_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_,
+  ApplyWeightScaling<SCALAR_T>(weights_ptr, workspace, input_data.total_q_tokens, input_data.stream, n_heads_,
                                softmax_scale_);
 
   // Step 7: Compute MQA logits
-  ComputeMqaLogits<SCALAR_T>(input_data, workspace, rank_, n_heads_, head_dim_);
+  ComputeMqaLogits<SCALAR_T>(input_data, workspace, rank_, n_heads_, head_dim_, total_tokens);
 
   // Step 8: TopK selection
   SelectTopK<SCALAR_T>(input_data, workspace, topk_indices, index_topk_);
@@ -426,6 +462,7 @@ size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   // Calculate workspace size needed for FP8 quantization and logits (with alignment)
   // Layout: [q_fp8 | q_scale | k_fp8 | k_scale | padding | logits(aligned to 256 bytes)]
   // Use max_step_token_num_ from runtime_config for more accurate calculation
+  // max_step_token_num_ should be able to accommodate total_q_tokens + total_prefix_tokens
 
   const size_t max_total_tokens = max_step_token_num_;
 
@@ -438,6 +475,7 @@ size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   size_t q_scale_bytes = max_total_tokens * n_heads_ * sizeof(float);
 
   // 3. K FP8 data: [max_total_tokens, head_dim_] * sizeof(uint8_t)
+  // NOTE: K/V buffers need to accommodate all tokens (new + prefix), so we use max_total_tokens
   size_t k_fp8_bytes = max_total_tokens * head_dim_;
 
   // 4. K scale data: [max_total_tokens] * sizeof(float)
@@ -457,9 +495,10 @@ size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
   size_t total_workspace_size = logits_offset + logits_bytes;
 
   KLLM_LOG_DEBUG << fmt::format(
-      "FlashSparseMlaIndexerLayer GetWorkspaceSize: q_fp8={}, q_scale={}, k_fp8={}, k_scale={}, padding={}, logits={}, "
-      "total={}",
-      q_fp8_bytes, q_scale_bytes, k_fp8_bytes, k_scale_bytes, padding_bytes, logits_bytes, total_workspace_size);
+      "FlashSparseMlaIndexerLayer GetWorkspaceSize: max_total_tokens={}, q_fp8={}, q_scale={}, k_fp8={}, k_scale={}, "
+      "padding={}, logits={}, total={}",
+      max_total_tokens, q_fp8_bytes, q_scale_bytes, k_fp8_bytes, k_scale_bytes, padding_bytes, logits_bytes,
+      total_workspace_size);
 
   return total_workspace_size;
 }

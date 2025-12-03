@@ -152,6 +152,60 @@ void MlaIndexerFlashKVCacheCopy(__nv_fp8_e4m3* k_src, float* v_src, void** k_lis
       k_stride_size, v_stride_size, k_thread_num);
 }
 
+__global__ void MlaIndexerKVReverseCacheCopyKernel(__nv_fp8_e4m3* __restrict__ k_dst, float* __restrict__ v_dst,
+                                                   const void* const* __restrict__ k_list,
+                                                   const void* const* __restrict__ v_list,
+                                                   const size_t* __restrict__ seq_len_offset,
+                                                   const int* __restrict__ block_offsets, int block_size,
+                                                   int batch_size, int k_stride_size, int v_stride_size,
+                                                   int k_thread_num) {
+  const int token_idx = blockIdx.x;
+  int batch_idx = 0;
+  for (batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+    if (token_idx < seq_len_offset[batch_idx + 1]) {
+      break;
+    }
+  }
+  // Token index in the whole input of current request
+  const int token_offset_in_req = token_idx - seq_len_offset[batch_idx];
+  const int block_offset_in_req = token_offset_in_req / block_size;
+  const int token_offset_in_block = token_offset_in_req % block_size;
+
+  if (threadIdx.x < k_thread_num) {
+    const __nv_fp8_e4m3* k_src_ptr =
+        reinterpret_cast<const __nv_fp8_e4m3*>(k_list[block_offsets[batch_idx] + block_offset_in_req]) +
+        token_offset_in_block * k_stride_size;
+    __nv_fp8_e4m3* k_dst_ptr = k_dst + token_idx * k_stride_size;
+    constexpr unsigned int kVecSize = sizeof(float) / sizeof(__nv_fp8_e4m3);
+    vec_t<__nv_fp8_e4m3, kVecSize> k_vec;
+    k_vec.load(k_src_ptr + threadIdx.x * kVecSize);
+    k_vec.store(k_dst_ptr + threadIdx.x * kVecSize);
+  } else {
+    const float* v_src_ptr = reinterpret_cast<const float*>(v_list[block_offsets[batch_idx] + block_offset_in_req]) +
+                             token_offset_in_block * v_stride_size;
+    float* v_dst_ptr = v_dst + token_idx * v_stride_size;
+    v_dst_ptr[threadIdx.x - k_thread_num] = v_src_ptr[threadIdx.x - k_thread_num];
+  }
+}
+
+// Copy K and V from KV cache blocks to continuous output buffers
+// Only needs seq_len_offset (cumulative sum of full sequence lengths including prefix)
+void MlaIndexerKVReverseCacheCopy(__nv_fp8_e4m3* k_dst, float* v_dst, void** k_list, void** v_list, size_t* seq_len_offset,
+                             int* block_offsets, int block_size, int batch_size, int total_len, int k_stride_size,
+                             int v_stride_size, cudaStream_t stream) {
+  // num_heads == 1
+  dim3 grid_shape(total_len);
+  // For DeepSeek-V32: k_thread_num = 128 / 4 = 32 (1 warp), v_thread_num = 1
+  // Each thread reads and writes one float
+  const int k_thread_num = k_stride_size * sizeof(__nv_fp8_e4m3) / sizeof(float);
+  const int v_thread_num = v_stride_size;
+  assert(k_thread_num + v_thread_num <= MAX_THREADS_PER_BLOCK);
+  const dim3 block_shape(k_thread_num + v_thread_num);
+  MlaIndexerKVReverseCacheCopyKernel<<<grid_shape, block_shape, 0, stream>>>(k_dst, v_dst, k_list, v_list, seq_len_offset,
+                                                                        block_offsets, block_size, batch_size,
+                                                                        k_stride_size, v_stride_size, k_thread_num);
+}
+
 __global__ void MlaIndexerPagedKVCacheCopyKernel(const __nv_fp8_e4m3* __restrict__ k_src,
                                                  const float* __restrict__ v_src, void** __restrict__ k_list,
                                                  void** __restrict__ v_list, const int* __restrict__ input_lengths,
@@ -836,8 +890,8 @@ MLA_CACHE_COPY_FUNCTION_DECLARATION(__nv_bfloat16, uint8_t, llm_kernels::utils::
       int* block_offsets, int block_size, int total_len, int k_stride_size, int v_stride_size, float k_scale,          \
       float v_scale, cudaStream_t stream);                                                                             \
   template void MlaFlashWithoutPrefixKVCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                              \
-      SCALAR_T * k_dst, SCALAR_T * v_dst, SCALAR_T * k_new, SCALAR_T * v_new, size_t * prefix_offsets,                 \
-      size_t * without_prefix_offsets, int total_q_len, int k_stride_size, int v_stride_size, cudaStream_t stream);    \
+      SCALAR_T * k_dst, SCALAR_T * v_dst, SCALAR_T * k_new, SCALAR_T * v_new, size_t* prefix_offsets,                  \
+      size_t* without_prefix_offsets, int total_q_len, int k_stride_size, int v_stride_size, cudaStream_t stream);     \
   template void MlaGetFromCompressedCache<SCALAR_T, CACHE_T, KV_DTYPE>(                                                \
       void* const k_rope_out, void* const latent_out, const void* const* const block_list, const int total_len,        \
       const size_t* const seq_len_offset, const int* const block_offsets, const int block_size, const int k_rope_size, \
