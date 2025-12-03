@@ -24,6 +24,7 @@ class FlashAttentionLayer : public AttentionLayer {
   std::shared_ptr<llm_kernels::ascend::ATBAttention> atb_flash_attn_;
 #endif
   bool enable_blocked_multi_token_forwarding_kv_;
+  bool use_flashinfer_for_decode_;
 };
 
 }  // namespace ksana_llm

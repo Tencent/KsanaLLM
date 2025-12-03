@@ -21,6 +21,7 @@
 #include "csrc/kernels/nvidia/add/add.h"
 #include "csrc/kernels/nvidia/all_reduce/custom_all_reduce.h"
 #include "csrc/kernels/nvidia/assemble_tokens_hidden/assemble_tokens_hidden.h"
+#include "csrc/kernels/nvidia/attention/flashinfer_attention/flashinfer_prefill.h"
 #include "csrc/kernels/nvidia/blockwise_gemm/blockwise_gemm.h"
 #include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/concat/concat.h"
@@ -77,6 +78,66 @@ INVOKE_QK_LAYER_NORM(half);
 INVOKE_QK_LAYER_NORM(__nv_bfloat16);
 #undef INVOKE_QK_LAYER_NORM
 
+// Copy the prefix KV from cache to input tensors.
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+void InvokeReverseCacheCopy(SCALAR_T* k_dst, SCALAR_T* v_dst, void** k_list, void** v_list, size_t* input_offsets,
+                            size_t* prefix_offsets, int* block_offsets, int block_size, int bs, int total_len,
+                            int num_heads, int head_size, int stride_size, float k_scale, float v_scale,
+                            cudaStream_t stream, bool is_flash_attention_layout) {
+  if (is_flash_attention_layout) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
+        k_dst, v_dst, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len,
+        num_heads, head_size, stride_size, k_scale, v_scale, stream));
+  } else {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+        k_dst, v_dst, k_list, v_list, input_offsets, prefix_offsets, block_offsets, block_size, bs, total_len,
+        num_heads, head_size, stride_size, k_scale, v_scale, stream));
+  }
+}
+
+#define INVOKE_REVERSE_CACHE_COPY(SCALAR_T, CACHE_T, KV_DTYPE)                                                         \
+  template void InvokeReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(                                                   \
+      SCALAR_T * k_dst, SCALAR_T * v_dst, void** k_list, void** v_list, size_t* input_offsets, size_t* prefix_offsets, \
+      int* block_offsets, int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size,        \
+      float k_scale, float v_scale, cudaStream_t stream, bool is_flash_attention_layout)
+INVOKE_REVERSE_CACHE_COPY(float, float, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_REVERSE_CACHE_COPY(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_REVERSE_CACHE_COPY(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_REVERSE_CACHE_COPY(half, half, llm_kernels::utils::KVCacheType::kAuto);
+INVOKE_REVERSE_CACHE_COPY(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_REVERSE_CACHE_COPY(half, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+INVOKE_REVERSE_CACHE_COPY(__nv_bfloat16, __nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto);
+#if defined(ENABLE_FP8)
+INVOKE_REVERSE_CACHE_COPY(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
+INVOKE_REVERSE_CACHE_COPY(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
+#endif
+#undef INVOKE_REVERSE_CACHE_COPY
+
+// Copy full KV from src(cache blocks) to dst(continuous space) for input preparation of FA3 FP8 inference.
+template <typename CACHE_T>
+void InvokeFP8WithPrefixReverseCacheCopy(CACHE_T* k_src, CACHE_T* v_src, void** k_list, void** v_list,
+                                         size_t* input_offsets, int* block_offsets, int block_size, int bs,
+                                         int total_len, int num_heads, int head_size, int stride_size,
+                                         size_t size_of_scalar_t, cudaStream_t stream, bool is_flash_attention_layout) {
+  if (is_flash_attention_layout) {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FP8WithPrefixReverseCacheCopyFlashAttnLayout<CACHE_T>(
+        k_src, v_src, k_list, v_list, input_offsets, block_offsets, block_size, bs, total_len, num_heads, head_size,
+        stride_size, size_of_scalar_t, stream));
+  } else {
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FP8WithPrefixReverseCacheCopy<CACHE_T>(
+        k_src, v_src, k_list, v_list, input_offsets, block_offsets, block_size, bs, total_len, num_heads, head_size,
+        stride_size, size_of_scalar_t, stream));
+  }
+}
+
+#define INVOKE_FP8_WITH_PREFIX_REVERSE_CACHE_COPY(CACHE_T)                                                           \
+  template void InvokeFP8WithPrefixReverseCacheCopy<CACHE_T>(                                                        \
+      CACHE_T * k_src, CACHE_T * v_src, void** k_list, void** v_list, size_t* input_offsets, int* block_offsets,     \
+      int block_size, int bs, int total_len, int num_heads, int head_size, int stride_size, size_t size_of_scalar_t, \
+      cudaStream_t stream, bool is_flash_attention_layout)
+INVOKE_FP8_WITH_PREFIX_REVERSE_CACHE_COPY(uint8_t);
+#undef INVOKE_FP8_WITH_PREFIX_REVERSE_CACHE_COPY
+
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embedding_mask, void* out, void* seqlen,
                  std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, int total_tokens,
@@ -91,7 +152,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
                  size_t* without_prefix_offsets, int max_forwarding_tokens, bool enable_qk_pre_norm_before_rotary_pos,
                  bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
-                 bool enable_blocked_multi_token_forwarding_kv) {
+                 bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode) {
   // qk norm before rotary position embedding
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
     InvokeQKRmsNorm<SCALAR_T>(qkv_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
@@ -120,11 +181,11 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
   if (use_cache && !enable_blocked_multi_token_forwarding_kv) {
-    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::ReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
+    InvokeReverseCacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
         v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets),
         reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-        k_scale, v_scale, stream));
+        k_scale, v_scale, stream, /*is_flash_attention_layout*/ use_flashinfer_for_decode);
   }
 
   if (!no_rope && rotary_embedding_cuda.has_value()) {
@@ -160,12 +221,13 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   }
 
   if (use_cache) {
-    if (enable_blocked_multi_token_forwarding_kv) {
+    if (enable_blocked_multi_token_forwarding_kv || use_flashinfer_for_decode) {
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
           v_list, reinterpret_cast<size_t*>(seqlen), reinterpret_cast<size_t*>(prefix_offsets), without_prefix_offsets,
           reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size, stride_size,
-          k_scale, v_scale, stream));
+          k_scale, v_scale, stream,
+          /*kv_with_prefix=*/!enable_blocked_multi_token_forwarding_kv && use_flashinfer_for_decode));
     } else {
       CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CacheCopy<SCALAR_T, CACHE_T, KV_DTYPE>(
           reinterpret_cast<SCALAR_T*>(k_tensor.data_ptr()), reinterpret_cast<SCALAR_T*>(v_tensor.data_ptr()), k_list,
@@ -183,6 +245,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   if (!seqlenq_ngroups_swapped) {
     out_tensor = torch::from_blob(out, {total_tokens, num_heads, head_size}, options);
   }
+
   at::Tensor q_tmp_tensor = torch::reshape(q_tensor, {total_tokens, num_heads, head_size});
   c10::optional<at::Tensor> seqused_k = c10::nullopt;
   c10::optional<at::Tensor> alibi_slopes_tensor = c10::nullopt;
@@ -284,11 +347,11 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
 
         // Copy kv from cache
         if (use_cache) {
-          CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::FP8WithPrefixReverseCacheCopy<CACHE_T>(
+          InvokeFP8WithPrefixReverseCacheCopy<CACHE_T>(
               reinterpret_cast<CACHE_T*>(quant_k_tensor.data_ptr()),
               reinterpret_cast<CACHE_T*>(quant_v_tensor.data_ptr()), k_list, v_list, reinterpret_cast<size_t*>(seqlen),
               reinterpret_cast<int*>(block_offsets), block_size, batch, total_tokens, num_kv_heads, head_size,
-              stride_size, sizeof(SCALAR_T), stream));
+              stride_size, sizeof(SCALAR_T), stream, /*is_flash_attention_layout*/ use_flashinfer_for_decode);
         } else {
           KLLM_THROW("Please enable kv cache to use flash attention 3 fp8 inference.");
         }
@@ -365,7 +428,7 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                     \
       int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens,                              \
       bool enable_qk_pre_norm_before_rotary_pos, bool no_rope, bool attn_temperature_tuning, float attn_scale,        \
-      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv)
+      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode);
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -405,6 +468,36 @@ PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, llm_kernels::uti
 PAGED_ATTENTION(__nv_bfloat16, __nv_bfloat16, uint8_t, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
 #undef PAGED_ATTENTION
 
+#define FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(SCALAR_T, KV_DTYPE, IdType)                                         \
+  template <>                                                                                                        \
+  void FlashinferBatchPrefillPagedAttentionOp<SCALAR_T, KV_DTYPE, IdType>(                                           \
+      int num_heads, int head_size, int num_kv_heads, int block_size, void* out, void* q_tensor_ptr,                 \
+      void* k_cache_ptr, void* v_cache_ptr, IdType* block_table_ptr, void* context_lens_ptr, int max_blocks_per_seq, \
+      int num_seqs, float* alibi_slopes_ptr, bool is_causal, float softmax_scale, void* workspace, size_t work_size, \
+      void* flashinfer_extra_workspace, void* page_locked_workspace, bool is_first_layer_on_node,                    \
+      cudaStream_t& stream, void* flashinfer_prefill_helper) {                                                       \
+    using HelperType = llm_kernels::nvidia::FlashinferBatchPrefillHelper<SCALAR_T, KV_DTYPE, SCALAR_T, IdType>;      \
+    if (!flashinfer_prefill_helper) {                                                                                \
+      KLLM_THROW("FlashInfer prefill helper is not initialized");                                                    \
+    }                                                                                                                \
+    auto* op = static_cast<HelperType*>(flashinfer_prefill_helper);                                                  \
+    op->Prepare(num_heads, head_size, num_kv_heads, block_size, max_blocks_per_seq, num_seqs, q_tensor_ptr, out,     \
+                context_lens_ptr, k_cache_ptr, v_cache_ptr, block_table_ptr, alibi_slopes_ptr, is_causal,            \
+                softmax_scale, workspace, work_size, flashinfer_extra_workspace, page_locked_workspace,              \
+                is_first_layer_on_node, stream);                                                                     \
+    CUDA_CHECK_LAST_ERROR(op->Forward());                                                                            \
+  }
+
+#if defined(ENABLE_FP8)
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(half, llm_kernels::utils::KVCacheType::kFp8E5M2, int32_t)
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(half, llm_kernels::utils::KVCacheType::kFp8E4M3, int32_t)
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(__nv_bfloat16, llm_kernels::utils::KVCacheType::kFp8E5M2, int32_t)
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(__nv_bfloat16, llm_kernels::utils::KVCacheType::kFp8E4M3, int32_t)
+#endif
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(half, llm_kernels::utils::KVCacheType::kAuto, int32_t)
+FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION(__nv_bfloat16, llm_kernels::utils::KVCacheType::kAuto, int32_t)
+#undef FLASHINFER_BATCH_PREFILL_PAGED_ATTENTION
+
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_ptrs, void** value_cache_ptrs,
                           void* context_lens_ptr, int max_context_len, cudaStream_t stream, void* cache_offsets_ptr,
@@ -414,10 +507,12 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
                           void* workspace_ptr, float layernorm_eps, bool use_qk_norm, void* q_norm_weight,
                           void* k_norm_weight, size_t work_size, int rank, const std::optional<void*>& alibi_slopes,
-                          void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,
-                          int64_t kv_cache_block_num, int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos,
-                          bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
-                          bool enable_blocked_multi_token_forwarding_kv) {
+                          void* qkv_workspace, void* flashinfer_extra_workspace, void* page_locked_workspace,
+                          void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,
+                          int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos, bool no_rope,
+                          bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
+                          bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer_on_node,
+                          bool use_flashinfer_for_decode, void* flashinfer_prefill_helper) {
   // qk norm before rotary position embedding for paged attention
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
     InvokeQKRmsNorm<SCALAR_T>(query_ptr, q_norm_weight, k_norm_weight, layernorm_eps, total_tokens, num_heads,
@@ -459,7 +554,8 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     torch::mul_out(q_tensor, q_tensor, attn_scale_tensor);
   }
 
-  if (enable_blocked_multi_token_forwarding_kv) {
+  if (enable_blocked_multi_token_forwarding_kv || use_flashinfer_for_decode) {
+    // FlashInfer uses the same kv_layout as FlashAttention.
     constexpr size_t kReqQLen = 1;
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::CachePosCopyFlashAttnLayout<SCALAR_T, CACHE_T, KV_DTYPE>(
         reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
@@ -472,7 +568,23 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
         block_size, batch, total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
   }
 
-  if (enable_blocked_multi_token_forwarding_kv) {
+  if (use_flashinfer_for_decode) {
+    // When enable_blocked_multi_token_forwarding_kv is also set as true, FlashInfer backend takes precedence over
+    // FlashAttention.
+    const float* alibi_slopes_ptr =
+        reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
+    if constexpr (std::is_same<SCALAR_T, float>::value) {
+      KLLM_THROW("FlashInfer only supports fp16/bfloat16 input and output!");
+    }
+    if (alibi_slopes_ptr != nullptr) {
+      KLLM_THROW("FlashInfer does not support alibi slopes!");
+    }
+    FlashinferBatchPrefillPagedAttentionOp<SCALAR_T, KV_DTYPE, int32_t>(
+        num_heads, head_size, num_kv_heads, block_size, output_ptr, q_tensor_ptr, k_cache_ptr, v_cache_ptr,
+        block_table_ptr, context_lens_ptr, max_blocks_per_seq, seqs_num, nullptr, false, 1.0 / sqrt(head_size),
+        workspace_ptr, work_size, flashinfer_extra_workspace, page_locked_workspace, is_first_layer_on_node, stream,
+        flashinfer_prefill_helper);
+  } else if (enable_blocked_multi_token_forwarding_kv) {
     auto cache_options = options;
     if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
                   KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
@@ -522,7 +634,6 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
     fa_params.softcap = 0.0f;
 
     InvokeMhaFwdKvcCache(fa_params);
-
   } else {
     const float* alibi_slopes_ptr =
         reinterpret_cast<const float*>(alibi_slopes.has_value() ? alibi_slopes.value() : nullptr);
@@ -541,10 +652,12 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
       void* rotary_embedding_pos, void* rotary_embedding_mask, int total_tokens,                                     \
       std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda, void* workspace_ptr,           \
       float layernorm_eps, bool use_qk_norm, void* q_norm_weight, void* k_norm_weight, size_t work_size, int rank,   \
-      const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* k_cache_ptr, void* v_cache_ptr,           \
-      int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,                                  \
-      bool enable_qk_pre_norm_before_rotary_pos, bool no_rope, bool attn_temperature_tuning, float attn_scale,       \
-      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv)
+      const std::optional<void*>& alibi_slopes, void* qkv_workspace, void* flashinfer_extra_workspace,               \
+      void* page_locked_workspace, void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr,                   \
+      int64_t kv_cache_block_num, int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos, bool no_rope,   \
+      bool attn_temperature_tuning, float attn_scale, size_t floor_scale,                                            \
+      bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer_on_node, bool use_flashinfer_for_decode,    \
+      void* flashinfer_prefill_helper);
 RUN_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);

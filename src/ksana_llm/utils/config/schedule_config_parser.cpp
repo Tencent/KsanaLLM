@@ -350,6 +350,9 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   // Read attn backend config.
   runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.attn_backend.enable_blocked_multi_token_forwarding_kv", false);
+  runtime_config_.attn_backend_config.use_flashinfer_for_decode =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.attn_backend.use_flashinfer_for_decode", false);
+
   if (model_config.use_mla) {
     runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv = true;
     KLLM_LOG_INFO
@@ -483,9 +486,8 @@ void ScheduleConfigParser::InitConnectorConfig(YamlReader &yaml_reader) {
       // Parse connector type
       std::string router_addr =
           yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.connector.router_addr", "");
-      if (!router_addr.empty() &&
-            router_addr.find("://") == std::string::npos &&
-            router_addr.find(':') != std::string::npos) {
+      if (!router_addr.empty() && router_addr.find("://") == std::string::npos &&
+          router_addr.find(':') != std::string::npos) {
         router_addr = fmt::format("http://{}", router_addr);
       }
       connector_config_.inference_addr =

@@ -4,19 +4,48 @@
 
 #include "ksana_llm/layers/paged_attention_layer.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/layers/flashinfer_resource_manager.h"
+
+#ifdef ENABLE_FLASHINFER
+#  include "csrc/kernels/nvidia/attention/flashinfer_attention/flashinfer_prefill.h"
+#endif
 
 namespace ksana_llm {
 
-Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters,
-                                                              const RuntimeConfig& runtime_config,
-                                                              std::shared_ptr<Context> context, int rank) {
+Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                 std::shared_ptr<Context> context, int rank) {
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  use_flashinfer_for_decode_ = runtime_config.attn_backend_config.use_flashinfer_for_decode;
+
+  // Initialize shared workspace pointers and helper to nullptr.
+  shared_pinned_host_workspace_ = nullptr;
+  shared_device_workspace_ = nullptr;
+  flashinfer_prefill_helper_ = nullptr;
+
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
 Status PagedAttentionLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   DISPATCH_BY_DTYPE_AND_KVTYPE(inter_data_type_, kv_cache_dtype_, ForwardT, input_tensors, output_tensors);
+}
+
+Status PagedAttentionLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
+  // initialize FlashInfer workspaces if using FlashInfer backend.
+  if (use_flashinfer_for_decode_) {
+    SetFlashInferWorkspace(num_heads_, num_kv_heads_, head_size_, rank_);
+  }
+
+  return AttentionLayer::SetWorkspaceBuffer(workspace_buffer);
+}
+
+void PagedAttentionLayer::SetFlashInferWorkspace(int num_heads, int num_kv_heads, int head_dim, int rank) {
+  // Retrieve workspaces from static FlashInferResourceManager.
+  shared_pinned_host_workspace_ =
+      FlashInferResourceManager::GetPinnedHostWorkspace(num_heads, num_kv_heads, head_dim, rank);
+  shared_device_workspace_ = FlashInferResourceManager::GetDeviceWorkspace(num_heads, num_kv_heads, head_dim, rank);
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Layer[{}] Initialized shared FlashInfer workspaces", rank,
+                                this->layer_index_);
 }
 
 /*
@@ -28,8 +57,7 @@ kv_list  [layers_num * (total_blocks * 2)]
 需要在model中将block按kv分开存储指针，方便后续计算
 */
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
-Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
-                                                                  std::vector<Tensor>& output_tensors) {
+Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
   // PagedAttention部分
   // input_tensors:
   //   0: 输入数据
@@ -85,7 +113,7 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
   int32_t* block_table_ptr = nullptr;
   int max_blocks_per_seq = 0;
 
-  if (enable_blocked_multi_token_forwarding_kv_) {
+  if (enable_blocked_multi_token_forwarding_kv_ || use_flashinfer_for_decode_) {
     kv_cache_block_num = *(input_tensors[11].GetPtr<int64_t>());
     layer_kv_cache_ptr = input_tensors[11].GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];
@@ -97,6 +125,20 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
   auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
   auto skipped_context_query_ptr = query.GetPtr<void>() + context_tokens * (query.GetTotalBytes() / query.shape[0]);
 
+  if (use_flashinfer_for_decode_ && !flashinfer_prefill_helper_) {
+    if constexpr (std::is_same<SCALAR_T, float>::value) {
+      KLLM_THROW("FlashInfer only supports fp16/bfloat16 input and output!");
+    } else {
+      flashinfer_prefill_helper_ = FlashInferResourceManager::GetPrefillHelper(rank_);
+      if (!flashinfer_prefill_helper_) {
+        flashinfer_prefill_helper_ = std::make_shared<
+            llm_kernels::nvidia::FlashinferBatchPrefillHelper<SCALAR_T, KV_DTYPE, SCALAR_T, int32_t>>();
+        FlashInferResourceManager::SetPrefillHelper(rank_, flashinfer_prefill_helper_);
+        KLLM_LOG_DEBUG << fmt::format("Rank[{}] Layer[{}] Created FlashInfer prefill helper", rank_, layer_index_);
+      }
+    }
+  }
+
   InvokePagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
       skipped_context_out_ptr, skipped_context_query_ptr, k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
       this->context_->GetComputeStreams()[this->rank_].Get(), cache_offset.GetPtr<void>(), batch_size, this->num_heads_,
@@ -104,9 +146,12 @@ Status PagedAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors,
       batch_size, rotary_embedding_pos.GetPtr<void>(), rotary_embedding_mask.GetPtr<void>(), total_tokens,
       this->rotary_embedding_cuda_, workspace.GetPtr<void>(), this->layernorm_eps_, this->use_qk_norm_,
       input_tensors[9].GetPtr<void>(), input_tensors[10].GetPtr<void>(), workspace.GetTotalBytes(), this->rank_,
-      this->alibi_slopes_, qkv_workspace.GetPtr<void>(), k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num,
-      max_blocks_per_seq, this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_,
-      this->attn_scale_, this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_);
+      this->alibi_slopes_, qkv_workspace.GetPtr<void>(),
+      shared_device_workspace_ != nullptr ? shared_device_workspace_->GetPtr<void>() : nullptr,
+      shared_pinned_host_workspace_, k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
+      this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
+      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, this->layer_index_ == 0,
+      use_flashinfer_for_decode_, flashinfer_prefill_helper_.get());
 
   return Status();
 }

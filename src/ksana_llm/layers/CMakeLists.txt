@@ -10,6 +10,10 @@ list(FILTER layers_SRCS EXCLUDE REGEX ".*test.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/nvidia/.*.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")
 list(FILTER layers_SRCS EXCLUDE REGEX ".*/zixiao/.*.cpp")
+if(NOT WITH_CUDA)
+  list(FILTER layers_SRCS EXCLUDE REGEX ".*/flashinfer_.*\\.cpp")
+endif()
+
 message(STATUS "layers_SRCS: ${layers_SRCS}")
 
 set(layers_nvidia_SRCS "")

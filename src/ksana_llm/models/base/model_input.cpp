@@ -33,6 +33,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   env->GetPipelineConfig(pipeline_config);
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  use_flashinfer_for_decode_ = runtime_config.attn_backend_config.use_flashinfer_for_decode;
 
   block_size_ = runtime_config_.attn_backend_config.block_size;
   const size_t max_batch_size = runtime_config_.max_batch_size;
@@ -908,7 +909,7 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest*>& forward_r
 void ModelInput::PrepareUseCache(input_info& input) {
   use_cache = runtime_config_.enable_prefix_caching || runtime_config_.enable_flexible_caching ||
               runtime_config_.separate_prefill_decode;
-  if (enable_blocked_multi_token_forwarding_kv_) {
+  if (enable_blocked_multi_token_forwarding_kv_ || use_flashinfer_for_decode_) {
     use_cache = true;
   }
   if (use_cache) {
@@ -978,6 +979,7 @@ void ModelInput::PrepareKVCacheBlocks(input_info& info) {
   }
 
   KLLM_LOG_DEBUG << "kv_cache_offset_host " << kv_cache_offset_host;
+
   info.kv_cache_offset = kv_cache_offset.GetView({kv_cache_offset_host.size()}, kv_cache_offset.shape[0]);
   kv_cache_offset.shape[0] += info.kv_cache_offset.GetElementNumber();
   MemcpyAsync(info.kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(),
@@ -1167,8 +1169,9 @@ void ModelInput::PrepareFlashRotary(input_info& input) {
 }
 
 void ModelInput::PrepareKVCacheBlockTable(input_info& info) {
+  // FlashInfer also needs block table
   PROFILE_EVENT_SCOPE(PrepareKVCacheBlockTable, "PrepareKVCacheBlockTable", rank_);
-  if (!enable_blocked_multi_token_forwarding_kv_) {
+  if (!enable_blocked_multi_token_forwarding_kv_ && !use_flashinfer_for_decode_) {
     return;
   }
 

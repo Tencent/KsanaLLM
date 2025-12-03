@@ -21,5 +21,21 @@ if(NOT repo-flashinfer_POPULATED)
     FetchContent_Populate(repo-flashinfer)
 endif()
 
+if(WITH_CUDA)
+    set(FLASHINFER_GEN_USE_FP16_QK_REDUCTIONS "false" CACHE STRING "")
+    set(FLASHINFER_DECODE OFF CACHE BOOL "")
+    set(FLASHINFER_PREFILL OFF CACHE BOOL "")
+    set(FLASHINFER_PAGE OFF CACHE BOOL "")
+    set(FLASHINFER_CASCADE OFF CACHE BOOL "")
+    set(FLASHINFER_SAMPLING OFF CACHE BOOL "")
+    set(FLASHINFER_NORM OFF CACHE BOOL "")
+    set(FLASHINFER_FASTDIV_TEST OFF CACHE BOOL "")
+    set(FLASHINFER_FASTDEQUANT_TEST OFF CACHE BOOL "")
+    set(FLASHINFER_DISTRIBUTED OFF CACHE BOOL "")
+
+    add_subdirectory(${repo-flashinfer_SOURCE_DIR} ${repo-flashinfer_BINARY_DIR})
+endif()
+
 include_directories(${repo-flashinfer_SOURCE_DIR}/include 
-                    ${repo-flashinfer_SOURCE_DIR}/csrc)
+                    ${repo-flashinfer_SOURCE_DIR}/csrc
+                    ${repo-flashinfer_SOURCE_DIR}/src/generated)

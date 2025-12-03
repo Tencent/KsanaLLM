@@ -19,6 +19,7 @@
 #include "ksana_llm/layers/cutlass_moe_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
+#include "ksana_llm/layers/flashinfer_resource_manager.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/layers/layer_workspace_manager.h"
 #include "ksana_llm/layers/layernorm_layer.h"
@@ -2136,6 +2137,63 @@ TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
   for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
     run_threads[cur_rank]->join();
   }
+#endif
+}
+
+TEST_F(LayerTest, FlashInferResourceManagerTest) {
+#ifdef ENABLE_CUDA
+  constexpr int kDeviceRank0 = 0;
+  size_t num_heads = 32;
+  size_t num_kv_heads = 4;
+  size_t head_dim = 128;
+
+  // Test 1: Get pinned host workspace for rank 0 (first time initialization)
+  void* pinned_workspace_rank0 = FlashInferResourceManager::GetPinnedHostWorkspace(
+      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  EXPECT_NE(pinned_workspace_rank0, nullptr);
+  KLLM_LOG_INFO << "Test 1 passed: Pinned host workspace initialized for rank 0";
+
+  // Test 2: Get pinned host workspace again for rank 0 (should return same pointer)
+  void* pinned_workspace_rank0_again = FlashInferResourceManager::GetPinnedHostWorkspace(
+      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  EXPECT_EQ(pinned_workspace_rank0, pinned_workspace_rank0_again);
+  KLLM_LOG_INFO << "Test 2 passed: Pinned host workspace reused for rank 0";
+
+  // Test 3: Get device workspace for rank 0
+  std::shared_ptr<Tensor>& device_workspace_rank0 = FlashInferResourceManager::GetDeviceWorkspace(
+      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  EXPECT_NE(device_workspace_rank0, nullptr);
+  EXPECT_GT(device_workspace_rank0->GetTotalBytes(), 0);
+  EXPECT_EQ(device_workspace_rank0->location, MemoryLocation::LOCATION_DEVICE);
+  EXPECT_EQ(device_workspace_rank0->dtype, DataType::TYPE_INT8);
+  KLLM_LOG_INFO << "Test 3 passed: Device workspace initialized for rank 0, size: "
+                << device_workspace_rank0->GetTotalBytes() << " bytes";
+
+  // Test 4: Get device workspace again for rank 0 (should return same reference)
+  std::shared_ptr<Tensor>& device_workspace_rank0_again = FlashInferResourceManager::GetDeviceWorkspace(
+      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  EXPECT_EQ(device_workspace_rank0.get(), device_workspace_rank0_again.get());
+  KLLM_LOG_INFO << "Test 4 passed: Device workspace reused for rank 0";
+
+  // Test 5: Get prefill helper before initialization (should return nullptr)
+  std::shared_ptr<void> helper_before_init = FlashInferResourceManager::GetPrefillHelper(kDeviceRank0);
+  EXPECT_EQ(helper_before_init, nullptr);
+  KLLM_LOG_INFO << "Test 5 passed: GetPrefillHelper returns nullptr before initialization";
+
+  // Test 6: Set prefill helper for rank 0
+  auto mock_helper_rank0 = std::make_shared<int>(42);  // Mock helper object
+  FlashInferResourceManager::SetPrefillHelper(kDeviceRank0, mock_helper_rank0);
+  KLLM_LOG_INFO << "Test 6 passed: Prefill helper set for rank 0";
+
+  // Test 7: Get prefill helper after initialization
+  std::shared_ptr<void> helper_rank0_after = FlashInferResourceManager::GetPrefillHelper(kDeviceRank0);
+  EXPECT_NE(helper_rank0_after, nullptr);
+  EXPECT_EQ(helper_rank0_after, mock_helper_rank0);
+  KLLM_LOG_INFO << "Test 7 passed: GetPrefillHelper returns correct helper after initialization";
+  KLLM_LOG_INFO << "All FlashInferResourceManager tests passed successfully! ";
+  FlashInferResourceManager::FreeAllResources();
+#else
+  GTEST_SKIP() << "FlashInferResourceManager requires CUDA support";
 #endif
 }
 

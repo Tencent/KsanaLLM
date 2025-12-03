@@ -228,6 +228,7 @@ class ModelInput {
   BatchSchedulerConfig batch_scheduler_config_;
 
   bool enable_blocked_multi_token_forwarding_kv_;
+  bool use_flashinfer_for_decode_;
 
   const int rank_;
   std::shared_ptr<Context> context_;

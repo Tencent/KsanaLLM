@@ -108,6 +108,18 @@ setting:
     #   - 其他选项（fa3, vllm_v26, flashattn_v26）均支持 block table-based KV cache
     # 注意：某些模型（如Deepseek）在Hopper架构下建议使用fa3以获得最佳性能
     flash_attn_impl: auto
+    # FlashInfer PagedAttention 启用控制配置
+    # 可选值说明：
+    #   false(默认值)   - 关闭 FlashInfer PagedAttention 后端
+    #   true           - 启用 FlashInfer PagedAttention 后端
+    # 重要说明：
+    #    — 当前 FlashInfer_Backend 仅在 decode 阶段使用
+    #    - 当前 FlashInfer_Backend 仅支持 flashinfer::BatchPrefillWithPagedKVCacheWrapper 接口
+    # 架构支持：
+    #    - FlashInfer_Backend 支持 sm_80; sm_86; sm_89; sm_90; sm_90a
+    # 使用建议：
+    #    - 对于 Qwen 非 moe 模型，建议在关闭 enable_blocked_multi_token_forwarding_kv 时启用 FlashInfer_Backend 以获取更优的性能
+    use_flashinfer_for_decode: false
 
   # 量化相关配置
   quantization_config:

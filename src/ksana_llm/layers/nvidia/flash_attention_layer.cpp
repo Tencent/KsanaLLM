@@ -14,6 +14,7 @@ Status FlashAttentionLayer::Init(const std::vector<std::any>& parameters, const 
                                  std::shared_ptr<Context> context, int rank) {
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
+  use_flashinfer_for_decode_ = runtime_config.attn_backend_config.use_flashinfer_for_decode;
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
@@ -69,7 +70,7 @@ Status FlashAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
   int max_forwarding_tokens = 0;
 
   // blocked_prefill.
-  if (enable_blocked_multi_token_forwarding_kv_) {
+  if (enable_blocked_multi_token_forwarding_kv_ || use_flashinfer_for_decode_) {
     kv_cache_block_num = *(input_tensors[18].GetPtr<int64_t>());
     layer_kv_cache_ptr = input_tensors[18].GetPtr<void*>() + 1;
     k_cache_ptr = layer_kv_cache_ptr[this->layer_index_ * 2];
@@ -93,7 +94,7 @@ Status FlashAttentionLayer::ForwardT(const std::vector<Tensor>& input_tensors, s
       use_cache, this->context_->GetComputeStreams()[this->rank_].Get(), k_cache_ptr, v_cache_ptr, block_table_ptr,
       kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset, max_forwarding_tokens,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
-      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_);
+      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, use_flashinfer_for_decode_);
 
   // 通知 LayerProgressTracker 该层已完成，它会在内部记录 event 并在单独的线程中监控完成情况
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(this->rank_, this->layer_index_,

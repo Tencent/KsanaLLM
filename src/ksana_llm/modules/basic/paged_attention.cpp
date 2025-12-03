@@ -57,6 +57,8 @@ PagedAttention::PagedAttention(bool is_neox, const LayerCreationContext& creatio
   paged_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
   paged_attention_layer_->Init(paged_attention_param, creation_context.runtime_config, creation_context.context,
                                creation_context.rank);
+  // FlashInfer workspaces will be initialized when SetWorkspaceBuffer is called.
+  paged_attention_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspace(0));
 }
 
 PagedAttention::~PagedAttention() {}

@@ -269,6 +269,7 @@ struct KVCacheConfig {
 // The config of attention backend.
 struct AttnBackendConfig {
   bool enable_blocked_multi_token_forwarding_kv = false;
+  bool use_flashinfer_for_decode = false;
   DataType kv_cache_dtype;    // kv_cache storage type
   size_t block_token_num{0};  // The max token number of one block.
   size_t block_size{0};       // The block size, in bytes.
@@ -450,9 +451,7 @@ class ScheduleConfigParser {
     return Status();
   }
 
-  void SetReasoningConfig(const ReasoningConfig &reasoning_config) {
-    reasoning_config_ = reasoning_config;
-  }
+  void SetReasoningConfig(const ReasoningConfig &reasoning_config) { reasoning_config_ = reasoning_config; }
 
   // Init disaggregating prefill and decode connector config
   void InitConnectorConfig(YamlReader &yaml_reader);
