@@ -283,7 +283,8 @@ def start_throughput_client(script_path: str, server_port: int, model: str,
     """Start client script and wait until finished.
     """
     os.system(
-        "python {} --port {} --model {} --input_csv {} --prompt_num 2 --output_csv integration_test_output.csv"
+        "python {} --port {} --model {} --input_csv {} "
+        "--prompt_num 2 --request_rate 1.0 --output_csv integration_test_output.csv"
         .format(script_path, str(server_port), model, input_csv_path))
 
 

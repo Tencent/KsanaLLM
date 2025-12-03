@@ -392,11 +392,13 @@ TEST_F(RequestPackerTest, LogitsGatherAllTest) {
 // Test for JSON format forward interface
 TEST_F(RequestPackerTest, JsonForward) {
   // JSON unpack test - cover main JSON parsing functionality
-  nlohmann::json json_request = {
-      {"requests",
-       {{{"input_tokens", {1, 2, 3, 4, 5}},
-         {"request_target",
-          {{{"target_name", "logits"}, {"slice_pos", {{0, 0}}}, {"token_reduce_mode", "GATHER_TOKEN_ID"}}}}}}}};
+  nlohmann::json json_request = {{"requests",
+                                  {{{"input_tokens", {1, 2, 3, 4, 5}},
+                                    {"request_target",
+                                     {{{"target_name", "logits"},
+                                       {"slice_pos", {{0, 0}}},
+                                       {"token_reduce_mode", "GATHER_TOKEN_ID"},
+                                       {"input_top_logprobs_num", 0}}}}}}}};
 
   std::string request_bytes = json_request.dump();
   ASSERT_TRUE(request_packer_.Unpack(request_bytes, ksana_python_inputs, "application/json").OK());
