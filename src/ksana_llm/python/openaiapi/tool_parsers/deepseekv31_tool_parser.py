@@ -127,6 +127,8 @@ class DeepSeekV31ToolParser(ToolParser):
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
 
+        logger.debug("delta_text: %s", delta_text)
+        logger.debug("delta_token_ids: %s", delta_token_ids)
         # check to see if we should be streaming a tool call - is there a
         if self.tool_calls_start_token_id not in current_token_ids:
             logger.debug("No tool call tokens found!")
@@ -155,10 +157,19 @@ class DeepSeekV31ToolParser(ToolParser):
                 and self.tool_call_end_token not in delta_text
             ):
                 logger.debug("Generating text content! skipping tool parsing.")
+
+                if self.streamed_args_for_tool: 
+                    if super().is_json_tool_call_args(self.streamed_args_for_tool[self.current_tool_id]):
+                        logger.info("Complete JSON tool call args found! Content: %s", 
+                                    self.streamed_args_for_tool)
+                    else:
+                        logger.warning("Incomplete JSON tool call args found! Content: %s", 
+                                       self.streamed_args_for_tool)
+
                 return DeltaMessage(content=delta_text)
 
             if self.tool_call_end_token in delta_text:
-                logger.debug("tool_call_end_token in delta_text")
+                logger.info("tool_call_end_token in delta_text: %s", delta_text)
                 full_text = current_text + delta_text
                 tool_call_portion = (
                     full_text.split(self.tool_call_start_token)[-1]
@@ -213,11 +224,16 @@ class DeepSeekV31ToolParser(ToolParser):
                         if diff is str
                         else diff
                     )
-                    if '"}' not in delta_text:
+                    # To parser examples of delta_text that contain more than just "<｜tool▁call▁end｜>"
+                    # For example: "}}<｜tool▁call▁end｜>".
+                    if delta_text == "" or delta_text is None:
                         return None
-                    end_loc = delta_text.rindex('"}')
-                    diff = delta_text[:end_loc] + '"}'
-                    logger.debug(
+                    elif '}' in delta_text:
+                        end_loc = delta_text.rindex('}')
+                        diff = delta_text[:end_loc] + '}'
+                    else:
+                        diff = delta_text
+                    logger.info(
                         "Finishing tool and found diff that had not "
                         "been streamed yet: %s",
                         diff,

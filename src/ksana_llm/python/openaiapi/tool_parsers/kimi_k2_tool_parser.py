@@ -160,10 +160,19 @@ class KimiK2ToolParser(ToolParser):
                     and prev_tool_end_count == cur_tool_end_count
                     and self.tool_call_end_token not in delta_text):
                 logger.debug("Generating text content! skipping tool parsing.")
+                # NOTE(winminkong): Check if the streamed args are complete json, will be removed later.
+                if self.streamed_args_for_tool: 
+                    if super().is_json_tool_call_args(self.streamed_args_for_tool[self.current_tool_id]):
+                        logger.info("Complete JSON tool call args found! Content: %s", 
+                                    self.streamed_args_for_tool)
+                    else:
+                        logger.warning("Incomplete JSON tool call args found! Content: %s", 
+                                       self.streamed_args_for_tool)
+
                 return DeltaMessage(content=delta_text)
 
             if self.tool_call_end_token in delta_text:
-                logger.debug("tool_call_end_token in delta_text")
+                logger.info("tool_call_end_token in delta_text: %s", delta_text)
                 full_text = current_text + delta_text
                 tool_call_portion = full_text.split(
                     self.tool_call_start_token)[-1].split(
@@ -213,11 +222,18 @@ class KimiK2ToolParser(ToolParser):
                 if diff:
                     diff = (diff.encode("utf-8").decode("unicode_escape")
                             if diff is str else diff)
-                    if '"}' not in delta_text:
+                    # TODO(winminkong): The hardcoding will be removed later, 
+                    # and the parsing method of sglang will be used instead.
+                    if delta_text == "" or delta_text is None:
                         return None
-                    end_loc = delta_text.rindex('"}')
-                    diff = delta_text[:end_loc] + '"}'
-                    logger.debug(
+                    elif '}' in delta_text:
+                        end_loc = delta_text.rindex('}')
+                        diff = delta_text[:end_loc] + '}'
+                    else:
+                        diff = delta_text
+                    # To parser examples of delta_text that contain more than just "<｜tool▁call▁end｜>"
+                    # For example: ' "}}<|tool_call_end|>'.
+                    logger.info(
                         "Finishing tool and found diff that had not "
                         "been streamed yet: %s",
                         diff,

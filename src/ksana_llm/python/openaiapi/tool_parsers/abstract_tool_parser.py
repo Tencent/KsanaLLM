@@ -4,9 +4,12 @@
 # https://github.com/vllm-project/vllm/blob/v0.9.1/vllm/entrypoints/openai/tool_parsers/abstract_tool_parser.py
 
 import os
+from json import JSONDecodeError
 from collections.abc import Sequence
 from functools import cached_property
 from typing import Callable, Optional, Union
+
+import orjson
 
 from openaiapi.openai_protocol import (ChatCompletionRequest,
                                     DeltaMessage,
@@ -81,6 +84,17 @@ class ToolParser:
         raise NotImplementedError(
             "AbstractToolParser.extract_tool_calls_streaming has not been "
             "implemented!")
+
+    def is_json_tool_call_args(self, arguments: str) -> bool:
+        """
+        Method that should be implemented for checking if a tool call arguments
+        is a JSON tool call.
+        """
+        try:
+            orjson.loads(arguments)
+            return True
+        except JSONDecodeError:
+            return False 
 
 
 class ToolParserManager:

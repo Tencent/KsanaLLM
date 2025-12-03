@@ -77,7 +77,7 @@ DEFAULT_LOGGING_CONFIG = {
         },
         "openaiapi": {
             "handlers": ["console", "file"],
-            "level": "DEBUG",
+            "level": "INFO",
             "propagate": False,
         },
     },
