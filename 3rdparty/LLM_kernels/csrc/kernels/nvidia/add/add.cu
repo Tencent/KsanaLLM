@@ -17,6 +17,7 @@
 
 #include "csrc/kernels/nvidia/add/add.h"
 
+#include "csrc/kernels/nvidia/common/vec_dtypes.cuh"
 #include "csrc/utils/nvidia/cuda_bf16_fallbacks.cuh"
 #include "csrc/utils/nvidia/cuda_type_utils.cuh"
 #include "csrc/utils/nvidia/cuda_utils.h"
@@ -55,21 +56,19 @@ __global__ void AddBiasResidualKernel(T* output, const T2* __restrict__ input, c
   }
 }
 
-template <typename T>
-__global__ void AddResidualKernel(T* output, const T* __restrict__ input, const T* __restrict__ residual,
+template <typename T, int kVecSize>
+__global__ void AddResidualKernel(T* __restrict__ output, const T* __restrict__ input, const T* __restrict__ residual,
                                   const int32_t total_element_num) {
-  const int32_t index = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
-  if (index < total_element_num) {
-    const int32_t idx = index / 4;
-    T input_val = input[idx];
-    T residual_val = residual[idx];
-    T output_val_tmp;
-
-    output_val_tmp.x = input_val.x + residual_val.x;
-    output_val_tmp.y = input_val.y + residual_val.y;
-    output_val_tmp.z = input_val.z + residual_val.z;
-    output_val_tmp.w = input_val.w + residual_val.w;
-    output[idx] = output_val_tmp;
+  if (const int32_t index = kVecSize * (blockIdx.x * blockDim.x + threadIdx.x); index < total_element_num) {
+    vec_t<T, kVecSize> input_vec;
+    input_vec.load(input + index);
+    vec_t<T, kVecSize> residual_vec;
+    residual_vec.load(residual + index);
+#pragma unroll
+    for (int i = 0; i < kVecSize; i++) {
+      input_vec[i] += residual_vec[i];
+    }
+    input_vec.store(output + index);
   }
 }
 
@@ -97,17 +96,14 @@ void InvokeAddBiasResidual(T* output, const T* input, const T* residual1, const 
                                                               total_element_num, n);
     }
   } else {
-    const size_t kVecSize = 4;
-    int32_t block_num = ceil(float(total_element_num) / BLOCK_SIZE);
-    if (bias == nullptr && residual2 == nullptr && total_element_num % kVecSize == 0) {
-      block_num = ceil(float(block_num) / kVecSize);
+    constexpr size_t kVecSize = sizeof(int4) / sizeof(T);
+    if (bias == nullptr && residual2 == nullptr && (total_element_num & (kVecSize - 1)) == 0) {
+      const uint32_t block_num = (total_element_num + kVecSize * BLOCK_SIZE - 1) / (kVecSize * BLOCK_SIZE);
       dim3 grid(block_num);
       dim3 block(BLOCK_SIZE);
-      using VecType = typename utils::PackType<T, kVecSize>::type;
-      AddResidualKernel<VecType>
-          <<<grid, block, 0, stream>>>(reinterpret_cast<VecType*>(output), reinterpret_cast<const VecType*>(input),
-                                       reinterpret_cast<const VecType*>(residual1), total_element_num);
+      AddResidualKernel<T, kVecSize><<<grid, block, 0, stream>>>(output, input, residual1, total_element_num);
     } else {
+      const uint32_t block_num = (total_element_num + BLOCK_SIZE - 1) / BLOCK_SIZE;
       dim3 grid(block_num);
       dim3 block(BLOCK_SIZE);
       if (residual2 == nullptr) {
