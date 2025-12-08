@@ -97,7 +97,30 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     buffers_shape_map["kv_cache_buffer"] = {0};
   } else {
     const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
-    buffers_shape_map["kv_cache_buffer"] = {batch_size, (max_seq_len + 511) / 512, head_num_per_tp, size_per_head + 2};
+    const size_t block_token_num = runtime_config.attn_backend_config.block_token_num;
+
+    // Whether to use FlashInfer for the decode stage.
+    if (runtime_config.attn_backend_config.use_flashinfer_for_decode) {
+      // FlashInfer workspace buffer layout (elements, dtype: int32_t):
+      // - kv_last_page_len: [batch_size]
+      // - kv_indptr:        [batch_size + 1]
+      // - qo_indptr:        [batch_size + 1]
+      // - kv_indices:       [sum of actual blocks, upper bound: batch_size * max_blocks_per_seq]
+      // Total (upper bound): batch_size + (batch_size + 1) + (batch_size + 1) + batch_size * max_blocks_per_seq
+      //                    = batch_size * (3 + max_blocks_per_seq) + 2
+      const size_t max_blocks_per_seq = (max_seq_len + block_token_num - 1) / block_token_num;
+      buffers_shape_map["kv_cache_buffer"] = {batch_size * (3 + max_blocks_per_seq) + 2};
+    } else {
+      // PagedAttention V2 workspace buffer layout:
+      // - exp_sums:   [batch_size, num_heads_per_tp, max_num_partitions] (dtype: float)
+      // - max_logits: [batch_size, num_heads_per_tp, max_num_partitions] (dtype: float)
+      // - tmp_out:    [batch_size, num_heads_per_tp, max_num_partitions, head_size] (dtype: SCALAR_T)
+      // Total = batch_size * num_heads_per_tp * max_num_partitions * (num_heads_per_tp + 2)
+      // - Since CreateBuffer only supports a single dtype, unifying the type as float for calculation.
+      constexpr size_t kPagedAttentionPartitionSize = 512;
+      const size_t max_num_partitions = (max_seq_len + kPagedAttentionPartitionSize - 1) / kPagedAttentionPartitionSize;
+      buffers_shape_map["kv_cache_buffer"] = {batch_size, max_num_partitions, head_num_per_tp, size_per_head + 2};
+    }
   }
 
   buffers_shape_map["mtp_hidden_buffer_tensors"] = {enable_mtp ? max_token_num * model_config.hidden_units : 0};

@@ -52,8 +52,20 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
                 << ", attn_dp_rank_id_: " << attn_dp_rank_id_ << ", attn_dp_group_size_: " << attn_dp_group_size_;
 
   const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
-  size_t max_block_num = (max_seq_len * max_batch_size + runtime_config.attn_backend_config.block_token_num - 1) /
-                         runtime_config.attn_backend_config.block_token_num;
+
+  // When enable_prefix_caching is disabled:
+  //   Represents the maximum number of blocks that can actually appear in the system.
+  //   This value is constrained by:
+  //     (max_seq_len + block_num - 1) / block_num * max_batch_size
+  //     and
+  //     reserved_memory_size / block_size.
+  //
+  // When enable_prefix_caching is enabled:
+  //   Physical blocks can be reused.
+  //   Therefore, max_table_block_num is reset to the max possible value.
+  size_t max_table_block_num = ((max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
+                                runtime_config.attn_backend_config.block_token_num) *
+                               max_batch_size;
 
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
@@ -62,14 +74,18 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   const Status status = GetDeviceMemoryInfo(MemoryDevice::MEMORY_DEVICE, &device_free, &device_total);
   if (status.OK()) {
     size_t reserved_memory_size = device_total * block_manager_config.reserved_device_memory_ratio;
-    max_block_num =
-        std::min(max_block_num, (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size);
+    // The max number of blocks that can actually appear in the system.
+    size_t max_block_num = (device_free - reserved_memory_size) / runtime_config_.attn_backend_config.block_size;
+    max_table_block_num = std::min(max_table_block_num, max_block_num);
   }
+
   // For prefix caching, the token will be used multiple times, reset it to max possible value.
   if (runtime_config.enable_prefix_caching) {
-    max_block_num = (max_token_num * max_batch_size) / runtime_config_.attn_backend_config.block_token_num;
+    max_table_block_num = ((max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
+                           runtime_config.attn_backend_config.block_token_num) *
+                          max_batch_size;
   }
-  KLLM_LOG_INFO << "max_block_num: " << max_block_num;
+  KLLM_LOG_INFO << "max_table_block_num: " << max_table_block_num;
 
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
   input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, rank_);
@@ -88,7 +104,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   input_length = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size}, rank_);
   kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                   {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
+                   {static_cast<size_t>(layer_num_on_node_), max_table_block_num, 2}, rank_);
   layer_kv_cache_ptr =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
   if (model_config.use_dsa) {
@@ -96,7 +112,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     cur_seq_len_end = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, rank_);
     // kv cache meta for the indexer module
     indexer_kv_list = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER,
-                             {static_cast<size_t>(layer_num_on_node_), max_block_num, 2}, rank_);
+                             {static_cast<size_t>(layer_num_on_node_), max_table_block_num, 2}, rank_);
     layer_indexer_kv_cache_ptr =
         Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {1 + static_cast<size_t>(layer_num_on_node_ * 2)}, rank);
     for (size_t q_len = 1; q_len <= GetDecodeTokenNumThreshold(); q_len++) {
@@ -112,7 +128,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
   rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
   rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_block_num}, rank);
+  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_table_block_num}, rank);
 #ifdef ENABLE_CUDA
   // Only for flashmla
   if (model_config_.use_mla) {
@@ -229,7 +245,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
                                {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_token_num)}, rank);
   layers_block_table =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-             {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_batch_size * max_block_num)}, rank);
+             {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_table_block_num)}, rank);
   // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/developmentguide/acce/ascendtb/ascendtb_01_0070.html
   // k/v_cache_blocks_base only support float16
   k_cache_blocks_base = Tensor(
@@ -241,14 +257,12 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   // 0: layers_slot_mapping_dim_1, 1: max_num_blocks_per_query
   atb_attention_attr = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {2}, rank);
   last_token_index_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_batch_size}, rank_);
-  kv_cache_ptrs_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER,
-                                {static_cast<uint64_t>(max_batch_size * max_block_num)}, rank_);
+  kv_cache_ptrs_tensor =
+      Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER, {static_cast<uint64_t>(max_table_block_num)}, rank_);
 #endif
   if (Singleton<Environment>::GetInstance()->IsEnableBlockChecksum()) {
-    checksum_ptrs_tensor_ =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_batch_size * max_block_num}, rank_);
-    checksum_results_tensor_ =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size * max_block_num}, rank_);
+    checksum_ptrs_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_POINTER, {max_table_block_num}, rank_);
+    checksum_results_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_table_block_num}, rank_);
   }
 }
 
