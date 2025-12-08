@@ -94,7 +94,7 @@ Status PagedSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   // Initialize RoPE based on data type
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
                       cos_sin_cache_ptr, rope_theta, rope_head_dim_, max_position_embeddings_, head_dim_, n_heads_,
-                      context_->GetComputeStreams()[rank_].Get());
+                      /*is_neox*/ true, context_->GetComputeStreams()[rank_].Get());
 
   KLLM_LOG_DEBUG << fmt::format(
       "PagedSparseMlaIndexerLayer initialized: dim={}, n_heads={}, "
@@ -329,8 +329,8 @@ static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, Pa
 
   // Call DeepGEMM MQA
   deepseek_deepgemm_wrapper->Fp8PagedMqaLogits(q_torch, fused_kv_cache_torch, weights_torch, context_lens_torch,
-                                                block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
-                                              /*clean_logits*/ true);
+                                               block_table_torch, schedule_meta_torch, logits_torch, max_seq_len,
+                                               /*clean_logits*/ true);
 
   return Status();
 }
@@ -339,7 +339,7 @@ template <typename SCALAR_T>
 static Status SelectTopK(const PagedMlaInputData<SCALAR_T>& input_data, const PagedQuantWorkspace& workspace,
                          Tensor& topk_indices, int index_topk, int max_seq_len) {
   KLLM_CHECK_WITH_INFO(input_data.cur_seq_len_start_tensor != nullptr && input_data.cur_seq_len_end_tensor != nullptr,
-                        "cur_seq_len tensors are required for TopK selection");
+                       "cur_seq_len tensors are required for TopK selection");
 
   CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeFastTopK(
       workspace.logits_ptr,                                             // logits

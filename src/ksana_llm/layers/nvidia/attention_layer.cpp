@@ -154,7 +154,7 @@ template <typename T>
 Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,
                                const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr,
                                float rope_theta, int rope_head_dim, int max_seq_len, int head_dim, int n_heads,
-                               cudaStream_t stream) {
+                               bool is_neox, cudaStream_t stream) {
   // Initialize rotary embedding using YARN scaling
   rotary_embedding_cuda.emplace();
 
@@ -185,7 +185,7 @@ Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddin
                                       n_heads,   // num_heads
                                       1,         // num_kv_heads = num_heads for indexer
                                       head_dim,  // stride_size
-                                      false,     // is_neox (DeepSeek uses False)
+                                      is_neox,   // MLA uses False, Indexer uses True
                                       stream, llm_kernels::nvidia::RotaryEmbeddingType::YARN_SCALING, scaling_factor,
                                       1.0f,  // low_freq_factor (not used in YARN)
                                       4.0f,  // high_freq_factor (not used in YARN)
@@ -199,12 +199,11 @@ Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddin
 }
 
 // Explicit template instantiations
-#define INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(T)                                                                     \
-  template Status InitYarnRotaryEmbedding<T>(                                                                         \
-      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda>& rotary_embedding_cuda,                                \
-      const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr, float rope_theta,                \
-      int rope_head_dim, int max_seq_len, int head_dim, int n_heads, cudaStream_t stream)
-
+#define INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(T)                                                     \
+  template Status InitYarnRotaryEmbedding<T>(                                                         \
+      std::optional<llm_kernels::nvidia::RotaryEmbeddingCuda> & rotary_embedding_cuda,                \
+      const RoPEScalingFactor& rope_scaling_factor_config, void* cos_sin_cache_ptr, float rope_theta, \
+      int rope_head_dim, int max_seq_len, int head_dim, int n_heads, bool is_neox, cudaStream_t stream)
 INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(float16);
 INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(bfloat16);
 INSTANTIATE_INIT_YARN_ROTARY_EMBEDDING(float);

@@ -97,7 +97,7 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
   // Initialize RoPE based on data type
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
                       cos_sin_cache_ptr, rope_theta, rope_head_dim_, max_position_embeddings_, head_dim_, n_heads_,
-                      context_->GetComputeStreams()[rank_].Get());
+                      /*is_neox*/ true, context_->GetComputeStreams()[rank_].Get());
 
   KLLM_LOG_DEBUG << fmt::format(
       "FlashSparseMlaIndexerLayer initialized: dim={}, n_heads={}, "
