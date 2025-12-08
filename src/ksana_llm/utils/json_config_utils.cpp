@@ -4,6 +4,8 @@
 
 #include "ksana_llm/utils/json_config_utils.h"
 
+#include <fstream>
+
 #include "fmt/format.h"
 #include "ksana_llm/utils/logger.h"
 
@@ -24,6 +26,16 @@ DataType GetModelDataType(const nlohmann::json &config_json) {
   } else {
     KLLM_THROW(fmt::format("Not supported model data type: {}.", dtype_str));
   }
+}
+
+nlohmann::json ReadJsonFromFile(const std::string &file_path) {
+  nlohmann::json json_data;
+  std::ifstream file(file_path);
+  if (file.is_open()) {
+    file >> json_data;
+    file.close();
+  }
+  return json_data;
 }
 
 }  // namespace ksana_llm

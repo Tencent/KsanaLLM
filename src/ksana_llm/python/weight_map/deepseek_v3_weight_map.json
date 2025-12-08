@@ -1,4 +1,8 @@
 {
     "model.layers.(\\d+).self_attn.q_proj.weight": "model.layers.$1.self_attn.q_b_proj.weight",
-    "model.layers.(\\d+).mlp.shared_experts.(.*)": "model.layers.$1.mlp.shared_expert.$2"
+    "model.layers.(\\d+).mlp.shared_experts.(.*)": "model.layers.$1.mlp.shared_expert.$2",
+
+    "(.*)\\.w1\\.(.*)": "$1.gate_proj.$2",
+    "(.*)\\.w2\\.(.*)": "$1.down_proj.$2",
+    "(.*)\\.w3\\.(.*)": "$1.up_proj.$2"
 }

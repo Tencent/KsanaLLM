@@ -47,7 +47,7 @@ class NewQwenConfigParserTest : public testing::Test {
     ParallelismBasicConfig parallel_basic_config;
     parallel_basic_config.tensor_parallel_size = 1;
     std::shared_ptr<BaseModelConfig> model_config;
-    Status status = parser_->ParseModelConfig(config_json, parallel_basic_config, model_config);
+    Status status = parser_->ParseModelConfig(config_json, parallel_basic_config, "", model_config);
     EXPECT_TRUE(status.OK());
     return std::dynamic_pointer_cast<NewQwenConfig>(model_config);
   }

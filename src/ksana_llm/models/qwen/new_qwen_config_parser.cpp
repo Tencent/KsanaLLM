@@ -18,6 +18,7 @@ NewQwenConfigParser::~NewQwenConfigParser() {}
 
 Status NewQwenConfigParser::ParseModelConfig(const nlohmann::json &config_json,
                                              const ParallelismBasicConfig &parallel_basic_config,
+                                             const std::string &model_dir,
                                              std::shared_ptr<BaseModelConfig> &model_config) {
   std::shared_ptr<NewQwenConfig> new_qwen_model_config = std::make_shared<NewQwenConfig>();
   model_config = new_qwen_model_config;

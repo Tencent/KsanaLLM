@@ -17,13 +17,13 @@ class BaseModelConfigParser {
   virtual ~BaseModelConfigParser();
 
   // Parse config from config.json
-  virtual Status ParseModelConfig(const nlohmann::json& config_json,
-                                  const ParallelismBasicConfig& parallel_basic_config,
-                                  std::shared_ptr<BaseModelConfig>& model_config);
+  virtual Status ParseModelConfig(const nlohmann::json &config_json,
+                                  const ParallelismBasicConfig &parallel_basic_config, const std::string &model_dir,
+                                  std::shared_ptr<BaseModelConfig> &model_config);
 
   // Parse config from gguf files.
-  virtual Status ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue>& gguf_meta,
-                                  std::shared_ptr<BaseModelConfig>& model_config);
+  virtual Status ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue> &gguf_meta,
+                                  std::shared_ptr<BaseModelConfig> &model_config);
 };
 
 }  // namespace ksana_llm

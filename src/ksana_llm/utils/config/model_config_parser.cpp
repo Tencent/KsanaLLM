@@ -5,11 +5,12 @@
 #include "ksana_llm/utils/config/model_config_parser.h"
 
 #include <filesystem>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 
 #include "fmt/core.h"
+
+#include "ksana_llm/utils/config/quant_config_parser.h"
 
 #include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/chatglm/chatglm_config.h"
@@ -19,6 +20,7 @@
 #include "ksana_llm/models/gpt/gpt_config.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/gguf_file_tensor_loader.h"
+#include "ksana_llm/utils/json_config_utils.h"
 #include "ksana_llm/utils/logger.h"
 #include "ksana_llm/utils/memory_utils.h"
 #include "ksana_llm/utils/optional_file.h"
@@ -43,85 +45,56 @@ DataType GetModelDataType(const nlohmann::json &config_json, ModelConfig &model_
   }
 }
 
-void ParseGPTQQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {
-  quant_config.method = QUANT_GPTQ;
-  quant_config.bits = config_json.at("bits");
-  quant_config.group_size = config_json.at("group_size");
-  quant_config.desc_act = config_json.value("desc_act", false);
-  quant_config.input_scale = config_json.value("input_scale", false);
-  KLLM_LOG_INFO << fmt::format(
-      "using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}, input_scale:{}", quant_config.bits,
-      quant_config.group_size, quant_config.desc_act, quant_config.input_scale);
-}
-
-void ParseAWQQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {
-  if (model_config.is_moe) {
-    KLLM_THROW(fmt::format("Not support quant_method awq for moe model."));
-  }
-  quant_config.method = QUANT_AWQ;
-  quant_config.bits = config_json.at("bits");
-  quant_config.group_size = config_json.at("group_size");
-  KLLM_LOG_INFO << fmt::format("using quant model, quant method awq, bits: {}, group_size: {}", quant_config.bits,
-                               quant_config.group_size);
-}
-
-void ParseFP8QuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {
-  quant_config.method = QUANT_FP8_E4M3;
-  quant_config.is_checkpoint_fp8_serialized = true;
-  quant_config.is_activation_scheme_static = (config_json.at("activation_scheme") == "static");
-  if (config_json.contains("weight_block_size") && config_json["weight_block_size"].is_array()) {
-    quant_config.is_fp8_blockwise = true;
-    quant_config.method = QUANT_BLOCK_FP8_E4M3;
-    quant_config.weight_block_size = config_json["weight_block_size"].get<std::vector<size_t>>();
-  }
-  if (model_config.is_moe && quant_config.is_fp8_blockwise == false && !quant_config.is_activation_scheme_static) {
-    KLLM_THROW(fmt::format("Not support dyanmic fp8 quant_method for moe model."));
-  }
-  KLLM_LOG_INFO << fmt::format(
-      "using quant model, quant method fp8, method type: {}, is_checkpoint_fp8_serialized: {}, "
-      "is_activation_scheme_static: {}",
-      quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static);
-}
-
-void ParseModelOptQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {
-  std::string algo = config_json.value("quant_algo", "");
-  if (algo == "W4A8_AWQ") {
-    quant_config.method = QUANT_W4A8_AWQ;
-    KLLM_LOG_INFO << "using quant model, quant method W4A8_AWQ";
-  } else {
-    KLLM_THROW("only support W4A8_AWQ algo in modelopt");
-  }
-}
-
 void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
                                                  std::string &yaml_weight_quant_method,
                                                  std::string &yaml_gptq_backend) {
-  model_config.is_quant = config_json.contains("quantization_config");
+  // 解析 quantize_config.json 和 hf_quant_config.json
+  nlohmann::json quantize_config = ReadJsonFromFile(model_config.path + "/quantize_config.json");
+  nlohmann::json hf_quant_config = ReadJsonFromFile(model_config.path + "/hf_quant_config.json");
+
+  // 解析三种不同的情况
+  nlohmann::json quantization_config;
+  if (config_json.contains("quantization_config")) {
+    // config.json 中有 quantization_config 字段（默认情况）
+    model_config.is_quant = true;
+    quantization_config = config_json["quantization_config"];
+  } else if (!quantize_config.empty()) {
+    // config.json 中没有 quantization_config 字段，但有额外文件 quantization_config
+    KLLM_LOG_INFO << "No quantization_config in config.json, but find quantize_config.json";
+    model_config.is_quant = true;
+    quantization_config = quantize_config;
+  } else if (!hf_quant_config.empty()) {
+    // config.json 中没有 quantization_config 字段，没有文件 quantization_config.json，但有 hf_quant_config.json
+    KLLM_LOG_INFO << "No quantization_config in config.json, no quantize_config.json, but find hf_quant_config.json";
+    model_config.is_quant = true;
+    quantization_config = ParseAndConvertQuantConfig(hf_quant_config);
+  }
+
   if (model_config.is_quant) {
-    std::string quant_method = config_json["quantization_config"].at("quant_method");
-    if (quant_method == "gptq") {
-      ParseGPTQQuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
+    std::string quant_method = quantization_config.at("quant_method");
+    if (quant_method == "gptq" || quant_method == "rtn") {
+      ParseGPTQQuantConfig(quantization_config, model_config.is_moe, model_config.quant_config);
     } else if (quant_method == "awq") {
-      ParseAWQQuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
+      ParseAWQQuantConfig(quantization_config, model_config.is_moe, model_config.quant_config);
     } else if (quant_method == "fp8") {
-      ParseFP8QuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
+      ParseFP8QuantConfig(quantization_config, model_config.is_moe, model_config.quant_config);
     } else if (quant_method == "modelopt") {
-      ParseModelOptQuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
+      ParseModelOptQuantConfig(quantization_config, model_config.is_moe, model_config.quant_config);
     } else if (quant_method == "mixed") {
-      auto configs = config_json["quantization_config"]["configs"];
+      auto configs = quantization_config["configs"];
       for (auto it = configs.begin(); it != configs.end(); ++it) {
         QuantConfig quant_config;
-        quant_method = config_json["quantization_config"]["configs"][it.key()]["method"];
-        if (quant_method == "gptq") {
-          ParseGPTQQuantConfig(config_json["quantization_config"]["configs"][it.key()], model_config, quant_config);
+        quant_method = quantization_config["configs"][it.key()]["method"];
+        if (quant_method == "gptq" || quant_method == "rtn") {
+          ParseGPTQQuantConfig(quantization_config["configs"][it.key()], model_config.is_moe, quant_config);
         } else if (quant_method == "awq") {
-          ParseAWQQuantConfig(config_json["quantization_config"]["configs"][it.key()], model_config, quant_config);
+          ParseAWQQuantConfig(quantization_config["configs"][it.key()], model_config.is_moe, quant_config);
         } else if (quant_method == "fp8") {
-          ParseFP8QuantConfig(config_json["quantization_config"]["configs"][it.key()], model_config, quant_config);
+          ParseFP8QuantConfig(quantization_config["configs"][it.key()], model_config.is_moe, quant_config);
         } else {
           KLLM_THROW(fmt::format("Not support quant_method {}.", quant_method));
         }
-        auto layer_mapping = config_json["quantization_config"]["layer_mapping"][it.key()];
+        auto layer_mapping = quantization_config["layer_mapping"][it.key()];
         quant_config.pattern_layers = layer_mapping["pattern_layers"].get<std::vector<std::string>>();
         quant_config.ignored_layers = layer_mapping["ignored_layers"].get<std::vector<std::string>>();
         if (layer_mapping["default_config"]) {
@@ -426,14 +399,11 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       return status;
     }
   } else {
-    nlohmann::json config_json;
-    std::ifstream file(config_file);
-    if (!file.is_open()) {
+    nlohmann::json config_json = ReadJsonFromFile(config_file);
+    if (config_json.empty()) {
+      // TODO(jinxcwu) 需要检查是否修改为KLLM_THROW
       KLLM_LOG_ERROR << fmt::format("Load model config file: {} error.", config_file);
       return Status(RetCode::RET_MODEL_INVALID, fmt::format("Load model config file: {} error.", config_file));
-    } else {
-      file >> config_json;
-      file.close();
     }
 
     model_config.weight_data_type = GetModelDataType(config_json, model_config);

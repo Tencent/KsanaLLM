@@ -212,7 +212,18 @@ Status NewDeepSeekV3WeightLoader::ProcessModelWeights(const std::unordered_map<s
 
   // Dequant GPTQ weight
   std::unordered_map<std::string, Tensor> host_gptq_weights;
-  for (auto& [file_weight_name, host_weight_tensor] : host_model_weights) {
+  for (auto& [origin_file_weight_name, host_weight_tensor] : host_model_weights) {
+    std::string file_weight_name = origin_file_weight_name;
+    // replace weight name with condition
+    if (new_deepseek_v3_config->ContainGptqWeights() && new_deepseek_v3_config->IsWeightMatchGptq(file_weight_name)) {
+      for (const auto& [pattern, format] : new_deepseek_v3_config->w4a8_patterns_) {
+        if (std::regex_search(origin_file_weight_name, pattern)) {
+          file_weight_name = std::regex_replace(origin_file_weight_name, pattern, format);
+          break;
+        }
+      }
+    }
+
     // for GPTQ weight or moe-int4(mixed with fp8) weight, save to host_gptq_weights and load later
     if (new_deepseek_v3_config->ContainGptqWeights() && new_deepseek_v3_config->IsWeightMatchGptq(file_weight_name) &&
         new_deepseek_v3_config->IsGptqContain(file_weight_name)) {

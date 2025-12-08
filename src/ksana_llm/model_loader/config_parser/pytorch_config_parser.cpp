@@ -4,9 +4,8 @@
 
 #include "ksana_llm/model_loader/config_parser/pytorch_config_parser.h"
 
-#include <fstream>
-
 #include "ksana_llm/model_loader/model_loader_utils.h"
+#include "ksana_llm/utils/json_config_utils.h"
 #include "ksana_llm/utils/string_utils.h"
 
 namespace ksana_llm {
@@ -21,14 +20,11 @@ Status PytorchConfigParser::GetJsonConfig(const std::string& model_dir, nlohmann
     return Status(RET_INVALID_ARGUMENT, "GetJsonConfig error, config.json not found.");
   }
 
-  std::ifstream config_file(model_config_file);
-  if (!config_file.is_open()) {
+  config_json = ReadJsonFromFile(model_config_file);
+  if (config_json.empty()) {
     return Status(RET_INVALID_ARGUMENT,
                   FormatStr("Load model config config_file %s error.", model_config_file.c_str()));
   }
-
-  config_file >> config_json;
-  config_file.close();
 
   // Get model arch
   std::string model_type = config_json.at("model_type");

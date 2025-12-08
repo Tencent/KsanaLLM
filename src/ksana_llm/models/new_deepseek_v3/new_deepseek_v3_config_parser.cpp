@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config.h"
+#include "ksana_llm/utils/config/quant_config_parser.h"
 #include "ksana_llm/utils/json_config_utils.h"
 #include "ksana_llm/utils/singleton.h"
 
@@ -16,10 +17,13 @@ NewDeepSeekV3ConfigParser::~NewDeepSeekV3ConfigParser() {}
 
 Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_json,
                                                    const ParallelismBasicConfig &parallel_basic_config,
+                                                   const std::string &model_dir,
                                                    std::shared_ptr<BaseModelConfig> &model_config) {
   KLLM_LOG_INFO << "Parse config using new deepseek v3 config parser" << std::endl;
   std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config = std::make_shared<NewDeepSeekV3Config>();
   model_config = new_deepseek_v3_config;
+
+  new_deepseek_v3_config->model_dir = model_dir;
 
   auto env = Singleton<Environment>::GetInstance();
   RuntimeConfig runtime_config;
@@ -130,66 +134,51 @@ Status NewDeepSeekV3ConfigParser::ParseModelConfig(const nlohmann::json &config_
   return Status();
 }
 
-void ParseGPTQQuantConfig(const nlohmann::json &config_json,
-                          std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config, QuantConfig &quant_config) {
-  quant_config.method = QUANT_GPTQ;
-  quant_config.bits = config_json.at("bits");
-  quant_config.group_size = config_json.at("group_size");
-  quant_config.desc_act = config_json.value("desc_act", false);
-  quant_config.input_scale = config_json.value("input_scale", false);
-  KLLM_LOG_INFO << fmt::format(
-      "using quant model, quant method gptq, bits: {}, group_size: {}, desc_act: {}, input_scale: {}",
-      quant_config.bits, quant_config.group_size, quant_config.desc_act, quant_config.input_scale);
-}
-
-void ParseFP8QuantConfig(const nlohmann::json &config_json, std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config,
-                         QuantConfig &quant_config) {
-  quant_config.method = QUANT_FP8_E4M3;
-  quant_config.is_checkpoint_fp8_serialized = true;
-  quant_config.is_activation_scheme_static = (config_json.at("activation_scheme") == "static");
-  if (config_json.contains("weight_block_size") && config_json["weight_block_size"].is_array()) {
-    quant_config.is_fp8_blockwise = true;
-    quant_config.method = QUANT_BLOCK_FP8_E4M3;
-    quant_config.weight_block_size = config_json["weight_block_size"].get<std::vector<size_t>>();
-  }
-  if (new_deepseek_v3_config->is_moe && quant_config.is_fp8_blockwise == false &&
-      !quant_config.is_activation_scheme_static) {
-    KLLM_THROW(fmt::format("Not support dynamic fp8 quant_method for moe model."));
-  }
-  KLLM_LOG_INFO << fmt::format(
-      "using quant model, quant method fp8, method type: {}, is_checkpoint_fp8_serialized: {}, "
-      "is_activation_scheme_static: {}",
-      quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static);
-}
-
 Status NewDeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_json,
                                                    std::shared_ptr<NewDeepSeekV3Config> new_deepseek_v3_config,
                                                    const std::string &yaml_weight_quant_method,
                                                    const std::string &yaml_gptq_backend) {
-  new_deepseek_v3_config->is_quant = config_json.contains("quantization_config");
+  // 解析 quantize_config.json 和 hf_quant_config.json
+  nlohmann::json quantize_config = ReadJsonFromFile(new_deepseek_v3_config->model_dir + "/quantize_config.json");
+  nlohmann::json hf_quant_config = ReadJsonFromFile(new_deepseek_v3_config->model_dir + "/hf_quant_config.json");
+
+  // 解析三种不同的情况
+  nlohmann::json quantization_config;
+  if (config_json.contains("quantization_config")) {
+    // config.json 中有 quantization_config 字段（默认情况）
+    new_deepseek_v3_config->is_quant = true;
+    quantization_config = config_json["quantization_config"];
+  } else if (!quantize_config.empty()) {
+    // config.json 中没有 quantization_config 字段，但有额外文件 quantization_config
+    KLLM_LOG_INFO << "No quantization_config in config.json, but find quantize_config.json";
+    new_deepseek_v3_config->is_quant = true;
+    quantization_config = quantize_config;
+  } else if (!hf_quant_config.empty()) {
+    // config.json 中没有 quantization_config 字段，没有文件 quantization_config.json，但有 hf_quant_config.json
+    KLLM_LOG_INFO << "No quantization_config in config.json, no quantize_config.json, but find hf_quant_config.json";
+    new_deepseek_v3_config->is_quant = true;
+    quantization_config = ParseAndConvertQuantConfig(hf_quant_config);
+  }
+
   if (new_deepseek_v3_config->is_quant) {
-    std::string quant_method = config_json["quantization_config"].at("quant_method");
-    if (quant_method == "gptq") {
-      ParseGPTQQuantConfig(config_json["quantization_config"], new_deepseek_v3_config,
-                           new_deepseek_v3_config->quant_config);
+    std::string quant_method = quantization_config.at("quant_method");
+    if (quant_method == "gptq" || quant_method == "rtn") {
+      ParseGPTQQuantConfig(quantization_config, new_deepseek_v3_config->is_moe, new_deepseek_v3_config->quant_config);
     } else if (quant_method == "fp8") {
-      ParseFP8QuantConfig(config_json["quantization_config"], new_deepseek_v3_config,
-                          new_deepseek_v3_config->quant_config);
+      ParseFP8QuantConfig(quantization_config, new_deepseek_v3_config->is_moe, new_deepseek_v3_config->quant_config);
     } else if (quant_method == "mixed") {
-      auto configs = config_json["quantization_config"]["configs"];
+      auto configs = quantization_config["configs"];
       for (auto it = configs.begin(); it != configs.end(); ++it) {
         QuantConfig quant_config;
-        quant_method = config_json["quantization_config"]["configs"][it.key()]["method"];
-        if (quant_method == "gptq") {
-          ParseGPTQQuantConfig(config_json["quantization_config"]["configs"][it.key()], new_deepseek_v3_config,
-                               quant_config);
+        quant_method = quantization_config["configs"][it.key()]["method"];
+        if (quant_method == "gptq" || quant_method == "rtn") {
+          ParseGPTQQuantConfig(quantization_config["configs"][it.key()], new_deepseek_v3_config->is_moe, quant_config);
         } else if (quant_method == "fp8") {
-          ParseFP8QuantConfig(config_json["quantization_config"]["configs"][it.key()], new_deepseek_v3_config,
-                              quant_config);
+          ParseFP8QuantConfig(quantization_config["configs"][it.key()], new_deepseek_v3_config->is_moe, quant_config);
         } else {
           KLLM_THROW(fmt::format("Not support quant_method {}.", quant_method));
         }
-        auto layer_mapping = config_json["quantization_config"]["layer_mapping"][it.key()];
+        auto layer_mapping = quantization_config["layer_mapping"][it.key()];
         quant_config.pattern_layers = layer_mapping["pattern_layers"].get<std::vector<std::string>>();
         quant_config.ignored_layers = layer_mapping["ignored_layers"].get<std::vector<std::string>>();
         if (layer_mapping["default_config"]) {

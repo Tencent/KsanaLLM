@@ -16,9 +16,10 @@ LlamaModelConfigParser::LlamaModelConfigParser() {}
 
 LlamaModelConfigParser::~LlamaModelConfigParser() {}
 
-Status LlamaModelConfigParser::ParseModelConfig(const nlohmann::json& config_json,
-                                                const ParallelismBasicConfig& parallel_basic_config,
-                                                std::shared_ptr<BaseModelConfig>& model_config) {
+Status LlamaModelConfigParser::ParseModelConfig(const nlohmann::json &config_json,
+                                                const ParallelismBasicConfig &parallel_basic_config,
+                                                const std::string &model_dir,
+                                                std::shared_ptr<BaseModelConfig> &model_config) {
   std::shared_ptr<LlamaModelConfig> llama_model_config = std::make_shared<LlamaModelConfig>();
   model_config = llama_model_config;
 
@@ -83,8 +84,8 @@ DataType GetGGUFWeightDataType(uint32_t gguf_model_file_type) {
   }
 }
 
-Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue>& gguf_meta,
-                                                std::shared_ptr<BaseModelConfig>& model_config) {
+Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue> &gguf_meta,
+                                                std::shared_ptr<BaseModelConfig> &model_config) {
   // Create real model config.
   std::shared_ptr<LlamaModelConfig> llama_model_config = std::make_shared<LlamaModelConfig>();
   model_config = llama_model_config;

@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <regex>
 #include <vector>
 
 #include "ksana_llm/models/base/base_model_config.h"
@@ -97,5 +98,12 @@ struct NewDeepSeekV3Config : public BaseModelConfig {
   bool load_bias = true;     // Check if load all weights bias.
   int cla_share_factor = 0;  // Determines the number of layers that share k and v.
   bool use_qk_norm = false;  // Check if normlize the attention out q and k.
+
+  std::vector<std::pair<std::regex, std::string>> w4a8_patterns_ = {
+      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight_scale_inv)"),
+                     std::string("model.layers.$1.mlp.experts.$2.$3.scales")),
+      std::make_pair(std::regex(R"(model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.([^.]+)\.weight)"),
+                     std::string("model.layers.$1.mlp.experts.$2.$3.qweight")),
+  };
 };
 }  // namespace ksana_llm

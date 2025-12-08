@@ -61,6 +61,7 @@ endif()
 if(WITH_STANDALONE_TEST)
   file(GLOB_RECURSE utils_test_SRCS
     ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/*test.cpp
+    ${PROJECT_SOURCE_DIR}/src/ksana_llm/utils/config/*test.cpp
     ${PROJECT_SOURCE_DIR}/tests/test.cpp)
   list(FILTER utils_test_SRCS EXCLUDE REGEX ".*environment_test.cpp")
   message(STATUS "utils_test_SRCS: ${utils_test_SRCS}")
