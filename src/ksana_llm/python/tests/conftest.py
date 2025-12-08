@@ -1,7 +1,9 @@
 # tests/conftest.py
 
 import os
+import sys
 import atexit
+from fnmatch import fnmatch
 import pytest
 from utils import read_from_csv
 
@@ -31,6 +33,25 @@ def pytest_configure(config):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
     os.chdir(parent_dir)
+
+
+def pytest_ignore_collect(path):
+    """
+    只要测试文件 basename 匹配任意一个 --ignore-glob 模式就跳过。
+    支持 *、?、[] 通配符，可写多次。
+    """
+    # 1. 取用户传来的模式列表
+    patterns = getattr(pytest_ignore_collect, "_patterns", [])
+    if not patterns:
+        patterns = []
+        for arg in sys.argv:
+            if arg.startswith("--ignore-glob="):
+                patterns.append(arg.split("=", 1)[1])
+        pytest_ignore_collect._patterns = patterns
+
+    # 2. 用 basename 做模糊匹配
+    basename = os.path.basename(str(path))
+    return any(fnmatch(basename, pat) for pat in patterns)
 
 
 def on_exit():

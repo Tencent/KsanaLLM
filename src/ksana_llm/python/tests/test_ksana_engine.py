@@ -115,6 +115,7 @@ async def async_run_test(
             "setting.block_manager.reserved_device_memory_ratio": reserved_device_memory_ratio,
             "setting.batch_scheduler.max_batch_size": max_batch_size,
             "setting.batch_scheduler.enable_auto_prefix_cache": enable_auto_prefix_cache,
+            "setting.batch_scheduler.split_fuse_token_num": 0,
             "model_spec.base_model.model_dir": model_dir,
             "setting.global.is_version_report": False,
             "setting.profiler.stat_interval_second": 0,
@@ -175,6 +176,7 @@ async def async_run_test(
                                     ]
                                 ],
                                 "token_reduce_mode": "GATHER_TOKEN_ID",
+                                "input_top_logprobs_num": 0,
                             },
                         ],
                     },
@@ -182,8 +184,8 @@ async def async_run_test(
             }
             print(f" data is {data}")
             packed_data = msgpack.packb(data)
-            result = await engine.forward(packed_data)
-            result = await engine.forward(packed_data)
+            req_ctx = {"Content-Type": "application/x-msgpack"}
+            result = await engine.forward(packed_data, req_ctx)
             unpacked_result = msgpack.unpackb(result[1])
             python_tensor = unpacked_result["responses"][0]["response"][0][
                 "tensor"

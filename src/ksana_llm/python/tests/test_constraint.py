@@ -79,10 +79,62 @@ class RemoteKsanaServer:
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """清理服务器资源"""
+        logger.debug("开始清理服务器资源...")
+        
+        # 1. 先设置退出标志
         if self.uvicorn_server:
             self.uvicorn_server.should_exit = True
-        if self.server_thread:
+        
+        # 2. 等待线程完全结束,给更长的超时时间
+        if self.server_thread and self.server_thread.is_alive():
+            logger.debug("等待服务器线程结束...")
             self.server_thread.join(timeout=5)
+        
+        # 3. 显式删除C++层的对象以释放GPU显存
+        if self.server:
+            logger.debug("开始删除LLMServer对象...")
+            # 先删除model,它包含C++的Serving对象
+            if hasattr(self.server, 'model') and self.server.model is not None:
+                del self.server.model
+                self.server.model = None
+            
+            # 最后删除server对象本身
+            del self.server
+            self.server = None
+            logger.debug("LLMServer对象已删除")
+        
+        # 4. 清理其他引用
+        self.uvicorn_server = None
+        self.server_thread = None
+        
+        # 5. 清理CUDA上下文和同步所有GPU设备
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device_count = torch.cuda.device_count()
+                logger.debug(f"检测到{device_count}个GPU设备,开始同步和清理...")
+                
+                # 同步所有GPU设备
+                for device_id in range(device_count):
+                    try:
+                        with torch.cuda.device(device_id):
+                            torch.cuda.synchronize()
+                            torch.cuda.empty_cache()
+                            logger.debug(f"  GPU {device_id}: 已同步并清理缓存")
+                    except torch.cuda.CudaError as cuda_err:
+                        # CUDA 运行时错误（非法设备、内存不足等）
+                        logger.error(f"[CUDA] device {device_id}: {cuda_err}")
+                # 再次全局同步
+                torch.cuda.synchronize()
+                logger.debug("所有GPU设备已同步")
+        except ImportError:
+            logger.warn("torch未安装,跳过GPU清理")
+        
+        # 6. 额外等待,确保C++层完全释放GPU显存
+        logger.debug("等待GPU显存完全释放...")
+        time.sleep(5)  # 增加到5秒
+        logger.debug("服务器资源清理完成")
             
     def _wait_for_server(self, timeout: int = 90):
         import requests
@@ -161,6 +213,7 @@ class TestStructuredOutputAPI:
             shutil.copyfile(yaml_path, temp_yaml_path)
             
             modify_yaml_field(temp_yaml_path, "setting.batch_scheduler.enable_xgrammar", True)
+            modify_yaml_field(temp_yaml_path, "setting.block_manager.block_host_memory_factor", 0.0)
             
             with RemoteKsanaServer(None, temp_yaml_path, port=8002) as server:
                 yield server
@@ -200,8 +253,8 @@ class TestStructuredOutputAPI:
             extra_body={"enable_structured_output": True} 
         )
         
-        print(f"\n=== 完整响应对象 ===")
-        print(f"Response: {response}")
+        logger.debug(f"\n=== 完整响应对象 ===")
+        logger.debug(f"Response: {response}")
         
         text = response.choices[0].message.content
 
@@ -213,7 +266,7 @@ class TestStructuredOutputAPI:
         
         try:
             js_obj = json.loads(text)
-            print(f"解析的 JSON 对象: {js_obj}")
+            logger.debug(f"解析的 JSON 对象: {js_obj}")
         except json.JSONDecodeError as e:
             pytest.fail(f"Response is not valid JSON. Error: {e}. Response: {text}")
         
@@ -254,9 +307,9 @@ class TestStructuredOutputAPI:
         )
         
         text = response.choices[0].message.content
-        print(f"\n=== JSON Schema Response Debug ===")
-        print(f"Raw response: {repr(text)}")
-        print("=" * 40)
+        logger.debug(f"\n=== JSON Schema Response Debug ===")
+        logger.debug(f"Raw response: {repr(text)}")
+        logger.debug("=" * 40)
         
         if not text or text.strip() == "":
             pytest.fail(f"Response is empty or None. Full response object: {response}")
@@ -294,8 +347,8 @@ class TestStructuredOutputAPI:
         )
         
         text = response.choices[0].message.content
-        print(f"Response: {text}")
-        print("=" * 40)
+        logger.debug(f"Response: {text}")
+        logger.debug("=" * 40)
         
         # 检查响应是否为空或无效
         if not text or text.strip() == "":
@@ -334,10 +387,10 @@ class TestStructuredOutputAPI:
         )
         
         text = response.choices[0].message.content
-        print(f"\n=== Simple JSON Schema Response Debug ===")
-        print(f"Raw response: {repr(text)}")
-        print(f"Response content: {text}")
-        print("=" * 40)
+        logger.debug(f"\n=== Simple JSON Schema Response Debug ===")
+        logger.debug(f"Raw response: {repr(text)}")
+        logger.debug(f"Response content: {text}")
+        logger.debug("=" * 40)
         
         if not text or text.strip() == "":
             pytest.fail(f"Response is empty or None. Full response object: {response}")
@@ -349,7 +402,7 @@ class TestStructuredOutputAPI:
         try:
             js_obj = json.loads(text)
         except (TypeError, json.JSONDecodeError) as e:
-            print("JSONDecodeError", text)
+            logger.debug("JSONDecodeError", text)
             pytest.fail(f"Response is not valid JSON. Error: {e}. Response: {text}")
         
         # 验证schema约束
@@ -367,9 +420,12 @@ class TestStructuredOutputAPI:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful AI assistant."
+                    "content": (
+                        "You are a helpful AI assistant. Always respond with valid JSON format. "
+                        "For example: {\"answer\": \"your response here\"}"
+                    )
                 },
-                {"role": "user", "content": "Tell me about Python programming language."}
+                {"role": "user", "content": "What is the capital of Bulgaria? Please respond in JSON format."}
             ],
             temperature=0,
             max_tokens=30,
@@ -378,7 +434,7 @@ class TestStructuredOutputAPI:
         )
         
         text = response.choices[0].message.content
-        print(f"Sync JSON Object Response ({len(text)} characters): {text}")
+        logger.debug(f"Sync JSON Object Response ({len(text)} characters): {text}")
         
         # 验证响应是有效的 JSON
         try:

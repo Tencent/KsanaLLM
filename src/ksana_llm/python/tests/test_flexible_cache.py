@@ -59,7 +59,7 @@ async def run_test(model_dir, default_ksana_yaml_path):
             "setting.global.tensor_para_size": 1,
             "setting.batch_scheduler.max_token_len": 65536,
             "setting.batch_scheduler.max_step_tokens": 65536,
-            "setting.block_manager.block_host_memory_factor": 0.1,
+            "setting.block_manager.block_host_memory_factor": 0.0,
             "setting.block_manager.reserved_device_memory_ratio": 0.3,
             "setting.batch_scheduler.max_batch_size": 1,
             "setting.batch_scheduler.enable_auto_prefix_cache": True,
