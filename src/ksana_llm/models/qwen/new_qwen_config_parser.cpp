@@ -63,7 +63,8 @@ void ParseModelOptQuantConfig(const nlohmann::json &config_json, std::shared_ptr
     quant_config.method = QUANT_W4A8_AWQ;
     KLLM_LOG_INFO << "using quant model, quant method W4A8_AWQ";
   } else {
-    KLLM_THROW("only support W4A8_AWQ algo in modelopt");
+    // TODO(jinxcwu) 支持所有量化类型后，需要修改回 KLLM_THROW
+    KLLM_LOG_ERROR << "only support W4A8_AWQ algo in modelopt";
   }
 }
 
@@ -77,7 +78,8 @@ Status NewQwenConfigParser::ParseQuantConfig(const nlohmann::json &config_json,
     if (quant_method == "modelopt") {
       ParseModelOptQuantConfig(config_json["quantization_config"], new_qwen_config, new_qwen_config->quant_config);
     } else {
-      KLLM_THROW(fmt::format("Not support quant method: {}", quant_method));
+      // TODO(jinxcwu) 支持所有量化类型后，需要修改回 KLLM_THROW
+      KLLM_LOG_ERROR << fmt::format("Not support quant method: {}", quant_method);
     }
   }
   return Status();
