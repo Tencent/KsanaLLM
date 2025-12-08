@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "ksana_llm/models/base/base_model_config.h"
+#include "ksana_llm/models/base/utils.h"
 #include "ksana_llm/utils/context.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/status.h"
@@ -60,14 +61,6 @@ class BaseModelWeightLoader {
 
   // Copy host tensor to device.
   Status CopyHostTensorToDevice(const Tensor host_tensor, int dev_rank, Tensor& dev_tensor);
-
-  // Check whether the weight_name is matched.
-  bool CheckWeightNameMatched(const std::string& weight_name, const std::vector<std::string>& name_list,
-                              bool full_match = true);
-
-  // Check whether all the weight names is exists.
-  bool CheckAllWeightsExist(const std::unordered_map<std::string, Tensor>& host_model_weights,
-                            const std::vector<std::string>& name_list);
 
  protected:
   std::shared_ptr<BaseModelConfig> model_config_ = nullptr;

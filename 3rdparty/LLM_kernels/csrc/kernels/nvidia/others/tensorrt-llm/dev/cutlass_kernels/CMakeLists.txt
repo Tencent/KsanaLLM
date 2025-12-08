@@ -68,8 +68,8 @@ if(NEED_REGENERATE)
   # 生成内核代码
   execute_process(
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python/
-    COMMAND ${Python3_EXECUTABLE} generate_kernels.py -o 
-            ${INSTANTIATION_GENERATION_DIR} -a 90
+    COMMAND ${Python3_EXECUTABLE} generate_kernels.py -o
+            ${INSTANTIATION_GENERATION_DIR} -a "89;90"
     RESULT_VARIABLE _KERNEL_GEN_SUCCESS)
 
   if(NOT _KERNEL_GEN_SUCCESS MATCHES 0)

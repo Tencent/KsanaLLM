@@ -12,6 +12,7 @@
 #include "ksana_llm/models/base/base_model_weight_loader.h"
 #include "ksana_llm/models/base/common_model_weight_loader.h"
 #include "ksana_llm/models/qwen/new_qwen_config.h"
+#include "ksana_llm/models/weight_method/weight_method.h"
 
 namespace ksana_llm {
 // Qwen weight loader
@@ -24,6 +25,9 @@ class NewQwenWeightLoader : public BaseModelWeightLoader {
   // Do some filter on model weight names.
   virtual Status FilterWeightNames(std::vector<std::string>& weight_names) override;
 
+  // Invoked only once before ProcessModelWeights.
+  virtual Status PreProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights) override;
+
   // Process weights, such as rename, split, merge, type convert, quantization, etc.
   virtual Status ProcessModelWeights(const std::unordered_map<std::string, Tensor>& host_model_weights, int dev_rank,
                                      std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -35,8 +39,11 @@ class NewQwenWeightLoader : public BaseModelWeightLoader {
 
  private:
   PipelineConfig pipeline_config_;
-  std::vector<std::unordered_set<std::string>> weights_to_permute_;
-  std::unique_ptr<CommonModelWeightLoader> common_weight_loader_;
+  RuntimeConfig runtime_config_;
+  std::shared_ptr<CommonModelWeightLoader> common_weight_loader_;
+  std::shared_ptr<WeightMethod> weight_method_;
+
+  size_t tp_;
 };
 
 }  // namespace ksana_llm

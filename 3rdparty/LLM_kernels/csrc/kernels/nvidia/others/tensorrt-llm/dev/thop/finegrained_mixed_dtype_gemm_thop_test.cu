@@ -78,144 +78,10 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     return unpacked_weight;
   }
 
-  torch::Tensor preprocess_weights_for_mixed_gemm(torch::Tensor tensor, torch::ScalarType quant_mode,
-                                                  torch::ScalarType act_dtype, int sm_ = -1,
-                                                  bool do_weight_interleave = true) {
-    if (sm_ <= 0) {
-      sm_ = GetSMVersion();
-    }
-
-    bool was_2d = false;
-    if (tensor.dim() == 2) {
-      tensor = tensor.unsqueeze(0);
-      was_2d = true;
-    } else if (sm_ >= 90) {
-      sm_ = 80;
-    }
-    if (sm_ > 90) {
-      sm_ = 80;
-    }
-
-    std::map<std::string, std::vector<int>> permutation_map = {
-        {"16_8", {0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15}},
-        {"16_4", {0, 1, 8,  9,  16, 17, 24, 25, 2, 3, 10, 11, 18, 19, 26, 27,
-                  4, 5, 12, 13, 20, 21, 28, 29, 6, 7, 14, 15, 22, 23, 30, 31}},
-        {"8_4", {0, 1, 2,  3,  16, 17, 18, 19, 4,  5,  6,  7,  20, 21, 22, 23,
-                 8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31}}};
-
-    int BITS_PER_ELT_A = (act_dtype == torch::kFloat8_e4m3fn) ? 8 : 16;
-    int BITS_PER_ELT_B = (quant_mode == torch::kQUInt4x2) ? 4 : 8;
-    int MMA_SHAPE_N = 8;
-    int B_ROWS_PER_MMA = 8 * 16 / BITS_PER_ELT_B;
-
-    int64_t num_experts = tensor.size(0);
-    int64_t num_rows = tensor.size(1);
-    int64_t num_cols = tensor.size(2);
-
-    KLLM_KERNEL_CHECK_WITH_INFO(sm_ >= 75, "SM version must be >= 75");
-    KLLM_KERNEL_CHECK_WITH_INFO(num_rows % B_ROWS_PER_MMA == 0, "num_rows must be divisible by B_ROWS_PER_MMA");
-    KLLM_KERNEL_CHECK_WITH_INFO(num_cols % MMA_SHAPE_N == 0, "num_cols must be divisible by MMA_SHAPE_N");
-
-    auto original_shape = tensor.sizes().vec();
-
-    // 第一步：permute_B_rows_for_mixed_gemm
-    if (do_weight_interleave) {
-      std::string key = std::to_string(BITS_PER_ELT_A) + "_" + std::to_string(BITS_PER_ELT_B);
-      auto& perm = permutation_map[key];
-
-      std::vector<int64_t> row_idx_list;
-      for (int64_t row_idx = 0; row_idx < num_rows; row_idx++) {
-        int64_t new_idx = (row_idx / B_ROWS_PER_MMA) * B_ROWS_PER_MMA + perm[row_idx % B_ROWS_PER_MMA];
-        row_idx_list.push_back(new_idx);
-      }
-
-      tensor =
-          tensor.index({torch::indexing::Slice(), torch::tensor(row_idx_list, torch::kLong), torch::indexing::Slice()});
-    }
-
-    // 第二步：subbyte_transpose
-    if (BITS_PER_ELT_B == 4) {
-      tensor = tensor.view(torch::kUInt8);
-
-      auto high_tensor = torch::bitwise_right_shift(tensor, 4).permute({0, 2, 1}).unsqueeze(2);
-      auto low_tensor =
-          torch::bitwise_right_shift(torch::bitwise_left_shift(tensor, 4), 4).permute({0, 2, 1}).unsqueeze(2);
-
-      auto new_tensor = torch::cat({low_tensor, high_tensor}, 2).reshape({tensor.size(0), -1, tensor.size(1)});
-
-      new_tensor = new_tensor.index({torch::indexing::Slice(), torch::indexing::Slice(),
-                                     torch::indexing::Slice(0, torch::indexing::None, 2)}) +
-                   new_tensor.index({torch::indexing::Slice(), torch::indexing::Slice(),
-                                     torch::indexing::Slice(1, torch::indexing::None, 2)}) *
-                       16;
-
-      tensor = new_tensor.view(torch::kInt8).reshape(original_shape);
-    } else {
-      tensor = tensor.permute({0, 2, 1}).reshape(original_shape);
-    }
-
-    // 第三步：interleave_column_major_tensor
-    if (do_weight_interleave) {
-      int interleave = BITS_PER_ELT_A / BITS_PER_ELT_B;
-
-      if (interleave > 1 && sm_ < 90) {
-        int rows_per_tile = 128 * 8 / BITS_PER_ELT_A;
-        int elts_in_int32 = 32 / BITS_PER_ELT_B;
-
-        KLLM_KERNEL_CHECK_WITH_INFO(num_rows % elts_in_int32 == 0, "num_rows must be divisible by elts_in_int32");
-        KLLM_KERNEL_CHECK_WITH_INFO(num_rows % rows_per_tile == 0, "num_rows must be divisible by rows_per_tile");
-
-        tensor =
-            tensor.reshape({num_experts, -1, interleave, num_rows / rows_per_tile, rows_per_tile * 4 / elts_in_int32});
-        tensor = tensor.permute({0, 1, 3, 2, 4}).reshape(original_shape);
-      }
-
-      // 第四步：add_bias_and_interleave_quantized_tensor_inplace
-      if (BITS_PER_ELT_B == 8) {
-        auto mask = (tensor > 127).to(torch::kUInt8);
-        tensor = tensor + (-256 * mask) + 128;
-
-        tensor = tensor.reshape({-1, 4})
-                     .index({torch::indexing::Slice(), torch::tensor({0, 2, 1, 3})})
-                     .reshape(tensor.sizes());
-
-      } else if (BITS_PER_ELT_B == 4) {
-        tensor = tensor.view(torch::kUInt8);
-
-        auto high_tensor = torch::bitwise_right_shift(tensor, 4).unsqueeze(-1);
-        auto low_tensor = torch::bitwise_right_shift(torch::bitwise_left_shift(tensor, 4), 4).unsqueeze(-1);
-
-        auto new_tensor = torch::cat({low_tensor, high_tensor}, -1).reshape({tensor.size(0), tensor.size(1), -1});
-
-        new_tensor = new_tensor.reshape({-1, 8})
-                         .index({torch::indexing::Slice(), torch::tensor({0, 2, 4, 6, 1, 3, 5, 7})})
-                         .reshape(new_tensor.sizes());
-
-        auto mask = (new_tensor > 7).to(torch::kUInt8);
-        new_tensor = new_tensor + (-16 * mask) + 8;
-
-        new_tensor = new_tensor.index({torch::indexing::Slice(), torch::indexing::Slice(),
-                                       torch::indexing::Slice(0, torch::indexing::None, 2)}) +
-                     new_tensor.index({torch::indexing::Slice(), torch::indexing::Slice(),
-                                       torch::indexing::Slice(1, torch::indexing::None, 2)}) *
-                         16;
-
-        tensor = new_tensor.view(torch::kInt8);
-      } else {
-        throw std::runtime_error("Unsupported BITS_PER_ELT_B");
-      }
-    }
-
-    if (was_2d) {
-      return tensor.squeeze(0).contiguous();
-    }
-    return tensor.contiguous();
-  }
-
   template <typename dtype>
   torch::Tensor finegrained_mixed_dtype_gemm(int64_t M, int64_t N, int64_t K, torch::Tensor& input,
                                              torch::Tensor& weight, torch::Tensor& scales, int64_t group_size,
-                                             double alpha, std::optional<torch::Tensor> zeros = std::nullopt) {
+                                             float alpha, std::optional<torch::Tensor> zeros = std::nullopt) {
     torch::Tensor output =
         torch::randn({M, N}, torch::TensorOptions().dtype(GetTorchDataType<dtype>()).device(torch::kCUDA));
 
@@ -231,8 +97,6 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
                                            torch::TensorOptions().dtype(torch::kInt8).device(torch::kCUDA));
 
     // 构建输入输出
-    Tensor workspace_tensor(workspace.data_ptr(),
-                            std::vector<size_t>(workspace.sizes().begin(), workspace.sizes().end()), ScalarType::Int8);
     Tensor input_tensor(input.data_ptr(), std::vector<size_t>(input.sizes().begin(), input.sizes().end()),
                         GetScalarType<__nv_fp8_e4m3>());
     Tensor weight_tensor(weight.data_ptr(), std::vector<size_t>(weight.sizes().begin(), weight.sizes().end()),
@@ -251,7 +115,7 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     }
 
     // gemm计算
-    runner.runGemm(stream, output_tensor, workspace_tensor, input_tensor, weight_tensor, scales_tensor, group_size, -1,
+    runner.runGemm(stream, output_tensor, workspace.data_ptr(), input_tensor, weight_tensor, scales_tensor, group_size, -1,
                    std::nullopt, zeros_tensor, alpha);
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
@@ -317,9 +181,7 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     // kernel计算
     // -- 预处理权重
     torch::Tensor cuda_q_weight =
-        preprocess_weights_for_mixed_gemm(unprocessed_weight.cpu(), torch::kQUInt4x2, activation_type)
-            .cuda()
-            .contiguous();
+        preprocess_weights_for_mixed_gemm(unprocessed_weight, torch::kQUInt4x2, activation_type).contiguous();
     // -- 将activation转换为FP8用于实际计算
     torch::Tensor fp8_activation = activation.to(activation_type).contiguous();
     // -- 调用GEMM内核
@@ -367,12 +229,11 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
         torch::tensor({1.0f}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
     // 权重处理
-    torch::Tensor processed_w = preprocess_weights_for_mixed_gemm(weight.to(torch::kInt8).contiguous().cpu(),
-                                                                  torch::kQUInt4x2, torch::kFloat8_e4m3fn)
-                                    .cuda()
-                                    .contiguous();
+    torch::Tensor processed_w =
+        preprocess_weights_for_mixed_gemm(weight.to(torch::kInt8), torch::kQUInt4x2, torch::kFloat8_e4m3fn)
+            .contiguous();
     torch::Tensor processed_weight_scale = (weight_scale / weight_scale_2).to(torch::kFloat16).contiguous();
-    double alpha = (input_scale.to(torch::kFloat) * weight_scale_2.to(torch::kFloat)).item<double>();
+    float alpha = (input_scale.to(torch::kFloat) * weight_scale_2.to(torch::kFloat)).item<float>();
 
     // 构建算子
     auto runner = FinegrainedMixedDtypeGemmRunner(ScalarType::Float8_e4m3fn, ScalarType::BFloat16, 0);
@@ -388,7 +249,6 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     Tensor quantized_x_tensor(quantized_x.data_ptr(),
                               std::vector<size_t>(quantized_x.sizes().begin(), quantized_x.sizes().end()),
                               GetScalarType<__nv_fp8_e4m3>());
-    Tensor workspace_tensor(workspace.data_ptr, workspace.shape, GetScalarType<char>());
     Tensor w_tensor(processed_w.data_ptr(), std::vector<size_t>(processed_w.sizes().begin(), processed_w.sizes().end()),
                     GetScalarType<int8_t>());
     Tensor weight_scale_tensor(
@@ -408,7 +268,7 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
 
     auto default_cuda_run = [&]() {
-      runner.runGemm(stream, output_tensor, workspace_tensor, quantized_x_tensor, w_tensor, weight_scale_tensor,
+      runner.runGemm(stream, output_tensor, workspace.data_ptr, quantized_x_tensor, w_tensor, weight_scale_tensor,
                      GROUP_SIZE, -1, std::nullopt, std::nullopt, alpha);
     };
     float default_time_elapsed_ms = MeasureCudaExecutionTime(default_cuda_run, stream, warmup, iters);
@@ -418,11 +278,15 @@ class NvidiaFinegrainedMixedDtypeGemmTestSuit : public NvidiaTestSuitBase {
     int64_t num_configs = runner.getNumConfigs();
     std::vector<float> config_times(num_configs, std::numeric_limits<float>::max());
     for (int64_t config_idx = 0; config_idx < num_configs; config_idx++) {
-      auto cuda_run = [&]() {
-        runner.runGemm(stream, output_tensor, workspace_tensor, quantized_x_tensor, w_tensor, weight_scale_tensor,
-                       GROUP_SIZE, config_idx, std::nullopt, std::nullopt, alpha);
-      };
-      config_times[config_idx] = MeasureCudaExecutionTime(cuda_run, stream, warmup, iters);
+      try {
+        auto cuda_run = [&]() {
+          runner.runGemm(stream, output_tensor, workspace.data_ptr, quantized_x_tensor, w_tensor, weight_scale_tensor,
+                         GROUP_SIZE, config_idx, std::nullopt, std::nullopt, alpha);
+        };
+        config_times[config_idx] = MeasureCudaExecutionTime(cuda_run, stream, warmup, iters);
+      } catch (const std::exception& e) {
+        config_times[config_idx] = std::numeric_limits<float>::max();
+      }
     }
     float best_time_elapsed_ms = *std::min_element(config_times.begin(), config_times.end());
     int64_t best_tflops = get_tflops(M, N, K, best_time_elapsed_ms);
@@ -445,13 +309,13 @@ TEST_F(NvidiaFinegrainedMixedDtypeGemmTestSuit, TestFinegrainedMixedDtypeGemmPre
 }
 
 TEST_F(NvidiaFinegrainedMixedDtypeGemmTestSuit, TestFinegrainedMixedDtypeGemmPerformance) {
-  std::vector<std::tuple<int64_t, int64_t, int64_t>> testcases = {
-      {1, 25600, 5120},   {2, 25600, 5120},   {4, 25600, 5120},    {8, 25600, 5120},
-      {16, 25600, 5120},  {32, 25600, 5120},  {64, 25600, 5120},   {128, 25600, 5120},
-      {256, 25600, 5120}, {512, 25600, 5120}, {1024, 25600, 5120}, {2048, 25600, 5120},
-  };
-  for (auto& tc : testcases) {
-    TestFinegrainedMixedDtypeGemmPerformance(std::get<0>(tc), std::get<1>(tc), std::get<2>(tc));
+  const std::vector<int64_t> ms = {64, 128, 256};
+  const std::vector<std::tuple<int64_t, int64_t>> nks = {{5120, 5120}, {25600, 5120}};
+  for (auto& nk : nks) {
+    std::cout << std::string(88, '=') << std::endl;
+    for (auto& m : ms) {
+      TestFinegrainedMixedDtypeGemmPerformance(m, std::get<0>(nk), std::get<1>(nk));
+    }
   }
 }
 

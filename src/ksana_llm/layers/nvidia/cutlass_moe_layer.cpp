@@ -15,21 +15,7 @@
 
 namespace ksana_llm {
 
-using KTensor = llm_kernels::nvidia::tensorrt_llm::dev::Tensor;
-using KScalarType = llm_kernels::nvidia::tensorrt_llm::dev::ScalarType;
-
 #define TRTLLM_CUTLASS_MOE_CHUNK_SIZE ((size_t)(8 * 1024))
-
-static const std::unordered_map<DataType, KScalarType> DataTypeToScalarTypeMap = {
-    {DataType::TYPE_INT64, KScalarType::Long},     {DataType::TYPE_FP8_E4M3, KScalarType::Float8_e4m3fn},
-    {DataType::TYPE_UINT8, KScalarType::QUInt4x2},  // NOTE(jinxcwu) 特殊配置的，需要注意
-    {DataType::TYPE_INT8, KScalarType::QUInt4x2},   // NOTE(jinxcwu) 特殊配置的，需要注意
-    {DataType::TYPE_INT32, KScalarType::Int},      {DataType::TYPE_FP32, KScalarType::Float},
-    {DataType::TYPE_BF16, KScalarType::BFloat16},  {DataType::TYPE_FP16, KScalarType::Float16}};
-
-inline KTensor TensorToKTensor(const Tensor& tensor) {
-  return KTensor(tensor.GetPtr<void>(), tensor.shape, DataTypeToScalarTypeMap.at(tensor.dtype));
-}
 
 Status CutlassMoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                              std::shared_ptr<Context> context, int rank) {

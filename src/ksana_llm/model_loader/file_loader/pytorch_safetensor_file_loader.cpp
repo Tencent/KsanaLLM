@@ -51,7 +51,7 @@ PytorchSafetensorFileLoader::~PytorchSafetensorFileLoader() {
 DataType GetTensorDataType(const std::string& safetensor_dtype) {
   const std::map<std::string, DataType> type_map = {
       {"F16", TYPE_FP16},         {"F32", TYPE_FP32},  {"BF16", TYPE_BF16}, {"I32", TYPE_INT32},
-      {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}, {"I8", TYPE_INT8}};
+      {"F8_E4M3", TYPE_FP8_E4M3}, {"UI8", TYPE_UINT8}, {"U8", TYPE_UINT8},  {"I8", TYPE_INT8}};
   return type_map.at(safetensor_dtype);
 }
 
@@ -112,7 +112,11 @@ Status PytorchSafetensorFileLoader::LoadModelWeights(const std::vector<std::stri
       continue;
     }
 
-    const std::vector<size_t> tensor_shape = tensor_data["shape"].get<decltype(tensor_shape)>();
+    std::vector<size_t> tensor_shape = tensor_data["shape"].get<decltype(tensor_shape)>();
+    if (tensor_shape.size() == 0) {
+      // 如果Tensor只有一个值，shape有可能是空()，强制修改为(1)
+      tensor_shape = {1};
+    }
     KLLM_LOG_DEBUG << FormatStr("SafeTensors Loader: weight_name:%s, shape:%s", weight_name.c_str(),
                                 Vector2Str(tensor_shape).c_str());
 

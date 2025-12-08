@@ -18,6 +18,7 @@
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_moe_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
+#include "ksana_llm/layers/finegrained_mixed_dtype_gemm_layer.h"
 #include "ksana_llm/layers/flash_attention_layer.h"
 #include "ksana_llm/layers/flashinfer_resource_manager.h"
 #include "ksana_llm/layers/grouped_topk_layer.h"
@@ -2137,6 +2138,146 @@ TEST_F(LayerTest, AllReduceResidualAddNormLayerTest) {
   for (int cur_rank = 0; cur_rank < device_count; cur_rank++) {
     run_threads[cur_rank]->join();
   }
+#endif
+}
+
+TEST_F(LayerTest, FinegrainedMixedDtypeGemmLayerTest) {
+#ifdef ENABLE_CUDA
+  // 仅在 SM90 架构上运行此测试
+  if (context_->ext->GetComputeCapacity() != 90) {
+    return;
+  }
+
+  constexpr int kDeviceRank = 0;
+  runtime_config.inter_data_type = TYPE_BF16;
+
+  // ============================================================================
+  // 第一部分：初始化层参数和工作空间
+  // ============================================================================
+
+  // GEMM 参数配置
+  // - max_m: 最大 batch size，用于分配工作空间
+  // - n, k: 矩阵维度
+  // - group_size: 量化分组大小
+  // - decode_tactic.size() = max_batch_size + 1 = 129，用于区分 decode/prefill 分支
+  const size_t max_m = 1024;
+  const size_t n = 1024;
+  const size_t k = 1024;
+  const size_t group_size = 128;
+  const bool has_zero = false;
+
+  // 创建层实例并初始化
+  FinegrainedMixedDtypeGemmLayer finegrained_gemm_layer;
+  FinegrainedMixedDtypeGemmLayerParameters params{.m = max_m,
+                                                  .n = n,
+                                                  .k = k,
+                                                  .group_size = group_size,
+                                                  .has_zero = has_zero,
+                                                  .activation_type = TYPE_FP8_E4M3,
+                                                  .output_type = TYPE_BF16};
+  finegrained_gemm_layer.Init({params}, runtime_config, context_, kDeviceRank);
+
+  // 分配工作空间
+  size_t workspace_size = finegrained_gemm_layer.GetWorkspaceSize();
+  Tensor workspace = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {workspace_size}, kDeviceRank);
+  std::shared_ptr<Tensor> workspace_ptr = std::make_shared<Tensor>(workspace);
+  finegrained_gemm_layer.SetWorkspaceBuffer(workspace_ptr);
+
+  // ============================================================================
+  // 第二部分：准备共享的权重张量
+  // ============================================================================
+
+  Tensor weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {k, n / 2}, kDeviceRank);
+  Tensor input_scale = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, kDeviceRank);
+  Tensor weight_scale = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {k / group_size, n}, kDeviceRank);
+
+  // 绑定 scales 和 alpha 到权重张量
+  weight.input_scales = &input_scale;
+  weight.weight_scales = &weight_scale;
+  weight.alpha = 1.0f;
+
+  // ============================================================================
+  // 第三部分：测试默认 tactic（跳过算子搜索）
+  // ============================================================================
+
+  // 设置环境变量跳过算子搜索，使用默认 tactic
+  setenv("QUANT_PROFILE", "0", 1);
+  finegrained_gemm_layer.Preprocess(model_config, runtime_config);
+  unsetenv("QUANT_PROFILE");
+
+  // 测试 decode 分支：m=16 < max_batch_size=128
+  const size_t m_decode = 16;
+  Tensor input_decode = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, k}, kDeviceRank);
+  Tensor output_default = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n}, kDeviceRank);
+  {
+    std::vector<Tensor> output_tensors = {output_default};
+    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+  }
+
+  // 验证输出形状
+  EXPECT_EQ(output_default.shape[0], m_decode);
+  EXPECT_EQ(output_default.shape[1], n);
+
+  // ============================================================================
+  // 第四部分：测试算子搜索和最优 tactic
+  // ============================================================================
+
+  // 执行算子搜索
+  finegrained_gemm_layer.Preprocess(model_config, runtime_config);
+  // 再次调用验证缓存复用
+  finegrained_gemm_layer.Preprocess(model_config, runtime_config);
+
+  // 使用最优 tactic 执行 Forward
+  Tensor output_optimized = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n}, kDeviceRank);
+  {
+    std::vector<Tensor> output_tensors = {output_optimized};
+    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+  }
+
+  // 验证输出形状
+  EXPECT_EQ(output_optimized.shape[0], m_decode);
+  EXPECT_EQ(output_optimized.shape[1], n);
+
+  // ============================================================================
+  // 第五部分：测试带 pre_quant_scales 的情况
+  // ============================================================================
+
+  Tensor pre_quant_scales = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {k}, kDeviceRank);
+  weight.pre_quant_scales = &pre_quant_scales;
+
+  Tensor output_with_prequant = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_decode, n}, kDeviceRank);
+  {
+    std::vector<Tensor> output_tensors = {output_with_prequant};
+    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_decode, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+  }
+
+  // 验证输出形状
+  EXPECT_EQ(output_with_prequant.shape[0], m_decode);
+  EXPECT_EQ(output_with_prequant.shape[1], n);
+
+  // 重置 pre_quant_scales
+  weight.pre_quant_scales = nullptr;
+
+  // ============================================================================
+  // 第六部分：测试 prefill 分支
+  // ============================================================================
+
+  // m=256 > max_batch_size=128，命中 prefill 分支
+  const size_t m_prefill = 256;
+  Tensor input_prefill = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_prefill, k}, kDeviceRank);
+  Tensor output_prefill = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m_prefill, n}, kDeviceRank);
+  {
+    std::vector<Tensor> output_tensors = {output_prefill};
+    EXPECT_TRUE(finegrained_gemm_layer.Forward({input_prefill, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+  }
+
+  // 验证输出形状
+  EXPECT_EQ(output_prefill.shape[0], m_prefill);
+  EXPECT_EQ(output_prefill.shape[1], n);
 #endif
 }
 

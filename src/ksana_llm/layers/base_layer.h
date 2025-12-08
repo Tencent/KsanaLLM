@@ -10,7 +10,31 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/tensor.h"
 
+#ifdef ENABLE_CUDA
+#  include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
+#endif
+
 namespace ksana_llm {
+
+#ifdef ENABLE_CUDA
+using KTensor = llm_kernels::nvidia::tensorrt_llm::dev::Tensor;
+using KScalarType = llm_kernels::nvidia::tensorrt_llm::dev::ScalarType;
+
+static const std::unordered_map<DataType, KScalarType> DataTypeToScalarTypeMap = {
+    {DataType::TYPE_INT64, KScalarType::Long},     {DataType::TYPE_FP8_E4M3, KScalarType::Float8_e4m3fn},
+    {DataType::TYPE_UINT8, KScalarType::QUInt4x2},  // NOTE(jinxcwu) 特殊配置的，需要注意
+    {DataType::TYPE_INT8, KScalarType::QUInt4x2},   // NOTE(jinxcwu) 特殊配置的，需要注意
+    {DataType::TYPE_INT32, KScalarType::Int},      {DataType::TYPE_FP32, KScalarType::Float},
+    {DataType::TYPE_BF16, KScalarType::BFloat16},  {DataType::TYPE_FP16, KScalarType::Float16}};
+
+inline KTensor TensorToKTensor(const Tensor& tensor) {
+  return KTensor(tensor.GetPtr<void>(), tensor.shape, DataTypeToScalarTypeMap.at(tensor.dtype));
+}
+#endif
+
+struct BaseLayerParameters {
+  // Empty base struct to allow aggregate initialization in derived types
+};
 
 class BaseLayer {
  public:

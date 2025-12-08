@@ -194,16 +194,16 @@ void Tensor::AssignMembers(const Tensor& other) {
   is_shared_buffer_ = other.is_shared_buffer_;
   reference_ = other.reference_;
 
+  // 子tensor数据
   scales = other.scales;
   zeros = other.zeros;
-
   g_idx = other.g_idx;
   perm = other.perm;
-
   input_scales = other.input_scales;
   weight_scales = other.weight_scales;
-
+  pre_quant_scales = other.pre_quant_scales;
   input_alpha = other.input_alpha;
+  alpha = other.alpha;
 }
 
 uint8_t* Tensor::GetPtrImpl(bool check_empty) const {

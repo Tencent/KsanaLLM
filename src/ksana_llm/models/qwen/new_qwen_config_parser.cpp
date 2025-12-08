@@ -8,6 +8,7 @@
 
 #include "ksana_llm/models/qwen/new_qwen_config.h"
 #include "ksana_llm/utils/json_config_utils.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -15,9 +16,9 @@ NewQwenConfigParser::NewQwenConfigParser() {}
 
 NewQwenConfigParser::~NewQwenConfigParser() {}
 
-Status NewQwenConfigParser::ParseModelConfig(const nlohmann::json& config_json,
-                                             const ParallelismBasicConfig& parallel_basic_config,
-                                             std::shared_ptr<BaseModelConfig>& model_config) {
+Status NewQwenConfigParser::ParseModelConfig(const nlohmann::json &config_json,
+                                             const ParallelismBasicConfig &parallel_basic_config,
+                                             std::shared_ptr<BaseModelConfig> &model_config) {
   std::shared_ptr<NewQwenConfig> new_qwen_model_config = std::make_shared<NewQwenConfig>();
   model_config = new_qwen_model_config;
 
@@ -48,8 +49,36 @@ Status NewQwenConfigParser::ParseModelConfig(const nlohmann::json& config_json,
     new_qwen_model_config->size_per_head = 0;
   }
 
-  // TODO(huicongyao): support quant config parse, and model weight process
-  new_qwen_model_config->is_quant = config_json.contains("quantization_config");
+  // parse quantization config
+  auto env = Singleton<Environment>::GetInstance();
+  ParseQuantConfig(config_json, new_qwen_model_config, env->GetYamlWeightQuantMethod(), env->GetYamlGptqBackend());
+  return Status();
+}
+
+void ParseModelOptQuantConfig(const nlohmann::json &config_json, std::shared_ptr<NewQwenConfig> new_qwen_config,
+                              QuantConfig &quant_config) {
+  std::string algo = config_json.value("quant_algo", "");
+  if (algo == "W4A8_AWQ") {
+    quant_config.method = QUANT_W4A8_AWQ;
+    KLLM_LOG_INFO << "using quant model, quant method W4A8_AWQ";
+  } else {
+    KLLM_THROW("only support W4A8_AWQ algo in modelopt");
+  }
+}
+
+Status NewQwenConfigParser::ParseQuantConfig(const nlohmann::json &config_json,
+                                             std::shared_ptr<NewQwenConfig> new_qwen_config,
+                                             const std::string &yaml_weight_quant_method,
+                                             const std::string &yaml_gptq_backend) {
+  new_qwen_config->is_quant = config_json.contains("quantization_config");
+  if (new_qwen_config->is_quant) {
+    std::string quant_method = config_json["quantization_config"].at("quant_method");
+    if (quant_method == "modelopt") {
+      ParseModelOptQuantConfig(config_json["quantization_config"], new_qwen_config, new_qwen_config->quant_config);
+    } else {
+      KLLM_THROW(fmt::format("Not support quant method: {}", quant_method));
+    }
+  }
   return Status();
 }
 

@@ -10,7 +10,7 @@
 namespace llm_kernels::nvidia::tensorrt_llm::dev {
 
 /** ScalarType: 轻量数据类型枚举，用于内部表示（替代 torch::ScalarType），含常用浮点/整型与设备/量化格式。 */
-enum ScalarType { Long, Int, Int8, UInt8, QUInt4x2, Float, BFloat16, Float16, Float8_e4m3fn, Byte, Char };
+enum ScalarType : int { Long, Int, Int8, UInt8, QUInt4x2, Float, BFloat16, Float16, Float8_e4m3fn, Byte, Char };
 
 template <typename T>
 inline ScalarType GetScalarType();

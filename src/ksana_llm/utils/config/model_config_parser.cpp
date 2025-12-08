@@ -83,6 +83,16 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, ModelConfig &model_c
       quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static);
 }
 
+void ParseModelOptQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config, QuantConfig &quant_config) {
+  std::string algo = config_json.value("quant_algo", "");
+  if (algo == "W4A8_AWQ") {
+    quant_config.method = QUANT_W4A8_AWQ;
+    KLLM_LOG_INFO << "using quant model, quant method W4A8_AWQ";
+  } else {
+    KLLM_THROW("only support W4A8_AWQ algo in modelopt");
+  }
+}
+
 void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_json, ModelConfig &model_config,
                                                  std::string &yaml_weight_quant_method,
                                                  std::string &yaml_gptq_backend) {
@@ -95,6 +105,8 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
       ParseAWQQuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
     } else if (quant_method == "fp8") {
       ParseFP8QuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
+    } else if (quant_method == "modelopt") {
+      ParseModelOptQuantConfig(config_json["quantization_config"], model_config, model_config.quant_config);
     } else if (quant_method == "mixed") {
       auto configs = config_json["quantization_config"]["configs"];
       for (auto it = configs.begin(); it != configs.end(); ++it) {

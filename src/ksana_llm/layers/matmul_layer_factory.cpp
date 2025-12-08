@@ -6,6 +6,7 @@
 #include "ksana_llm/layers/batched_matmul_layer.h"
 #include "ksana_llm/layers/blockwise_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
+#include "ksana_llm/layers/finegrained_mixed_dtype_gemm_layer.h"
 #include "ksana_llm/layers/fp8_matmul_layer.h"
 #include "ksana_llm/layers/fp8_moe_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
@@ -59,6 +60,11 @@ MatMulLayerFactory::MatMulLayerFactory(const ModelConfig& model_config, const Ru
   builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_AWQ, MACHETE_LINEAR_BACKEND}] =
       &MatMulLayerFactory::BuildLayer<MacheteMatMulLayer>;
 
+  builder_map_[{TYPE_I4_GROUP, TYPE_FP16, TYPE_FP16, QUANT_W4A8_AWQ, CUTLASS_LINEAR_BACKEND}] =
+      &MatMulLayerFactory::BuildLayer<FinegrainedMixedDtypeGemmLayer>;
+  builder_map_[{TYPE_I4_GROUP, TYPE_BF16, TYPE_BF16, QUANT_W4A8_AWQ, CUTLASS_LINEAR_BACKEND}] =
+      &MatMulLayerFactory::BuildLayer<FinegrainedMixedDtypeGemmLayer>;
+
 #endif
 #ifdef ENABLE_FP8
   builder_map_[{TYPE_FP8_E4M3, TYPE_FP32, TYPE_FP32, QUANT_FP8_E4M3, DEFAULT_LINEAR_BACKEND}] =
@@ -83,6 +89,19 @@ std::shared_ptr<BaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<B
                                                                DataType input_type, DataType output_type,
                                                                LinearComputeBackend backend,
                                                                const std::vector<std::any>& init_params) {
+  // w4a8_awq
+  const WeightStatus& weight_status = context_->GetWeightStatus(weight_name);
+  if (weight_status.quant_mode == QUANT_W4A8_AWQ) {
+    using Parameters = FinegrainedMixedDtypeGemmLayerParameters;
+    Parameters param{.m = runtime_config_.max_step_token_num,
+                     .n = weight_status.layout.at("n"),
+                     .k = weight_status.layout.at("k"),
+                     .group_size = 128,
+                     .has_zero = false,
+                     .activation_type = TYPE_FP8_E4M3,
+                     .output_type = output_type};
+    return CreateLayer(TYPE_I4_GROUP, input_type, output_type, {param}, QUANT_W4A8_AWQ, CUTLASS_LINEAR_BACKEND);
+  }
   // gptq layer
   if (model_config_.is_quant &&
       (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {

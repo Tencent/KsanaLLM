@@ -72,4 +72,31 @@ c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type) {
   return torch_type;
 }
 
+DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
+  DataType data_type = TYPE_INVALID;
+  switch (torch_type) {
+    case c10::kBFloat16:
+      data_type = TYPE_BF16;
+      break;
+    case torch::kFloat16:
+      data_type = TYPE_FP16;
+      break;
+    case torch::kFloat32:
+      data_type = TYPE_FP32;
+      break;
+    case torch::kInt32:
+      data_type = TYPE_INT32;
+      break;
+    case torch::kInt8:
+      data_type = TYPE_INT8;
+      break;
+    case torch::kUInt8:
+      data_type = TYPE_UINT8;
+      break;
+    default:
+      break;
+  }
+  return data_type;
+}
+
 }  // namespace ksana_llm

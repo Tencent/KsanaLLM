@@ -93,8 +93,6 @@ void InvokeMarlinGemm(void* a, void* a_tmp, void* b_q_weight, void* b_scales, vo
 template <typename T>
 torch::ScalarType GetTorchDataType();
 
-DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type);
-
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes);
 

@@ -1,10 +1,10 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
-if (SM STREQUAL "90" OR SM STREQUAL "90a")
+if ((SM STREQUAL "90" OR SM STREQUAL "90a") AND ${CUDA_VERSION} VERSION_GREATER_EQUAL "12.8")
     set(ENABLE_CUTLASSMOE 1)
 else()
     set(ENABLE_CUTLASSMOE 0)
-    message(WARNING "SM != 90, set ENABLE_CUTLASSMOE=0")
+    message(WARNING "SM != 90 or CUDA version < 12.8, set ENABLE_CUTLASSMOE=0")
 endif()
 
 # set kernels target

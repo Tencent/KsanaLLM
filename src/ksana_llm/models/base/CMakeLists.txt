@@ -35,6 +35,8 @@ if(WITH_STANDALONE_TEST)
     set(MODELS_TEST_LIBS "")
   endif()
   cpp_test(model_input_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/model_input_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  cpp_test(model_base_utils_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/utils_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  cpp_test(common_model_weight_loader_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/base/common_model_weight_loader_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     
 endif()
 

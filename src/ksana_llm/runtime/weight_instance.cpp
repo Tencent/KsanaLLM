@@ -376,9 +376,13 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
     }
 
     case ModelArchitecture::ARCH_QWEN: {
-      // Temporarily disable Qwen model support because of a potential bug in the new loader.
+      std::shared_ptr<NewQwenConfig> new_qwen_model_config = std::dynamic_pointer_cast<NewQwenConfig>(model_config);
+      if (new_qwen_model_config->is_quant && new_qwen_model_config->quant_config.method == QUANT_W4A8_AWQ) {
+        return true;
+      }
       return false;
     }
+
     default:
       return false;
   }

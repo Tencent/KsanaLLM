@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ksana_llm/utils/device_types.h"
+
 namespace ksana_llm {
 
 class CutlassSearchStatus {

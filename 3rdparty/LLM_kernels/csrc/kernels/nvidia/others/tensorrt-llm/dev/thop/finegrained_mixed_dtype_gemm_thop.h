@@ -25,6 +25,7 @@
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
 
 #include <fmt/format.h>
+#include <torch/torch.h>
 
 #include "csrc/kernels/nvidia/others/tensorrt-llm/dev/thop/utils.h"
 #include "csrc/utils/nvidia/assert.h"
@@ -36,14 +37,18 @@ namespace internal {
 namespace kernels = llm_kernels::nvidia::tensorrt_llm::dev::kernels;
 }  // namespace internal
 
+torch::Tensor preprocess_weights_for_mixed_gemm(torch::Tensor tensor, torch::ScalarType quant_mode,
+                                                torch::ScalarType act_dtype, int sm = -1,
+                                                bool do_weight_interleave = true);
+
 class FinegrainedMixedDtypeGemmRunner {
  public:
   explicit FinegrainedMixedDtypeGemmRunner(ScalarType activationDtype, ScalarType outputDtype, int64_t quant_mode = 0);
 
-  void runGemm(cudaStream_t stream, Tensor& C_tensor, Tensor& workspace_tensor, Tensor const& A, Tensor const& B_packed,
+  void runGemm(cudaStream_t stream, Tensor& C_tensor, void* workspace_ptr, Tensor const& A, Tensor const& B_packed,
                Tensor const& scales, int64_t group_size_long, int64_t configIdx = -1,
                std::optional<Tensor> bias = std::nullopt, std::optional<Tensor> zeros = std::nullopt,
-               double alpha = 1.0f) const;
+               float alpha = 1.0f) const;
 
   size_t getWorkspaceSize(const std::vector<size_t>& A_shape, const std::vector<size_t>& B_packed_shape) const;
 

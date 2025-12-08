@@ -4,10 +4,12 @@
 #pragma once
 
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/environment.h"
+#include "ksana_llm/weight_status.h"
 
 namespace ksana_llm {
 
@@ -72,6 +74,13 @@ class ContextT {
 
   void SetIsLastLayer(bool is_last_layer) { is_last_layer_ = is_last_layer; }
 
+  // Weight status management
+  void SetWeightStatus(const std::string& key, const WeightStatus& status) { weight_status_map_[key] = status; }
+
+  WeightStatus& GetWeightStatus(const std::string& key) {
+    return weight_status_map_[key];  // Will create default WeightStatus if key not found
+  }
+
  public:
   friend class ExtensionTypeTraits<T>::value_type;
   typename ExtensionTypeTraits<T>::value_type* ext = nullptr;
@@ -119,6 +128,9 @@ class ContextT {
 
   // Single node or master node of expert parallel mode.
   bool is_expert_chief_ = false;
+
+  // Weight status map
+  std::unordered_map<std::string, WeightStatus> weight_status_map_;
 
  private:
   // Initialize and destroy extension, implemented by device.

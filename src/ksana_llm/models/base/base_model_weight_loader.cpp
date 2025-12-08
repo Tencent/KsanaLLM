@@ -60,30 +60,6 @@ Status BaseModelWeightLoader::ProcessModelWeights(const std::unordered_map<std::
   return Status();
 }
 
-bool BaseModelWeightLoader::CheckWeightNameMatched(const std::string& weight_name,
-                                                   const std::vector<std::string>& name_list, bool full_match) {
-  if (full_match) {
-    return std::find(name_list.begin(), name_list.end(), weight_name) != name_list.end();
-  }
-
-  for (const auto& name_piece : name_list) {
-    if (weight_name.find(name_piece) != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool BaseModelWeightLoader::CheckAllWeightsExist(const std::unordered_map<std::string, Tensor>& host_model_weights,
-                                                 const std::vector<std::string>& name_list) {
-  for (const auto& name : name_list) {
-    if (host_model_weights.find(name) == host_model_weights.end()) {
-      return false;
-    }
-  }
-  return true;
-}
-
 Status BaseModelWeightLoader::CopyHostTensorToDevice(const Tensor host_tensor, int dev_rank, Tensor& dev_tensor) {
   dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_tensor.dtype, host_tensor.shape, dev_rank);
 

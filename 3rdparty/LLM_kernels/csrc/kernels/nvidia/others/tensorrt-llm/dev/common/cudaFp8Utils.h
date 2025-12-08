@@ -34,7 +34,7 @@ namespace common {
 
 constexpr float FP8_E4M3_MAX = 448.0f;
 
-enum QuantizeMode {
+enum QuantizeMode : int {
   PER_CHANNEL,
   PER_TENSOR,
   PER_CHANNEL_WEIGHT_PER_TENSOR_ACT,

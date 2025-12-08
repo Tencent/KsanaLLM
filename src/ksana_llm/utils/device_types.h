@@ -224,4 +224,6 @@ struct DummyClass {};
 
 c10::ScalarType GetTorchTypeFromDataType(const DataType& data_type);
 
+DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type);
+
 }  // namespace ksana_llm

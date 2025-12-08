@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "c10/core/ScalarType.h"
+#include "ksana_llm/utils/config/model_config_parser.h"
 #include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/utils/device_utils.h"
 #include "ksana_llm/utils/dynamic_memory_pool.h"
@@ -143,9 +145,11 @@ class Tensor {
 
   Tensor* input_scales = nullptr;
   Tensor* weight_scales = nullptr;
+  Tensor* pre_quant_scales = nullptr;
 
   // input_alpha is used as a coefficient for input
   Tensor* input_alpha = nullptr;
+  float alpha = 0.f;
 
   void Fill(float f);
 };

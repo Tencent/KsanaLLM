@@ -35,8 +35,8 @@
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/others/sglang/main/elementwise/concat_mla.h"
 #include "csrc/kernels/nvidia/others/sglang/main/quantization/fp8/per_token_group_quant.h"
-#include "csrc/kernels/nvidia/others/vllm/main/tokenweave/tokenweave_fused_kernels.h"
 #include "csrc/kernels/nvidia/others/tensorrt-llm/main/communication_kernels/trtllm_all_reduce.h"
+#include "csrc/kernels/nvidia/others/vllm/main/tokenweave/tokenweave_fused_kernels.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy.h"
 #include "csrc/kernels/nvidia/paged_attention/cache_copy_flash_attn_layout.h"
 #include "csrc/kernels/nvidia/paged_attention/mla_cache_copy.h"
@@ -198,33 +198,6 @@ GET_TORCH_DATA_TYPE(half, torch::kFloat16);
 GET_TORCH_DATA_TYPE(__nv_bfloat16, torch::kBFloat16);
 GET_TORCH_DATA_TYPE(uint8_t, torch::kUInt8);
 #undef GET_TORCH_DATA_TYPE
-
-DataType GetDataTypeFromTorchType(const c10::ScalarType& torch_type) {
-  DataType data_type = TYPE_INVALID;
-  switch (torch_type) {
-    case c10::kBFloat16:
-      data_type = TYPE_BF16;
-      break;
-    case torch::kFloat16:
-      data_type = TYPE_FP16;
-      break;
-    case torch::kFloat32:
-      data_type = TYPE_FP32;
-      break;
-    case torch::kInt32:
-      data_type = TYPE_INT32;
-      break;
-    case torch::kInt8:
-      data_type = TYPE_INT8;
-      break;
-    case torch::kUInt8:
-      data_type = TYPE_UINT8;
-      break;
-    default:
-      break;
-  }
-  return data_type;
-}
 
 template <typename T, llm_kernels::nvidia::WeightType WT>
 void GetFpAIntBGroupCutlassGemmWorkspaceSize(size_t m, size_t n, size_t k, size_t& ws_bytes) {
@@ -891,7 +864,10 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
 
 Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<size_t>& permutation, Stream& stream,
                void* workspace_ptr) {
-  if (input_tensor.dtype == TYPE_INT32) {
+  if (input_tensor.dtype == TYPE_UINT8) {
+    InvokePermute<uint8_t>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
+                           stream.Get());
+  } else if (input_tensor.dtype == TYPE_INT32) {
     InvokePermute<int32_t>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
                            stream.Get());
   } else if (input_tensor.dtype == TYPE_FP32) {
