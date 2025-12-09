@@ -94,8 +94,8 @@ class WaitGroup {
   }
 
  private:
-  const bool spin_ = false;
   std::atomic_int64_t count_ = 0;
+  const bool spin_ = false;
   std::mutex mutex_;
   std::condition_variable cond_;
 };

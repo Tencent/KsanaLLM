@@ -98,8 +98,43 @@ void CheckCUDAError(T result, const char* func, const char* file, const int line
     }                                                                                                 \
   } while (0)
 
+// Adapted from
+// https://github.com/NVIDIA/nvbench/blob/main/nvbench/detail/l2flush.cuh
+// Used to flush the L2 cache for more precise measurements
+struct L2Flush {
+  __forceinline__ L2Flush() {
+    int dev_id{};
+    CUDA_CHECK(cudaGetDevice(&dev_id));
+    CUDA_CHECK(cudaDeviceGetAttribute(&l2_size_, cudaDevAttrL2CacheSize, dev_id));
+    if (l2_size_ > 0) {
+      void* buffer = l2_buffer_;
+      CUDA_CHECK(cudaMalloc(&buffer, static_cast<std::size_t>(l2_size_)));
+      l2_buffer_ = reinterpret_cast<int*>(buffer);
+    }
+  }
+
+  __forceinline__ ~L2Flush() {
+    if (l2_buffer_) {
+      CUDA_CHECK(cudaFree(l2_buffer_));
+    }
+  }
+
+  __forceinline__ void Flush(cudaStream_t stream) {
+    if (l2_size_ > 0) {
+      CUDA_CHECK(cudaMemsetAsync(l2_buffer_, 0, static_cast<std::size_t>(l2_size_), stream));
+    }
+  }
+
+ private:
+  int l2_size_{};
+  int* l2_buffer_{};
+};
+
 template <typename Func>
-float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100) {
+float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100,
+                               bool flush_l2 = true) {
+  L2Flush l2_flush;
+
   cudaEvent_t begin, end;
   CUDA_CHECK(cudaEventCreate(&begin));
   CUDA_CHECK(cudaEventCreate(&end));
@@ -110,6 +145,9 @@ float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 1
 
   CUDA_CHECK(cudaEventRecord(begin, stream));
   for (int i = 0; i < iterations; ++i) {
+    if (flush_l2) {
+      l2_flush.Flush(stream);
+    }
     func();
   }
   CUDA_CHECK(cudaEventRecord(end, stream));

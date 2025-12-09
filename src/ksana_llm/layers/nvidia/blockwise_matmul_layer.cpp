@@ -4,9 +4,9 @@
 
 #ifdef ENABLE_FP8
 #  include "ksana_llm/layers/blockwise_matmul_layer.h"
+
 #  include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
 #  include "ksana_llm/profiler/timer.h"
-#  include "ksana_llm/runtime/threadpool.h"
 #  include "ksana_llm/utils/search_status.h"
 #  include "ksana_llm/utils/singleton.h"
 #  include "ksana_llm/utils/utils.h"
@@ -69,11 +69,12 @@ size_t BlockwiseMatMulLayer::GetCachedCutlassBufferSize() {
 }
 
 Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const RuntimeConfig& runtime_config) {
-  const auto start_time = ProfileTimer::GetCurrentTime();
   if (!deepgemm_enabled_) {
     SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Cutlass);
     return Status();
   }
+
+  const auto start_time = ProfileTimer::GetCurrentTimeInMs();
 
   static std::mutex g_mtx;
   std::lock_guard<std::mutex> guard(g_mtx);
@@ -81,11 +82,11 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
   // Check if GEMM selection thresholds are already cached
   if (Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->IsGemmSelectionThresholdContain(inter_data_type_, max_m_,
                                                                                              k_, n_)) {
-    auto [deepgemm_threshold, swap_ab_threshold] =
+    auto [deepgemm_threshold, swap_ab_thresholds] =
         Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->GetGemmSelectionThreshold(inter_data_type_, max_m_, k_,
                                                                                          n_);
     deepgemm_max_m_threshold_ = deepgemm_threshold;
-    swap_ab_max_m_threshold_ = swap_ab_threshold;
+    swap_ab_max_m_thresholds_ = std::move(swap_ab_thresholds);
     KLLM_LOG_DEBUG << fmt::format("Reusing Profile BlockwiseMatMulLayer in rank:{}, ({},{},{},{})", rank_,
                                   inter_data_type_, max_m_, k_, n_);
   } else {
@@ -99,25 +100,26 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
     const size_t kUseSmallStepThreshold = 2048;
 
     // generate random input and output
-    auto input = torch::randn({max_m_, k_}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBFloat16));
+    auto input = torch::randn({static_cast<int64_t>(max_m_), static_cast<int64_t>(k_)},
+                              torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBFloat16));
     Tensor output_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {max_m_, n_}, rank_);
     // 自适应GEMM算子选择阈值搜索算法
     // 目标：通过性能测试确定三种GEMM实现（cutlass、deepgemm、deepgemm_swap_ab）的最优切换阈值
     //
     // 搜索策略：
-    //   1. 从 m=1 开始，逐步增大 m 值
+    //   1. 从 m=kAlignSize 开始，逐步增大 m 值
     //   2. 对每个 m 值，分别测量三种算子的执行时间
-    //   3. 当 deepgemm_swap_ab 性能优于 deepgemm 时，更新 swap_ab_max_m_threshold_
-    //   4. 当 deepgemm 或 deepgemm_swap_ab 性能优于 cutlass 时，更新 deepgemm_max_m_threshold_
-    //   5. 当 deepgemm 和 deepgemm_swap_ab 均不再优于 cutlass 时，终止搜索
+    //   3. 当 deepgemm 和 deepgemm_swap_ab 均不优于 cutlass 时，终止搜索
+    //   4. 否则更新 deepgemm_max_m_threshold_
+    //   5. 当 deepgemm_swap_ab 性能优于 deepgemm 时，更新 swap_ab_max_m_threshold_
     //
-    // 算法假设（基于线性模型 t = f(m) = k*m + b）：
-    //   1. 执行时间随 m 增长呈近似线性关系
-    //   2. 三种算子的时间增长率（斜率 k）不同：
-    //      deepgemm_swap_ab > deepgemm > cutlass
-    //   3. 三种算子的初始开销（截距 b）不同：
-    //      deepgemm_swap_ab < deepgemm < cutlass
-    //   4. 性能曲线的交点即为最优切换阈值
+    // 算法假设：
+    //   1. m 越大，cutlass 相比 deepgemm 优势越大，因此当 m 大于
+    //      deepgemm_max_m_threshold_ 时使用 cutlass
+    //   2. deepgemm 使用的 wgmma 指令固定 m=kWgmmaBlockM_=64，导致执行时间按 64 呈阶梯式增长。
+    //      在每个 64 的分段内，m 越大，deepgemm 相比 deepgemm_swap_ab 优势越大，因此当 m
+    //      大于对应分段的 swap_ab_max_m_threshold_ 时使用 deepgemm，否则使用 deepgemm_swap_ab。
+    //      为避免段数过多，当 m 大于 kUseSmallStepThreshold=2048 时，固定使用 deepgemm
     size_t m = kAlignSize_;
     while (m <= max_m_) {
       Tensor input_tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {m, k_}, rank_,
@@ -145,30 +147,36 @@ Status BlockwiseMatMulLayer::Preprocess(const ModelConfig& model_config_, const 
       float deepgemm_swap_ab_time = MeasureCudaExecutionTime(
           deepgemm_swap_ab_kernel, context_->GetComputeStreams()[rank_].Get(), kWarmupIters, kPerfIters);
 
-      if (deepgemm_swap_ab_time < deepgemm_time) {
-        swap_ab_max_m_threshold_ = m;
-      }
       if (std::min(deepgemm_time, deepgemm_swap_ab_time) < cutlass_time) {
         deepgemm_max_m_threshold_ = m;
       } else {
         break;
       }
+      if (m <= kUseSmallStepThreshold) {
+        if ((m - kAlignSize_) / kWgmmaBlockM_ == swap_ab_max_m_thresholds_.size()) {
+          swap_ab_max_m_thresholds_.push_back((m - kAlignSize_) / kWgmmaBlockM_ * kWgmmaBlockM_);
+        }
+        if (deepgemm_swap_ab_time < deepgemm_time) {
+          swap_ab_max_m_thresholds_.back() = m;
+        }
+      }
+
       m += m < kUseSmallStepThreshold ? std::min(m, kSmallStep) : m;
     }
 
     // Cache the computed thresholds
     Singleton<BlockwiseMatmulSearchStatus>::GetInstance()->AddGemmSelectionThreshold(
-        inter_data_type_, max_m_, k_, n_, deepgemm_max_m_threshold_, swap_ab_max_m_threshold_);
+        inter_data_type_, max_m_, k_, n_, deepgemm_max_m_threshold_, swap_ab_max_m_thresholds_);
     KLLM_LOG_INFO << fmt::format(
-        "Set deepgemm_max_m_threshold_ to {} and swap_ab_max_m_threshold_ to {} "
+        "Set deepgemm_max_m_threshold_ to {} and swap_ab_max_m_thresholds_ to {} "
         "for max_m={}, k={}, n={}",
-        deepgemm_max_m_threshold_, swap_ab_max_m_threshold_, max_m_, k_, n_);
+        deepgemm_max_m_threshold_, Vector2Str(swap_ab_max_m_thresholds_), max_m_, k_, n_);
   }
 
   BuildDeepGemmKernels();
   SetGemmType(BlockwiseMatMulLayer::Fp8GemmType::Dynamic);
-  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer Preprocess cost time: {} s", rank_,
-                               ProfileTimer::GetCurrentTime() - start_time);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer Preprocess cost time: {} ms", rank_,
+                               ProfileTimer::GetCurrentTimeInMs() - start_time);
   return Status();
 }
 
@@ -176,29 +184,31 @@ void BlockwiseMatMulLayer::BuildDeepGemmKernels() {
   if (!deepgemm_enabled_) {
     return;
   }
-  const auto start_time = ProfileTimer::GetCurrentTime();
-  if (deepgemm_max_m_threshold_ % kAlignSize_ != 0 || swap_ab_max_m_threshold_ % kAlignSize_ != 0) {
-    KLLM_THROW(fmt::format("deepgemm_max_m_threshold_ {} or swap_ab_max_m_threshold_ {} is not aligned by {}",
-                           deepgemm_max_m_threshold_, swap_ab_max_m_threshold_, kAlignSize_));
-  }
+
+  const auto start_time = ProfileTimer::GetCurrentTimeInMs();
 
   // Build kernel
   static std::mutex g_mtx;
   std::lock_guard<std::mutex> guard(g_mtx);
 
-  // Build SwapAB kernel
-  for (size_t m = kAlignSize_; m <= swap_ab_max_m_threshold_; m += kAlignSize_) {
-    const size_t aligned_m = RoundUp(m, kAlignSize_);
-    deepgemm_wrapper_->BuildGemmSwapABKernel(aligned_m, n_, k_);
-  }
-  // Build regular kernel
-  for (size_t m = swap_ab_max_m_threshold_ + kAlignSize_; m <= deepgemm_max_m_threshold_; m += kAlignSize_) {
-    const size_t aligned_m = RoundUp(m, kAlignSize_);
-    deepgemm_wrapper_->BuildGemmKernel(aligned_m, n_, k_);
+  static_assert(kWgmmaBlockM_ % kAlignSize_ == 0);
+  for (size_t begin_m = kAlignSize_; begin_m <= deepgemm_max_m_threshold_; begin_m += kWgmmaBlockM_) {
+    const size_t swap_ab_max_m_threshold = begin_m > swap_ab_max_m_thresholds_.back()
+                                               ? begin_m - kAlignSize_
+                                               : swap_ab_max_m_thresholds_[(begin_m - kAlignSize_) / kWgmmaBlockM_];
+    // Build SwapAB kernel
+    for (size_t m = begin_m; m <= swap_ab_max_m_threshold; m += kAlignSize_) {
+      deepgemm_wrapper_->BuildGemmSwapABKernel(m, n_, k_);
+    }
+    // Build regular kernel
+    for (size_t m = swap_ab_max_m_threshold + kAlignSize_;
+         m < begin_m + kWgmmaBlockM_ && m <= deepgemm_max_m_threshold_; m += kAlignSize_) {
+      deepgemm_wrapper_->BuildGemmKernel(m, n_, k_);
+    }
   }
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer BuildDeepGemmKernels cost time: {} s", rank_,
-                               ProfileTimer::GetCurrentTime() - start_time);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] BlockwiseMatMulLayer BuildDeepGemmKernels cost time: {} ms", rank_,
+                               ProfileTimer::GetCurrentTimeInMs() - start_time);
 }
 
 void BlockwiseMatMulLayer::SetGemmType(BlockwiseMatMulLayer::Fp8GemmType gemm_type) { gemm_type_ = gemm_type; }
@@ -207,13 +217,13 @@ BlockwiseMatMulLayer::Fp8GemmType BlockwiseMatMulLayer::PickGemmType(size_t m) {
   if (gemm_type_ != BlockwiseMatMulLayer::Fp8GemmType::Dynamic) {
     return gemm_type_;
   }
-  size_t alined_m = RoundUp(m, kAlignSize_);
-  if (alined_m <= swap_ab_max_m_threshold_) {
-    return BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB;
-  } else if (alined_m <= deepgemm_max_m_threshold_) {
+  if (const size_t aligned_m = RoundUp(m, kAlignSize_); aligned_m > deepgemm_max_m_threshold_) {
+    return BlockwiseMatMulLayer::Fp8GemmType::Cutlass;
+  } else if (aligned_m > swap_ab_max_m_thresholds_.back() ||
+             aligned_m > swap_ab_max_m_thresholds_[(aligned_m - kAlignSize_) / kWgmmaBlockM_]) {
     return BlockwiseMatMulLayer::Fp8GemmType::DeepGemm;
   } else {
-    return BlockwiseMatMulLayer::Fp8GemmType::Cutlass;
+    return BlockwiseMatMulLayer::Fp8GemmType::DeepGemmSwapAB;
   }
 }
 
@@ -278,12 +288,6 @@ Status BlockwiseMatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, 
                          cutlass_buffer, cutlass_gemm_workspace_size_);
       break;
     }
-    case BlockwiseMatMulLayer::Fp8GemmType::Dynamic:
-      KLLM_THROW(
-          fmt::format("Dynamic gemm type should have been resolved to a specific type. "
-                      "Current m={}, deepgemm_max_m_threshold_={}, swap_ab_max_m_threshold_={}",
-                      m, deepgemm_max_m_threshold_, swap_ab_max_m_threshold_));
-      break;
     default:
       KLLM_THROW(fmt::format("Invalid or unsupported gemm type: {}", static_cast<int>(gemm_type)));
       break;
