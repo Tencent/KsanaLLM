@@ -198,7 +198,7 @@ void Expand(void* input, void* output, const int m, const int expand_size, const
 
 template <typename T>
 void CustomAllReduceInit(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, int total_ranks,
-                         bool is_full_nvlink, uint32_t root_rank);
+                         bool is_full_nvlink, uint32_t root_rank, bool is_group_custom_all_reduce);
 
 template <typename T>
 void CustomAllReduceRegisterSignalBuffer(void* ptr, void** signals);

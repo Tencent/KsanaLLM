@@ -134,30 +134,40 @@ static DINLINE FlagType ld_flag_volatile(FlagType* flag_addr) {
   return flag;
 }
 
+template <bool need_fence>
+DINLINE void barrier_sync(Signal* self_sg, RankSignals sg, int rank) {
+  auto val = self_sg->self_counter[blockIdx.x][threadIdx.x] += 1;
+  auto peer_counter_ptr = &sg.signals[threadIdx.x]->peer_counter[val % 2][blockIdx.x][rank];
+  auto self_counter_ptr = &self_sg->peer_counter[val % 2][blockIdx.x][threadIdx.x];
+  if constexpr (need_fence) {
+    st_flag_release(peer_counter_ptr, val);
+    while (ld_flag_acquire(self_counter_ptr) != val)
+      ;
+  } else {
+    st_flag_volatile(peer_counter_ptr, val);
+    while (ld_flag_volatile(self_counter_ptr) != val)
+      ;
+  }
+}
+
 // is_start: whether this is the very first synchronization barrier.
 // need_fence: whether a memory fence is needed. If true, a release-acquire
 // semantic is used to enforce memory access order before and after this
 // barrier.
-template <int ngpus, bool is_start, bool need_fence = false>
+template <int ngpus, bool is_start, bool need_fence = false, bool is_group_custom_all_reduce = false>
 DINLINE void multi_gpu_barrier(const RankSignals& sg, Signal* self_sg, int rank, uint32_t root_rank) {
   if constexpr (!is_start) __syncthreads();
   static_assert(!(is_start && need_fence));  // 开始屏障不应该需要内存屏障。
-  if ((threadIdx.x >= root_rank) && (threadIdx.x - root_rank < ngpus)) {
-    // Increment the counter. Technically we only need one counter, but we use
-    // multiple per block to eliminate the need to share the counter via smem.
-    auto val = self_sg->self_counter[blockIdx.x][threadIdx.x] += 1;
-    // Write the expected counter value to peer and wait for correct value from
-    // peer.
-    auto peer_counter_ptr = &sg.signals[threadIdx.x]->peer_counter[val % 2][blockIdx.x][rank];
-    auto self_counter_ptr = &self_sg->peer_counter[val % 2][blockIdx.x][threadIdx.x];
-    if constexpr (need_fence) {
-      st_flag_release(peer_counter_ptr, val);
-      while (ld_flag_acquire(self_counter_ptr) != val)
-        ;
-    } else {
-      st_flag_volatile(peer_counter_ptr, val);
-      while (ld_flag_volatile(self_counter_ptr) != val)
-        ;
+  // For attention data parallelism, we do all reduce as group allreduce, which is ued in DeepSeek and Kimi
+  // For Qwen and llama, we use normal custom all reduce.
+  if constexpr (is_group_custom_all_reduce) {
+    if ((threadIdx.x >= root_rank) && (threadIdx.x - root_rank < ngpus)) {
+      barrier_sync<need_fence>(self_sg, sg, rank);
+    }
+  }
+  else {
+    if (threadIdx.x < ngpus) {
+      barrier_sync<need_fence>(self_sg, sg, rank);
     }
   }
   if constexpr (is_start || need_fence) __syncthreads();
@@ -173,7 +183,17 @@ DINLINE P packed_reduce(const P* ptrs[], int idx, uint32_t root_rank) {
   return downcast<P>(tmp);
 }
 
-template <typename T, int ngpus>
+template <typename P, int ngpus, typename A>
+DINLINE P packed_reduce_no_group(const P* ptrs[], int idx) {
+  A tmp = upcast(ptrs[0][idx]);
+#pragma unroll
+  for (int i = 1; i < ngpus; i++) {
+    packed_assign_add(tmp, upcast(ptrs[i][idx]));
+  }
+  return downcast<P>(tmp);
+}
+
+template <typename T, int ngpus, bool is_group_custom_all_reduce = false>
 __global__ void __launch_bounds__(512, 1)
     cross_device_reduce_1stage(RankData* _dp, RankSignals sg, Signal* self_sg, T* __restrict__ result, int rank,
                                uint32_t root_rank, int size) {
@@ -182,12 +202,16 @@ __global__ void __launch_bounds__(512, 1)
   // note: we don't reorder the address so the accumulation order is the same
   // for all ranks, ensuring bitwise identical results
   auto dp = *_dp;
-  multi_gpu_barrier<ngpus, true>(sg, self_sg, rank, root_rank);
+  multi_gpu_barrier<ngpus, true, false, is_group_custom_all_reduce>(sg, self_sg, rank, root_rank);
   // do the actual reduction
   for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < size; idx += gridDim.x * blockDim.x) {
-    ((P*)result)[idx] = packed_reduce<P, ngpus, A>((const P**)&dp.ptrs[0], idx, root_rank);
+    if constexpr (is_group_custom_all_reduce) {
+      ((P*)result)[idx] = packed_reduce<P, ngpus, A>((const P**)&dp.ptrs[0], idx, root_rank);
+    } else {
+      ((P*)result)[idx] = packed_reduce_no_group<P, ngpus, A>((const P**)&dp.ptrs[0], idx);
+    }
   }
-  multi_gpu_barrier<ngpus, false>(sg, self_sg, rank, root_rank);
+  multi_gpu_barrier<ngpus, false, false, is_group_custom_all_reduce>(sg, self_sg, rank, root_rank);
 }
 
 template <typename P>
@@ -195,7 +219,7 @@ DINLINE P* get_tmp_buf(Signal* sg) {
   return (P*)(((Signal*)sg) + 1);
 }
 
-template <typename T, int ngpus>
+template <typename T, int ngpus, bool is_group_custom_all_reduce = true>
 __global__ void __launch_bounds__(512, 1)
     cross_device_reduce_2stage(RankData* _dp, RankSignals sg, Signal* self_sg, T* __restrict__ result, int rank,
                                uint32_t root_rank, int size) {
@@ -216,12 +240,12 @@ __global__ void __launch_bounds__(512, 1)
     tmps[i] = get_tmp_buf<P>(sg.signals[target]);
   }
   auto tmp_out = tmps[0];
-  multi_gpu_barrier<ngpus, true>(sg, self_sg, rank, root_rank);
+  multi_gpu_barrier<ngpus, true, false, is_group_custom_all_reduce>(sg, self_sg, rank, root_rank);
   // stage 1: reduce scatter
   for (int idx = start + tid; idx < end; idx += stride) {
     tmp_out[idx - start] = packed_reduce<P, ngpus, A>(ptrs, idx, 0);
   }
-  multi_gpu_barrier<ngpus, false, true>(sg, self_sg, rank, root_rank);
+  multi_gpu_barrier<ngpus, false, true, is_group_custom_all_reduce>(sg, self_sg, rank, root_rank);
 
   // stage 2: allgather. Note: it's important to match the tid between
   // the two stages, because visibility across devices is only guaranteed
@@ -248,12 +272,13 @@ __global__ void __launch_bounds__(512, 1)
 
 // Note: this class does not own any device memory. Any required buffers
 // are passed in from the constructor.
-CustomAllreduce::CustomAllreduce(void* rank_data, size_t rank_data_sz, int rank, int world_size, bool full_nvlink,
-                                 uint32_t root_rank)
+CustomAllreduce::CustomAllreduce(void* rank_data, size_t rank_data_sz, int rank, int world_size,
+                                 bool full_nvlink, uint32_t root_rank, bool is_group_custom_all_reduce)
     : rank_(rank),
       world_size_(world_size),
       full_nvlink_(full_nvlink),
       root_rank_(root_rank),
+      is_group_custom_all_reduce_(is_group_custom_all_reduce),
       d_rank_data_base_(reinterpret_cast<RankData*>(rank_data)),
       d_rank_data_end_(d_rank_data_base_ + rank_data_sz / sizeof(RankData)) {
   saved_d_rank_data_base_ = d_rank_data_base_;
@@ -263,7 +288,11 @@ CustomAllreduce::CustomAllreduce(void* rank_data, size_t rank_data_sz, int rank,
 void CustomAllreduce::RegisterSignalBuffer(Signal** signals) {
   self_sg_ = signals[rank_];
   for (int i = 0; i < world_size_; i++) {
-    sg_.signals[i + root_rank_] = signals[i + root_rank_];
+    if (is_group_custom_all_reduce_) {
+      sg_.signals[i + root_rank_] = signals[i + root_rank_];
+    } else {
+      sg_.signals[i] = signals[i];
+    }
   }
 }
 
@@ -280,8 +309,14 @@ void CustomAllreduce::RegisterBuffer(void** ptrs, cudaStream_t& stream) {
 
   CheckRankDataCapacity();
   RankData data;
-  for (uint32_t i = root_rank_; i < (root_rank_ + world_size_); ++i) {
-    data.ptrs[i] = ptrs[i];
+  if (is_group_custom_all_reduce_) {
+    for (int i = root_rank_; i < (root_rank_ + world_size_); ++i) {
+      data.ptrs[i] = ptrs[i];
+    }
+  } else {
+    for (int i = 0; i < world_size_; ++i) {
+      data.ptrs[i] = ptrs[i];
+    }
   }
   auto d_data = d_rank_data_base_++;
   CHECK_NVIDIA_CUDA_ERROR(cudaMemcpyAsync(d_data, &data, sizeof(RankData), cudaMemcpyHostToDevice, stream));
@@ -324,22 +359,36 @@ void CustomAllreduce::AllReduce(cudaStream_t stream, T* input, T* output, int si
   size /= d;
   auto bytes = size * sizeof(typename packed_t<T>::P);
   int blocks = std::min(block_limit, (size + threads - 1) / threads);
-#define KL(ngpus, name) \
-  name<T, ngpus><<<blocks, threads, 0, stream>>>(ptrs, sg_, self_sg_, output, rank_, root_rank_, size);
+  
+  // launch group custom all reduce with root_rank
+#define KL_GROUP(ngpus, name) \
+  name<T, ngpus, true><<<blocks, threads, 0, stream>>>(ptrs, sg_, self_sg_, output, rank_, root_rank_, size);
+  // launch no group custom all reduce with no root_rank
+#define KL_NO_GROUP(ngpus, name) \
+  name<T, ngpus, false><<<blocks, threads, 0, stream>>>(ptrs, sg_, self_sg_, output, rank_, 0, size);
+
   // TODO(hanzhi713): Threshold is different for A100 and H100.
   // Add per device threshold.
-#define REDUCE_CASE(ngpus)                                                                        \
-  case ngpus: {                                                                                   \
-    if (world_size_ == 2) {                                                                       \
-      KL(ngpus, cross_device_reduce_1stage);                                                      \
-    } else if (full_nvlink_) {                                                                    \
-      if ((world_size_ <= 4 && bytes < 512 * 1024) || (world_size_ <= 8 && bytes < 256 * 1024)) { \
-        KL(ngpus, cross_device_reduce_1stage);                                                    \
-      } else {                                                                                    \
-        KL(ngpus, cross_device_reduce_2stage);                                                    \
-      }                                                                                           \
-    }                                                                                             \
-    break;                                                                                        \
+#define REDUCE_CASE(ngpus)                                                                          \
+  case ngpus: {                                                                                     \
+    if (world_size_ == 2) {                                                                         \
+      if (is_group_custom_all_reduce_) {                                                            \
+        KL_GROUP(ngpus, cross_device_reduce_1stage);                                                \
+      } else {                                                                                      \
+        KL_NO_GROUP(ngpus, cross_device_reduce_1stage);                                             \
+      }                                                                                             \
+    } else if (full_nvlink_) {                                                                      \
+      if ((world_size_ <= 4 && bytes < 512 * 1024) || (world_size_ <= 8 && bytes < 256 * 1024)) {   \
+        if (is_group_custom_all_reduce_) {                                                          \
+          KL_GROUP(ngpus, cross_device_reduce_1stage);                                              \
+        } else {                                                                                    \
+          KL_NO_GROUP(ngpus, cross_device_reduce_1stage);                                           \
+        }                                                                                           \
+      } else {                                                                                      \
+        KL_GROUP(ngpus, cross_device_reduce_2stage);                                                \
+      }                                                                                             \
+    }                                                                                               \
+    break;                                                                                          \
   }
 
   switch (world_size_) {

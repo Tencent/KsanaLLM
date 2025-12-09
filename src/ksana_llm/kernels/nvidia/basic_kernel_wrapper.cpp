@@ -604,14 +604,15 @@ INVOKE_EXPAND(__nv_bfloat16);
 // rank_data & rank_data_sz: 当前GPU的中间结果数据
 template <typename T>
 void CustomAllReduceInit(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, int total_ranks,
-                         bool is_full_nvlink, uint32_t root_rank) {
+                         bool is_full_nvlink, uint32_t root_rank, bool is_group_custom_all_reduce) {
   *ptr = new llm_kernels::nvidia::CustomAllreduce(rank_data, rank_data_sz, cur_rank, total_ranks, is_full_nvlink,
-                                                  root_rank);
+                                                  root_rank, is_group_custom_all_reduce);
 }
 
-#define CUSTOM_ALL_REDUCE_INIT(T)                                                                      \
-  template void CustomAllReduceInit<T>(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank, \
-                                       int total_ranks, bool is_full_nvlink, uint32_t root_rank);
+#define CUSTOM_ALL_REDUCE_INIT(T)                                                                                      \
+  template void CustomAllReduceInit<T>(void** ptr, void* rank_data, size_t rank_data_sz, int cur_rank,                 \
+                                       int total_ranks, bool is_full_nvlink, uint32_t root_rank,                       \
+                                       bool is_group_custom_all_reduce);
 CUSTOM_ALL_REDUCE_INIT(float);
 CUSTOM_ALL_REDUCE_INIT(half);
 CUSTOM_ALL_REDUCE_INIT(__nv_bfloat16);

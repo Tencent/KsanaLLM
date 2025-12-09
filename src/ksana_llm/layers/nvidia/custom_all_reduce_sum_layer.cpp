@@ -134,7 +134,8 @@ Status CustomAllReduceSumLayer::ForwardT(const std::vector<Tensor>& input_tensor
     // Initialize the workspace on the first forward
     if (!is_init_) {
       // TODO(jinxcwu): layer的init是卡间串行的，但allreduce的init需要卡间并行，可以考虑并行创建commonmodel
-      CustomAllReduceInit<T>(&reduce_op_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_, root_rank_);
+      CustomAllReduceInit<T>(&reduce_op_, rank_data_, rank_data_sz_, rank_, world_size_, is_full_nvlink_, root_rank_,
+                             is_group_custom_all_reduce_);
 
       // Should register new signal buffer every time later.
       CustomAllReduceRegisterSignalBuffer<T>(reduce_op_, signals_);
