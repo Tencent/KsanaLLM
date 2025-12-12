@@ -168,7 +168,8 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 
   if (context_->IsChief()) {
     lm_head_ = std::make_shared<Linear>("lm_head.weight", layer_creation_context_,
-                                        model_creation_config.attn_config.model_config.quant_config.backend);
+                                        model_creation_config.attn_config.model_config.quant_config.backend,
+                                        /*skip_quant=*/false, MatMulLayerType::kLmHead);
     if (model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM) {
       lm_head_prenorm_ =
           std::make_shared<Layernorm>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_);

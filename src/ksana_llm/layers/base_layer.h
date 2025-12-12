@@ -16,6 +16,11 @@
 
 namespace ksana_llm {
 
+enum class MatMulLayerType {
+  kGeneral = 0,  // Default matmul layer
+  kLmHead = 1,   // LmHead specific optimization (strided batched gemm for decode)
+};
+
 #ifdef ENABLE_CUDA
 using KTensor = llm_kernels::nvidia::tensorrt_llm::dev::Tensor;
 using KScalarType = llm_kernels::nvidia::tensorrt_llm::dev::ScalarType;

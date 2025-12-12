@@ -16,7 +16,6 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   cublas_workspace_ptr_ = nullptr;
   cublaslt_algo_ptr_ = nullptr;
   inter_data_type_ = runtime_config.inter_data_type;
-
   return Status();
 }
 
@@ -58,12 +57,16 @@ Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
     }
   }
 
-  InvokeMatMul<T>(
-      context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_],
-      static_cast<int>(input_tensors[0].shape[0]), static_cast<int>(input_tensors[1].shape[1]),
-      static_cast<int>(input_tensors[0].shape[1]), reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>()),
-      reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>()), output_tensors[0].GetPtr<void>(),
-      context_->GetComputeStreams()[rank_].Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
+  const int m = static_cast<int>(input_tensors[0].shape[0]);
+  const int n = static_cast<int>(input_tensors[1].shape[1]);
+  const int k = static_cast<int>(input_tensors[0].shape[1]);
+  const void* a_ptr = reinterpret_cast<const void*>(input_tensors[0].GetPtr<void>());
+  const void* b_ptr = reinterpret_cast<const void*>(input_tensors[1].GetPtr<void>());
+  void* c_ptr = output_tensors[0].GetPtr<void>();
+
+  InvokeMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_], m, n, k, a_ptr,
+                  b_ptr, c_ptr, context_->GetComputeStreams()[rank_].Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_,
+                  cublas_workspace_size_);
 
   output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
   output_tensors[0].dtype = input_tensors[0].dtype;

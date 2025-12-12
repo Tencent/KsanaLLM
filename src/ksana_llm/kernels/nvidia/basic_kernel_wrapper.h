@@ -134,6 +134,13 @@ void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle
                   cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0);
 
 template <typename T>
+void InvokeStridedBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
+                                cublasOperation_t transa, cublasOperation_t transb,
+                                int m, int n, int k, const void* a_ptr, int lda, int64_t stride_a,
+                                const void* b_ptr, int ldb, int64_t stride_b, void* c_ptr, int ldc,
+                                int64_t stride_c, int batch_count, float alpha, float beta);
+
+template <typename T>
 void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m, int n,
                          int k, int lda, int ldb, int ldc, int64_t batch_offset_a, int64_t batch_offset_b,
                          int64_t batch_offset_c, const void* a_ptr, const void* b_ptr, void* c_ptr,

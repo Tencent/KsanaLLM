@@ -16,6 +16,7 @@
 #include "ksana_llm/layers/attention_layer.h"
 #include "ksana_llm/layers/batched_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
+#include "ksana_llm/layers/lm_head_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_moe_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/finegrained_mixed_dtype_gemm_layer.h"
@@ -2337,5 +2338,92 @@ TEST_F(LayerTest, FlashInferResourceManagerTest) {
   GTEST_SKIP() << "FlashInferResourceManager requires CUDA support";
 #endif
 }
+
+TEST_F(LayerTest, LmHeadMatMulLayerTest) {
+#ifdef ENABLE_CUDA
+  constexpr int kDeviceRank = 0;
+  using dtype = half_float::half;
+  using device_type = half;
+  runtime_config.inter_data_type = TYPE_FP16;
+
+  // Test parameters simulating lm_head GEMM
+  const size_t hidden_size = 4096;
+  const size_t vocab_size = 32000;
+
+  LmHeadMatMulLayer lm_head_layer;
+  lm_head_layer.Init({}, runtime_config, context_, kDeviceRank);
+
+  // Test case 1: Decode case (m=1), should use strided batched GEMM
+  {
+    const size_t m = 1;
+    Tensor input = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, hidden_size}, kDeviceRank);
+    Tensor weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {hidden_size, vocab_size}, kDeviceRank);
+    Tensor output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, vocab_size}, kDeviceRank);
+
+    // Initialize input with random data
+    std::vector<dtype> input_host(input.GetElementNumber());
+    std::vector<dtype> weight_host(weight.GetElementNumber());
+    std::default_random_engine eng(42);
+    std::uniform_real_distribution<float> random_range(-0.1f, 0.1f);
+
+    for (size_t i = 0; i < input.GetElementNumber(); ++i) {
+      input_host[i] = static_cast<dtype>(random_range(eng));
+    }
+    for (size_t i = 0; i < weight.GetElementNumber(); ++i) {
+      weight_host[i] = static_cast<dtype>(random_range(eng));
+    }
+
+    MemcpyAsync(input.GetPtr<void>(), input_host.data(), input.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[kDeviceRank]);
+    MemcpyAsync(weight.GetPtr<void>(), weight_host.data(), weight.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[kDeviceRank]);
+    StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
+
+    std::vector<Tensor> output_tensors = {output};
+    EXPECT_TRUE(lm_head_layer.Forward({input, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+    // Verify output shape
+    EXPECT_EQ(output_tensors[0].shape[0], m);
+    EXPECT_EQ(output_tensors[0].shape[1], vocab_size);
+  }
+
+  // Test case 2: Prefill case (m>1), should use standard GEMM
+  {
+    const size_t m = 128;
+    Tensor input = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, hidden_size}, kDeviceRank);
+    Tensor weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {hidden_size, vocab_size}, kDeviceRank);
+    Tensor output = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {m, vocab_size}, kDeviceRank);
+
+    // Initialize with random data
+    std::vector<dtype> input_host(input.GetElementNumber());
+    std::vector<dtype> weight_host(weight.GetElementNumber());
+    std::default_random_engine eng(123);
+    std::uniform_real_distribution<float> random_range(-0.1f, 0.1f);
+
+    for (size_t i = 0; i < input.GetElementNumber(); ++i) {
+      input_host[i] = static_cast<dtype>(random_range(eng));
+    }
+    for (size_t i = 0; i < weight.GetElementNumber(); ++i) {
+      weight_host[i] = static_cast<dtype>(random_range(eng));
+    }
+
+    MemcpyAsync(input.GetPtr<void>(), input_host.data(), input.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[kDeviceRank]);
+    MemcpyAsync(weight.GetPtr<void>(), weight_host.data(), weight.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE,
+                context_->GetMemoryManageStreams()[kDeviceRank]);
+    StreamSynchronize(context_->GetMemoryManageStreams()[kDeviceRank]);
+
+    std::vector<Tensor> output_tensors = {output};
+    EXPECT_TRUE(lm_head_layer.Forward({input, weight}, output_tensors).OK());
+    StreamSynchronize(context_->GetComputeStreams()[kDeviceRank]);
+
+    // Verify output shape
+    EXPECT_EQ(output_tensors[0].shape[0], m);
+    EXPECT_EQ(output_tensors[0].shape[1], vocab_size);
+  }
+#endif
+}
+
 
 }  // namespace ksana_llm

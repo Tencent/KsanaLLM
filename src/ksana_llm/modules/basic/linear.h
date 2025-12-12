@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "ksana_llm/layers/base_layer.h"
 #include "ksana_llm/models/base/layer_creation_context.h"
 
 namespace ksana_llm {
@@ -15,7 +16,8 @@ class Linear {
  public:
   // Disable a default constructor
   Linear(const std::string& weight_name, const LayerCreationContext& creation_context,
-         const LinearComputeBackend& linear_compute_backend, const bool skip_quant = false);
+         const LinearComputeBackend& linear_compute_backend, const bool skip_quant = false,
+         MatMulLayerType layer_type = MatMulLayerType::kGeneral);
 
   ~Linear();
   Status Forward(Tensor input_tensor, std::vector<Tensor>& output_tensors);

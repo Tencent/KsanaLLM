@@ -1,0 +1,25 @@
+/* Copyright 2025 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+#pragma once
+
+#include "ksana_llm/layers/base_layer.h"
+
+namespace ksana_llm {
+
+// Specialized matmul layer for lm_head GEMM.
+// Uses strided batched GEMM for decode case (m=1, n>>>k) for better performance.
+class LmHeadMatMulLayer : public BaseLayer {
+ public:
+  virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                      std::shared_ptr<Context> context, int rank) override;
+
+  virtual Status Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) override;
+
+ private:
+  template <typename T>
+  Status ForwardT(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+};
+
+}  // namespace ksana_llm
+

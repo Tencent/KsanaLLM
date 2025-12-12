@@ -374,6 +374,22 @@ INVOKE_MATMUL(half, CUDA_R_16F);
 INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 #undef INVOKE_MATMUL
 
+#define INVOKE_STRIDED_BATCHED_GEMM(T, CUDA_TYPE)                                                                      \
+  template <>                                                                                                          \
+  void InvokeStridedBatchedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,                   \
+                                     cublasOperation_t transa, cublasOperation_t transb,                               \
+                                     int m, int n, int k, const void* a_ptr, int lda, int64_t stride_a,                \
+                                     const void* b_ptr, int ldb, int64_t stride_b, void* c_ptr, int ldc,               \
+                                     int64_t stride_c, int batch_count, float alpha, float beta) {                     \
+    CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeCublasStridedBatchedGemm(                                         \
+        cublas_handle, cublaslt_handle, transb, transa, n, m, k, b_ptr, ldb, stride_b, CUDA_TYPE, a_ptr,               \
+        lda, stride_a, CUDA_TYPE, c_ptr, ldc, stride_c, CUDA_TYPE, batch_count, CUDA_R_32F, alpha, beta));             \
+  }
+INVOKE_STRIDED_BATCHED_GEMM(float, CUDA_R_32F);
+INVOKE_STRIDED_BATCHED_GEMM(half, CUDA_R_16F);
+INVOKE_STRIDED_BATCHED_GEMM(__nv_bfloat16, CUDA_R_16BF);
+#undef INVOKE_STRIDED_BATCHED_GEMM
+
 #define INVOKE_BATCHED_GEMM(T, CUDA_TYPE)                                                                              \
   template <>                                                                                                          \
   void InvokeBatchedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m,   \
