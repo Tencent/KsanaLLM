@@ -388,6 +388,12 @@ python -c "import ksana_llm"
 
 打开FP8 E4M3 KV Cache量化时，为保证推理精度需要提供缩放因子。想要获取更详细的信息，请参考: [Optional KV Scale Guide](src/ksana_llm/python/kv_scale_files/README.md)。
 
+#### 6.4 Prefill-Decode分离（PD分离）
+
+一念LLM支持Prefill-Decode分离架构，将预填充（prefill）和解码（decode）阶段分离到不同的节点组，以实现更好的资源利用和性能优化。
+
+详细的启动配置说明，请参考：[PD分离启动指南](docs/pd_separation_startup.md)
+
 #### 7. 联系我们
 ##### 微信群
 <img src=docs/img/webchat-github.jpg width="200px">

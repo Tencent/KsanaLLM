@@ -405,6 +405,12 @@ When enabling FP8 E4M3 KV Cache quantization, it is necessary to provide scaling
 
 For more detailed information, please refer to the following link: [Optional KV Scale Guide](src/ksana_llm/python/kv_scale_files/README.md)
 
+#### 6.4 Prefill-Decode Disaggregation (PD Separation)
+
+KsanaLLM supports Prefill-Decode disaggregation architecture, which separates the prefill and decode phases into different node groups for better resource utilization and performance optimization.
+
+For detailed setup instructions, please refer to: [PD Separation Startup Guide](docs/pd_separation_startup.md)
+
 #### 7. Contact Us
 ##### WeChat Group
 <img src=docs/img/webchat-github.jpg width="200px">
