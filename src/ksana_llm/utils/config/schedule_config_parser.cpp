@@ -408,6 +408,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     KLLM_LOG_INFO << "flash_attn_impl: " << choice_str;
   }
 
+  // Read cublas kernel optimization config (optional)
+  std::string gemm_reduction_precision_str = yaml_reader.GetScalar<std::string>(
+      yaml_reader.GetRootNode(), "setting.kernel_config.cublas.gemm_reduction_precision", "fp32");
+  // Convert to enum, invalid value defaults to FP32
+  if (gemm_reduction_precision_str == "fp16") {
+    cublas_kernel_config_.gemm_reduction_precision = GemmReductionPrecision::FP16;
+  } else {
+    cublas_kernel_config_.gemm_reduction_precision = GemmReductionPrecision::FP32;
+  }
+
   InitConnectorConfig(yaml_reader);
   // TODO(zhongzhicao): Support PD + prefix cache + split fuse.
   if (connector_config_.group_role != GroupRole::NONE && batch_scheduler_config_.split_fuse_token_num != 0) {

@@ -34,6 +34,8 @@ class MatMulLayer : public BaseLayer {
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 #endif  // ENABLE_ACL
+
+  bool use_fp16_compute_reduction_{false};
 };
 
 }  // namespace ksana_llm

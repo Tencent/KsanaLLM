@@ -6,6 +6,8 @@
 
 #include "3rdparty/LLM_kernels/csrc/kernels/nvidia/gemm_wrapper/gemm_wrapper.h"
 #include "ksana_llm/kernels/nvidia/kernel_wrapper.h"
+#include "ksana_llm/utils/environment.h"
+#include "ksana_llm/utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -16,6 +18,9 @@ Status MatMulLayer::Init(const std::vector<std::any>& parameters, const RuntimeC
   cublas_workspace_ptr_ = nullptr;
   cublaslt_algo_ptr_ = nullptr;
   inter_data_type_ = runtime_config.inter_data_type;
+  CublasKernelConfig cublas_cfg;
+  Singleton<Environment>::GetInstance()->GetCublasKernelConfig(cublas_cfg);
+  use_fp16_compute_reduction_ = (cublas_cfg.gemm_reduction_precision == GemmReductionPrecision::FP16);
   return Status();
 }
 
@@ -66,7 +71,7 @@ Status MatMulLayer::ForwardT(const std::vector<Tensor>& input_tensors, std::vect
 
   InvokeMatMul<T>(context_->ext->GetCublasHandles()[rank_], context_->ext->GetCublasLtHandles()[rank_], m, n, k, a_ptr,
                   b_ptr, c_ptr, context_->GetComputeStreams()[rank_].Get(), cublas_workspace_ptr_, cublaslt_algo_ptr_,
-                  cublas_workspace_size_);
+                  cublas_workspace_size_, use_fp16_compute_reduction_);
 
   output_tensors[0].shape = {input_tensors[0].shape[0], input_tensors[1].shape[1]};
   output_tensors[0].dtype = input_tensors[0].dtype;

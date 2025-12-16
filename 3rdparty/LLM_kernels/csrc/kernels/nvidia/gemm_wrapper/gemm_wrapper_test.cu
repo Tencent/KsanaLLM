@@ -306,6 +306,26 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
       EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_3", expected_buffer, c_buffer, 1e-4f, 1e-5f,
                                             miss_match_rate, true));
+      
+      // invokeCublasGemm_fp16_compute_reduction and invokeCublasGemm_cublashgemm use fp16 reduction so we expect lower accuracy
+      CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k,
+                                                b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
+                                                c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
+                                                stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, true, false));
+      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
+      EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_fp16_compute_reduction", expected_buffer, c_buffer, 1e-3f, 1e-4f,
+                                            miss_match_rate, true));
+
+      CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k,
+                                                b_buffer.data_ptr, ldb, btype, a_buffer.data_ptr, lda, atype,
+                                                c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type,
+                                                stream, cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, false, true));
+      CHECK_NVIDIA_CUDA_ERROR(cudaStreamSynchronize(stream));
+      CHECK_NVIDIA_CUDA_ERROR(cudaDeviceSynchronize());
+      EXPECT_TRUE(CheckResult<OUTPUT_DTYPE>(test_name + "_invokeCublasGemm_cublashgemm", expected_buffer, c_buffer, 1e-3f, 1e-4f,
+                                            miss_match_rate, true));
+
     }
 
     // test performance
@@ -359,11 +379,38 @@ class LlamaNvidiaGemmWrapperTestSuit : public NvidiaTestSuitBase {
       float InvokeCublasGemm_3_time_elapsed_ms =
           MeasureCudaExecutionTime(InvokeCublasGemm_3_cuda_run, stream, warmup_rounds, tested_rounds);
 
+      float InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms = 0.0f;
+      float InvokeCublasGemm_cublashgemm_time_elapsed_ms = 0.0f;
+      if (atype == CUDA_R_16F) {
+        auto InvokeCublasGemm_fp16_compute_reduction_cuda_run = [&]() {
+          CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
+              cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
+              a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type, stream,
+              cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, true, false));
+        };
+        InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms = MeasureCudaExecutionTime(
+            InvokeCublasGemm_fp16_compute_reduction_cuda_run, stream, warmup_rounds, tested_rounds);
+
+        auto InvokeCublasGemm_cublashgemm_cuda_run = [&]() {
+          CHECK_NVIDIA_CUDA_ERROR(InvokeCublasGemm(
+              cublas_handle, cublaslt_handle, op_pair.transb, op_pair.transa, n, m, k, b_buffer.data_ptr, ldb, btype,
+              a_buffer.data_ptr, lda, atype, c_buffer.data_ptr, ldc, ctype, batch_size, alpha, beta, compute_type, stream,
+              cublas_workspace_buffer_ptr, default_ws_size, &cublaslt_algo, nullptr, nullptr, false, true));
+        };
+        InvokeCublasGemm_cublashgemm_time_elapsed_ms =
+            MeasureCudaExecutionTime(InvokeCublasGemm_cublashgemm_cuda_run, stream, warmup_rounds, tested_rounds);
+      }
+
       std::cout << test_name << " performance InvokeCublasGemmEx: " << InvokeCublasGemmEx_time_elapsed_ms
                 << ", InvokeCublasGemm_1: " << InvokeCublasGemm_1_time_elapsed_ms
                 << ", InvokeCublasGemm_2: " << InvokeCublasGemm_2_time_elapsed_ms
-                << ", InvokeCublasGemm_3(with heuristic search gemm algo): " << InvokeCublasGemm_3_time_elapsed_ms
-                << std::endl;
+                << ", InvokeCublasGemm_3(with heuristic search gemm algo): " << InvokeCublasGemm_3_time_elapsed_ms;
+      if (atype == CUDA_R_16F) {
+        std::cout << ", InvokeCublasGemm_fp16_compute_reduction: "
+                  << InvokeCublasGemm_fp16_compute_reduction_time_elapsed_ms
+                  << ", InvokeCublasGemm_cublashgemm: " << InvokeCublasGemm_cublashgemm_time_elapsed_ms;
+      }
+      std::cout << std::endl;
     }
 
     DeleteBuffer(expected_buffer);

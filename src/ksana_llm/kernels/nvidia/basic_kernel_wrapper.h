@@ -1,3 +1,4 @@
+
 /* Copyright 2024 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
@@ -131,7 +132,8 @@ void InvokeRMSNorm(void* input, void* weight, float layernorm_eps, int m, int n,
 template <typename T>
 void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
                   const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr,
-                  cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0);
+                  cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0,
+                  bool use_fp16_compute_reduction = false);
 
 template <typename T>
 void InvokeStridedBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,

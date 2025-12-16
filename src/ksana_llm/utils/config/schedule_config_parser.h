@@ -20,6 +20,9 @@ namespace ksana_llm {
 
 enum PreemptMode { SWAP = 0, RECOMPUTE = 1 };
 
+// GEMM reduction precision for cublas
+enum class GemmReductionPrecision { FP32 = 0, FP16 = 1 };
+
 enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
 
 enum PPMultibatchWBStrategy { NO_WB = 0, NO_DYNAMIC_WB = 1, WB_BATCH_REQ = 2, WB_BATCH_TOKEN = 3, WB_REQ_TOKEN = 4 };
@@ -291,6 +294,12 @@ struct AttnBackendConfig {
   FlashAttnImplChoice flash_attn_impl_choice = FlashAttnImplChoice::AUTO;
 };
 
+// Cublas kernel configuration
+struct CublasKernelConfig {
+  // GEMM reduction precision: FP16 or FP32, default is FP32
+  GemmReductionPrecision gemm_reduction_precision = GemmReductionPrecision::FP32;
+};
+
 struct ParallelismBasicConfig {
   size_t tensor_parallel_size{1};
   size_t attn_data_parallel_size{1};
@@ -418,6 +427,10 @@ class ScheduleConfigParser {
     attn_backend_config = runtime_config_.attn_backend_config;
   }
 
+  void GetCublasKernelConfig(CublasKernelConfig &cublas_kernel_config) const {
+    cublas_kernel_config = cublas_kernel_config_;
+  }
+
   void SetAttnBackendConfig(const AttnBackendConfig &attn_backend_config) {
     runtime_config_.attn_backend_config = attn_backend_config;
   }
@@ -488,6 +501,9 @@ class ScheduleConfigParser {
 
   // Store reasoning configuration
   ReasoningConfig reasoning_config_;
+
+  // Cublas kernel config
+  CublasKernelConfig cublas_kernel_config_;
 };
 
 }  // namespace ksana_llm

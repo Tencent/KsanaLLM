@@ -158,6 +158,10 @@ class Environment {
     schedule_config_parser_.SetAttnBackendConfig(attn_backend_config);
   }
 
+  void GetCublasKernelConfig(CublasKernelConfig &cublas_kernel_config) const {
+    schedule_config_parser_.GetCublasKernelConfig(cublas_kernel_config);
+  }
+
   void SetConnectorConfigs(const ConnectorConfig &connector_config) {
     schedule_config_parser_.SetConnectorConfigs(connector_config);
   }

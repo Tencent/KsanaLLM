@@ -98,7 +98,7 @@ setting:
     # Flash Attention 实现选择配置
     # 可选值说明：
     #   auto          - 自动选择最优实现（推荐）：系统会根据GPU架构和可用库自动选择
-    #   fa3           - Flash Attention 3：适用于Hopper架构（SM >= 9.0），性能最优
+    #   fa3           - Flash Attention 3：适用于Hopper架构（SM >= 9.0），性能最优R
     #   vllm_v26      - VLLM Flash Attention 2.6+：兼容性好，支持更多特性
     #   flashattn_v26 - 官方Flash Attention 2.6+：标准实现
     #   flashattn_v25 - 官方Flash Attention 2.5+：较老版本，兼容性最好
@@ -120,6 +120,14 @@ setting:
     # 使用建议：
     #    - 对于 Qwen 非 moe 模型，建议在关闭 enable_blocked_multi_token_forwarding_kv 时启用 FlashInfer_Backend 以获取更优的性能
     use_flashinfer_for_decode: false
+
+  # kernel配置
+  kernel_config:
+    cublas:
+      # cublas gemm计算时使用的归约精度，可选值: fp16, fp32
+      # fp16对于精度有一定损失，在CUDA12.8时对于GEMM性能提升约4%
+      # 默认值为fp32，如果配置不是fp16或fp32则默认使用fp32
+      gemm_reduction_precision: fp32
 
   # 量化相关配置
   quantization_config:

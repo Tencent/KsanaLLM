@@ -71,6 +71,22 @@ cublasStatus_t InvokeCublasGemmEx(cublasHandle_t cublas_handle, cublasOperation_
                       c_ptr, c_type, ldc, compute_type, algo);
 }
 
+cublasStatus_t InvokeCustomGemm(cudaStream_t& stream, cublasOperation_t transa, cublasOperation_t transb,
+                                const int32_t m, const int32_t n, const int32_t k, const void* a_ptr,
+                                const int32_t lda, cudaDataType_t a_type, const void* b_ptr, const int32_t ldb,
+                                cudaDataType_t b_type, void* c_ptr, const int32_t ldc, cudaDataType_t c_type,
+                                cudaDataType_t compute_type) {
+  cudaError_t result = InvokeCustomGemm(stream, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb, b_type, c_ptr,
+            ldc, c_type, compute_type, 1.0f);
+  if (result == cudaSuccess) {
+    return CUBLAS_STATUS_SUCCESS;
+  } else if (result == cudaErrorNotSupported) {
+    return CUBLAS_STATUS_NOT_SUPPORTED;
+  } else {
+    return CUBLAS_STATUS_EXECUTION_FAILED;
+  }
+}
+
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
                                 cublasOperation_t transa, cublasOperation_t transb, const int32_t m, const int32_t n,
                                 const int32_t k, const void* a_ptr, const int32_t lda, cudaDataType_t a_type,
@@ -89,10 +105,11 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 const void* b_ptr, const int32_t ldb, cudaDataType_t b_type, void* c_ptr,
                                 const int32_t ldc, cudaDataType_t c_type, cudaDataType_t compute_type,
                                 cudaStream_t& stream, void* workspace_ptr, size_t workspace_size,
-                                cublasLtMatmulAlgo_t* cublaslt_algo) {
+                                cublasLtMatmulAlgo_t* cublaslt_algo, bool use_fp16_compute_reduction) {
   return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
                           b_type, c_ptr, ldc, c_type, /*batch_size */ 1, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f,
-                          compute_type, stream, workspace_ptr, workspace_size, cublaslt_algo);
+                          compute_type, stream, workspace_ptr, workspace_size, cublaslt_algo, nullptr, nullptr,
+                          use_fp16_compute_reduction);
 }
 
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
@@ -104,7 +121,8 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo) {
   return InvokeCublasGemm(cublas_handle, cublaslt_handle, transa, transb, m, n, k, a_ptr, lda, a_type, b_ptr, ldb,
                           b_type, c_ptr, ldc, c_type, batch_count, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f, compute_type,
-                          stream, workspace_ptr, workspace_size, cublaslt_algo);
+                          stream, workspace_ptr, workspace_size, cublaslt_algo, nullptr, nullptr, 0, 0, 0,
+                          false);
 }
 
 cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle,
@@ -115,31 +133,24 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                 float f_beta, cudaDataType_t compute_type, cudaStream_t& stream, void* workspace_ptr,
                                 size_t workspace_size, cublasLtMatmulAlgo_t* cublaslt_algo, const void* a_scale,
                                 const void* b_scale, int64_t batch_offset_a, int64_t batch_offset_b,
-                                int64_t batch_offset_c) {
+                                int64_t batch_offset_c, bool use_fp16_compute_reduction) {
   // NOTE(karlluo): half no static cast in regular c_ptr++
   half h_alpha = (half)(f_alpha);
   half h_beta = (half)(f_beta);
-
-  // TODO(karlluo): will invoke accuraccy problem
   int32_t is_fp16_compute_type = compute_type == CUDA_R_16F ? 1 : 0;
-  // fp32 use cublas as default
-  // fp16 use cublasLt as default
   const void* alpha = is_fp16_compute_type ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<void*>(&f_alpha);
   const void* beta = is_fp16_compute_type ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<void*>(&f_beta);
 
-  // prepare description
   cublasLtMatmulDesc_t operation_desc = nullptr;
   cublasLtMatrixLayout_t a_desc = nullptr;
   cublasLtMatrixLayout_t b_desc = nullptr;
   cublasLtMatrixLayout_t c_desc = nullptr;
   cudaDataType_t scale_type = CUDA_R_32F;
-  cublasComputeType_t inner_compute_type;
-
+  cublasComputeType_t compute_reduction_type;
   if (is_fp16_compute_type) {
-    // TODO(karlluo): support CUBLAS_COMPUTE_32F_FAST_TF32
-    inner_compute_type = CUBLAS_COMPUTE_16F;
+    compute_reduction_type = CUBLAS_COMPUTE_16F;
   } else {
-    inner_compute_type = CUBLAS_COMPUTE_32F;
+    compute_reduction_type = CUBLAS_COMPUTE_32F;
   }
 
   // Create descriptors for the original matrices
@@ -173,7 +184,7 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
                                      sizeof(batch_offset_c));
   }
 
-  RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescCreate(&operation_desc, inner_compute_type, scale_type));
+  RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescCreate(&operation_desc, compute_reduction_type, scale_type));
   RETURN_NVIDIA_CUBLAS_ERROR(
       cublasLtMatmulDescSetAttribute(operation_desc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(cublasOperation_t)));
   RETURN_NVIDIA_CUBLAS_ERROR(
@@ -189,14 +200,26 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
   workspace_size = (workspace_ptr == nullptr ? 0ul : workspace_size);
   bool is_use_cublaslt_algo = (cublaslt_algo != nullptr) && (workspace_size > 0);
 
-  RETURN_NVIDIA_CUBLAS_ERROR(
+  if (a_type == CUDA_R_16F && use_fp16_compute_reduction) {
+    compute_reduction_type = CUBLAS_COMPUTE_16F;
+    half h_alpha = static_cast<half>(f_alpha);
+    half h_beta = static_cast<half>(f_beta);
+    void* alpha = reinterpret_cast<void*>(&h_alpha);
+    void* beta = reinterpret_cast<void*>(&h_beta);
+    RETURN_NVIDIA_CUBLAS_ERROR(cublasGemmEx(cublas_handle, transa, transb, m, n, k, alpha, a_ptr, a_type, lda, b_ptr,
+                                          b_type, ldb, beta, c_ptr, c_type, ldc, compute_reduction_type,
+                                          CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  } else {
+    RETURN_NVIDIA_CUBLAS_ERROR(
       cublasLtMatmul(cublaslt_handle, operation_desc, alpha, a_ptr, a_desc, b_ptr, b_desc, beta, c_ptr, c_desc, c_ptr,
                      c_desc, is_use_cublaslt_algo ? nullptr : cublaslt_algo, workspace_ptr, workspace_size, stream));
+  }
 
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescDestroy(operation_desc));
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatrixLayoutDestroy(c_desc));
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatrixLayoutDestroy(b_desc));
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatrixLayoutDestroy(a_desc));
+
   return CUBLAS_STATUS_SUCCESS;
 }
 

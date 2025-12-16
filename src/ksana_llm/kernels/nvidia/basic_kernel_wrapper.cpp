@@ -364,10 +364,13 @@ INVOKE_RMS_NORM(__nv_bfloat16);
   template <>                                                                                                        \
   void InvokeMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,          \
                        const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr, \
-                       cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size) {                                 \
+                       cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size, bool use_fp16_compute_reduction) { \
     CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                                \
         cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_ptr, n, CUDA_TYPE, a_ptr, k, CUDA_TYPE, \
-        c_ptr, n, CUDA_TYPE, CUDA_R_32F, stream, workspace_ptr, workspace_size, cublaslt_algo));                     \
+        c_ptr, n, CUDA_TYPE, /*batch_count*/ 1, /*f_alpha*/ 1.0f, /*f_beta*/ 0.0f, CUDA_R_32F, stream,               \
+        workspace_ptr, workspace_size, cublaslt_algo, /*a_scale*/ nullptr, /*b_scale*/ nullptr,                      \
+        /*batch_offset_a*/ 0, /*batch_offset_b*/ 0, /*batch_offset_c*/ 0,                                            \
+        /*use_fp16_compute_reduction*/ use_fp16_compute_reduction));                                                 \
   }
 INVOKE_MATMUL(float, CUDA_R_32F);
 INVOKE_MATMUL(half, CUDA_R_16F);
