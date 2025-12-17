@@ -19,7 +19,7 @@ class FlashSparseMlaIndexer {
 
   Status Forward(const std::shared_ptr<ModelInput>& model_input, const AttentionForwardContext& attn_ctx,
                  Tensor& q_indexer_tensor, Tensor& k_indexer_tensor, Tensor& weights_tensor,
-                 std::vector<Tensor>& output_tensors);
+                 Tensor& quant_workspace_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
   std::shared_ptr<BaseLayer> flash_sparse_mla_indexer_layer_;

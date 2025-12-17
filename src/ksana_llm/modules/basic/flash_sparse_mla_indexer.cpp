@@ -43,26 +43,18 @@ FlashSparseMlaIndexer::FlashSparseMlaIndexer(const size_t layer_idx, const Layer
 }
 
 Status FlashSparseMlaIndexer::Forward(const std::shared_ptr<ModelInput>& model_input,
-                                      const AttentionForwardContext& attn_ctx,
-                                      Tensor& q_indexer_tensor, Tensor& k_indexer_tensor, Tensor& weights_tensor,
+                                      const AttentionForwardContext& attn_ctx, Tensor& q_indexer_tensor,
+                                      Tensor& k_indexer_tensor, Tensor& weights_tensor, Tensor& quant_workspace_tensor,
                                       std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(flash_sparse_mla_indexer_layer_->Forward({q_indexer_tensor,
-                                                                k_indexer_tensor,
-                                                                weights_tensor,
-                                                                model_input->flash_input.rotary_embedding_pos,
-                                                                model_input->flash_input.rotary_embedding_mask,
-                                                                model_input->flash_input.indexer_kv_list,
-                                                                model_input->flash_input.kv_cache_offset,
-                                                                model_input->dp_prefill_q_offset_uint64_tensor,
-                                                                model_input->dp_input_prefix_uint64_tensor,
-                                                                model_input->dp_input_offset_uint64_tensor,
-                                                                model_input->flash_input.block_table,
-                                                                model_input->flash_input.cur_seq_len_start,
-                                                                model_input->flash_input.cur_seq_len_end,
-                                                                model_input->layer_indexer_kv_cache_ptr,
-                                                                attn_ctx.forward_shape},
-                                                               output_tensors));
-  return Status();
+  return flash_sparse_mla_indexer_layer_->Forward(
+      {q_indexer_tensor, k_indexer_tensor, weights_tensor, quant_workspace_tensor,
+       model_input->flash_input.rotary_embedding_pos, model_input->flash_input.rotary_embedding_mask,
+       model_input->flash_input.indexer_kv_list, model_input->flash_input.kv_cache_offset,
+       model_input->dp_prefill_q_offset_uint64_tensor, model_input->dp_input_prefix_uint64_tensor,
+       model_input->dp_input_offset_uint64_tensor, model_input->flash_input.block_table,
+       model_input->flash_input.cur_seq_len_start, model_input->flash_input.cur_seq_len_end,
+       model_input->layer_indexer_kv_cache_ptr, attn_ctx.forward_shape},
+      output_tensors);
 }
 
 }  // namespace ksana_llm

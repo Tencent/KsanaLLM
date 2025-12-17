@@ -22,13 +22,12 @@ namespace ksana_llm {
 static Barrier g_mla_tensor_parallel_barrier;
 DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                                                ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                                               IndexerBuffers& indexer_buffers, TensorBuffer* moe_buffer)
+                                               TensorBuffer* moe_buffer)
     : is_moe_(is_moe),
       enable_full_shared_expert_(creation_context.runtime_config.enable_full_shared_expert),
       layer_idx_(layer_idx),
       rank_(creation_context.rank),
       mla_buffers_(mla_buffers),
-      indexer_buffers_(indexer_buffers),
       moe_buffer_(moe_buffer) {
   MoeScaleNormMode moe_scale_norm_mode;
   if (model_creation_config.attn_config.model_config.mla_config.q_lora_rank != 0) {
@@ -76,9 +75,8 @@ DeepSeekV3DecoderLayer::DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, Layer
   }
 
   // mla should be init after linear, because mla will reuse workspace buffer which is created by linear layers
-  constexpr bool is_neox = false;
-  mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, is_neox, creation_context, model_creation_config,
-                                                    mla_buffers_, indexer_buffers_);
+  mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, /*is_neox*/ false, creation_context,
+                                                    model_creation_config, mla_buffers_);
 
   tp_comm_ = std::make_shared<TpCommunicator>();
 }
@@ -306,10 +304,6 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
                                      ModelCreationConfig& model_creation_config) {
   MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                           creation_context.runtime_config, mla_buffers_);
-  if (model_creation_config.attn_config.model_config.use_dsa) {
-    SparseMlaIndexer::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
-                                    creation_context.runtime_config, indexer_buffers_);
-  }
   const DataType weight_type = model_creation_config.attn_config.model_config.weight_data_type;
   const size_t max_token_num = creation_context.runtime_config.max_step_token_num;
   const size_t moe_buffer_size = max_token_num * model_creation_config.attn_config.model_config.hidden_units;
@@ -328,8 +322,8 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
 
   for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
     const bool is_moe = layer_idx >= first_k_dense_replace_;
-    layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(
-        layer_idx, is_moe, creation_context, model_creation_config, mla_buffers_, indexer_buffers_, moe_buffer_);
+    layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(layer_idx, is_moe, creation_context,
+                                                                  model_creation_config, mla_buffers_, moe_buffer_);
   }
 
   if (pipeline_config_.lower_nextn_layer_idx >=
@@ -337,8 +331,8 @@ Status DeepSeekV3Model::CreateLayers(LayerCreationContext& creation_context,
     for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
          ++layer_idx) {
       const bool is_moe = layer_idx >= first_k_dense_replace_;
-      layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(
-          layer_idx, is_moe, creation_context, model_creation_config, mla_buffers_, indexer_buffers_, moe_buffer_);
+      layers_[layer_idx] = std::make_shared<DeepSeekV3DecoderLayer>(layer_idx, is_moe, creation_context,
+                                                                    model_creation_config, mla_buffers_, moe_buffer_);
       // create nextn layer, give decoder layer
       nextn_layers_[layer_idx] =
           std::make_shared<DeepSeekV3MtpLayer>(layer_idx, creation_context, model_creation_config, layers_[layer_idx]);

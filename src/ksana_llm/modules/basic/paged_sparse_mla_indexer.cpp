@@ -47,23 +47,13 @@ PagedSparseMlaIndexer::PagedSparseMlaIndexer(const size_t layer_idx, const Layer
 Status PagedSparseMlaIndexer::Forward(const std::shared_ptr<ModelInput>& model_input,
                                       const ModelInput::input_info& page_input, const AttentionForwardContext& attn_ctx,
                                       Tensor& q_indexer_tensor, Tensor& k_indexer_tensor, Tensor& weights_tensor,
-                                      std::vector<Tensor>& output_tensors) {
-  STATUS_CHECK_RETURN(paged_sparse_mla_indexer_layer_->Forward(
-      {q_indexer_tensor,                         // 0: query tensor [total_tokens, n_heads, head_dim]
-       k_indexer_tensor,                         // 1: key tensor [total_tokens, head_dim]
-       weights_tensor,                           // 2: weights tensor [total_tokens, n_heads]
-       page_input.rotary_embedding_pos,          // 3: rotary position embeddings
-       page_input.rotary_embedding_mask,         // 4: rotary embedding mask
-       page_input.input_length,                  // 5: input sequence lengths [batch_size]
-       page_input.indexer_kv_list,               // 6: indexer kv cache list
-       page_input.kv_cache_offset,               // 7: indexer kv cache offset
-       page_input.block_table,                   // 8: block table for paged attention
-       page_input.cur_seq_len_start,             // 9: cumulative sequence length start [total_tokens]
-       page_input.cur_seq_len_end,               // 10: cumulative sequence length end [total_tokens]
-       model_input->layer_indexer_kv_cache_ptr,  // 11: layer-specific indexer kv cache pointer
-       page_input.paged_schedule_meta},          // 12: paged scheduling metadata
-      output_tensors));
-  return Status();
+                                      Tensor& quant_workspace_tensor, std::vector<Tensor>& output_tensors) {
+  return paged_sparse_mla_indexer_layer_->Forward(
+      {q_indexer_tensor, k_indexer_tensor, weights_tensor, quant_workspace_tensor, page_input.rotary_embedding_pos,
+       page_input.rotary_embedding_mask, page_input.input_length, page_input.indexer_kv_list,
+       page_input.kv_cache_offset, page_input.block_table, page_input.cur_seq_len_start, page_input.cur_seq_len_end,
+       model_input->layer_indexer_kv_cache_ptr, page_input.paged_schedule_meta},
+      output_tensors);
 }
 
 }  // namespace ksana_llm

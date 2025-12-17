@@ -125,7 +125,6 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
 
   std::shared_ptr<MultiHeadLatentAttention> mla_;
   MlaBuffers mla_buffers_;
-  IndexerBuffers indexer_buffers_;
 
   MultiHeadLatentAttentionTestModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                     const int rank, std::shared_ptr<Context> context,
@@ -143,14 +142,10 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override {
     MultiHeadLatentAttention::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
                                             creation_context.runtime_config, mla_buffers_);
-    if (model_creation_config.attn_config.model_config.use_dsa) {
-      SparseMlaIndexer::CreateBuffers(CommonModel::GetBufferManager(), model_creation_config.attn_config,
-                                      creation_context.runtime_config, indexer_buffers_);
-    }
     bool is_neox = true;
     int layer_idx = 0;
     mla_ = std::make_shared<MultiHeadLatentAttention>(layer_idx, is_neox, creation_context, model_creation_config,
-                                                      mla_buffers_, indexer_buffers_);
+                                                      mla_buffers_);
     return Status();
   }
 
@@ -221,7 +216,6 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     }
     std::vector<float> output;
     if (model_config_.use_dsa) {
-      // DSA (Sparse MLA with Indexer) test - values to be filled after test run
       if (is_multi_token_forward) {
         // Prefill phase (no prefix cache for DSA test)
         // The numerical difference here is due to sparse mla applies weight absorption for prefill tokens,
@@ -229,7 +223,7 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
         output = {1416, 65.5, -1248, -2672, 856, -692};
       } else {
         // Decode phase
-        output = {552, 944, 366, -49.25, -77.5, -568};
+        output = {744, 748, 118, -684, 201, -716};
       }
     } else if (is_multi_token_forward) {
       if (runtime_config_.attn_backend_config.kv_cache_dtype == TYPE_FP8_E4M3) {
@@ -305,12 +299,12 @@ class TestWeight : public BaseWeight {
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uk_t.weight", i)] = {16, 128, 512};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.w_uv.weight", i)] = {16, 512, 128};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.q_b_nope_rope_proj.weight", i)] = {2048, 3072};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_a_proj.weight", i)] = {2048, 1536};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.q_a_layernorm.weight", i)] = {1536};
       // Add indexer weights
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight", i)] = {8192, 1536};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight_scale_inv", i)] = {64, 12};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wq_b.weight", i)] = {4096, 1536};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight", i)] = {128, 2048};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.wk.weight_scale_inv", i)] = {1, 16};
-      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.weights_proj.weight", i)] = {64, 2048};
+      add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.weights_proj.weight", i)] = {32, 2048};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.weight", i)] = {128};
       add_tensor_map[fmt::format("model.layers.{}.self_attn.indexer.k_norm.bias", i)] = {128};
     }
@@ -369,8 +363,9 @@ class MlaTest : public testing::Test {
       // so that indexer kv_cache_config can be properly initialized
       model_config.use_dsa = true;
       model_config.dsa_config.index_head_dim = 128;
-      model_config.dsa_config.index_n_heads = 64;
+      model_config.dsa_config.index_n_heads = 32;
       model_config.dsa_config.index_topk = 2048;
+      model_config.mla_config.q_lora_rank = 1536;
       // Update the environment's model config
       env->SetModelConfig(model_config);
       env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype_str = "fp8_ds_mla";

@@ -8,7 +8,6 @@
 
 #include "ksana_llm/models/base/forwarding_context.h"
 #include "ksana_llm/models/base/layer_creation_context.h"
-#include "ksana_llm/models/communicator/tp_communicator.h"
 #include "ksana_llm/modules/basic/layernorm.h"
 #include "ksana_llm/modules/basic/linear.h"
 #include "ksana_llm/utils/status.h"
@@ -20,19 +19,11 @@ namespace ksana_llm {
 class FlashSparseMlaIndexer;
 class PagedSparseMlaIndexer;
 
-// Buffers used in sparse mla indexer.
-struct IndexerBuffers {
-  TensorBuffer* q_indexer_buffer;     // for wq_b output
-  TensorBuffer* k_indexer_buffer;     // for wk output
-  TensorBuffer* weights_buffer;       // for weights_proj output
-};
-
 // Sparse MLA Indexer module
 // Implements the indexer logic for sparse multi-head latent attention
 class SparseMlaIndexer {
  public:
-  SparseMlaIndexer(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
-                   IndexerBuffers& indexer_buffers);
+  SparseMlaIndexer(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config);
 
   ~SparseMlaIndexer() = default;
 
@@ -40,18 +31,14 @@ class SparseMlaIndexer {
   // Inputs:
   //   - x: hidden states [batch, seq_len, hidden_dim]
   //   - qr: query lora output [batch, seq_len, q_lora_rank]
+  //   - workspace: store intermediate results
   // Outputs:
   //   - topk_indices: top-k indices [batch, seq_len, n_heads, index_topk]
-  Status Forward(const Tensor& x, const Tensor& qr, Tensor& topk_indices, ForwardingContext& forwarding_context);
-
-  // Create buffers for indexer
-  static Status CreateBuffers(BufferManager* buffer_mgr, const AttentionCreationConfig& attn_config,
-                              const RuntimeConfig& runtime_config, IndexerBuffers& indexer_buffers);
+  Status Forward(const Tensor& x, const Tensor& qr, Tensor& workspace, Tensor& topk_indices,
+                 ForwardingContext& forwarding_context);
 
  private:
   const int layer_idx_;
-  const int tensor_parallel_size_;
-  IndexerBuffers& indexer_buffers_;
 
   // Model parameters (actively used)
   size_t n_heads_;     // number of index heads

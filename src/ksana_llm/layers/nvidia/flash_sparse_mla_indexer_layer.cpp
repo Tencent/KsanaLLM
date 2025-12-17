@@ -29,6 +29,7 @@ struct FlashMlaInputData {
   const Tensor& q_tensor;
   const Tensor& k_tensor;
   const Tensor& weights_tensor;
+  uint8_t* quant_workspace_ptr;
   const Tensor& rotary_pos;
   const Tensor& rotary_mask;
   const Tensor& indexer_kv_list_tensor;
@@ -114,9 +115,9 @@ Status FlashSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tens
 template <typename SCALAR_T>
 static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
                                                      std::shared_ptr<Context> context, int rank) {
-  if (input_tensors.size() < 15) {
+  if (input_tensors.size() < 16) {
     KLLM_THROW(
-        fmt::format("FlashSparseMlaIndexerLayer requires at least 15 input tensors, got {}", input_tensors.size()));
+        fmt::format("FlashSparseMlaIndexerLayer requires at least 16 input tensors, got {}", input_tensors.size()));
   }
   auto input_iter = input_tensors.cbegin();
 
@@ -124,18 +125,19 @@ static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   const Tensor& q_tensor = *input_iter++;                              // 0: query
   const Tensor& k_tensor = *input_iter++;                              // 1: key
   const Tensor& weights_tensor = *input_iter++;                        // 2: weights
-  const Tensor& rotary_pos = *input_iter++;                            // 3: rotary pos
-  const Tensor& rotary_mask = *input_iter++;                           // 4: rotary mask
-  const Tensor& indexer_kv_list_tensor = *input_iter++;                // 5: indexer_kv_list
-  const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 6: indexer_kv_cache_offset
-  const Tensor& without_prefix_offset_tensor = *input_iter++;          // 7: dp_prefill_q_offset (without_prefix)
-  const Tensor& prefix_offsets_tensor = *input_iter++;                 // 8: dp_input_prefix (prefix)
-  const Tensor& seq_len_offset_tensor = *input_iter++;                 // 9: dp_input_offset (seq_len)
-  const Tensor* block_table_tensor = &(*input_iter++);                 // 10: block_table
-  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 11: cur_seq_len_start
-  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 12: cur_seq_len_end
-  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 13: layer_indexer_kv_cache_ptr
-  const Tensor* forward_shape_tensor = &(*input_iter++);               // 14: forward_shape
+  const Tensor& quant_workspace_tensor = *input_iter++;                // 3: quant_workspace
+  const Tensor& rotary_pos = *input_iter++;                            // 4: rotary pos
+  const Tensor& rotary_mask = *input_iter++;                           // 5: rotary mask
+  const Tensor& indexer_kv_list_tensor = *input_iter++;                // 6: indexer_kv_list
+  const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 7: indexer_kv_cache_offset
+  const Tensor& without_prefix_offset_tensor = *input_iter++;          // 8: dp_prefill_q_offset (without_prefix)
+  const Tensor& prefix_offsets_tensor = *input_iter++;                 // 9: dp_input_prefix (prefix)
+  const Tensor& seq_len_offset_tensor = *input_iter++;                 // 10: dp_input_offset (seq_len)
+  const Tensor* block_table_tensor = &(*input_iter++);                 // 11: block_table
+  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 12: cur_seq_len_start
+  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 13: cur_seq_len_end
+  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 14: layer_indexer_kv_cache_ptr
+  const Tensor* forward_shape_tensor = &(*input_iter++);               // 15: forward_shape
 
   // 从 forward_shape 获取 total_prefix_tokens (shape[12]) 和 batch_size (shape[8])
   int total_prefix_tokens = 0;
@@ -149,6 +151,7 @@ static FlashMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   FlashMlaInputData<SCALAR_T> data{.q_tensor = q_tensor,
                                    .k_tensor = k_tensor,
                                    .weights_tensor = weights_tensor,
+                                   .quant_workspace_ptr = quant_workspace_tensor.GetPtr<uint8_t>(),
                                    .rotary_pos = rotary_pos,
                                    .rotary_mask = rotary_mask,
                                    .indexer_kv_list_tensor = indexer_kv_list_tensor,
@@ -201,7 +204,7 @@ static Status ApplyRoPE(SCALAR_T* q_ptr, SCALAR_T* k_ptr, const Tensor& rotary_p
 }
 
 static void PrepareQuantWorkspace(size_t total_q_tokens, size_t total_tokens, FlashQuantWorkspace& workspace,
-                                  std::shared_ptr<Tensor> workspace_buffer, int n_heads, int head_dim,
+                                  uint8_t* quant_workspace_ptr, float* logits_workspace_ptr, int n_heads, int head_dim,
                                   int quant_block_size, int block_size) {
   // Calculate FP8 quantization buffer sizes
   // total_q_tokens = new tokens without prefix
@@ -213,34 +216,18 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, size_t total_tokens, Fl
   size_t q_scale_bytes = total_q_tokens * n_heads * q_scale_groups * sizeof(float);
   // K/V buffers need to accommodate all tokens (new + prefix)
   size_t k_fp8_bytes = total_tokens * head_dim;
-  size_t k_scale_bytes = total_tokens * q_scale_groups * sizeof(float);
 
-  // Calculate logits space requirements for DeepGEMM
   const int block_kv = 256;
   const int seq_len_alignment = 4;
   const int aligned_seq_len = RoundUp(static_cast<int>(total_q_tokens), seq_len_alignment);
   const int aligned_seq_len_kv = RoundUp(static_cast<int>(total_tokens) + block_kv, seq_len_alignment);
-  size_t logits_bytes = static_cast<size_t>(aligned_seq_len) * static_cast<size_t>(aligned_seq_len_kv) * sizeof(float);
-
-  // Calculate offsets with 256-byte alignment
-  size_t quant_data_bytes = q_fp8_bytes + q_scale_bytes + k_fp8_bytes + k_scale_bytes;
-  size_t logits_offset = RoundUp(quant_data_bytes, static_cast<size_t>(256));
-  size_t total_workspace_bytes = logits_offset + logits_bytes;
-
-  KLLM_CHECK_WITH_INFO(
-      workspace_buffer->GetTotalBytes() >= total_workspace_bytes,
-      fmt::format(
-          "workspace_buffer_ not large enough. Required: {} (quant_data: {} + padding: {} + logits: {}), Available: {}",
-          total_workspace_bytes, quant_data_bytes, logits_offset - quant_data_bytes, logits_bytes,
-          workspace_buffer->GetTotalBytes()));
 
   // Setup workspace pointers
-  uint8_t* workspace_ptr = workspace_buffer->GetPtr<uint8_t>();
-  workspace.q_fp8_ptr = workspace_ptr;
-  workspace.q_scale_ptr = reinterpret_cast<float*>(workspace_ptr + q_fp8_bytes);
-  workspace.k_fp8_ptr = workspace_ptr + q_fp8_bytes + q_scale_bytes;
-  workspace.k_scale_ptr = reinterpret_cast<float*>(workspace_ptr + q_fp8_bytes + q_scale_bytes + k_fp8_bytes);
-  workspace.logits_ptr = reinterpret_cast<float*>(workspace_ptr + logits_offset);
+  workspace.q_fp8_ptr = quant_workspace_ptr;
+  workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
+  workspace.k_fp8_ptr = quant_workspace_ptr + q_fp8_bytes + q_scale_bytes;
+  workspace.k_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes + q_scale_bytes + k_fp8_bytes);
+  workspace.logits_ptr = logits_workspace_ptr;
   workspace.aligned_seq_len = aligned_seq_len;
   workspace.aligned_seq_len_kv = aligned_seq_len_kv;
 }
@@ -435,8 +422,8 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
   // Step 3: Prepare workspace
   const size_t total_tokens = input_data.total_q_tokens + input_data.total_prefix_tokens;
   FlashQuantWorkspace workspace;
-  PrepareQuantWorkspace(input_data.total_q_tokens, total_tokens, workspace, workspace_buffer_, n_heads_, head_dim_,
-                        quant_block_size_, block_size_);
+  PrepareQuantWorkspace(input_data.total_q_tokens, total_tokens, workspace, input_data.quant_workspace_ptr,
+                        workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, quant_block_size_, block_size_);
 
   // Step 4: Quantize Q/K
   QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_q_tokens, input_data.stream, n_heads_, head_dim_,
@@ -459,48 +446,24 @@ Status FlashSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
 }
 
 size_t FlashSparseMlaIndexerLayer::GetWorkspaceSize() {
-  // Calculate workspace size needed for FP8 quantization and logits (with alignment)
-  // Layout: [q_fp8 | q_scale | k_fp8 | k_scale | padding | logits(aligned to 256 bytes)]
+  // Calculate workspace size needed for logits (with alignment)
+  // Layout: [logits(aligned to 256 bytes)]
   // Use max_step_token_num_ from runtime_config for more accurate calculation
   // max_step_token_num_ should be able to accommodate total_q_tokens + total_prefix_tokens
-
   const size_t max_total_tokens = max_step_token_num_;
 
-  // FP8 quantization workspace requirements:
-  // 1. Q FP8 data: [max_total_tokens, n_heads_, head_dim_] * sizeof(uint8_t)
-  size_t q_fp8_bytes = max_total_tokens * n_heads_ * head_dim_;
-
-  // 2. Q scale data: [max_total_tokens, n_heads_] * sizeof(float)
-  // (assuming q_scale_groups = 1 based on the check in ForwardT)
-  size_t q_scale_bytes = max_total_tokens * n_heads_ * sizeof(float);
-
-  // 3. K FP8 data: [max_total_tokens, head_dim_] * sizeof(uint8_t)
-  // NOTE: K/V buffers need to accommodate all tokens (new + prefix), so we use max_total_tokens
-  size_t k_fp8_bytes = max_total_tokens * head_dim_;
-
-  // 4. K scale data: [max_total_tokens] * sizeof(float)
-  size_t k_scale_bytes = max_total_tokens * sizeof(float);
-
-  // 5. Logits data: [aligned_seq_len, aligned_seq_len_kv] * sizeof(float), aligned to 256 bytes
+  // Logits data: [aligned_seq_len, aligned_seq_len_kv] * sizeof(float), aligned to 256 bytes
   const int block_kv = 256;
   const int seq_len_alignment = 4;
   const int aligned_seq_len = RoundUp(static_cast<int>(max_total_tokens), seq_len_alignment);
   const int aligned_seq_len_kv = RoundUp(static_cast<int>(max_total_tokens) + block_kv, seq_len_alignment);
-  size_t logits_bytes = static_cast<size_t>(aligned_seq_len) * static_cast<size_t>(aligned_seq_len_kv) * sizeof(float);
+  const size_t logits_bytes =
+      static_cast<size_t>(aligned_seq_len) * static_cast<size_t>(aligned_seq_len_kv) * sizeof(float);
 
-  // Calculate total size with 256-byte alignment for logits (same as ForwardT)
-  size_t quant_data_bytes = q_fp8_bytes + q_scale_bytes + k_fp8_bytes + k_scale_bytes;
-  size_t logits_offset = RoundUp(quant_data_bytes, static_cast<size_t>(256));  // Align to 256 bytes
-  size_t padding_bytes = logits_offset - quant_data_bytes;
-  size_t total_workspace_size = logits_offset + logits_bytes;
+  KLLM_LOG_DEBUG << fmt::format("FlashSparseMlaIndexerLayer GetWorkspaceSize: max_total_tokens={}, logits={}",
+                                max_total_tokens, logits_bytes);
 
-  KLLM_LOG_DEBUG << fmt::format(
-      "FlashSparseMlaIndexerLayer GetWorkspaceSize: max_total_tokens={}, q_fp8={}, q_scale={}, k_fp8={}, k_scale={}, "
-      "padding={}, logits={}, total={}",
-      max_total_tokens, q_fp8_bytes, q_scale_bytes, k_fp8_bytes, k_scale_bytes, padding_bytes, logits_bytes,
-      total_workspace_size);
-
-  return total_workspace_size;
+  return logits_bytes;
 }
 
 }  // namespace ksana_llm

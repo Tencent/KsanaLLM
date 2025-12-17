@@ -22,7 +22,7 @@ class DeepSeekV3DecoderLayer {
  public:
   DeepSeekV3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                          ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                         IndexerBuffers& indexer_buffers, TensorBuffer* moe_buffer);
+                         TensorBuffer* moe_buffer);
 
   ~DeepSeekV3DecoderLayer() = default;
   Status Forward(std::vector<Tensor>& residual_buffer, const bool is_multi_token_forward,
@@ -59,7 +59,6 @@ class DeepSeekV3DecoderLayer {
   std::shared_ptr<MoE> moe_;
 
   MlaBuffers& mla_buffers_;
-  IndexerBuffers& indexer_buffers_;
   TensorBuffer* const moe_buffer_;
 
   // Be a replacement of residual_buffer_, for distributed mode only.
@@ -111,7 +110,6 @@ class DeepSeekV3Model : public CommonModel {
 
   const int first_k_dense_replace_;
   MlaBuffers mla_buffers_;
-  IndexerBuffers indexer_buffers_;
   TensorBuffer* moe_buffer_;
 };
 }  // namespace ksana_llm

@@ -27,6 +27,7 @@ struct PagedMlaInputData {
   const Tensor& q_tensor;
   const Tensor& k_tensor;
   const Tensor& weights_tensor;
+  uint8_t* quant_workspace_ptr;
   const Tensor& rotary_pos;
   const Tensor& rotary_mask;
   const Tensor& input_length_tensor;
@@ -113,9 +114,9 @@ Status PagedSparseMlaIndexerLayer::Forward(const std::vector<Tensor>& input_tens
 template <typename SCALAR_T>
 static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& input_tensors,
                                                      std::shared_ptr<Context> context, int rank) {
-  if (input_tensors.size() < 13) {
+  if (input_tensors.size() < 14) {
     KLLM_THROW(
-        fmt::format("PagedSparseMlaIndexerLayer requires at least 13 input tensors, got {}", input_tensors.size()));
+        fmt::format("PagedSparseMlaIndexerLayer requires at least 14 input tensors, got {}", input_tensors.size()));
   }
   auto input_iter = input_tensors.cbegin();
 
@@ -123,21 +124,23 @@ static PagedMlaInputData<SCALAR_T> ParseInputTensors(const std::vector<Tensor>& 
   const Tensor& q_tensor = *input_iter++;                              // 0: query
   const Tensor& k_tensor = *input_iter++;                              // 1: key
   const Tensor& weights_tensor = *input_iter++;                        // 2: weights
-  const Tensor& rotary_pos = *input_iter++;                            // 3: rotary pos
-  const Tensor& rotary_mask = *input_iter++;                           // 4: rotary mask
-  const Tensor& input_length_tensor = *input_iter++;                   // 5: input_length
-  const Tensor& indexer_kv_list_tensor = *input_iter++;                // 6: indexer_kv_list
-  const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 7: indexer_kv_cache_offset
-  const Tensor* block_table_tensor = &(*input_iter++);                 // 8: block_table
-  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 9: cur_seq_len_start
-  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 10: cur_seq_len_end
-  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 11: layer_indexer_kv_cache_ptr
-  const Tensor& schedule_meta_tensor = *input_iter++;                  // 12: schedule_meta
+  const Tensor& quant_workspace_tensor = *input_iter++;                // 3: quant_workspace
+  const Tensor& rotary_pos = *input_iter++;                            // 4: rotary pos
+  const Tensor& rotary_mask = *input_iter++;                           // 5: rotary mask
+  const Tensor& input_length_tensor = *input_iter++;                   // 6: input_length
+  const Tensor& indexer_kv_list_tensor = *input_iter++;                // 7: indexer_kv_list
+  const Tensor& indexer_kv_cache_offset_tensor = *input_iter++;        // 8: indexer_kv_cache_offset
+  const Tensor* block_table_tensor = &(*input_iter++);                 // 9: block_table
+  const Tensor* cur_seq_len_start_tensor = &(*input_iter++);           // 10: cur_seq_len_start
+  const Tensor* cur_seq_len_end_tensor = &(*input_iter++);             // 11: cur_seq_len_end
+  const Tensor* layer_indexer_kv_cache_ptr_tensor = &(*input_iter++);  // 12: layer_indexer_kv_cache_ptr
+  const Tensor& schedule_meta_tensor = *input_iter++;                  // 13: schedule_meta
 
   // 使用聚合初始化创建对象
   PagedMlaInputData<SCALAR_T> data{.q_tensor = q_tensor,
                                    .k_tensor = k_tensor,
                                    .weights_tensor = weights_tensor,
+                                   .quant_workspace_ptr = quant_workspace_tensor.GetPtr<uint8_t>(),
                                    .rotary_pos = rotary_pos,
                                    .rotary_mask = rotary_mask,
                                    .input_length_tensor = input_length_tensor,
@@ -184,9 +187,9 @@ static Status ApplyRoPE(SCALAR_T* q_ptr, SCALAR_T* k_ptr, const Tensor& rotary_p
   return Status();
 }
 
-static void PrepareQuantWorkspace(size_t total_tokens, PagedQuantWorkspace& workspace,
-                                  std::shared_ptr<Tensor> workspace_buffer, int n_heads, int head_dim,
-                                  int quant_block_size, int max_seq_len, int block_size) {
+static void PrepareQuantWorkspace(size_t total_tokens, PagedQuantWorkspace& workspace, uint8_t* quant_workspace_ptr,
+                                  float* logits_workspace_ptr, int n_heads, int head_dim, int quant_block_size,
+                                  int max_seq_len, int block_size) {
   // Calculate FP8 quantization buffer sizes
   size_t q_fp8_bytes = total_tokens * n_heads * head_dim;
   size_t q_scale_groups = DivRoundUp(head_dim, quant_block_size);
@@ -194,31 +197,17 @@ static void PrepareQuantWorkspace(size_t total_tokens, PagedQuantWorkspace& work
                        fmt::format("q_scale_groups must be 1 for weight scaling, got {}", q_scale_groups));
   size_t q_scale_bytes = total_tokens * n_heads * q_scale_groups * sizeof(float);
   size_t k_fp8_bytes = total_tokens * head_dim;
-  size_t k_scale_bytes = total_tokens * q_scale_groups * sizeof(float);
 
-  // Calculate logits buffer size
   constexpr int num_math_warp_groups = 4;
   const int aligned_max_seq_len = static_cast<int>(
       RoundUp(static_cast<size_t>(max_seq_len), static_cast<size_t>(num_math_warp_groups * block_size)));
-  size_t logits_bytes = static_cast<size_t>(total_tokens) * aligned_max_seq_len * sizeof(float);
-
-  // Calculate offsets with 256-byte alignment
-  size_t quant_data_bytes = q_fp8_bytes + q_scale_bytes + k_fp8_bytes + k_scale_bytes;
-  size_t logits_offset = RoundUp(quant_data_bytes, static_cast<size_t>(256));
-  size_t total_workspace_bytes = logits_offset + logits_bytes;
-
-  KLLM_CHECK_WITH_INFO(
-      workspace_buffer->GetTotalBytes() >= total_workspace_bytes,
-      fmt::format("workspace_buffer_ not large enough. Required: {} (quant_data: {} + logits: {}), Available: {}",
-                  total_workspace_bytes, quant_data_bytes, logits_bytes, workspace_buffer->GetTotalBytes()));
 
   // Setup workspace pointers
-  uint8_t* workspace_ptr = workspace_buffer->GetPtr<uint8_t>();
-  workspace.q_fp8_ptr = workspace_ptr;
-  workspace.q_scale_ptr = reinterpret_cast<float*>(workspace_ptr + q_fp8_bytes);
-  workspace.k_fp8_ptr = workspace_ptr + q_fp8_bytes + q_scale_bytes;
-  workspace.k_scale_ptr = reinterpret_cast<float*>(workspace_ptr + q_fp8_bytes + q_scale_bytes + k_fp8_bytes);
-  workspace.logits_ptr = reinterpret_cast<float*>(workspace_ptr + logits_offset);
+  workspace.q_fp8_ptr = quant_workspace_ptr;
+  workspace.q_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes);
+  workspace.k_fp8_ptr = quant_workspace_ptr + q_fp8_bytes + q_scale_bytes;
+  workspace.k_scale_ptr = reinterpret_cast<float*>(quant_workspace_ptr + q_fp8_bytes + q_scale_bytes + k_fp8_bytes);
+  workspace.logits_ptr = logits_workspace_ptr;
   workspace.aligned_max_seq_len = aligned_max_seq_len;
 }
 
@@ -377,8 +366,9 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
 
   // Step 3: Prepare workspace
   PagedQuantWorkspace workspace;
-  PrepareQuantWorkspace(input_data.total_tokens, workspace, workspace_buffer_, n_heads_, head_dim_, quant_block_size_,
-                        max_seq_len_, block_size_);
+  PrepareQuantWorkspace(input_data.total_tokens, workspace, input_data.quant_workspace_ptr,
+                        workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, quant_block_size_, max_seq_len_,
+                        block_size_);
 
   // Step 4: Quantize Q/K
   QuantizeQK<SCALAR_T>(q_ptr, k_ptr, workspace, input_data.total_tokens, input_data.stream, n_heads_, head_dim_,
@@ -402,44 +392,21 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const std::vector<Tensor>& input_ten
 }
 
 size_t PagedSparseMlaIndexerLayer::GetWorkspaceSize() {
-  // Calculate workspace size needed for FP8 quantization and logits (with alignment)
-  // Layout: [q_fp8 | q_scale | k_fp8 | k_scale | padding | logits(aligned to 256 bytes)]
+  // Calculate workspace size needed for logits (with alignment)
+  // Layout: [logits(aligned to 256 bytes)]
   // Use max_step_token_num_ from runtime_config for more accurate calculation
-
   const size_t max_total_tokens = max_step_token_num_;
 
-  // FP8 quantization workspace requirements:
-  // 1. Q FP8 data: [max_total_tokens, n_heads_, head_dim_] * sizeof(uint8_t)
-  size_t q_fp8_bytes = max_total_tokens * n_heads_ * head_dim_;
-
-  // 2. Q scale data: [max_total_tokens, n_heads_] * sizeof(float)
-  // (assuming q_scale_groups = 1 based on the check in ForwardT)
-  size_t q_scale_bytes = max_total_tokens * n_heads_ * sizeof(float);
-
-  // 3. K FP8 data: [max_total_tokens, head_dim_] * sizeof(uint8_t)
-  size_t k_fp8_bytes = max_total_tokens * head_dim_;
-
-  // 4. K scale data: [max_total_tokens] * sizeof(float)
-  size_t k_scale_bytes = max_total_tokens * sizeof(float);
-
-  // 5. Logits data: [max_total_tokens, aligned_max_seq_len] * sizeof(float), aligned to 256 bytes
+  // Logits data: [max_total_tokens, aligned_max_seq_len] * sizeof(float), aligned to 256 bytes
   constexpr int num_math_warp_groups = 4;
   const int aligned_max_seq_len = static_cast<int>(
       RoundUp(static_cast<size_t>(max_seq_len_), static_cast<size_t>(num_math_warp_groups * block_size_)));
-  size_t logits_bytes = max_total_tokens * aligned_max_seq_len * sizeof(float);
+  const size_t logits_bytes = max_total_tokens * aligned_max_seq_len * sizeof(float);
 
-  // Calculate total size with 256-byte alignment for logits
-  size_t quant_data_bytes = q_fp8_bytes + q_scale_bytes + k_fp8_bytes + k_scale_bytes;
-  size_t logits_offset = RoundUp(quant_data_bytes, static_cast<size_t>(256));  // Align logits to 256 bytes
-  size_t padding_bytes = logits_offset - quant_data_bytes;
-  size_t total_workspace_size = logits_offset + logits_bytes;
+  KLLM_LOG_DEBUG << fmt::format("PagedSparseMlaIndexerLayer GetWorkspaceSize: max_total_tokens={}, logits={}",
+                                max_total_tokens, logits_bytes);
 
-  KLLM_LOG_DEBUG << fmt::format(
-      "PagedSparseMlaIndexerLayer GetWorkspaceSize: q_fp8={}, q_scale={}, k_fp8={}, k_scale={}, padding={}, "
-      "logits={}, total={}",
-      q_fp8_bytes, q_scale_bytes, k_fp8_bytes, k_scale_bytes, padding_bytes, logits_bytes, total_workspace_size);
-
-  return total_workspace_size;
+  return logits_bytes;
 }
 
 }  // namespace ksana_llm

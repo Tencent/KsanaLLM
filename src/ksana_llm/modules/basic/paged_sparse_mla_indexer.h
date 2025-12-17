@@ -18,7 +18,7 @@ class PagedSparseMlaIndexer {
 
   Status Forward(const std::shared_ptr<ModelInput>& model_input, const ModelInput::input_info& page_input,
                  const AttentionForwardContext& attn_ctx, Tensor& q_indexer_tensor, Tensor& k_indexer_tensor,
-                 Tensor& weights_tensor, std::vector<Tensor>& output_tensors);
+                 Tensor& weights_tensor, Tensor& quant_workspace_tensor, std::vector<Tensor>& output_tensors);
 
  protected:
   std::shared_ptr<BaseLayer> paged_sparse_mla_indexer_layer_;

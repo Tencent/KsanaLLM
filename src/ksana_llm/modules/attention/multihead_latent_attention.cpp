@@ -10,12 +10,10 @@
 namespace ksana_llm {
 
 MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
-                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                                                   IndexerBuffers& indexer_buffers)
+                                                   ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers)
     : layer_idx_(layer_idx),
       tensor_parallel_size_(creation_context.runtime_config.parallel_basic_config.tensor_parallel_size),
-      mla_buffers_(mla_buffers),
-      indexer_buffers_(indexer_buffers) {
+      mla_buffers_(mla_buffers) {
   if (creation_context.runtime_config.enable_o_proj_out_of_dp) {
     o_proj_out_of_dp_ = true;
     KLLM_LOG_DEBUG << "Enable o_proj_out_of_dp";
@@ -38,8 +36,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
 
   // Initialize sparse MLA indexer if using sparse MLA
   if (use_dsa_) {
-    sparse_mla_indexer_ =
-        std::make_shared<SparseMlaIndexer>(layer_idx, creation_context, model_creation_config, indexer_buffers);
+    sparse_mla_indexer_ = std::make_shared<SparseMlaIndexer>(layer_idx, creation_context, model_creation_config);
   }
 
   flash_mla_attention_layers_ = std::make_shared<FlashMlaAttention>(layer_idx, is_neox, creation_context, attn_config);
@@ -62,8 +59,10 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
         std::make_shared<Linear>(fused_lora_a_projs_weight_name, creation_context, linear_compute_backend);
   } else {
     use_fused_lora_a_ = false;
-    attn_q_a_projs_ =
-        std::make_shared<Linear>(layer_prefix + ".self_attn.q_a_proj.weight", creation_context, linear_compute_backend);
+    if (use_q_lora_) {
+      attn_q_a_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_a_proj.weight", creation_context,
+                                                 linear_compute_backend);
+    }
     attn_kv_a_lora_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.kv_a_lora_proj.weight",
                                                      creation_context, linear_compute_backend);
     attn_kv_a_ropes_ = std::make_shared<Linear>(layer_prefix + ".self_attn.kv_a_rope_proj.weight", creation_context,
@@ -255,8 +254,10 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       q_b_input = hidden_buffer_tensors_1[0];
     }
 
-    if (use_dsa_ && sparse_mla_indexer_) {
-      STATUS_CHECK_RETURN(sparse_mla_indexer_->Forward(dp_hidden_input, q_b_input, indices_tensor, forwarding_context));
+    if (use_dsa_) {
+      KLLM_CHECK_WITH_INFO(use_q_lora_, "DeepSeek sparse attention must use q lora");
+      STATUS_CHECK_RETURN(sparse_mla_indexer_->Forward(
+          dp_hidden_input, q_b_input, /*workspace*/ reduce_buffer_tensors[0], indices_tensor, forwarding_context));
     }
 
     PROFILE_EVENT_SCOPE(q_b_nope_rope_proj_weight, "q_b_nope_rope_proj", rank);

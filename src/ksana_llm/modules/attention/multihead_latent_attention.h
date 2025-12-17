@@ -37,8 +37,7 @@ struct MlaBuffers {
 class MultiHeadLatentAttention {
  public:
   MultiHeadLatentAttention(int layer_idx, bool is_neox, LayerCreationContext& creation_context,
-                           ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
-                           IndexerBuffers& indexer_buffers);
+                           ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers);
 
   Status Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std::vector<Tensor>& reduce_buffer_tensors,
                  std::shared_ptr<TpCommunicator> tp_comm, bool is_multi_token_forward,
@@ -54,7 +53,6 @@ class MultiHeadLatentAttention {
   const int layer_idx_;
   const int tensor_parallel_size_;
   MlaBuffers& mla_buffers_;
-  IndexerBuffers& indexer_buffers_;
 
  protected:
 #ifdef ENABLE_CUDA
