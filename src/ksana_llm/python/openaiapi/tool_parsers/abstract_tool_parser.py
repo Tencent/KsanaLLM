@@ -7,13 +7,14 @@ import os
 from json import JSONDecodeError
 from collections.abc import Sequence
 from functools import cached_property
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, Dict, List
 
 import orjson
 
 from openaiapi.openai_protocol import (ChatCompletionRequest,
-                                    DeltaMessage,
-                                    ExtractedToolCallInformation)
+                                       DeltaMessage,
+                                       ChatCompletionToolsParam,
+                                       ExtractedToolCallInformation)
 from openaiapi.transformers_utils.chat_utils import AnyTokenizer
 from utilize.utils import import_from_path, is_list_of
 
@@ -94,7 +95,25 @@ class ToolParser:
             orjson.loads(arguments)
             return True
         except JSONDecodeError:
-            return False 
+            return False
+
+    def _get_tool_indices(self, tools: List[ChatCompletionToolsParam]) -> Dict[str, int]:
+        """
+        Get a mapping of tool names to their indices in the tools list.
+
+        This utility method creates a dictionary mapping function names to their
+        indices in the tools list, which is commonly needed for tool validation
+        and ToolCallItem creation.
+
+        Args:
+            tools: List of available tools
+
+        Returns:
+            Dictionary mapping tool names to their indices
+        """
+        return {
+            tool.function.name: i for i, tool in enumerate(tools) if tool.function.name
+        }
 
 
 class ToolParserManager:

@@ -23,6 +23,7 @@ from pydantic import Field
 from starlette.datastructures import Headers
 
 from openaiapi.request_converter import RequestConverter
+from openaiapi.encoding_dsv32 import encode_messages
 
 from openaiapi.openai_protocol import (
     ErrorResponse, UsageInfo, 
@@ -151,6 +152,8 @@ class KsanaOpenAIServing:
             executor=self._tokenizer_executor)
         
         self._model_info = self._extract_model_info()
+
+        self.use_deepseek_v32_encoding = False
     
     def _initialize_tokenizer(self) -> Any:
         """Initialize tokenizer, avoid repeat getting tokenizer"""
@@ -567,6 +570,20 @@ class KsanaOpenAIServing:
         except (AttributeError, TypeError, UnicodeDecodeError):
             return f"<token_id:{token_id}>"
 
+    def maybe_serialize_tool_calls(self, messages: list[ChatCompletionMessageParam]):
+        for i, message in enumerate(messages):
+            if message.get("role") == 'assistant':
+                tool_calls_validator = message.get("tool_calls", ().__iter__())
+                validated_tool_calls = []
+                while True:
+                    try:
+                        tool_call = next(tool_calls_validator)  # type: ignore
+                        validated_tool_calls.append(tool_call)
+                    except StopIteration:
+                        break
+
+                messages[i]["tool_calls"] = validated_tool_calls
+
     async def _preprocess_completion(
         self,
         request: CompletionLikeRequest,
@@ -616,22 +633,27 @@ class KsanaOpenAIServing:
         
         model_config = self.llm_server.engine_args
 
-        resolved_content_format = resolve_chat_template_content_format(
-            chat_template,
-            tool_dicts,
-            chat_template_content_format,
-            tokenizer,
-            trust_remote_code=getattr(model_config, 'trust_remote_code', True),
-        )
+        if self.use_deepseek_v32_encoding:
+            self.maybe_serialize_tool_calls(messages)
+            conversation = messages
+            mm_data_future = None
+        else:
+            resolved_content_format = resolve_chat_template_content_format(
+                chat_template,
+                tool_dicts,
+                chat_template_content_format,
+                tokenizer,
+                trust_remote_code=getattr(model_config, 'trust_remote_code', True),
+            )
 
-        conversation, mm_data_future = parse_chat_messages_futures(
-            messages,
-            model_config,
-            tokenizer,
-            content_format=resolved_content_format,
-        )
+            conversation, mm_data_future = parse_chat_messages_futures(
+                messages,
+                model_config,
+                tokenizer,
+                content_format=resolved_content_format,
+            )
 
-        mm_data_future = None
+            mm_data_future = None
 
         _chat_template_kwargs: dict[str, Any] = dict(
             chat_template=chat_template,
@@ -643,11 +665,32 @@ class KsanaOpenAIServing:
         _chat_template_kwargs.update(chat_template_kwargs or {})
 
         request_prompt: Union[str, list[int]]
+
         if isinstance(tokenizer, MistralTokenizer):
+            logger.warning("MistralTokenizer is used")
             request_prompt = apply_mistral_chat_template(
                 tokenizer,
                 messages=messages,
                 **_chat_template_kwargs,
+            )
+        elif self.use_deepseek_v32_encoding:
+            # Detailed explanation:
+            # https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+            if request.chat_template_kwargs and request.chat_template_kwargs.get(
+                "thinking"
+            ):
+                thinking_mode = "thinking"
+            else:
+                thinking_mode = "chat"
+
+            if conversation[0]["role"] != "system":
+                conversation.insert(
+                    0, {"role": "system", "content": "You are a helpful Assistant."}
+                )
+            if tool_dicts:
+                conversation[0]["tools"] = tool_dicts
+            request_prompt = encode_messages(
+                conversation, thinking_mode=thinking_mode, drop_thinking=False
             )
         else:
             request_prompt = apply_hf_chat_template(

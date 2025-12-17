@@ -122,7 +122,7 @@ class TokenizerProcessorOpBase:
     def encode(self, prompt_text: str):
         return self.tokenizer.encode(prompt_text, add_special_tokens=self.add_special_tokens)
         
-    def decode(self, output_tokens: list, is_stream_generate: bool): 
+    def decode(self, output_tokens: list, is_stream_generate: bool):
         return self.tokenizer.decode(output_tokens, 
                 skip_special_tokens=self.skip_special_tokens  # skip special tokens
                 ).rstrip('\ufffd')

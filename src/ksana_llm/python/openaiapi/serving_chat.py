@@ -92,6 +92,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 logger.info(f"Tool parser '{self.config.tool_call_parser}' initialized successfully")
             except TypeError as e:
                 logger.error(f"❌ [DEBUG] Failed to initialize tool parser: {e}")
+        
+        if self.config.tool_call_parser == 'deepseek_v32':
+            # NOTE(winminkong): The current support is only for the deepseek-v3.2 OpenAI API
+            # released on December 1st, 2025.
+            self.use_deepseek_v32_encoding = True
     
     @lru_cache(maxsize=128)
     def _format_message(self, role: str, content: str) -> str:
@@ -271,6 +276,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             # For reasoning parser and tool call all enabled
             added_content_delta_arr = [False] * num_choices
             reasoning_end_arr = [False] * num_choices
+            last_step_delta_content = [""] * num_choices
+            last_step_delta_content_id = [[] for _ in range(num_choices)]
         elif request.tool_choice == "required":
             all_previous_token_ids = None
 
@@ -418,6 +425,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         if all_previous_token_ids is not None:
                             all_previous_token_ids[i] = current_token_ids
 
+                        logger.debug(f"previous_text: {previous_text}")
+                        logger.debug(f"delta_text: {delta_text}")
                         # handle streaming deltas for tools with named tool_choice
                         if tool_choice_function_name:
                             if (self.reasoning_parser and reasoning_parser._in_reasoning
@@ -508,13 +517,13 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 history_tool_call_cnt += 1
                                 tools_streamed[i] = True
                         # auto tool choice and reasoning parser enabled, extract reasoning content
-                        elif tool_choice_auto and self.reasoning_parser and reasoning_parser._in_reasoning:
+                        elif tool_choice_auto and self.reasoning_parser:
                             assert reasoning_parser is not None
                             assert tool_parser_instance is not None
                             assert added_content_delta_arr is not None
                             assert reasoning_end_arr is not None
-
-                            if not reasoning_end_arr[i]:
+                            # TODO(winminkong): remove reasoning_end_arr
+                            if not reasoning_end_arr[i] and reasoning_parser._in_reasoning:
                                 delta_message = (
                                     reasoning_parser.
                                     extract_reasoning_content_streaming(
@@ -525,22 +534,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                         current_token_ids,
                                         output_tokenids,
                                     ))
-                                # When encountering think end id in prompt_token_ids
-                                # i.e {"enable_thinking": False},
-                                # set reasoning status to end.
-                                # Remove the text and token ids related
-                                # to 'reasoning_content'.
-                                if hasattr(ksana_python_output, 'input_tokens') and \
-                                    ksana_python_output.input_tokens and \
-                                        reasoning_parser.is_reasoning_end(
-                                        list(ksana_python_output.input_tokens)):
-                                    reasoning_end_arr[i] = True
-                                    current_token_ids = list(output_tokenids)
-                                    if delta_message and delta_message.content:
-                                        current_text = delta_message.content
-                                        delta_message.content = None
-                                    else:
-                                        current_text = ""
 
                                 # When encountering think end id in delta_token_ids,
                                 # set reasoning status to end.
@@ -549,26 +542,30 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 if reasoning_parser.is_reasoning_end(
                                         list(output_tokenids)):
                                     reasoning_end_arr[i] = True
-                                    current_token_ids =  \
+                                    last_step_delta_content_id[i] =  \
                                         reasoning_parser.extract_content_ids(
                                             list(output_tokenids))
                                     if delta_message and delta_message.content:
-                                        current_text = delta_message.content
+                                        last_step_delta_content[i] = delta_message.content
                                         delta_message.content = None
                                     else:
-                                        current_text = ""
+                                        last_step_delta_content[i] = ""
+
                             # handle tool calls only after reasoning is done,
                             else:
                                 delta_token_ids = list(output_tokenids)
                                 # First time to tool call,
                                 # add the remaining text and token ids
                                 # to delta from previous
-                                if not added_content_delta_arr[i]:
+                                if not added_content_delta_arr[i] and last_step_delta_content[i]:
                                     added_content_delta_arr[i] = True
-                                    previous_text = ""
-                                    previous_token_ids = []
-                                    delta_text = current_text
-                                    delta_token_ids = current_token_ids
+                                    logger.warning(f"Need deal with last step content: {last_step_delta_content[i]}")
+                                    delta_text = last_step_delta_content[i] + delta_text
+                                    delta_token_ids = last_step_delta_content_id[i] + delta_token_ids
+                                    previous_text = current_text[:-len(delta_text)]
+                                    previous_token_ids = current_token_ids[:-len(delta_token_ids)]
+                                    last_step_delta_content[i] = ""
+                                    last_step_delta_content_id[i] = []
 
                                 # Get tool parser instance for this choice
                                 if tool_parser_instance is not None:
@@ -581,24 +578,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                             current_token_ids=current_token_ids,
                                             delta_token_ids=delta_token_ids,
                                             request=request))
-                                    # Check tool parser returned content length is abnormal
-                                    if delta_message and delta_message.content:
-                                        # Calc recalculated delta text
-                                        if output_tokenids:
-                                            recalculated_delta_text = self.llm_server.pre_post_processor.decode(
-                                                list(output_tokenids), True)
-                                            # Notice:
-                                            # If tool_parser returns a wrong content length, it maybe:
-                                            # 1. Contains longer reasoning content, which is not expected
-                                            # it may contain reasoning content, delete
-                                            # 2. Contains shorter tool_call content, it may be a tool call
-                                            # Use it directly
-                                            if len(delta_message.content) > len(recalculated_delta_text):
-                                                delta_text = recalculated_delta_text
-                                                delta_message.content = recalculated_delta_text
-                                    
+
                                     # Post-process tool calls for streaming (DeltaToolCall)
                                     if delta_message and delta_message.tool_calls:
+                                        logger.debug(f"delta_message.tool_calls: {delta_message.tool_calls}")
                                         self.post_process_tool_calls(delta_message.tool_calls, history_tool_call_cnt)
                                     
                                 else:
@@ -789,7 +772,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 truncate_prompt_tokens=getattr(request, 'truncate_prompt_tokens', None),
                 add_special_tokens=getattr(request, 'add_special_tokens', True),
             )
-                        
+
         except (TypeError, RuntimeError, ValueError) as e:
             logger.exception("Error in preprocessing prompt inputs")
             return self.create_error_response(
@@ -948,8 +931,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 # Dealing Ksana Python output, decode output tokens
                 for request_output in output.output_tokens:
                     output_tokens.extend(request_output)
+                logger.debug(f"output_tokens: {output_tokens}")
                 full_output_text = self.llm_server.pre_post_processor.decode(output_tokens, True)
-
+                logger.debug(f"full_output_text: {full_output_text}")
                 finish_reason = "stop"
                 
                 # 处理 logprobs（如果请求了）

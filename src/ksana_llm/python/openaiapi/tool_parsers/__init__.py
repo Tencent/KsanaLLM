@@ -6,6 +6,7 @@
 from .abstract_tool_parser import ToolParser, ToolParserManager
 from .deepseekv3_tool_parser import DeepSeekV3ToolParser
 from .deepseekv31_tool_parser import DeepSeekV31ToolParser
+from .deepseekv32_tool_parser import DeepSeekV32ToolParser
 from .hermes_tool_parser import Hermes2ProToolParser
 from .internlm2_tool_parser import Internlm2ToolParser
 from .kimi_k2_tool_parser import KimiK2ToolParser
@@ -20,4 +21,5 @@ __all__ = [
     "Llama3JsonToolParser", "Llama4PythonicToolParser",
     "PythonicToolParser", "DeepSeekV3ToolParser", 
     "KimiK2ToolParser", "DeepSeekV31ToolParser",
+    "DeepSeekV32ToolParser",
 ]
