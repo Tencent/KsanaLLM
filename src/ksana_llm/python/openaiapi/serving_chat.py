@@ -393,7 +393,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             unchanged_count[i] = 0  
                             previous_token_lengths[i] = current_token_length
                         
-                        full_text = self.llm_server.pre_post_processor.decode(current_token_ids, True)
+                        full_text = self.tokenizer.decode(current_token_ids,
+                                                          skip_special_tokens=request.skip_special_tokens)
                         
                         delta_text = ""
                         prev_length = len(previous_texts[i])
@@ -602,8 +603,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                             # Check tool parser returned content length is abnormal
                             if delta_message and delta_message.content:
                                 if output_tokenids:
-                                    recalculated_delta_text = self.llm_server.pre_post_processor.decode(
-                                        list(output_tokenids), True)
+                                    recalculated_delta_text = self.tokenizer.decode(
+                                        list(output_tokenids), skip_special_tokens=request.skip_special_tokens)
                                     if len(delta_message.content) > len(recalculated_delta_text):
                                         delta_text = recalculated_delta_text
                                         delta_message.content = recalculated_delta_text
@@ -752,6 +753,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 tool.model_dump() for tool in request.tools
             ]
             
+            if tool_dicts and request.tool_choice == "auto":
+                request.skip_special_tokens = False
+
             # preprocess chat messages, add hf chat template, etc.
             (
                 conversation,
@@ -938,7 +942,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 for request_output in output.output_tokens:
                     output_tokens.extend(request_output)
                 logger.debug(f"output_tokens: {output_tokens}")
-                full_output_text = self.llm_server.pre_post_processor.decode(output_tokens, True)
+                full_output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=request.skip_special_tokens)
                 logger.debug(f"full_output_text: {full_output_text}")
                 finish_reason = "stop"
                 
