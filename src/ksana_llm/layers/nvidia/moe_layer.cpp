@@ -148,7 +148,11 @@ size_t MoeLayer::GetWorkspaceSizeT() {
     topk_ids_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(int64_t));
     max_fused_id_buffer_size = 2 * m * expert_topk_ * sizeof(int32_t);
     intermediate_cache1_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T));
-    intermediate_cache2_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(T));
+    // When T is __nv_fp8e4m3, we fuse silu_mul into group quant,
+    // and intermediate_cache2 is not needed
+    bool fuse_silu_mul =
+        (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 && compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3);
+    intermediate_cache2_size = fuse_silu_mul ? 0 : AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(T));
     intermediate_cache3_size = AlignAddress(m * expert_topk_ * expert_hidden_size_ * sizeof(T));
     intermediate_cache1_and_cache3_size = std::max(intermediate_cache1_size, intermediate_cache3_size);  // 共享
     if (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
