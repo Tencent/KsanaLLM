@@ -394,18 +394,6 @@ class RequestConverter:
         if hasattr(request, 'logit_bias') and request.logit_bias:
             ksana_request["sampling_config"]["logit_bias"] = request.logit_bias
 
-        if hasattr(request, 'chat_template_kwargs') and request.chat_template_kwargs:
-            # For Qwen3 models, `enable_thinking` is supported.
-            if self.config.reasoning_parser in ["qwen3", "glm45"]:
-                enable_thinking = request.chat_template_kwargs.get("enable_thinking", False)
-                ksana_request["sampling_config"]["enable_thinking"] = enable_thinking
-            # For DeepSeek-V3.1 models, `thinking` is supported.
-            elif self.config.reasoning_parser in ["deepseek_v3"]:
-                enable_thinking = request.chat_template_kwargs.get("thinking", False)
-                ksana_request["sampling_config"]["enable_thinking"] = enable_thinking
-            elif self.config.reasoning_parser in ["deepseek_r1"]:
-                ksana_request["sampling_config"]["enable_thinking"] = True
-
         # 处理KsanaLLM特定的扩展参数
         extended_params = [
             'structured_output_regex', 'model_type', 'use_chat_template',

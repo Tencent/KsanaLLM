@@ -71,7 +71,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         self.tool_call_id_type = 'random'
         
         self._init_parsers()
-    
+
     def _init_parsers(self) -> None:
         self.reasoning_parser: Optional[Callable[[AnyTokenizer],
                                             ReasoningParser]] = None
@@ -797,6 +797,12 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 max_new_tokens = request.max_tokens or request.max_completion_tokens or 8192
                 max_new_tokens = max_new_tokens
                 ksana_request["sampling_config"]["max_new_tokens"] = max_new_tokens if max_new_tokens > 0 else 0
+                if self.reasoning_parser:
+                    enable_thinking = (self.reasoning_parser(tokenizer)._in_reasoning or
+                                       self._get_enable_thinking_from_request(request))
+                    ksana_request["sampling_config"]["enable_thinking"] = enable_thinking
+                    logger.debug("ksana_request enable_thinking: %s",
+                                 ksana_request["sampling_config"]["enable_thinking"])
                 #multi_modal_data & mm_processor_kwargs
                 if "multi_modal_data" in engine_prompt:
                     ksana_request["multi_modal_data"] = engine_prompt["multi_modal_data"]
@@ -1005,30 +1011,35 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 elif request.tool_choice and request.tool_choice == "required":
                     # temporary tool call class
                     # TODO(ethanyczeng): support Mistral tool call class 
-                    assert content is not None
-
-                    tool_calls = TypeAdapter(
-                        list[FunctionDefinition]).validate_json(content)
-                    tool_call_ids = []
-                    for tool_call in tool_calls:
-                        tool_call_ids.append(
-                            make_tool_call_id(id_type=self.tool_call_id_type,
-                                              func_name=tool_call.name,
-                                              idx=history_tool_call_cnt))
-                        history_tool_call_cnt += 1
-                    message = ChatMessage(
-                        role=role,
-                        reasoning_content=reasoning_content,
-                        content="",
-                        tool_calls=[
-                            ToolCall(id=tool_call_ids[i],
-                                function=FunctionCall(
-                                name=tool_call.name,
-                                arguments=json.dumps(tool_call.parameters,
-                                                        ensure_ascii=False)))
-                            for i, tool_call in enumerate(tool_calls)
-                        ])
-                    finish_reason = "tool_calls"
+                    if content is not None:
+                        tool_calls = TypeAdapter(
+                            list[FunctionDefinition]).validate_json(content)
+                        tool_call_ids = []
+                        for tool_call in tool_calls:
+                            tool_call_ids.append(
+                                make_tool_call_id(id_type=self.tool_call_id_type,
+                                                func_name=tool_call.name,
+                                                idx=history_tool_call_cnt))
+                            history_tool_call_cnt += 1
+                        message = ChatMessage(
+                            role=role,
+                            reasoning_content=reasoning_content,
+                            content="",
+                            tool_calls=[
+                                ToolCall(id=tool_call_ids[i],
+                                    function=FunctionCall(
+                                    name=tool_call.name,
+                                    arguments=json.dumps(tool_call.parameters,
+                                                            ensure_ascii=False)))
+                                for i, tool_call in enumerate(tool_calls)
+                            ])
+                        finish_reason = "tool_calls"
+                    else:
+                        message = ChatMessage(
+                            role=role,
+                            reasoning_content=reasoning_content,
+                            content=""
+                        )
                 
                 elif not request.tool_choice or request.tool_choice == "none":
                     # dont use any tools

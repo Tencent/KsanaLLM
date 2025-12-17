@@ -41,15 +41,18 @@ class DeepSeekV31ToolParser(ToolParser):
         self.tool_call_end_token: str = "<｜tool▁call▁end｜>"
 
         self.tool_call_regex = re.compile(
-            r"<｜tool▁call▁begin｜>(?P<function_name>.*?)<｜tool▁sep｜>(?P<function_arguments>.*?)<｜tool▁call▁end｜>"
+            r"<｜tool▁call▁begin｜>(?P<function_name>.*?)<｜tool▁sep｜>(?P<function_arguments>.*?)<｜tool▁call▁end｜>",
+            re.DOTALL
         )
 
         self.stream_tool_call_portion_regex = re.compile(
-            r"(?P<function_name>.*)<｜tool▁sep｜>(?P<function_arguments>.*)"
+            r"(?P<function_name>.*)<｜tool▁sep｜>(?P<function_arguments>.*)",
+            re.DOTALL
         )
 
         self.stream_tool_call_name_regex = re.compile(
-            r"(?P<function_name>.*)<｜tool▁sep｜>"
+            r"(?P<function_name>.*)<｜tool▁sep｜>",
+            re.DOTALL
         )
 
         if not self.model_tokenizer:
@@ -126,7 +129,7 @@ class DeepSeekV31ToolParser(ToolParser):
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> Union[DeltaMessage, None]:
-
+        logger.debug("previous_text: %s", previous_text)
         logger.debug("delta_text: %s", delta_text)
         logger.debug("delta_token_ids: %s", delta_token_ids)
         # check to see if we should be streaming a tool call - is there a
@@ -170,9 +173,8 @@ class DeepSeekV31ToolParser(ToolParser):
 
             if self.tool_call_end_token in delta_text:
                 logger.info("tool_call_end_token in delta_text: %s", delta_text)
-                full_text = current_text + delta_text
                 tool_call_portion = (
-                    full_text.split(self.tool_call_start_token)[-1]
+                    current_text.split(self.tool_call_start_token)[-1]
                     .split(self.tool_call_end_token)[0]
                     .rstrip()
                 )
@@ -215,8 +217,52 @@ class DeepSeekV31ToolParser(ToolParser):
                 and cur_tool_end_count >= prev_tool_end_count
             ):
                 if self.prev_tool_call_arr is None or len(self.prev_tool_call_arr) == 0:
-                    logger.debug("attempting to close tool call, but no tool call")
-                    return None
+                    # To parser "funtion_name<｜tool▁sep｜>function_args<｜tool▁call▁end｜>"
+                    # in one step.
+                    if not self.streamed_args_for_tool[self.current_tool_id]:
+                        logger.info("Last deal with tool_call_portion: %s", tool_call_portion)
+                        current_tool_call_matches = self.stream_tool_call_portion_regex.match(
+                            tool_call_portion
+                        )
+                        if current_tool_call_matches:
+                            tool_name, tool_args = current_tool_call_matches.groups()
+                        else:
+                            logger.debug("Not enough token")
+                            return None
+                        if not self.current_tool_name_sent:
+                            last_delta = DeltaMessage(
+                                tool_calls=[
+                                    DeltaToolCall(
+                                        index=self.current_tool_id,
+                                        type="function",
+                                        id=make_tool_call_id(),
+                                        function=DeltaFunctionCall(
+                                            name=tool_name,
+                                            arguments=tool_args
+                                        ).model_dump(exclude_none=True),
+                                    )
+                                ]
+                            )
+                            logger.warning("Last delta name delay out: %s", tool_name)
+                            self.current_tool_name_sent = True
+                        else:
+                            last_delta = DeltaMessage(
+                                tool_calls=[
+                                    DeltaToolCall(
+                                        index=self.current_tool_id,
+                                        function=DeltaFunctionCall(
+                                            arguments=tool_args
+                                        ).model_dump(exclude_none=True),
+                                    )
+                                ]
+                            )
+                        logger.warning("Last delta args text delay out: %s", tool_args)
+                        self.streamed_args_for_tool[self.current_tool_id] = tool_args
+                        return last_delta
+                    else:
+                        logger.debug("attempting to close tool call, but no tool call")
+                        return None
+
                 diff = self.prev_tool_call_arr[self.current_tool_id].get("arguments")
                 if diff:
                     diff = (
