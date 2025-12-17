@@ -753,7 +753,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 tool.model_dump() for tool in request.tools
             ]
             
-            if tool_dicts and request.tool_choice == "auto":
+            if self.use_deepseek_v32_encoding and tool_dicts and request.tool_choice == "auto":
                 request.skip_special_tokens = False
 
             # preprocess chat messages, add hf chat template, etc.
