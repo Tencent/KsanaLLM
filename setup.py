@@ -197,6 +197,11 @@ class BuildExt(build_ext_orig):
                 dst_lib_package = package_lib_dir / target_lib   # other libs in /ksana_llm/lib/
             copy_file(str(src_lib), str(dst_lib_package))
 
+        # Copy deepseek-ai deepgemm package
+        src_dir = build_temp / "third_party" / "DeepGEMM" / "deep_gemm"
+        dst_dir = extdir.parent / "ksana_llm" / "deepseek_deep_gemm"
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
+
     def copy_python_files_and_dirs(self, extdir, cwd, implemented_endpoints, endpoint_status):
         """
         Copy the required Python files and directories into the package.

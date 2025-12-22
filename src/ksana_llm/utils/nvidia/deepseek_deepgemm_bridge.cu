@@ -21,7 +21,14 @@
 namespace {
 
 void InitializeRuntime() {
-  deep_gemm::Compiler::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH, DEEPGEMM_CUDA_HOME);
+  const char* env_path_str = std::getenv("DEEPGEMM_INCLUDE_DIR");
+  if (env_path_str == nullptr || *env_path_str == '\0') {
+    deep_gemm::Compiler::prepare_init(DEEPGEMM_LIBRARY_ROOT_PATH, DEEPGEMM_CUDA_HOME);
+  } else {
+    std::filesystem::path deepseek_deepgemm_path(env_path_str);
+    deepseek_deepgemm_path /= "deepseek_deep_gemm";
+    deep_gemm::Compiler::prepare_init(deepseek_deepgemm_path, DEEPGEMM_CUDA_HOME);
+  }
   deep_gemm::KernelRuntime::prepare_init(DEEPGEMM_CUDA_HOME);
 }
 
