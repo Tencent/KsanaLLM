@@ -128,7 +128,7 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + GetDecodeTokenNumThreshold()}, rank_);
   rotary_embedding_pos = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
   rotary_embedding_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num}, rank_);
-  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_table_block_num}, rank);
+  block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size * max_table_block_num}, rank);
 #ifdef ENABLE_CUDA
   // Only for flashmla
   if (model_config_.use_mla) {
