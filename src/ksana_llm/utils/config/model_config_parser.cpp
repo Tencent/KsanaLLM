@@ -12,6 +12,7 @@
 
 #include "ksana_llm/utils/config/quant_config_parser.h"
 
+#include "ksana_llm/models/arc_hunyuan_video/arc_hunyuan_video_config.h"
 #include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_config.h"
 #include "ksana_llm/models/chatglm/chatglm_config.h"
 #include "ksana_llm/models/common/common_config.h"
@@ -195,17 +196,21 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
     // fit llama3.1 config
     model_config.rope_scaling_factor_config.type =
         rope_scaling_setting.value("rope_type", model_config.rope_scaling_factor_config.type);
-    model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
+    // adjust the rope_scaling type based on the position_embedding_xdrope
+    if (config_json.value("position_embedding_xdrope", false)) {
+      model_config.rope_scaling_factor_config.type = "xdrope";
+    }
     // adjust the rope_scaling type based on the mrope_section
     if (rope_scaling_setting.contains("mrope_section") && model_config.rope_scaling_factor_config.type != "mrope") {
       KLLM_LOG_DEBUG << fmt::format("Replace rope_scaling type {} with mrope",
                                     model_config.rope_scaling_factor_config.type);
       model_config.rope_scaling_factor_config.type = "mrope";
     }
+    model_config.rope_scaling_factor_config.factor = rope_scaling_setting.value("factor", 1.0f);
     KLLM_LOG_DEBUG << fmt::format("rope_scaling type: {} factor: {}", model_config.rope_scaling_factor_config.type,
                                   model_config.rope_scaling_factor_config.factor);
 
-    std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3"};
+    std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3", "xdrope"};
     if (possible_rope_types.find(model_config.rope_scaling_factor_config.type) == possible_rope_types.end()) {
       if (model_config.rope_scaling_factor_config.type == "yarn") {
         derived_max_model_len = rope_scaling_setting.value("original_max_position_embeddings", derived_max_model_len);
@@ -228,6 +233,28 @@ void ParseModelMaxLength(const nlohmann::json &config_json, ModelConfig &model_c
       } else {
         derived_max_model_len *= model_config.rope_scaling_factor_config.factor;
       }
+    }
+
+    // arc-hunyuan-video with xdrope
+    if (model_config.rope_scaling_factor_config.type == "xdrope") {
+      model_config.rope_scaling_factor_config.has_alpha = true;
+      model_config.rope_scaling_factor_config.scaling_alpha = rope_scaling_setting.value("alpha", 1.0f);
+      model_config.rope_scaling_factor_config.beta_fast = rope_scaling_setting.value("beta_fast", 32.0f);
+      model_config.rope_scaling_factor_config.beta_slow = rope_scaling_setting.value("beta_slow", 1.0f);
+      model_config.rope_scaling_factor_config.mscale = rope_scaling_setting.value("mscale", 1.0f);
+      model_config.rope_scaling_factor_config.mscale_all_dim = rope_scaling_setting.value("mscale_all_dim", 1.0f);
+      std::vector<float> float_xdrope_section = config_json["xdrope_section"].get<std::vector<float>>();
+      // xdrope_section从float转换成int，并转换为cumsum方便算子使用
+      std::vector<int> int_xdrope_section(float_xdrope_section.size());
+      for (size_t i = 0; i < int_xdrope_section.size(); i++) {
+        int_xdrope_section[i] = static_cast<int>(float_xdrope_section[i] * model_config.size_per_head / 2);
+      }
+      for (size_t i = 1; i < int_xdrope_section.size(); i++) {
+        int_xdrope_section[i] += int_xdrope_section[i - 1];
+      }
+      model_config.rope_scaling_factor_config.xdrope_section = int_xdrope_section;
+      derived_max_model_len =
+          model_config.max_position_embeddings * model_config.rope_scaling_factor_config.scaling_alpha;
     }
 
     if (model_config.rope_scaling_factor_config.type == "llama3") {
@@ -467,6 +494,9 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       PrepareDeepSeekV3Attributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {
       PrepareBgeRerankerMinicpmAttributes(config_json, model_config);
+    } else if (model_config.type == "arc_hunyuan_video") {
+      config_json = config_json["text_config"];
+      PrepareArcHunyuanVideoAttributes(config_json, model_config);
     } else {
       if (config_json.at("model_type") == "internvl_chat") {
         config_json = config_json.at("llm_config");

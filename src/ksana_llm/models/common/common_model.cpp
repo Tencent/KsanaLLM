@@ -158,10 +158,16 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
     MemcpyAsync(mrotary_section_tensor_.GetPtr<void>(), model_config_.rope_scaling_factor_config.mrope_section.data(),
                 3 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
   }
+  if (model_config_.type == "arc_hunyuan_video") {
+    xdrotary_section_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {4}, rank_);
+    MemcpyAsync(xdrotary_section_tensor_.GetPtr<void>(), model_config_.rope_scaling_factor_config.xdrope_section.data(),
+                4 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
+  }
   bool reuse_prefix_config = prefix_caching_enabled_ || speculative_decoding_enabled_;
   model_creation_config.Init(model_config_, runtime_config_, model_buffers_.cos_sin_cache_tensor_,
                              model_run_config_.position_encoding, reuse_prefix_config, layer_num_on_node_,
-                             mrotary_section_tensor_.GetPtr<const int>(false));
+                             mrotary_section_tensor_.GetPtr<const int>(false),
+                             xdrotary_section_tensor_.GetPtr<const int>(false));
 
   // create matmul layer
   CreateLayers(layer_creation_context_, model_creation_config);

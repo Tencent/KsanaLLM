@@ -38,6 +38,7 @@ class FlashAttention {
   std::shared_ptr<Context> context_;
   int rank_;
   bool use_mrotary_ = false;
+  bool use_xdrotary_ = false;
   bool enable_blocked_multi_token_forwarding_kv_;
 };
 }  // namespace ksana_llm

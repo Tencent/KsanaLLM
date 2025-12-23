@@ -46,7 +46,7 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
   block_token_num_ = runtime_config.attn_backend_config.block_token_num;
   // +7 is because there are 6 more elements down:
   // attn_temperature_tuning_, attn_scale_, floor_scale_, RoPEScalingFactor,
-  // is_multi_token_forward, mrope_section_ptr
+  // is_multi_token_forward, mrope_section_ptr/xdrope_section_ptr
   enable_qk_pre_norm_before_rotary_pos_ = std::any_cast<const bool>(parameters[parameter_index + 7]);
 
   // setting scaling factor and mode
@@ -65,6 +65,7 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
     float mscale = 1.0f;
     float mscale_all_dim = 1.0f;
     const int* mrope_section_ptr = nullptr;
+    const int* xdrope_section_ptr = nullptr;
     if (rope_scaling_factor_config.type == "dynamic") {
       if (rope_scaling_factor_config.has_alpha) {
         rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::DYNAMIC_NTK_ALPHA;
@@ -113,6 +114,14 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
         // so we just adopt rope.
         rope_scaling_factor_config.type = "default";
       }
+    } else if (rope_scaling_factor_config.type == "xdrope") {
+      rotary_embedding_type = llm_kernels::nvidia::RotaryEmbeddingType::XDROPE;
+      scaling_alpha = rope_scaling_factor_config.scaling_alpha;
+      if (/* is_multi_token_forward */ std::any_cast<const bool>(parameters[parameter_index + 5])) {
+        xdrope_section_ptr = std::any_cast<const int*>(parameters[parameter_index + 6]);
+      } else {
+        xdrope_section_ptr = nullptr;
+      }
     } else if (rope_scaling_factor_config.type != "default") {
       KLLM_THROW(fmt::format("Unsupport rope scaling type: {}.", rope_scaling_factor_config.type));
     }
@@ -121,7 +130,7 @@ Status AttentionLayer::InitT(const std::vector<std::any>& parameters, const Runt
         cos_sin_cache_ptr, rotary_dim, max_position_embeddings, base, head_size_, head_size_, num_heads_, num_kv_heads_,
         stride_size_, is_neox, context_->GetComputeStreams()[rank_].Get(), rotary_embedding_type, scaling_factor,
         low_freq_factor, high_freq_factor, original_max_position_embeddings, scaling_alpha, mrope_section_ptr,
-        beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_yarn);
+        xdrope_section_ptr, beta_fast, beta_slow, mscale, mscale_all_dim, rope_scaling_factor_config.use_deepseek_yarn);
   } else if (position_encoding == PositionEncoding::ALIBI) {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::GetAlibiSlopesCuda(reinterpret_cast<float*>(cos_sin_cache_ptr),
                                                                   num_heads_ * tensor_para_size_,
@@ -192,6 +201,7 @@ Status InitYarnRotaryEmbedding(std::optional<llm_kernels::nvidia::RotaryEmbeddin
                                       original_max_position_embeddings,
                                       1.0f,     // scaling_alpha (not used in YARN)
                                       nullptr,  // mrope_section_ptr (not used in YARN)
+                                      nullptr,  // xdrope_section_ptr (not used in YARN)
                                       beta_fast, beta_slow, mscale, mscale_all_dim,
                                       rope_scaling_factor_config.use_deepseek_yarn);
 

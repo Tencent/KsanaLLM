@@ -84,4 +84,14 @@ std::string WeightNameReplace(const std::string& weight_name, const std::string&
   return std::regex_replace(weight_name, pattern, replace_name);
 }
 
+std::string CutPrefix(const std::string& weight_name, const std::string& prefix) {
+  // Check if weight_name starts with prefix
+  if (weight_name.size() >= prefix.size() && weight_name.compare(0, prefix.size(), prefix) == 0) {
+    // Return weight_name without the prefix
+    return weight_name.substr(prefix.size());
+  }
+  // Return original weight_name if prefix doesn't match
+  return weight_name;
+}
+
 }  // namespace ksana_llm

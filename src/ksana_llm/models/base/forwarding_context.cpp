@@ -190,6 +190,13 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
          static_cast<size_t>(max_position_embeddings) * static_cast<size_t>(scale_factor)},
         weight_type);
     cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
+  } else if (model_config.rope_scaling_factor_config.type == "xdrope") {
+    TensorBuffer* cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
+        "cos_sin_cache_tensor_",
+        {static_cast<size_t>(rotary_embedding),
+         static_cast<size_t>(max_position_embeddings * model_config.rope_scaling_factor_config.scaling_alpha)},
+        weight_type);
+    cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
   } else {
     TensorBuffer* cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
         "cos_sin_cache_tensor_", {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings)},

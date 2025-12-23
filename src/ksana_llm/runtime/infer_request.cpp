@@ -179,6 +179,7 @@ ForwardRequest *InferRequest::GetForwardRequest() {
     forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward_request_->input_refit_embedding = &input_refit_embedding;
     forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+    forward_request_->xdrotary_embedding_pos_offset = &xdrotary_embedding_pos_offset;
     forward_request_->response = &response;
     forward_request_->sampling_config = &sampling_config;
     forward_request_->request_target = &request_target;

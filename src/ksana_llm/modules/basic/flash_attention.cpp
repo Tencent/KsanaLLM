@@ -56,13 +56,17 @@ FlashAttention::FlashAttention(bool is_neox, const LayerCreationContext& creatio
   // end for applying temperature tuning
   std::vector<std::any> flash_attention_param = attention_param;
   flash_attention_param.push_back(true);
-  flash_attention_param.push_back(attn_config.mrope_section_ptr);
+  if (attn_config.model_config.rope_scaling_factor_config.type == "mrope") {
+    flash_attention_param.push_back(attn_config.mrope_section_ptr);
+    use_mrotary_ = true;
+  } else if (attn_config.model_config.rope_scaling_factor_config.type == "xdrope") {
+    flash_attention_param.push_back(attn_config.xdrope_section_ptr);
+    use_xdrotary_ = true;
+  } else {
+    flash_attention_param.push_back(nullptr);
+  }
   flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
   flash_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
-
-  if (attn_config.model_config.rope_scaling_factor_config.type == "mrope") {
-    use_mrotary_ = true;
-  }
 }
 
 FlashAttention::~FlashAttention() {}
@@ -82,7 +86,9 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
        model_input->flash_input.kv_list,
        model_input->dp_input_prefix_uint64_tensor,
        model_input->flash_input.kv_cache_offset,
-       use_mrotary_ ? model_input->dp_mrotary_embedding_pos : model_input->flash_input.rotary_embedding_pos,
+       use_mrotary_
+           ? model_input->dp_mrotary_embedding_pos
+           : (use_xdrotary_ ? model_input->dp_xdrotary_embedding_pos : model_input->flash_input.rotary_embedding_pos),
        model_input->flash_input.rotary_embedding_mask,
        model_input->dp_src_flexible_rotary_embedding_pos,
        model_input->dp_flexible_rotary_embedding_mask,

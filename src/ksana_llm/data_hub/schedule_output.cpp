@@ -18,6 +18,7 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest() {
     forward_request_->flexible_cached_copy_tasks = &flexible_cached_copy_tasks;
     forward_request_->input_refit_embedding = &input_refit_embedding;
     forward_request_->mrotary_embedding_pos_offset = &mrotary_embedding_pos_offset;
+    forward_request_->xdrotary_embedding_pos_offset = &xdrotary_embedding_pos_offset;
     forward_request_->forwarding_tokens =
         std::shared_ptr<decltype(forwarding_tokens)>(&forwarding_tokens, [](decltype(forwarding_tokens)*) {});
     forward_request_->request_target = &request_target;
@@ -196,6 +197,8 @@ size_t ScheduleOutputParser::GetSerializedSize(const ScheduleOutput* schedule_ou
 
     // mrotary_embedding_pos_offset
     serialized_bytes += sizeof(int64_t);
+    // xdrotary_embedding_pos_offset
+    serialized_bytes += sizeof(int64_t);
 
     // attn_dp_group_id
     serialized_bytes += sizeof(uint32_t);
@@ -253,6 +256,9 @@ Status ScheduleOutputParser::SerializeAsWorkerInferRequest(const std::vector<std
 
     // mrotary_embedding_pos_offset
     std::memcpy(data + offset, &req->mrotary_embedding_pos_offset, sizeof(int64_t));
+    offset += sizeof(int64_t);
+    // xdrotary_embedding_pos_offset
+    std::memcpy(data + offset, &req->xdrotary_embedding_pos_offset, sizeof(int64_t));
     offset += sizeof(int64_t);
 
     // attn_dp_group_id
@@ -319,6 +325,9 @@ Status ScheduleOutputParser::DeserializeWorkerInferRequest(
 
     // mrotary_embedding_pos_offset.
     req->mrotary_embedding_pos_offset = *reinterpret_cast<int64_t*>(data + offset);
+    offset += sizeof(int64_t);
+    // xdrotary_embedding_pos_offset.
+    req->xdrotary_embedding_pos_offset = *reinterpret_cast<int64_t*>(data + offset);
     offset += sizeof(int64_t);
 
     // attn_dp_group_id

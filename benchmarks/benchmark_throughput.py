@@ -64,6 +64,9 @@ PROMPT_AFFIX_DICT = {
     "<|startoftext|><|startoftext|>%s<|extra_4|><|extra_0|>",
     "empty":
     "%s",
+    "arc_hunyuan_video":
+    "<|startoftext|>\n%s\nOutput the thinking process in <think> </think> and final answer in <answer> </answer>"
+    " tags, i.e., <think> reasoning process here </think><answer> answer here </answer>.<sep>"
 }
 DEFAULT_STOP_TOKEN_IDS = {
     "llama-3": [128001, 128009],
@@ -289,7 +292,7 @@ def args_config():
                         choices=[
                             'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi',
                             'chatglm', 'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1',
-                            'hunyuan_large', 'kimi_k2'
+                            'hunyuan_large', 'kimi_k2', 'arc_hunyuan_video'
                         ],
                         help="serving model type, used to add prefixes and suffixes"
                              " to the prompt.")

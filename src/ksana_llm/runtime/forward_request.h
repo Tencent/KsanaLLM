@@ -38,6 +38,7 @@ struct ForwardRequest {
 
   // Multimodal rotary position embedding offset, this points to the corresponding member in infer_request.
   int64_t* mrotary_embedding_pos_offset = nullptr;
+  int64_t* xdrotary_embedding_pos_offset = nullptr;
 
   // forwarding_tokens contains tokens used in forwarding step. There are two parts:
   // 1. tokens have kv-caches, kv_cached_token_num is the number

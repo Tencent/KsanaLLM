@@ -34,6 +34,7 @@ enum RotaryEmbeddingType {
   MULTIFREQ_SCALING,
   YARN_SCALING,
   MROPE,
+  XDROPE,
   INTERNLM2_DYNAMIC_NTK_SCALING
 };
 
@@ -65,6 +66,7 @@ struct RotaryEmbeddingParam {
   int original_max_position_embeddings = 8192;
   float scaling_alpha = 1.0f;
   const int* mrope_section = nullptr;
+  const int* xdrope_section = nullptr;
   // for yarn
   float beta_fast = 32.0f;
   float beta_slow = 1.0f;
@@ -83,9 +85,9 @@ class RotaryEmbeddingCuda {
                  const RotaryEmbeddingType rotary_embedding_type = RotaryEmbeddingType::DEFAULT,
                  const float scaling_factor = 1.0f, const float low_freq_factor = 1.0f,
                  const float high_freq_factor = 4.0f, const int original_max_position_embeddings = 8192,
-                 const float scaling_alpha = 1.0f, const int* mrope_section = nullptr, const float beta_fast = 32.0f,
-                 const float beta_slow = 1.0f, const float mscale = 1.0f, const float mscale_all_dim = 1.0f,
-                 const bool use_deepseek_rope = false);
+                 const float scaling_alpha = 1.0f, const int* mrope_section = nullptr,
+                 const int* xdrope_section = nullptr, const float beta_fast = 32.0f, const float beta_slow = 1.0f,
+                 const float mscale = 1.0f, const float mscale_all_dim = 1.0f, const bool use_deepseek_rope = false);
 
   void SetInput(const int64_t* positions,  // [batch_size, seq_len] or [num_tokens]
                 const int64_t* mask,       // [batch_size, seq_len] or [num_tokens]
@@ -93,7 +95,7 @@ class RotaryEmbeddingCuda {
                                            // [num_tokens, num_heads * head_size]
                 void* key,                 // [batch_size, seq_len, num_kv_heads * head_size] or
                                            // [num_tokens, num_kv_heads * head_size]
-                int num_tokens, cudaStream_t& stream, int64_t query_stride = 0, int64_t key_stride = 0, 
+                int num_tokens, cudaStream_t& stream, int64_t query_stride = 0, int64_t key_stride = 0,
                 int query_head_size = 0, int key_head_size = 0, bool is_reverse = false);
 
   template <typename T>

@@ -60,9 +60,16 @@ class FakeModel {
       MemcpyAsync(mrotary_section_tensor_.GetPtr<void>(), model_config.rope_scaling_factor_config.mrope_section.data(),
                   3 * sizeof(int), MEMCPY_HOST_TO_DEVICE, context_->GetMemoryManageStreams()[rank_]);
     }
+    if (model_config.type == "arc_hunyuan_video") {
+      xdrotary_section_tensor_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {4}, rank_);
+      MemcpyAsync(xdrotary_section_tensor_.GetPtr<void>(),
+                  model_config.rope_scaling_factor_config.xdrope_section.data(), 4 * sizeof(int), MEMCPY_HOST_TO_DEVICE,
+                  context_->GetMemoryManageStreams()[rank_]);
+    }
     model_creation_config.Init(model_config, runtime_config, buffers_.cos_sin_cache_tensor_,
                                model_run_config.position_encoding, reuse_prefix_config, layer_num_on_node,
-                               mrotary_section_tensor_.GetPtr<const int>());
+                               mrotary_section_tensor_.GetPtr<const int>(),
+                               xdrotary_section_tensor_.GetPtr<const int>());
 
     model_->CreateLayers(layer_creation_context_, model_creation_config);
 
@@ -157,6 +164,8 @@ class FakeModel {
 
   // Only used for QWenVL
   Tensor mrotary_section_tensor_;
+  // Only used for arc_hunyuan_video
+  Tensor xdrotary_section_tensor_;
 };
 
 class ForwardRequestBuilderForTest {

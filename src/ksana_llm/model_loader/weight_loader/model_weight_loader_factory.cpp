@@ -9,6 +9,7 @@
 #include "ksana_llm/utils/status.h"
 #include "ksana_llm/utils/string_utils.h"
 
+#include "ksana_llm/models/arc_hunyuan_video/arc_hunyuan_video_weight_loader.h"
 #include "ksana_llm/models/llama/llama_model_weight_loader.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_weight_loader.h"
 #include "ksana_llm/models/qwen/new_qwen_weight_loader.h"
@@ -31,6 +32,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_QWEN: {
       model_weight_loader = std::make_shared<NewQwenWeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO: {
+      model_weight_loader = std::make_shared<ArcHunyuanVideoWeightLoader>(model_config, env, context);
       break;
     }
     default: {

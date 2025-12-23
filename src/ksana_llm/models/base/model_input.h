@@ -36,6 +36,8 @@ class ModelInput {
 
   // Prepare MRope position for qwen2_vl
   void PrepareMRopePos(const std::vector<ForwardRequest*>& forward_reqs);
+  // Prepare XDRope position for arc_hunyuan_video
+  void PrepareXDRopePos(const std::vector<ForwardRequest*>& forward_reqs);
 
 #ifdef ENABLE_CUDA
   template <typename T>
@@ -137,6 +139,8 @@ class ModelInput {
 
   // The 3-dimentional index position for multimodal rotarty embedding.
   Tensor dp_mrotary_embedding_pos;
+  // The 4-dimentional index position for xd rotarty embedding.
+  Tensor dp_xdrotary_embedding_pos;
 
   // Record which logits in the output of all tokens need to be extracted for subsequent sampling calculations
   // Due to the presence of logits_custom_length and speculative_decoding, a single request may require extracting more

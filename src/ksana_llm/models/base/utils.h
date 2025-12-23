@@ -36,4 +36,8 @@ bool CheckWeightNameEndMatched(const std::string& weight_name, const std::vector
 std::string WeightNameReplace(const std::string& weight_name, const std::string& match_name,
                               const std::string& replace_name);
 
+// Cut prefix from weight_name if it starts with the given prefix
+// Returns the weight_name without the prefix if it matches, otherwise returns the original weight_name
+std::string CutPrefix(const std::string& weight_name, const std::string& prefix);
+
 }  // namespace ksana_llm

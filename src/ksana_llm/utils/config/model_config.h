@@ -20,8 +20,9 @@ struct RoPEScalingFactor {
   float high_freq_factor{4.0f};
   int original_max_position_embeddings{8192};
   bool has_alpha{false};
-  float scaling_alpha{1.0f};         // for dynamic alpha rope
-  std::vector<int> mrope_section{};  // for multimodal rope
+  float scaling_alpha{1.0f};          // for dynamic alpha rope
+  std::vector<int> mrope_section{};   // for multimodal rope
+  std::vector<int> xdrope_section{};  // for arc-hunyuan-video
 
   // deepseek-yarn config params
   bool use_deepseek_yarn{false};
@@ -286,6 +287,7 @@ struct ModelConfig {
   bool load_bias = true;     // Check if load all weights bias.
   int cla_share_factor = 0;  // Determines the number of layers that share k and v.
   bool use_cla = false;
+  // NOTE(jinxcwu) 这个参数不是从配置解析的，是在创建Model/Model函数内等位置手动指定的
   bool use_qk_norm = false;  // Check if normlize the attention out q and k.
   bool mlp_bias = false;     // Check if use bias in mlp layer.
   // For mla model
@@ -294,6 +296,15 @@ struct ModelConfig {
   // For dsa model
   bool use_dsa = false;
   DsaConfig dsa_config;
+
+  // For arc-hunyuan-video
+  // TODO(jinxcwu) 后续要简化下，不是所有都需要的
+  uint32_t eod_token_id = 0;
+  uint32_t im_end_id = 0;
+  uint32_t im_newline_id = 0;
+  uint32_t im_start_id = 0;
+  uint32_t image_token_id = 0;
+  bool position_embedding_xdrope = false;
 
   // Whether to normalize q and k before rotary position embedding in attention.
   bool enable_qk_pre_norm_before_rotary_pos = false;  // to be removed

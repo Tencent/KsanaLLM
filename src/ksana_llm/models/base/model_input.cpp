@@ -277,6 +277,10 @@ void ModelInput::CreateVLTensors() {
     dp_mrotary_embedding_pos =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {3, runtime_config_.max_step_token_num}, rank_);
   }
+  if (model_config_.type == "arc_hunyuan_video") {
+    dp_xdrotary_embedding_pos =
+        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {4, runtime_config_.max_step_token_num}, rank_);
+  }
   if (model_config_.type == "internlmxcomposer2") {
     im_mask = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16, {runtime_config_.max_step_token_num}, rank_);
   }
@@ -532,6 +536,9 @@ void ModelInput::PrepareVLInputRefit(const std::vector<ForwardRequest*>& forward
   if (model_config_.type == "qwen2_vl") {
     PrepareMRopePos(forward_reqs);
   }
+  if (model_config_.type == "arc_hunyuan_video") {
+    PrepareXDRopePos(forward_reqs);
+  }
 }
 
 void ModelInput::PrepareCutoffLayer(const std::vector<ForwardRequest*>& forward_reqs) {
@@ -759,6 +766,71 @@ void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest*>& forward_req
   }
   MemcpyAsync(dp_mrotary_embedding_pos.GetPtr<void>(), mrotary_embedding_pos_host.data(),
               sizeof(int64_t) * mrotary_embedding_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
+              context_->GetH2DStreams()[rank_]);
+
+#ifdef ENABLE_ACL
+  StreamSynchronize(context_->GetH2DStreams()[rank_]);
+#endif
+}
+
+/**
+ * xdrope
+ * # https://github.com/TencentARC/ARC-Hunyuan-Video-7B/model_vllm/hunyuan.py
+ * 实现上与mrope比较类似
+ */
+void ModelInput::PrepareXDRopePos(const std::vector<ForwardRequest*>& forward_reqs) {
+  constexpr int kXDRotaryEmbeddingPosFactor = 4;
+  int64_t dp_xdrotary_embedding_pos_size = 0;
+  std::vector<int64_t> xdrotary_embedding_pos_host;
+  for (auto& req_ptr : forward_reqs) {
+    auto& req = *req_ptr;
+    // only needs to handle the prefill requests in its dp group
+    if (req.GetType() != ForwardRequestType::kFlash || req.attn_dp_group_id != attn_dp_group_id_) {
+      continue;
+    }
+    if (req.kv_cached_token_num == 0) {  // 首token的prefill情况
+      auto& additional_tensors = req.input_refit_embedding->additional_tensors;
+      // This is a plain text input.
+      if (additional_tensors.empty()) {
+        int64_t list_size = req.forwarding_tokens->size() * kXDRotaryEmbeddingPosFactor;
+        xdrotary_embedding_pos_host.reserve(xdrotary_embedding_pos_host.size() + list_size);
+        for (int64_t i = 0; i < list_size; i += kXDRotaryEmbeddingPosFactor) {
+          for (int t = 0; t < kXDRotaryEmbeddingPosFactor; ++t) {
+            xdrotary_embedding_pos_host.emplace_back(i);
+          }
+        }
+        *req.xdrotary_embedding_pos_offset = 0;
+        continue;
+      }
+      KLLM_CHECK_WITH_INFO(
+          additional_tensors.size() == 2,
+          "For visual inputs, additional_tensors must contain 2 tensors: position tensor and offset tensor.");
+      // This is a input with visual information.
+      torch::Tensor dp_xdrotary_embedding_pos_tensor;
+      {
+        py::gil_scoped_acquire acquire;
+        dp_xdrotary_embedding_pos_tensor = THPVariable_Unpack(additional_tensors[0].ptr());
+      }
+      int64_t tensor_size = dp_xdrotary_embedding_pos_tensor.numel();
+      int64_t xdrotart_embedding_pos_index = xdrotary_embedding_pos_host.size();
+      xdrotary_embedding_pos_host.resize(xdrotary_embedding_pos_host.size() + tensor_size);
+      std::memcpy(xdrotary_embedding_pos_host.data() + xdrotart_embedding_pos_index,
+                  dp_xdrotary_embedding_pos_tensor.data_ptr(), sizeof(int64_t) * tensor_size);
+      torch::Tensor dp_xdrotary_embedding_pos_offset_tensor = THPVariable_Unpack(additional_tensors[1].ptr());
+      *req.xdrotary_embedding_pos_offset = dp_xdrotary_embedding_pos_offset_tensor.item().toLong();
+    } else {  // decode情况，对应get_next_input_positions
+      const size_t input_len = req.forwarding_tokens->size() - req.kv_cached_token_num;
+      const auto pos_offset = *req.xdrotary_embedding_pos_offset;
+      xdrotary_embedding_pos_host.reserve(xdrotary_embedding_pos_host.size() + kXDRotaryEmbeddingPosFactor * input_len);
+      for (int i = 0; i < input_len; ++i) {
+        for (int t = 0; t < kXDRotaryEmbeddingPosFactor; ++t) {
+          xdrotary_embedding_pos_host.emplace_back(req.kv_cached_token_num + pos_offset + i);
+        }
+      }
+    }
+  }
+  MemcpyAsync(dp_xdrotary_embedding_pos.GetPtr<void>(), xdrotary_embedding_pos_host.data(),
+              sizeof(int64_t) * xdrotary_embedding_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->GetH2DStreams()[rank_]);
 
 #ifdef ENABLE_ACL
@@ -1079,7 +1151,8 @@ void ModelInput::PrepareDecodeRotary(input_info& input) {
   size_t rotary_data_offset = 0;
   for (const auto& req : input.dp_reqs) {
     const size_t input_len = req->forwarding_tokens->size() - req->kv_cached_token_num;
-    const auto pos_offset = model_config_.type == "qwen2_vl" ? *req->mrotary_embedding_pos_offset : 0;
+    auto pos_offset = model_config_.type == "qwen2_vl" ? *req->mrotary_embedding_pos_offset : 0;
+    pos_offset = model_config_.type == "arc_hunyuan_video" ? *req->xdrotary_embedding_pos_offset : pos_offset;
     std::iota(rotary_pos_host.begin() + rotary_data_offset, rotary_pos_host.begin() + rotary_data_offset + input_len,
               req->kv_cached_token_num + pos_offset);
     rotary_data_offset += input_len;

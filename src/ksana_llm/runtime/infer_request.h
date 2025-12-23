@@ -156,6 +156,7 @@ class InferRequest {
   // The offset for multimodal rotary position embedding, computed in prefill phase by Python plugin,
   // and used in decode phase.
   int64_t mrotary_embedding_pos_offset = 0;
+  int64_t xdrotary_embedding_pos_offset = 0;
 
   // output_tokens is used during computation. When split fuse is enabled, output_tokens contains only the split
   // part. This variable is dynamically updated based on the current computation phase and may not always represent the

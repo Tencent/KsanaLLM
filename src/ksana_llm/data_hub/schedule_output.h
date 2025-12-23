@@ -42,6 +42,7 @@ struct WorkerInferRequest {
   // The offset for multimodal rotary position embedding, computed in prefill phase by Python plugin,
   // and used in decode phase.
   int64_t mrotary_embedding_pos_offset = 0;
+  int64_t xdrotary_embedding_pos_offset = 0;
 
   // The model instance pointer.
   std::shared_ptr<ModelInstance> model_instance = nullptr;
@@ -153,6 +154,7 @@ struct ScheduleOutput {
       result += "\n";
       result += "        kv_cached_token_num:" + std::to_string(req->kv_cached_token_num) + "\n";
       result += "        mrotary_embedding_pos_offset:" + std::to_string(req->mrotary_embedding_pos_offset) + "\n";
+      result += "        xdrotary_embedding_pos_offset:" + std::to_string(req->xdrotary_embedding_pos_offset) + "\n";
       result += "        attn_dp_group_id:" + std::to_string(req->attn_dp_group_id) + "\n";
       result += "      }\n";
     }

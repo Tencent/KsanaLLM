@@ -383,6 +383,10 @@ bool WeightInstance::IsCompatibleWithNewLoader(std::shared_ptr<BaseModelConfig> 
       return false;
     }
 
+    case ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO: {
+      return true;
+    }
+
     default:
       return false;
   }

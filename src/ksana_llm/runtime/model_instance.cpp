@@ -16,6 +16,7 @@
 #include "ksana_llm/utils/status.h"
 #include "nlohmann/json.hpp"
 
+#include "ksana_llm/models/arc_hunyuan_video/arc_hunyuan_video_model.h"
 #include "ksana_llm/models/baichuan/baichuan_model.h"
 #include "ksana_llm/models/bge_reranker_minicpm/bge_reranker_minicpm_model.h"
 #include "ksana_llm/models/chatglm/chatglm_model.h"
@@ -99,6 +100,11 @@ void ModelInstance::Load() {
     type = "internlm2";
     CreateModelInstance<InternlmxComposer2Model>(unified_model_type, model_config_, runtime_config_, context_, models_,
                                                  weight_instance_);
+  } else if (unified_model_type.find("arc_hunyuan_video") !=
+             std::string::npos) {  // 要放在普通hunyuan的前面，避免错误匹配
+    type = "arc_hunyuan_video";
+    CreateModelInstance<ArcHunyuanVideoModel>(unified_model_type, model_config_, runtime_config_, context_, models_,
+                                              weight_instance_);
   } else if (unified_model_type.find("hunyuan") != std::string::npos && !model_config_.is_moe) {
     type = "hunyuan";
     CreateModelInstance<HunyuanTurboModel>(unified_model_type, model_config_, runtime_config_, context_, models_,

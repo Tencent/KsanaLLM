@@ -186,3 +186,48 @@ TEST_F(UtilsTest, WeightNameReplaceTest) {
   EXPECT_EQ(WeightNameReplace("transformer.h.0.mlp.c_fc.weight", ".h.", ".layers."),
             "transformer.layers.0.mlp.c_fc.weight");
 }
+
+// 测试 CutPrefix 函数
+TEST_F(UtilsTest, CutPrefixTest) {
+  // 测试基本前缀移除
+  EXPECT_EQ(CutPrefix("model.layers.0.weight", "model."), "layers.0.weight");
+  EXPECT_EQ(CutPrefix("prefix.attention.weight", "prefix."), "attention.weight");
+
+  // 测试前缀不匹配的情况（返回原始字符串）
+  EXPECT_EQ(CutPrefix("model.layers.0.weight", "other."), "model.layers.0.weight");
+  EXPECT_EQ(CutPrefix("attention.weight", "model."), "attention.weight");
+
+  // 测试空前缀（应该返回原始字符串）
+  EXPECT_EQ(CutPrefix("model.layers.weight", ""), "model.layers.weight");
+
+  // 测试空字符串输入
+  EXPECT_EQ(CutPrefix("", "prefix."), "");
+  EXPECT_EQ(CutPrefix("", ""), "");
+
+  // 测试前缀等于整个字符串的情况
+  EXPECT_EQ(CutPrefix("model.weight", "model.weight"), "");
+
+  // 测试前缀比字符串长的情况（不匹配，返回原始字符串）
+  EXPECT_EQ(CutPrefix("model", "model.layers.weight"), "model");
+
+  // 测试部分匹配但不是前缀的情况
+  EXPECT_EQ(CutPrefix("mymodel.weight", "model"), "mymodel.weight");
+  EXPECT_EQ(CutPrefix("prefix_model.weight", "model"), "prefix_model.weight");
+
+  // 测试实际使用场景
+  EXPECT_EQ(CutPrefix("transformer.encoder.layer.0.weight", "transformer."), "encoder.layer.0.weight");
+  EXPECT_EQ(CutPrefix("bert.embeddings.word_embeddings.weight", "bert."), "embeddings.word_embeddings.weight");
+  EXPECT_EQ(CutPrefix("language_model.model.layers.0.self_attn.q_proj.weight", "language_model."),
+            "model.layers.0.self_attn.q_proj.weight");
+
+  // 测试多层前缀移除（需要多次调用）
+  std::string name = "prefix1.prefix2.weight";
+  name = CutPrefix(name, "prefix1.");
+  EXPECT_EQ(name, "prefix2.weight");
+  name = CutPrefix(name, "prefix2.");
+  EXPECT_EQ(name, "weight");
+
+  // 测试特殊字符
+  EXPECT_EQ(CutPrefix("model[0].weight", "model[0]."), "weight");
+  EXPECT_EQ(CutPrefix("model_v2.layers.weight", "model_v2."), "layers.weight");
+}

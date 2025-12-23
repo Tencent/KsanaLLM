@@ -17,6 +17,12 @@ from transformers import (
    VideoLlavaProcessor, PreTrainedTokenizerFast
 )
 
+# NOTE(jinxcwu) 目前 ARCHunyuanVideoTokenizer 还不在官方transformers库中，因此需要检查
+try:
+    from transformers import ARCHunyuanVideoTokenizer
+except ImportError as e:
+    ARCHunyuanVideoTokenizer = None
+
 PROMPT_AFFIX_DICT = {
     "llama":
     "[INST]%s[/INST]",
@@ -49,11 +55,14 @@ PROMPT_AFFIX_DICT = {
     "kimi_k2":
     "<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user"
     "<|im_middle|>%s<|im_end|><|im_assistant|>assistant<|im_middle|>",
+    "arc_hunyuan_video":
+    "<|startoftext|>\n%s\nOutput the thinking process in <think> </think> and final answer in <answer> </answer> tags,"
+    " i.e., <think> reasoning process here </think><answer> answer here </answer>.<sep>"
 }
 
 SUPPORTED_MODEL_TYPE = [
     'llama', 'llama-3', 'baichuan', 'qwen', 'vicuna', 'yi', 'chatglm',
-    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1', 'hunyuan_large', "kimi_k2"
+    'empty', 'deepseek_v2', 'deepseek_v3', 'deepseek_r1', 'hunyuan_large', "kimi_k2", "arc_hunyuan_video"
 ]
 
 USER = "user"
@@ -143,6 +152,11 @@ class TokenizerProcessorOpBase:
         if tokenizer_config.get("processor_class", "") == "Llama4Processor" \
             and tokenizer_config.get("tokenizer_class", "") == "PreTrainedTokenizer":
             return PreTrainedTokenizerFast.from_pretrained(model_path)
+        if tokenizer_config.get("tokenizer_class", "") == "ARCHunyuanVideoTokenizer":
+            if ARCHunyuanVideoTokenizer is None:
+                print(f"\033[33m------ARCHunyuanVideoTokenizer modules not available--------\033[0m")
+            else:
+                return ARCHunyuanVideoTokenizer.from_pretrained(model_path)
 
         if os.path.exists(model_path + "/preprocessor_config.json"):
             return AutoProcessor.from_pretrained(model_path, trust_remote_code=True)

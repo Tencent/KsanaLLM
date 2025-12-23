@@ -75,10 +75,10 @@ class CommonModelWeightLoader {
   // 获取context指针
   std::shared_ptr<Context> GetContext() const { return context_; }
 
- private:
   // 沿第0维拼接多个张量（要求第1维大小相同）
   Status Concat(const std::vector<Tensor>& inputs_tensor, Tensor& output, int dev_rank);
 
+ private:
   // 根据源张量和目标张量的内存位置自动判断内存拷贝类型（Host/Device）
   MemcpyKind GetMemcpyKind(const Tensor& from_tensor, const Tensor& to_tensor);
 

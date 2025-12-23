@@ -60,6 +60,7 @@ struct AttentionCreationConfig {
 
   // Only for flash attention. need to remove later
   const int* mrope_section_ptr;
+  const int* xdrope_section_ptr;
   bool reuse_prefix_caching;
 };
 
@@ -75,7 +76,7 @@ struct ModelCreationConfig {
 
   void Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config, Tensor cos_sin_cache_tensor_,
             PositionEncoding position_encoding, bool reuse_prefix_caching, int layer_num_on_node_,
-            const int* mrope_section_ptr);
+            const int* mrope_section_ptr, const int* xdrope_section_ptr);
 };
 
 // Temp, remove later

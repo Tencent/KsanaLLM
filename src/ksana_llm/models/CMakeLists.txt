@@ -24,7 +24,8 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_large/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/*.cpp
   ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/new_deepseek_v3/*.cpp
-  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_turbo/*.cpp)
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/hunyuan_turbo/*.cpp
+  ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/arc_hunyuan_video/*.cpp)
 
 list(FILTER models_SRCS EXCLUDE REGEX ".*test.cpp")
 
@@ -68,6 +69,7 @@ if(WITH_STANDALONE_TEST)
     if(DEFINED SM AND "${SM}" STREQUAL "90a")
       cpp_test(deepseek_v3_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_model_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(deepseek_v3_dp_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/deepseek_v3/deepseek_v3_dp_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+      cpp_test(arc_hunyuan_video_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/arc_hunyuan_video/arc_hunyuan_video_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(quant_int4_weight_test SRCS ${PROJECT_SOURCE_DIR}/src/ksana_llm/models/quant/quant_int4_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     endif()
   endif()

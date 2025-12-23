@@ -30,6 +30,8 @@ enum class ModelArchitecture {
   ARCH_MIXTRAL,
   // DeepSeek V2/V3/R1/V32 or Kimi K2
   ARCH_DEEPSEEK,
+  // arc_hunyuan_video
+  ARCH_ARC_HUNYUAN_VIDEO,
   // unknown
   ARCH_UNKNOWN,
 };

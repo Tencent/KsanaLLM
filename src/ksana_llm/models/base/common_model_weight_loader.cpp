@@ -207,13 +207,14 @@ Status CommonModelWeightLoader::Concat(const std::vector<Tensor>& inputs_tensor,
   for (size_t i = 0; i < inputs_tensor.size(); i++) {
     shape[0] += inputs_tensor[i].shape[0];
   }
-  // 创建tensor
+  // 创建tensor（目标tensor始终在device上）
   Tensor concat = Tensor(MemoryLocation::LOCATION_DEVICE, inputs_tensor[0].dtype, shape, dev_rank);
-  // 逐个拷贝
+  // 逐个拷贝，根据源tensor的location自动判断拷贝方向
   size_t offset = 0;
   for (size_t i = 0; i < inputs_tensor.size(); i++) {
+    MemcpyKind memcpy_kind = GetMemcpyKind(inputs_tensor[i], concat);
     MemcpyAsync(concat.GetPtr<void>() + offset, inputs_tensor[i].GetPtr<void>(), inputs_tensor[i].GetTotalBytes(),
-                MEMCPY_DEVICE_TO_DEVICE, context_->GetMemoryManageStreams()[dev_rank]);
+                memcpy_kind, context_->GetMemoryManageStreams()[dev_rank]);
     offset += inputs_tensor[i].GetTotalBytes();
   }
   output = concat;

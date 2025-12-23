@@ -180,6 +180,8 @@ class CommonModel : public BaseModel {
 
   // Only used for QWenVL
   Tensor mrotary_section_tensor_;
+  // Only used for arc_hunyuan_video
+  Tensor xdrotary_section_tensor_;
 
  protected:
   bool IsPrefixCachingComputationReuse();

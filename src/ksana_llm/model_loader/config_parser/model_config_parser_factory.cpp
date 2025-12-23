@@ -4,6 +4,7 @@
 
 #include "ksana_llm/model_loader/config_parser/model_config_parser_factory.h"
 
+#include "ksana_llm/models/arc_hunyuan_video/arc_hunyuan_video_config_parser.h"
 #include "ksana_llm/models/llama/llama_model_config_parser.h"
 #include "ksana_llm/models/new_deepseek_v3/new_deepseek_v3_config_parser.h"
 #include "ksana_llm/models/qwen/new_qwen_config_parser.h"
@@ -24,6 +25,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_QWEN: {
       model_config_parser = std::make_shared<NewQwenConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO: {
+      model_config_parser = std::make_shared<ArcHunyuanVideoConfigParser>();
       break;
     }
     default: {

@@ -32,7 +32,8 @@ void LayerCreationContext::Init(std::shared_ptr<BaseWeight> base_weight_, std::s
 
 void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeConfig& runtime_config,
                                Tensor cos_sin_cache_tensor_, PositionEncoding position_encoding,
-                               bool reuse_prefix_caching, int layer_num_on_node_, const int* mrope_section_ptr) {
+                               bool reuse_prefix_caching, int layer_num_on_node_, const int* mrope_section_ptr,
+                               const int* xdrope_section_ptr) {
   auto env = Singleton<Environment>::GetInstance();
   const int size_per_head = model_config_.size_per_head;
   const int head_num_per_tp = model_config_.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
@@ -61,6 +62,7 @@ void ModelCreationConfig::Init(const ModelConfig& model_config_, const RuntimeCo
   attn_config.max_decode_tokens_per_req = batch_scheduler_config.max_decode_tokens_per_req;
   attn_config.use_qk_norm = model_config_.use_qk_norm;
   attn_config.mrope_section_ptr = mrope_section_ptr;
+  attn_config.xdrope_section_ptr = xdrope_section_ptr;
   attn_config.reuse_prefix_caching = reuse_prefix_caching;
   attn_config.model_config.enable_qk_pre_norm_before_rotary_pos = model_config_.enable_qk_pre_norm_before_rotary_pos;
   attn_config.model_config.enable_add_qkv_bias = model_config_.enable_add_qkv_bias;

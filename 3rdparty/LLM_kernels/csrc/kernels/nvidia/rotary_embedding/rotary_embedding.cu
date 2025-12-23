@@ -172,6 +172,66 @@ __global__ void InvokeMRotaryEmbeddingKernel(
   }
 }
 
+// XDRope
+template <typename T, bool IS_NEOX>
+__global__ void InvokeXDRotaryEmbeddingKernel(
+    const int64_t* __restrict__ positions,  // [4, num_tokens] 实际数据是按照[num_tokens,4]存储的
+    const int64_t* __restrict__ mask,       // [num_tokens]
+    T* __restrict__ query,                  // [num_tokens, num_heads, query_head_size]
+    T* __restrict__ key,                    // [num_tokens, num_kv_heads, key_head_size]
+    const T* __restrict__ cos_sin_cache,    // [max_position_embeddings, 2, rotary_dim // 2]
+    const int* __restrict__ xdrope_section, const int rotary_dim, const int64_t query_stride, const int64_t key_stride,
+    const int num_heads, const int num_kv_heads, const int query_head_size, const int key_head_size) {
+  // Each thread block is responsible for one token.
+  const int token_idx = blockIdx.x;
+  int64_t mask_i = mask[token_idx];
+  if (mask_i == 0) {
+    return;
+  }
+
+  // 四个维度分别是[seq,x,y,t]
+  auto get_section = [&xdrope_section](int rot_offset) -> int {
+    if (rot_offset < xdrope_section[0]) {
+      return 0;
+    }
+    if (rot_offset < xdrope_section[1]) {
+      return 1;
+    }
+    if (rot_offset < xdrope_section[2]) {
+      return 2;
+    }
+    return 3;
+  };
+
+  const int embed_dim = rotary_dim / 2;
+
+  const int nq = num_heads * embed_dim;
+  for (int i = threadIdx.x; i < nq; i += blockDim.x) {
+    const int head_idx = i / embed_dim;
+    const int rot_offset = i % embed_dim;
+    const int64_t token_head = token_idx * query_stride + head_idx * query_head_size;
+    const int pos_index = get_section(rot_offset);
+    const int64_t pos = positions[token_idx * 4 + pos_index];
+    const T* cache_ptr = cos_sin_cache + pos * rotary_dim;
+    const T* cos_ptr = cache_ptr;
+    const T* sin_ptr = cache_ptr + embed_dim;
+    ApplyRotaryEmbedding<T, IS_NEOX>(query + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+  }
+
+  const int nk = num_kv_heads * embed_dim;
+  for (int i = threadIdx.x; i < nk; i += blockDim.x) {
+    const int head_idx = i / embed_dim;
+    const int rot_offset = i % embed_dim;
+    const int64_t token_head = token_idx * key_stride + head_idx * key_head_size;
+    const int pos_index = get_section(rot_offset);
+    const int64_t pos = positions[token_idx * 4 + pos_index];
+    const T* cache_ptr = cos_sin_cache + pos * rotary_dim;
+    const T* cos_ptr = cache_ptr;
+    const T* sin_ptr = cache_ptr + embed_dim;
+    ApplyRotaryEmbedding<T, IS_NEOX>(key + token_head, cos_ptr, sin_ptr, rot_offset, embed_dim);
+  }
+}
+
 #define DISPATCH_ROTARY_EMBEDDING_BY_NEOX(ROTARY_EMBEDDING, IS_NEOX, ...)                       \
   if (IS_NEOX) {                                                                                \
     Invoke##ROTARY_EMBEDDING##Kernel<T, true><<<grid, block, 0, params.stream>>>(__VA_ARGS__);  \
@@ -184,16 +244,23 @@ void LaunchRotaryEmbedding(const RotaryEmbeddingParam& params, T* cos_sin_cache,
   dim3 grid(params.num_tokens_);
   dim3 block(std::min(params.num_heads * params.rotary_dim / 2, 512));
 
-  if (params.mrope_section == nullptr) {
-    DISPATCH_ROTARY_EMBEDDING_BY_NEOX(RotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
-                                      cos_sin_cache, params.rotary_dim, params.query_stride, params.key_stride,
-                                      params.num_heads, params.num_kv_heads, params.query_head_size,
-                                      params.key_head_size, params.is_reverse);
-  } else {
+  if (params.mrope_section != nullptr) {
     DISPATCH_ROTARY_EMBEDDING_BY_NEOX(MRotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
                                       cos_sin_cache, params.mrope_section, params.rotary_dim, params.query_stride,
                                       params.key_stride, params.num_heads, params.num_kv_heads, params.query_head_size,
                                       params.key_head_size);
+  } else if (params.xdrope_section != nullptr) {
+    KLLM_KERNEL_CHECK(params.rotary_dim == params.query_head_size);
+    KLLM_KERNEL_CHECK(params.query_head_size == params.key_head_size);
+    DISPATCH_ROTARY_EMBEDDING_BY_NEOX(XDRotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
+                                      cos_sin_cache, params.xdrope_section, params.rotary_dim, params.query_stride,
+                                      params.key_stride, params.num_heads, params.num_kv_heads, params.query_head_size,
+                                      params.key_head_size);
+  } else {
+    DISPATCH_ROTARY_EMBEDDING_BY_NEOX(RotaryEmbedding, params.is_neox, params.positions, params.mask, query, key,
+                                      cos_sin_cache, params.rotary_dim, params.query_stride, params.key_stride,
+                                      params.num_heads, params.num_kv_heads, params.query_head_size,
+                                      params.key_head_size, params.is_reverse);
   }
 }
 
@@ -291,6 +358,20 @@ __global__ void InvokeYarnComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_c
 }
 
 template <typename T>
+__global__ void InvokeXDRopeComputeCosSinWithCacheKernel(T* __restrict__ cos_sin_cache, const int rotary_dim,
+                                                         const int max_position_embeddings, const float base,
+                                                         const float scaling_alpha) {
+  int pos = blockIdx.x;
+  float scaled_base = base * powf(scaling_alpha, (float)rotary_dim / ((float)rotary_dim - 2.0f));
+  for (int rid = threadIdx.x; rid < rotary_dim / 2; rid += blockDim.x) {
+    float inv_freq = 1.0f / powf(scaled_base, (rid * 2) / (float)rotary_dim);
+    float freq = pos * inv_freq;
+    cos_sin_cache[pos * rotary_dim + rid] = (T)cosf(freq);
+    cos_sin_cache[pos * rotary_dim + rotary_dim / 2 + rid] = (T)sinf(freq);
+  }
+}
+
+template <typename T>
 void ComputeCosSinWithCache(const RotaryEmbeddingParam& params, T* cos_sin_cache) {
   size_t extend_max_len = params.max_position_embeddings;
   dim3 block(std::min(params.rotary_dim / 2, DEFAULT_CUDA_BLOCK_THREADS_NUM));
@@ -328,6 +409,11 @@ void ComputeCosSinWithCache(const RotaryEmbeddingParam& params, T* cos_sin_cache
     InvokeComputeMultiFreqCosSinWithCacheKernel<T>
         <<<grid, block, 0, params.stream>>>(cos_sin_cache, params.rotary_dim, extend_max_len, base, scaling,
                                             low_freq_factor, high_freq_factor, original_max_position_embeddings);
+  } else if (params.rotary_embedding_type == RotaryEmbeddingType::XDROPE) {
+    extend_max_len = params.max_position_embeddings * params.scaling_alpha;
+    dim3 grid(extend_max_len);
+    InvokeXDRopeComputeCosSinWithCacheKernel<T><<<grid, block, 0, params.stream>>>(
+        cos_sin_cache, params.rotary_dim, extend_max_len, params.base, params.scaling_alpha);
   } else if (params.rotary_embedding_type == RotaryEmbeddingType::YARN_SCALING) {
     scaling = params.scaling_factor;
     int original_max_position_embeddings = params.original_max_position_embeddings;
@@ -356,7 +442,7 @@ void RotaryEmbeddingCuda::SetInput(const int64_t* positions,  // [batch_size, se
                                                  // [num_tokens, num_heads * query_head_size]
                                    void* key,    // [batch_size, seq_len, num_kv_heads * key_head_size] or
                                                  // [num_tokens, num_kv_heads * key_head_size]
-                                   int num_tokens, cudaStream_t& stream, int64_t query_stride, int64_t key_stride, 
+                                   int num_tokens, cudaStream_t& stream, int64_t query_stride, int64_t key_stride,
                                    int query_head_size, int key_head_size, bool is_reverse) {
   params_.positions = positions;
   params_.mask = mask;
@@ -382,7 +468,7 @@ void RotaryEmbeddingCuda::SetInput(const int64_t* positions,  // [batch_size, se
 template <typename T>
 void RotaryEmbeddingCuda::Forward() {
   LaunchRotaryEmbedding<T>(params_, reinterpret_cast<T*>(cos_sin_cache_), reinterpret_cast<T*>(query_),
-                        reinterpret_cast<T*>(key_));
+                           reinterpret_cast<T*>(key_));
 }
 
 template void RotaryEmbeddingCuda::Forward<float>();
@@ -397,8 +483,9 @@ void RotaryEmbeddingCuda::SetConfig(void* cos_sin_cache, const int rotary_dim, c
                                     const RotaryEmbeddingType rotary_embedding_type, const float scaling_factor,
                                     const float low_freq_factor, const float high_freq_factor,
                                     const int original_max_position_embeddings, const float scaling_alpha,
-                                    const int* mrope_section, const float beta_fast, const float beta_slow,
-                                    const float mscale, const float mscale_all_dim, const bool use_deepseek_rope) {
+                                    const int* mrope_section, const int* xdrope_section, const float beta_fast,
+                                    const float beta_slow, const float mscale, const float mscale_all_dim,
+                                    const bool use_deepseek_rope) {
   cos_sin_cache_ = cos_sin_cache;
   params_.rotary_dim = rotary_dim;
   params_.max_position_embeddings = max_position_embeddings;
@@ -418,6 +505,7 @@ void RotaryEmbeddingCuda::SetConfig(void* cos_sin_cache, const int rotary_dim, c
   params_.original_max_position_embeddings = original_max_position_embeddings;
   params_.scaling_alpha = scaling_alpha;
   params_.mrope_section = mrope_section;
+  params_.xdrope_section = xdrope_section;
   params_.beta_fast = beta_fast;
   params_.beta_slow = beta_slow;
   params_.mscale = mscale;
@@ -439,24 +527,24 @@ template void RotaryEmbeddingCuda::SetConfig<float>(
     const int stride_size, const bool is_neox, cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type,
     const float scaling_factor, const float low_freq_factor, const float high_freq_factor,
     const int original_max_position_embeddings, const float scaling_alpha, const int* mrope_section,
-    const float beta_fast, const float beta_slow, const float mscale, const float mscale_all_dim,
-    const bool use_deepseek_rope);
+    const int* xdrope_section, const float beta_fast, const float beta_slow, const float mscale,
+    const float mscale_all_dim, const bool use_deepseek_rope);
 template void RotaryEmbeddingCuda::SetConfig<half>(
     void* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int query_head_size, const int key_head_size, const int num_heads, const int num_kv_heads,
     const int stride_size, const bool is_neox, cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type,
     const float scaling_factor, const float low_freq_factor, const float high_freq_factor,
     const int original_max_position_embeddings, const float scaling_alpha, const int* mrope_section,
-    const float beta_fast, const float beta_slow, const float mscale, const float mscale_all_dim,
-    const bool use_deepseek_rope);
+    const int* xdrope_section, const float beta_fast, const float beta_slow, const float mscale,
+    const float mscale_all_dim, const bool use_deepseek_rope);
 template void RotaryEmbeddingCuda::SetConfig<__nv_bfloat16>(
     void* cos_sin_cache, const int rotary_dim, const int max_position_embeddings, const float base,
     const int query_head_size, const int key_head_size, const int num_heads, const int num_kv_heads,
     const int stride_size, const bool is_neox, cudaStream_t& stream, const RotaryEmbeddingType rotary_embedding_type,
     const float scaling_factor, const float low_freq_factor, const float high_freq_factor,
     const int original_max_position_embeddings, const float scaling_alpha, const int* mrope_section,
-    const float beta_fast, const float beta_slow, const float mscale, const float mscale_all_dim,
-    const bool use_deepseek_rope);
+    const int* xdrope_section, const float beta_fast, const float beta_slow, const float mscale,
+    const float mscale_all_dim, const bool use_deepseek_rope);
 
 }  // namespace nvidia
 }  // namespace llm_kernels
