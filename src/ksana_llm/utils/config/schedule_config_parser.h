@@ -355,6 +355,8 @@ struct RuntimeConfig {
   bool enable_o_proj_out_of_dp = false;  // Whether to enable out-of-data-parallelism for o_proj in attention.
 
   bool is_profile_mode = false;  // Only used for profiling performance
+
+  bool is_decode_only = false;  // Whether the model is used for decode only.
 };
 
 class ScheduleConfigParser {

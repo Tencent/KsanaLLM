@@ -131,8 +131,12 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
   this->model_config = model_config;
   this->runtime_config = runtime_config;
   const DataType weight_type = model_config.weight_data_type;
-  CalculateBuffersShape(context, runtime_config.max_batch_size, runtime_config.max_step_token_num, weight_type);
-
+  if (runtime_config.is_decode_only) {
+    CalculateBuffersShape(context, runtime_config.max_batch_size,
+                          runtime_config.max_batch_size * (runtime_config.mtp_step_num + 1), weight_type);
+  } else {
+    CalculateBuffersShape(context, runtime_config.max_batch_size, runtime_config.max_step_token_num, weight_type);
+  }
   Stream* const stream = &(context->GetMemoryManageStreams()[rank]);
 
   // NOTE(karlluo): all create tensor used dynamic memory pool

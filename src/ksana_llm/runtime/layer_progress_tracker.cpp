@@ -3,8 +3,8 @@
 ==============================================================================*/
 
 #include "ksana_llm/runtime/layer_progress_tracker.h"
-
 #include <string.h>
+#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 
@@ -147,7 +147,7 @@ void LayerProgressTracker::MonitorEvents() {
           int current_progress_layer_index = GetLayerProgressNoLock(event_info.device_id);
 
           // 只处理下一层的事件，跳过更高层的事件
-          if (current_progress_layer_index != -1 && event_info.layer_index > current_progress_layer_index + 1) {
+          if (event_info.layer_index > current_progress_layer_index + 1) {
             // 该层比当前需要处理的下一层大，不需要查询，直接放回临时队列
             temp_queue.push(event_info);
             continue;
@@ -192,16 +192,17 @@ void LayerProgressTracker::ResetState() {
     return;
   }
 
-  while (true) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (pending_events_.empty()) {
-        break;
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
-  }
   std::lock_guard<std::mutex> lock(mutex_);
+  while (!pending_events_.empty()) {
+    // 运行了兜底逻辑，这里会影响性能
+    KLLM_LOG_WARNING << "ResetState, processing pending event for device_id: " << pending_events_.top().device_id
+                     << ", layer_index: " << pending_events_.top().layer_index;
+    auto event_info = pending_events_.top();
+    pending_events_.pop();
+    for (const auto& callback : callbacks_) {
+      callback(event_info.device_id, event_info.layer_index);
+    }
+  }
 
   // 清除所有设备的层进度记录
   device_layer_progress_.clear();

@@ -432,6 +432,7 @@ void BatchScheduler::ReportTotalState() {
   size_t total_decoding_size = 0;
   size_t total_waiting_size = 0;
   size_t total_transfer_size = 0;
+  size_t total_transfer_block_num = 0;
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
     total_waiting_size = waiting_reqs_.size();
@@ -445,6 +446,9 @@ void BatchScheduler::ReportTotalState() {
         total_decoding_size += batch_state->decoding_queue.size();
         total_waiting_size += batch_state->waiting_queue.size();
         total_transfer_size += batch_state->transfer_queue.size();
+        for (auto& req : batch_state->transfer_queue) {
+          total_transfer_block_num += req->kv_cache_blocks.size();
+        }
       }
     }
   }
@@ -460,7 +464,7 @@ void BatchScheduler::ReportTotalState() {
   size_t total_block_num = total_used_blocks_num + total_free_blocks_num;
   KLLM_LOG_INFO << "running_req_num=" << total_running_size << ", decoding_req_num=" << total_decoding_size
                 << ", waiting_req_num=" << total_waiting_size << ", transfer_req_num=" << total_transfer_size
-                << ", free_block_num=" << total_free_blocks_num
+                << ", free_block_num=" << total_free_blocks_num << ", transfer_block_num=" << total_transfer_block_num
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "% (" << total_used_blocks_num
                 << "/" << total_block_num << ")";
 }

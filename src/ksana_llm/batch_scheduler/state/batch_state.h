@@ -14,12 +14,15 @@
 #include "ksana_llm/data_hub/schedule_output.h"
 #include "ksana_llm/runtime/infer_request.h"
 #include "ksana_llm/runtime/request_state.h"
+#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 
 struct BatchState {
   explicit BatchState(size_t multi_batch_id, const BatchSchedulerConfig& batch_scheduler_config)
-      : multi_batch_id_(multi_batch_id), batch_scheduler_config_(batch_scheduler_config) {
+      : multi_batch_id_(multi_batch_id),
+        batch_scheduler_config_(batch_scheduler_config),
+        schedule_time_in_ms(GetCurrentTimeInMs()) {
     schedule_output = GetScheduleOutputPool()->GetScheduleOutput();
 
     schedule_output->running_reqs.reserve(batch_scheduler_config_.max_batch_size);

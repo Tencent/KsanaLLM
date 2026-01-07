@@ -84,4 +84,7 @@ constexpr auto GetDataType = GetDataTypeT<ACTIVE_DEVICE_TYPE>::impl<U>;
 
 constexpr auto GetRuntimeContext = GetRuntimeContextT<ACTIVE_DEVICE_TYPE>;
 
+// Check if device runtime is still available (not shutting down).
+constexpr auto IsDeviceRuntimeAvailable = IsDeviceRuntimeAvailableT<ACTIVE_DEVICE_TYPE>;
+
 }  // namespace ksana_llm

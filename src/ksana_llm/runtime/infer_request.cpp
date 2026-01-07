@@ -201,6 +201,7 @@ ForwardRequest *InferRequest::GetForwardRequest() {
   forward_request_->attn_dp_group_id = attn_dp_group_id;
   forward_request_->block_checksums = &block_checksums;
   forward_request_->checksummed_block_num = &checksummed_block_num;
+  forward_request_->is_prefix_only_request = is_prefix_only_request;
 
   UpdateBlockPtrs(forward_request_->kv_cache_ptrs);
 

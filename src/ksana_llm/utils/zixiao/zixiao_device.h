@@ -149,4 +149,8 @@ class GetDataTypeT<DEVICE_TYPE_ZIXIAO> {
 template <>
 void* GetRuntimeContextT<DEVICE_TYPE_ZIXIAO>(int device_id);
 
+// Check if TOPS runtime is still available.
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_ZIXIAO>();
+
 }  // namespace ksana_llm

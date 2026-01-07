@@ -4,8 +4,10 @@
 
 #include "ksana_llm/batch_scheduler/strategy/continuous_batching.h"
 
+#include <chrono>
 #include <limits>
 #include <random>
+#include <thread>
 
 #include "ksana_llm/cache_manager/block_allocator/block_allocator_manager.h"
 #include "ksana_llm/cache_manager/prefix_cache_manager.h"
@@ -29,6 +31,14 @@ class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
 
   void SetConnectorRole(GroupRole role) {
     connector_config_.group_role = role;
+
+    // Set BlockManagerConfig with valid block_size before Initialize
+    // to avoid "block_size must be > 0" error in TransferConnector
+    auto env = Singleton<Environment>::GetInstance();
+    BlockManagerConfig block_manager_config;
+    block_manager_config.device_allocator_config.block_size = 4096;
+    env->SetBlockManagerConfig(block_manager_config);
+
     TransferEngine::GetInstance()->Initialize(connector_config_.group_role);
     TransferEngine::GetInstance()->SetGroupRole(role);
   }
@@ -52,6 +62,11 @@ class ContinuousBatchingTest : public testing::Test {
       connector_config.group_role = GroupRole::DECODE;
       connector_config.router_addr = "127.0.0.1:13579";
       env->SetConnectorConfigs(connector_config);
+
+      // Set BlockManagerConfig with valid block_size to avoid "block_size must be > 0" error
+      BlockManagerConfig block_manager_config;
+      block_manager_config.device_allocator_config.block_size = 4096;
+      env->SetBlockManagerConfig(block_manager_config);
     }
     RuntimeConfig runtime_config;
     if (test_name.find("ProcessMTPDecodeTransferQueueTest") != std::string::npos) {
@@ -91,8 +106,6 @@ class ContinuousBatchingTest : public testing::Test {
     continuous_batching_strategy_->SetSharedCounter(scheduler_shared_counter);
     continuous_batching_strategy_->SetSchedulerTickTok(scheduler_ticktok);
     continuous_batching_strategy_->SetDataParaGroupId(0);
-
-    pybind11::initialize_interpreter();
   }
 
   ~ContinuousBatchingTest() {
@@ -109,7 +122,6 @@ class ContinuousBatchingTest : public testing::Test {
       BlockManagerConfig block_manager_config;
       env->SetBlockManagerConfig(block_manager_config);
     }
-    pybind11::finalize_interpreter();
   }
 
   void SetUp() {}
@@ -571,4 +583,186 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
 
   // 清理
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
+}
+
+// 测试ProcessDecodeTransferQueue处理aborted请求的分支
+TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueAbortedTest) {
+  // 设置为DECODE节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
+
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  // 初始化waiter，防止Notify时访问空指针
+  // 由于测试设置aborted=true，需要初始化abort_waiter
+  request->waiter = std::make_shared<Waiter>(1);
+  request->abort_waiter = std::make_shared<Waiter>(1);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->kv_comm_request_id = 456;
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置KV缓存块
+  req->kv_cache_blocks.resize(2);
+  for (size_t i = 0; i < 2; ++i) {
+    req->kv_cache_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      req->kv_cache_blocks[i][j] = j + i * 10;
+    }
+  }
+
+  // 设置block_token_num，防止添加元数据时报错
+  req->block_token_num = 16;
+
+  // 设置request调度状态
+  req->input_tokens = {1, 2, 3, 4, 5};
+  req->output_tokens = req->input_tokens;
+  req->ResetPrefillingTokens();
+
+  // 设置请求为aborted状态
+  req->aborted = true;
+
+  // 添加传输元数据
+  std::vector<std::shared_ptr<InferRequest>> queue;
+  queue.push_back(req);
+  continuous_batching_strategy_->AddTransferMeta(queue);
+
+  // 将请求添加到传输队列
+  continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+
+  // 调用ProcessDecodeTransferQueue函数
+  continuous_batching_strategy_->ProcessDecodeTransferQueue();
+
+  // 验证结果：aborted的请求应该被从传输队列中移除
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 0);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->decoding_queue.size(), 0);
+
+  // 等待异步取消操作完成
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // 清理传输元数据
+  TransferEngine::GetInstance()->CleanupTransferMeta(456);
+}
+
+// 测试ProcessDecodeTransferQueue处理超时请求的分支
+TEST_F(ContinuousBatchingTest, ProcessDecodeTransferQueueTimeoutTest) {
+  // 设置为DECODE节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::DECODE);
+
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  // 初始化所有waiter，防止Notify时访问空指针
+  request->waiter = std::make_shared<Waiter>(1);
+  request->step_waiter = std::make_shared<Waiter>(1);
+  request->abort_waiter = std::make_shared<Waiter>(1);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->kv_comm_request_id = 457;
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置KV缓存块
+  req->kv_cache_blocks.resize(2);
+  for (size_t i = 0; i < 2; ++i) {
+    req->kv_cache_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      req->kv_cache_blocks[i][j] = j + i * 10;
+    }
+  }
+
+  // 设置block_token_num，防止添加元数据时报错
+  req->block_token_num = 16;
+
+  // 设置request调度状态
+  req->input_tokens = {1, 2, 3, 4, 5};
+  req->output_tokens = req->input_tokens;
+  req->ResetPrefillingTokens();
+
+  // 设置请求的时间戳为很早的时间，使其超时
+  // timestamp_in_us 设置为0，这样任何 schedule_time_in_ms 都会触发超时
+  req->timestamp_in_us = 0;
+
+  // 设置batch_state的调度时间为一个很大的值，使请求超时
+  // 超时条件: schedule_time_in_ms >= timestamp_in_us / 1000 + waiting_timeout_in_ms
+  continuous_batching_strategy_->batch_state_->schedule_time_in_ms =
+      continuous_batching_strategy_->batch_state_->batch_scheduler_config_.waiting_timeout_in_ms + 1;
+
+  // 添加传输元数据
+  std::vector<std::shared_ptr<InferRequest>> queue;
+  queue.push_back(req);
+  continuous_batching_strategy_->AddTransferMeta(queue);
+
+  // 将请求添加到传输队列
+  continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+
+  // 调用ProcessDecodeTransferQueue函数
+  continuous_batching_strategy_->ProcessDecodeTransferQueue();
+
+  // 验证结果：超时的请求应该被从传输队列中移除
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 0);
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->decoding_queue.size(), 0);
+
+  // 等待异步取消操作完成
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // 清理传输元数据
+  TransferEngine::GetInstance()->CleanupTransferMeta(457);
+}
+
+// 测试ProcessPrefillTransferQueue处理超时请求的分支
+TEST_F(ContinuousBatchingTest, ProcessPrefillTransferQueueTimeoutTest) {
+  // 设置为PREFILL节点
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::PREFILL);
+
+  // 创建测试请求
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  // 初始化所有waiter，防止Notify时访问空指针
+  request->waiter = std::make_shared<Waiter>(1);
+  request->step_waiter = std::make_shared<Waiter>(1);
+  request->abort_waiter = std::make_shared<Waiter>(1);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->kv_comm_request_id = 458;
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+
+  // 设置KV缓存块
+  req->kv_cache_blocks.resize(2);
+  for (size_t i = 0; i < 2; ++i) {
+    req->kv_cache_blocks[i].resize(3);
+    for (size_t j = 0; j < 3; ++j) {
+      req->kv_cache_blocks[i][j] = j + i * 10;
+    }
+  }
+
+  // 设置kv_cached_token_num和block_token_num，防止添加元数据时报错
+  req->kv_cached_token_num = 0;
+  req->block_token_num = 16;
+
+  // 设置请求的时间戳为很早的时间，使其超时
+  req->timestamp_in_us = 0;
+
+  // 设置batch_state的调度时间为一个很大的值，使请求超时
+  continuous_batching_strategy_->batch_state_->schedule_time_in_ms =
+      continuous_batching_strategy_->batch_state_->batch_scheduler_config_.waiting_timeout_in_ms + 1;
+
+  // 添加传输元数据
+  std::vector<std::shared_ptr<InferRequest>> queue;
+  queue.push_back(req);
+  continuous_batching_strategy_->AddTransferMeta(queue);
+
+  // 将请求添加到传输队列
+  continuous_batching_strategy_->batch_state_->transfer_queue.push_back(req);
+
+  // 调用ProcessPrefillTransferQueue函数
+  continuous_batching_strategy_->ProcessPrefillTransferQueue();
+
+  // 验证结果：超时的请求应该被从传输队列中移除
+  ASSERT_EQ(continuous_batching_strategy_->batch_state_->transfer_queue.size(), 0);
+
+  // 等待异步取消操作完成
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // 清理传输元数据（虽然ProcessPrefillTransferQueue已经清理了，但以防万一）
+  TransferEngine::GetInstance()->CleanupTransferMeta(458);
 }

@@ -81,6 +81,8 @@ struct ForwardRequest {
   // is cudagraph capture call
   bool is_cudagraph_capture_request;
 
+  bool is_prefix_only_request = false;
+
   // The sampling config.
   SamplingConfig* sampling_config = nullptr;
 
@@ -141,6 +143,11 @@ struct ForwardRequest {
 
   // Get the request type, flash for prefill, page for decode
   ForwardRequestType GetType() const {
+    // For disaggregation prefill-decode scenario, always use flash attention for prefill node
+    if (is_prefix_only_request) {
+      return ForwardRequestType::kFlash;
+    }
+
     if (GetInputIdsLength() <= GetDecodeTokenNumThreshold() && kv_cached_token_num > 0) {
       return ForwardRequestType::kPage;
     } else {

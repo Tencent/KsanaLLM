@@ -175,7 +175,7 @@ void ContinuousBatchingStrategy::SyncRecomputeRequest(std::shared_ptr<InferReque
     KLLM_LOG_INFO << "Request " << req->req_id << "  and kv_comm_request_id: " << req->kv_comm_request_id
                   << " is recomputed due to exceeding max_step_token_num or max_batch_size in decode group.";
     Status status(RET_PREDICTOR_DISCARD, "Disaggregation of prefill and decoding could not be recomputed.");
-    ResetRequest(req, status, true);
+    req->aborted = true;
     return;
   }
 
@@ -419,11 +419,14 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     if (block_merged) {
       req->RebuildBlockPtrs();
     }
-
     if (!status.OK()) {
       KLLM_LOG_SCHEDULER << "UpdateRequestTokens " << req << " error, recompute it, info: " << status.GetMessage();
       RemoveRequestFromBatchState(req);
-      RecomputeRequest(req);
+      if (batch_scheduler_config_.preempt_mode == SWAP) {
+        SwapoutRequest(req);
+      } else {
+        RecomputeRequest(req);
+      }
       has_block_freed = true;
       continue;
     }
@@ -762,6 +765,10 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           // but don't have logits to generate next token, need to recompute the last token to generate next token
           // NOTE: this happens only when request is just received.
 
+          // force set is_prefix_only_request for prefill group
+          if (connector_config_.group_role == GroupRole::PREFILL) {
+            req->is_prefix_only_request = true;
+          }
           req->infer_stage = InferStage::kDecode;
           planning_workload.prefill_start_offset = shared_token_num - kStepGenerateTokenNum;
           planning_workload.prefill_token_num = kStepGenerateTokenNum;
@@ -1145,6 +1152,28 @@ Status ContinuousBatchingStrategy::MergePendingSwapoutRequests(bool blocking, bo
   } while (!early_stop && swapout_left_req_num > 0);
 
   return Status();
+}
+
+/**
+ * @brief 统一处理timeout和aborted请求的异步清理
+ *
+ * 该方法使用异步方式清理timeout或aborted的请求，避免重复代码。
+ *
+ * @param req 需要处理的请求
+ * @param ret_status 返回状态（超时或终止）
+ * @param req_state 请求状态
+ */
+void ContinuousBatchingStrategy::ProcessTimeoutOrAbortedRequestAsync(std::shared_ptr<InferRequest> req,
+                                                                     Status ret_status, RequestState req_state) {
+  auto transfer_engine = TransferEngine::GetInstance();
+
+  // 使用异步取消接口，在后台完成取消操作
+  transfer_engine->CancelRequestAsync(req->kv_comm_request_id, [this, req, ret_status, req_state]() {
+    StopRequest(req, ret_status, req_state);
+    // 清理传输元数据
+    TransferEngine::GetInstance()->CleanupTransferMeta(req->kv_comm_request_id);
+    KLLM_LOG_WARNING << "Async cancel completed for req: " << req->kv_comm_request_id;
+  });
 }
 
 }  // namespace ksana_llm

@@ -39,7 +39,8 @@ class PinnedMemoryBufferPool {
     GetDeviceCount(&count);
     if (device_count <= 0 || device_count > count) {
       KLLM_LOG_WARNING << "No CUDA devices found. PinnedMemoryBufferPool will be empty.";
-      return;  // Return early with empty pool
+      device_count_ = 0;  // Reset to prevent destructor from iterating over invalid devices
+      return;             // Return early with empty pool
     }
 
     if (block_size_ <= 0) {
@@ -64,13 +65,32 @@ class PinnedMemoryBufferPool {
     // Mark as destroyed to prevent new operations
     is_destroyed_.store(true);
 
-    // First, stop all queues to prevent new operations
-    for (int device_id = 0; device_id < device_count_; ++device_id) {
-      available_blocks_[device_id].Stop();
+    // Check if device runtime is still available before cleanup
+    // During program exit, device runtime may already be unloaded
+    if (!IsDeviceRuntimeAvailable()) {
+      // Device runtime is shutting down, skip cleanup
+      // OS will reclaim the memory when process exits
+      // Stop all queues first to prevent memory leaks from unique_ptrs
+      for (int device_id = 0; device_id < device_count_; ++device_id) {
+        available_blocks_[device_id].Stop();
+      }
+      KLLM_LOG_WARNING << "Device runtime is shutting down, skipping pinned memory cleanup";
+      return;
     }
 
-    // Clean up all allocated pinned host memory
+    // Clean up all allocated pinned host memory BEFORE stopping queues
+    // NonBlockingGet returns empty unique_ptr after Stop() is called
     for (int device_id = 0; device_id < device_count_; ++device_id) {
+      // Check runtime again before each device operation, as it may have
+      // started shutting down during the loop
+      if (!IsDeviceRuntimeAvailable()) {
+        KLLM_LOG_WARNING << "Device runtime started shutting down during cleanup, stopping";
+        // Stop remaining queues
+        for (int i = device_id; i < device_count_; ++i) {
+          available_blocks_[i].Stop();
+        }
+        return;
+      }
       SetDevice(device_id);
       // Use NonBlockingGet to avoid waiting indefinitely
       auto block = available_blocks_[device_id].NonBlockingGet();
@@ -80,6 +100,8 @@ class PinnedMemoryBufferPool {
         }
         block = available_blocks_[device_id].NonBlockingGet();
       }
+      // Stop the queue after draining it
+      available_blocks_[device_id].Stop();
     }
   }
 
@@ -109,6 +131,11 @@ class PinnedMemoryBufferPool {
   PinnedMemoryBufferBlock* get_block(int device_id) {
     if (is_destroyed_.load()) {
       KLLM_LOG_ERROR << "Attempting to get block from destroyed pool";
+      return nullptr;
+    }
+
+    // Handle empty pool case (no CUDA devices available)
+    if (device_count_ == 0) {
       return nullptr;
     }
 

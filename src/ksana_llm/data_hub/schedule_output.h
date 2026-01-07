@@ -33,6 +33,11 @@ struct WorkerInferRequest {
   // The key and value are stored in same blocks.
   std::vector<std::vector<int>> kv_cache_blocks;
 
+  // The flag for tagging request prefix cache usage
+  bool is_use_prefix_cache = false;
+
+  bool is_prefix_only_request = false;
+
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 

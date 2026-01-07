@@ -127,7 +127,10 @@ class TaskDispatcherTest : public ::testing::Test {
     ::testing::Mock::AllowLeak(mock_nccl_communicator_.get());
     mock_comm_manager_ = std::make_shared<MockCommunicatorManager>(mock_zmq_communicator_, mock_nccl_communicator_);
     ::testing::Mock::AllowLeak(mock_comm_manager_.get());
-    task_manager_ = TaskManager::GetInstance(128, config_.circular_bucket_size);
+    // TaskManager(circular_bucket_num, bucket_size_hint, circular_thread_num, device_count, block_size)
+    // Use config_.device_count instead of hardcoded 4 to match actual available devices
+    task_manager_ =
+        std::make_shared<TaskManager>(128, config_.circular_bucket_size, 2, config_.device_count, 16 * 1024 * 1024);
     SetDefaultExpectations();
   }
 

@@ -526,4 +526,48 @@ void TransferEngine::CreateTransferTasksForDecodeNode(int request_id, std::share
                  << ", device_num: " << device_num << ", block_num: " << block_num;
 }
 
+void TransferEngine::CancelRequestAsync(int request_id, std::function<void()> callback) {
+  KLLM_LOG_INFO << "CancelRequestAsync called for request_id: " << request_id;
+
+  // 只有请求异常的时候才会提交任务 创建耗时 < 50us 不用池化
+  try {
+    std::thread([this, request_id, callback]() {
+      try {
+        KLLM_LOG_INFO << "Starting async cancel for request_id: " << request_id;
+
+        // 调用connector的取消接口，将dst_ptr重定向到黑洞
+        if (connector_) {
+          connector_->CancelRequestTasks(request_id);
+        } else {
+          KLLM_LOG_WARNING << "Connector is null, skipping CancelRequestTasks for request_id: " << request_id;
+        }
+
+        // 清理传输元数据
+        CleanupTransferMeta(request_id);
+
+        KLLM_LOG_INFO << "Async cancel completed for request_id: " << request_id;
+
+        // 执行回调
+        if (callback) {
+          callback();
+        }
+      } catch (const std::exception& e) {
+        KLLM_LOG_ERROR << "Exception in async cancel thread for request_id " << request_id << ": " << e.what();
+      } catch (...) {
+        KLLM_LOG_ERROR << "Unknown exception in async cancel thread for request_id: " << request_id;
+      }
+    }).detach();
+  } catch (const std::exception& e) {
+    KLLM_LOG_ERROR << "Failed to create async cancel thread for request_id " << request_id << ": " << e.what();
+    // Fallback to synchronous execution
+    if (connector_) {
+      connector_->CancelRequestTasks(request_id);
+    }
+    CleanupTransferMeta(request_id);
+    if (callback) {
+      callback();
+    }
+  }
+}
+
 }  // namespace ksana_llm

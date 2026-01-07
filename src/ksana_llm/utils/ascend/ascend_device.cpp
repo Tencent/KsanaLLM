@@ -2,11 +2,18 @@
 
 ==============================================================================*/
 #include "ksana_llm/utils/ascend/ascend_device.h"
+
+#include <atomic>
+
 #include "3rdparty/LLM_kernels/csrc/utils/ascend/common.h"
 #include "ksana_llm/utils/ascend/acl_utils.h"
 #include "ksana_llm/utils/device_utils.h"
 
 namespace ksana_llm {
+
+// Flag to track if the Ascend runtime is still available
+// This is set to false when g_context_manager is destroyed
+static std::atomic<bool> g_ascend_runtime_available{false};
 
 static AscendDeviceContextManager g_context_manager;
 
@@ -23,6 +30,8 @@ AscendDeviceContextManager::AscendDeviceContextManager() {
     ATB_CHECK_RET(atb::CreateContext(&atb_context_ptr));
     acl_atb_contexts_[dev_id] = atb_context_ptr;
   }
+  // Mark runtime as available after successful initialization
+  g_ascend_runtime_available.store(true, std::memory_order_release);
 }
 
 aclrtContext& AscendDeviceContextManager::GetDeviceContext(int device_id) { return acl_contexts_[device_id]; }
@@ -30,6 +39,8 @@ aclrtContext& AscendDeviceContextManager::GetDeviceContext(int device_id) { retu
 atb::Context* AscendDeviceContextManager::GetDeviceATBContext(int device_id) { return acl_atb_contexts_[device_id]; }
 
 AscendDeviceContextManager::~AscendDeviceContextManager() {
+  // Mark runtime as unavailable before cleanup
+  g_ascend_runtime_available.store(false, std::memory_order_release);
   for (auto& [dev_id, context] : acl_contexts_) {
     ACL_CHECK(aclrtDestroyContext(context));
     ATB_CHECK_RET(DestroyContext(acl_atb_contexts_[dev_id]));
@@ -151,12 +162,22 @@ void FreeHostT<DEVICE_TYPE_ASCEND>(void* host_ptr) {
 
 template <>
 void HostAllocMappedT<DEVICE_TYPE_ASCEND>(void** host_ptr, void** device_ptr, size_t size) {
-  throw std::runtime_error("Ascend does not support mapped host memory allocation.");
+  // Ascend does not support true mapped host memory allocation.
+  // As a fallback, we allocate separate host and device memory.
+  // Note: This requires explicit memory copy between host and device.
+  ACL_CHECK(aclrtMallocHost(host_ptr, size));
+  ACL_CHECK(aclrtMalloc(device_ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
 }
 
 template <>
 void FreeHostMappedT<DEVICE_TYPE_ASCEND>(void* host_ptr, void* device_ptr) {
-  throw std::runtime_error("Ascend does not support mapped host memory allocation.");
+  // Free both host and device memory allocated by HostAllocMappedT
+  if (host_ptr) {
+    ACL_CHECK(aclrtFreeHost(host_ptr));
+  }
+  if (device_ptr) {
+    ACL_CHECK(aclrtFree(device_ptr));
+  }
 }
 
 template <>
@@ -267,6 +288,12 @@ void* GetRuntimeContextT<DEVICE_TYPE_ASCEND>(int device_id) {
   void* runtime_context_ptr = nullptr;
   runtime_context_ptr = reinterpret_cast<void*>(g_context_manager.GetDeviceATBContext(device_id));
   return runtime_context_ptr;
+}
+
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_ASCEND>() {
+  // Check if the Ascend runtime (g_context_manager) is still valid
+  return g_ascend_runtime_available.load(std::memory_order_acquire);
 }
 
 }  // namespace ksana_llm

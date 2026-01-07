@@ -3,6 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <thread>
+
 #include "ksana_llm/transfer/transfer_engine.h"
 #include "ksana_llm/utils/environment.h"
 #include "ksana_llm/utils/logger.h"
@@ -22,6 +27,11 @@ class MockEnvironment : public Environment {
 
     // 设置默认的chunk传输配置
     batch_scheduler_config_.transfer_layer_chunk_size = 1;
+
+    // 关键：调用基类的 SetBlockManagerConfig 和 SetPipelineConfig
+    // 这样通过基类指针调用 GetBlockManagerConfig 时也能获取正确的配置
+    Environment::SetBlockManagerConfig(block_manager_config_);
+    Environment::SetPipelineConfig(pipeline_config_);
   }
 
   Status GetPipelineConfig(PipelineConfig& pipeline_config) const {
@@ -45,6 +55,38 @@ class MockEnvironment : public Environment {
   BatchSchedulerConfig batch_scheduler_config_;
 };
 
+// 创建一个简单的 MockConnector，使用默认构造函数避免初始化 CUDA 资源
+class MockConnector : public Connector {
+ public:
+  // 使用默认构造函数，避免调用参数化构造函数初始化 CUDA 资源
+  // 这样析构时不会尝试调用 CUDA API 导致 coredump
+  MockConnector() : Connector() {
+    // 空实现，不初始化任何 CUDA 资源
+  }
+
+  // 覆盖 Initialize 方法，避免调用真实的初始化逻辑（避免网络连接等）
+  Status Initialize(GroupRole group_role, std::shared_ptr<DeviceInfoManager> device_info_manager) override {
+    return Status();
+  }
+
+  // 覆盖 Start 方法
+  void Start() override {
+    // 空实现
+  }
+
+  // 覆盖 PushTask 方法，模拟任务立即完成
+  void PushTask(const std::shared_ptr<TransferTask>& task) override {
+    if (task) {
+      task->is_completed = true;
+    }
+  }
+
+  // 覆盖 CancelRequestTasks 方法，避免访问 null 的 task_manager_
+  void CancelRequestTasks(int req_id) override {
+    // 空实现，不调用基类方法
+  }
+};
+
 // 创建一个继承自TransferEngine的模拟类
 class MockTransferEngine : public TransferEngine {
  public:
@@ -56,12 +98,8 @@ class MockTransferEngine : public TransferEngine {
 
     auto env = Singleton<MockEnvironment>::GetInstance();
 
-    // 直接使用TransferConnector单例而不是创建新实例
-    connector_ = std::make_shared<TransferConnector>(ConnectorConfig{}, 2, 0, env);
-
-    // 初始化并启动传输连接器
-    connector_->Initialize(group_role, device_info_manager_);
-    connector_->Start();
+    // 使用 MockConnector 避免调用真实的 Connector 构造函数导致 block_size 问题
+    connector_ = std::make_shared<MockConnector>();
 
     // 从环境中获取配置
     env->GetPipelineConfig(pipeline_config_);
@@ -104,13 +142,17 @@ class TransferEngineTest : public testing::Test {
 
 // 测试初始化功能
 TEST(TransferEngineTestInitialize, Initialize) {
-  // 测试 DECODE 角色初始化，使用TransferConnector模板参数避免真实Connector造成的崩溃
-  TransferEngine::GetInstance()->Initialize<Environment, TransferConnector>(GroupRole::DECODE);
-  ASSERT_EQ(TransferEngine::GetInstance()->GetTransferMeta(0), nullptr);
+  // 创建 MockEnvironment 实例
+  auto mock_env = Singleton<MockEnvironment>::GetInstance();
 
-  // 测试 PREFILL 角色初始化，使用TransferConnector模板参数避免真实Connector造成的崩溃
-  TransferEngine::GetInstance()->Initialize<Environment, TransferConnector>(GroupRole::PREFILL);
-  ASSERT_EQ(TransferEngine::GetInstance()->GetTransferMeta(0), nullptr);
+  // 获取 MockTransferEngine 实例并测试 DECODE 角色初始化
+  auto mock_transfer_engine = MockTransferEngine::GetInstance();
+  mock_transfer_engine->Initialize(GroupRole::DECODE);
+  ASSERT_EQ(mock_transfer_engine->GetTransferMeta(0), nullptr);
+
+  // 测试 PREFILL 角色初始化
+  mock_transfer_engine->Initialize(GroupRole::PREFILL);
+  ASSERT_EQ(mock_transfer_engine->GetTransferMeta(0), nullptr);
 }
 
 // 测试添加传输元数据
@@ -966,6 +1008,394 @@ TEST_F(TransferEngineTest, ChunkTransferCreateTasksForDecodeNode) {
 
   // 清理
   free(meta->gpu_blocks[0][0]);
+}
+
+// ==================== CancelRequestAsync 测试用例 ====================
+
+// 创建一个可以设置connector为null的MockTransferEngine
+class MockTransferEngineForCancelTest : public TransferEngine {
+ public:
+  static std::shared_ptr<MockTransferEngineForCancelTest> Create() {
+    return std::make_shared<MockTransferEngineForCancelTest>();
+  }
+
+  void InitializeWithMockConnector(GroupRole group_role, std::shared_ptr<Connector> connector) {
+    group_role_ = group_role;
+    connector_ = connector;
+
+    auto env = Singleton<MockEnvironment>::GetInstance();
+    env->GetPipelineConfig(pipeline_config_);
+    BlockManagerConfig block_manager_config;
+    env->GetBlockManagerConfig(block_manager_config);
+    tensor_parallel_size_ = 2;
+    attn_data_parallel_size_ = 2;
+    layer_num_ = pipeline_config_.upper_layer_idx - pipeline_config_.lower_layer_idx + 1;
+    block_size_ = block_manager_config.device_allocator_config.block_size;
+    transfer_layer_chunk_size_ = env->GetTransferLayerChunkSize();
+  }
+
+  void SetConnectorNull() { connector_ = nullptr; }
+
+  std::shared_ptr<Connector> GetConnector() { return connector_; }
+};
+
+// 测试CancelRequestAsync正常路径：connector存在，callback存在
+TEST_F(TransferEngineTest, CancelRequestAsync_NormalPath_WithConnectorAndCallback) {
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  // 创建测试数据
+  int request_id = 123;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  // 验证元数据存在
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  // 使用原子变量跟踪回调是否执行
+  std::atomic<bool> callback_called(false);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 调用CancelRequestAsync
+  transfer_engine_->CancelRequestAsync(request_id, [&]() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    callback_called = true;
+    callback_cv.notify_one();
+  });
+
+  // 等待回调执行（最多等待1秒）
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(1), [&]() { return callback_called.load(); });
+  }
+
+  // 验证回调被调用
+  ASSERT_TRUE(callback_called);
+
+  // 验证元数据已被清理
+  meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_EQ(meta, nullptr);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
+}
+
+// 测试CancelRequestAsync：callback为空
+TEST_F(TransferEngineTest, CancelRequestAsync_NullCallback) {
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  // 创建测试数据
+  int request_id = 124;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  // 调用CancelRequestAsync，传入空回调
+  transfer_engine_->CancelRequestAsync(request_id, nullptr);
+
+  // 等待异步操作完成
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // 验证元数据已被清理
+  meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_EQ(meta, nullptr);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
+}
+
+// 测试CancelRequestAsync：connector为空
+TEST_F(TransferEngineTest, CancelRequestAsync_NullConnector) {
+  // 创建专用的测试引擎
+  auto test_engine = MockTransferEngineForCancelTest::Create();
+  test_engine->InitializeWithMockConnector(GroupRole::DECODE, nullptr);
+
+  // 创建测试数据
+  int request_id = 125;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 由于connector为空，直接手动添加元数据到meta_map
+  // 这里我们先用一个有connector的引擎添加元数据，然后设置connector为空
+  auto mock_connector = std::make_shared<MockConnector>();
+  test_engine->InitializeWithMockConnector(GroupRole::DECODE, mock_connector);
+  test_engine->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  auto meta = test_engine->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  // 设置connector为空
+  test_engine->SetConnectorNull();
+  ASSERT_EQ(test_engine->GetConnector(), nullptr);
+
+  std::atomic<bool> callback_called(false);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 调用CancelRequestAsync
+  test_engine->CancelRequestAsync(request_id, [&]() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    callback_called = true;
+    callback_cv.notify_one();
+  });
+
+  // 等待回调执行
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(1), [&]() { return callback_called.load(); });
+  }
+
+  // 验证回调被调用
+  ASSERT_TRUE(callback_called);
+
+  // 验证元数据已被清理
+  meta = test_engine->GetTransferMeta(request_id);
+  ASSERT_EQ(meta, nullptr);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
+}
+
+// 测试CancelRequestAsync：请求ID不存在
+TEST_F(TransferEngineTest, CancelRequestAsync_NonExistentRequestId) {
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  std::atomic<bool> callback_called(false);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 调用CancelRequestAsync，使用不存在的请求ID
+  int non_existent_request_id = 99999;
+  transfer_engine_->CancelRequestAsync(non_existent_request_id, [&]() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    callback_called = true;
+    callback_cv.notify_one();
+  });
+
+  // 等待回调执行
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(1), [&]() { return callback_called.load(); });
+  }
+
+  // 回调应该被调用（即使请求ID不存在，CleanupTransferMeta会返回false但不会阻止回调执行）
+  ASSERT_TRUE(callback_called);
+}
+
+// 测试CancelRequestAsync：多次取消同一请求
+TEST_F(TransferEngineTest, CancelRequestAsync_MultipleCancellations) {
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  // 创建测试数据
+  int request_id = 128;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  std::atomic<int> callback_count(0);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 多次调用CancelRequestAsync
+  for (int i = 0; i < 3; ++i) {
+    transfer_engine_->CancelRequestAsync(request_id, [&]() {
+      std::lock_guard<std::mutex> lock(callback_mutex);
+      callback_count++;
+      callback_cv.notify_one();
+    });
+  }
+
+  // 等待所有回调执行
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(2), [&]() { return callback_count.load() >= 3; });
+  }
+
+  // 验证所有回调都被调用
+  ASSERT_EQ(callback_count.load(), 3);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
+}
+
+// 测试CancelRequestAsync：PREFILL角色
+TEST_F(TransferEngineTest, CancelRequestAsync_PrefillRole) {
+  // 初始化引擎为PREFILL角色
+  transfer_engine_->Initialize(GroupRole::PREFILL);
+
+  // 创建测试数据
+  int request_id = 129;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  transfer_engine_->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  auto meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  std::atomic<bool> callback_called(false);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 调用CancelRequestAsync
+  transfer_engine_->CancelRequestAsync(request_id, [&]() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    callback_called = true;
+    callback_cv.notify_one();
+  });
+
+  // 等待回调执行
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(1), [&]() { return callback_called.load(); });
+  }
+
+  // 验证回调被调用
+  ASSERT_TRUE(callback_called);
+
+  // 验证元数据已被清理
+  meta = transfer_engine_->GetTransferMeta(request_id);
+  ASSERT_EQ(meta, nullptr);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
+}
+
+// 测试CancelRequestAsync：负数请求ID
+TEST_F(TransferEngineTest, CancelRequestAsync_NegativeRequestId) {
+  // 初始化引擎
+  transfer_engine_->Initialize(GroupRole::DECODE);
+
+  std::atomic<bool> callback_called(false);
+  std::mutex callback_mutex;
+  std::condition_variable callback_cv;
+
+  // 调用CancelRequestAsync，使用负数请求ID
+  int negative_request_id = -1;
+  transfer_engine_->CancelRequestAsync(negative_request_id, [&]() {
+    std::lock_guard<std::mutex> lock(callback_mutex);
+    callback_called = true;
+    callback_cv.notify_one();
+  });
+
+  // 等待回调执行
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex);
+    callback_cv.wait_for(lock, std::chrono::seconds(1), [&]() { return callback_called.load(); });
+  }
+
+  // 回调应该被调用
+  ASSERT_TRUE(callback_called);
+}
+
+// 测试CancelRequestAsync：connector和callback都为空
+TEST_F(TransferEngineTest, CancelRequestAsync_NullConnectorAndCallback) {
+  // 创建专用的测试引擎
+  auto test_engine = MockTransferEngineForCancelTest::Create();
+
+  // 先用有效的connector初始化
+  auto mock_connector = std::make_shared<MockConnector>();
+  test_engine->InitializeWithMockConnector(GroupRole::DECODE, mock_connector);
+
+  // 创建测试数据
+  int request_id = 130;
+  size_t shared_block_num = 0;
+  std::vector<std::vector<void*>> gpu_blocks;
+  std::vector<int> kv_occupied_devices = {0};
+  gpu_blocks.resize(1);
+  gpu_blocks[0].resize(1);
+  gpu_blocks[0][0] = malloc(4096);
+
+  // 添加传输元数据
+  test_engine->AddTransferMeta("", request_id, shared_block_num, gpu_blocks, kv_occupied_devices);
+
+  auto meta = test_engine->GetTransferMeta(request_id);
+  ASSERT_NE(meta, nullptr);
+  auto gpu_blocks_copy = meta->gpu_blocks;
+
+  // 设置connector为空
+  test_engine->SetConnectorNull();
+
+  // 调用CancelRequestAsync，callback也为空
+  test_engine->CancelRequestAsync(request_id, nullptr);
+
+  // 等待异步操作完成
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // 验证元数据已被清理
+  meta = test_engine->GetTransferMeta(request_id);
+  ASSERT_EQ(meta, nullptr);
+
+  // 清理分配的内存
+  for (size_t i = 0; i < gpu_blocks_copy.size(); ++i) {
+    for (size_t j = 0; j < gpu_blocks_copy[i].size(); ++j) {
+      free(gpu_blocks_copy[i][j]);
+    }
+  }
 }
 
 }  // namespace ksana_llm

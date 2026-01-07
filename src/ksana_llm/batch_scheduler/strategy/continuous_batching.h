@@ -26,7 +26,7 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
  private:
   // True if request timeout.
-  inline bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
+  bool CheckRequestTimeout(const std::shared_ptr<InferRequest> req);
 
   // True if request finished, that is, arrive max output len or encounter eos.
   inline bool CheckRequestFinish(const std::shared_ptr<InferRequest> req);
@@ -56,6 +56,10 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
   // Set the finish status of the request to finished, timeout or aborted.
   void StopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
   void SyncStopRequest(std::shared_ptr<InferRequest> req, Status ret_status, RequestState req_state);
+
+  // 统一处理timeout和aborted请求的异步清理
+  void ProcessTimeoutOrAbortedRequestAsync(std::shared_ptr<InferRequest> req, Status ret_status,
+                                           RequestState req_state);
 
   void RecoverAsyncRecomputedRequests();
   bool ProcessAsyncStoppedRequest(std::shared_ptr<InferRequest> &req);

@@ -632,6 +632,7 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
                                           (batch_scheduler_config_.split_fuse_token_num > 0);
 
   runtime_config_.enable_flexible_caching = cache_manager_config_.min_flexible_cache_num > 0;
+  runtime_config_.is_decode_only = (connector_config_.group_role == GroupRole::DECODE);
 
   return Status();
 }

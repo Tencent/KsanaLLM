@@ -145,7 +145,7 @@ struct TaskKey {
 
   // TBB compatible hash comparator
   struct HashCompare {
-    static size_t hash(const TaskKey& key) { return Hash {} (key); }
+    static size_t hash(const TaskKey& key) { return Hash{}(key); }
 
     static bool equal(const TaskKey& lhs, const TaskKey& rhs) { return lhs == rhs; }
   };
@@ -205,7 +205,9 @@ struct TaskKey {
 
     int tensor_size = 0;
     if (!task->tensor.shape.empty()) {
-      tensor_size = task->tensor.GetElementNumber() * GetTypeSize(task->tensor.dtype);
+      size_t element_count = task->tensor.GetElementNumber();
+      size_t bytes_per_element = GetTypeSize(task->tensor.dtype);
+      tensor_size = static_cast<int>(element_count * bytes_per_element);
     }
 
     return TaskKey(task->req_id, task->tensor.block_idx, task->tensor.layer_idx, task->tensor.hash_device_id,

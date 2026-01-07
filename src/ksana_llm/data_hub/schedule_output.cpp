@@ -36,6 +36,7 @@ ForwardRequest* WorkerInferRequest::GetForwardRequest() {
   // The flexible cache follows the end of the prefix cache, so it can be included in the cached length of req prefix.
   forward_request_->prefix_cache_len = prefix_cache_len + flexible_cached_copy_tasks.size();
   forward_request_->attn_dp_group_id = attn_dp_group_id;
+  forward_request_->is_prefix_only_request = is_prefix_only_request;
 
   // rebuild in worker
   forward_request_->kv_cache_ptrs.clear();

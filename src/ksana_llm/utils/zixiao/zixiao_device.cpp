@@ -240,4 +240,11 @@ void* GetRuntimeContextT<DEVICE_TYPE_ZIXIAO>(int device_id) {
   return nullptr;
 }
 
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_ZIXIAO>() {
+  // For Zixiao, assume runtime is always available
+  // If there's a specific API to check runtime status, use it here
+  return true;
+}
+
 }  // namespace ksana_llm

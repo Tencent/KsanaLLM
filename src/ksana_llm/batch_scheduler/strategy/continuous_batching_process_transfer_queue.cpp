@@ -68,6 +68,24 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
             [](const auto& a, const auto& b) { return a->kv_comm_request_id < b->kv_comm_request_id; });
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
     auto req = *it;
+    if (req->aborted) {
+      // 使用统一的异步处理函数
+      REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+      KLLM_LOG_WARNING << "Decode transfer queue erase reqs aborted, req id:" << req->kv_comm_request_id;
+      ProcessTimeoutOrAbortedRequestAsync(req, Status(RET_REQUEST_TERMINATED), RequestState::kTransfer);
+      it = batch_state_->transfer_queue.erase(it);
+      continue;
+    }
+
+    if (CheckRequestTimeout(req)) {
+      REPORT_COUNTER("forward_req_timeout_num", static_cast<size_t>(1));
+      KLLM_LOG_WARNING << "req timeout in running req kv_comm_request_id is: " << req->kv_comm_request_id;
+      ProcessTimeoutOrAbortedRequestAsync(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."),
+                                          RequestState::kTransfer);
+      it = batch_state_->transfer_queue.erase(it);
+      continue;
+    }
+
     // 检查请求是否接收完成，如果完成则返回第一个token，否则返回-1
     std::vector<int> recv_tokens = transfer_engine->IsRecvDone(req->kv_comm_request_id);
     if (recv_tokens != std::vector<int>(MAX_TRANSFER_TOKENS, -1)) {
@@ -130,9 +148,25 @@ void ContinuousBatchingStrategy::ProcessDecodeTransferQueue() {
 void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
   auto transfer_engine = TransferEngine::GetInstance();
   for (auto it = batch_state_->transfer_queue.begin(); it != batch_state_->transfer_queue.end();) {
-    // TODO(zakwang): 检查是否有超时和abort，目前强制要求传输完成再释放req
     // 检查请求是否发送完成
     auto req = *it;
+    if (req->aborted) {
+      REPORT_COUNTER("forward_req_aborted_num", static_cast<size_t>(1));
+      KLLM_LOG_INFO << "Prefill transfer queue erase reqs aborted, kv_comm_request_id: " << req->kv_comm_request_id;
+      ProcessTimeoutOrAbortedRequestAsync(req, Status(RET_REQUEST_TERMINATED), RequestState::kTransfer);
+      it = batch_state_->transfer_queue.erase(it);
+      continue;
+    }
+
+    if (CheckRequestTimeout(req)) {
+      REPORT_COUNTER("forward_req_timeout_num", static_cast<size_t>(1));
+      KLLM_LOG_INFO << "Prefill transfer queue erase reqs timeout, kv_comm_request_id: " << req->kv_comm_request_id;
+      ProcessTimeoutOrAbortedRequestAsync(req, Status(RET_REQUEST_TIMEOUT, "timeout in running."),
+                                          RequestState::kTransfer);
+      it = batch_state_->transfer_queue.erase(it);
+      continue;
+    }
+
     if (transfer_engine->IsSendDone(req->kv_comm_request_id)) {
       // 发送完成，从传输队列中移除该请求
       KLLM_LOG_DEBUG << "Prefill transfer queue erase reqs has computed, req id:" << req->kv_comm_request_id;
@@ -147,7 +181,7 @@ void ContinuousBatchingStrategy::ProcessPrefillTransferQueue() {
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }
 
-      StopRequest(req, Status(RET_SUCCESS), RequestState::kRunning);
+      StopRequest(req, Status(RET_SUCCESS), RequestState::kTransfer);
 
       it = batch_state_->transfer_queue.erase(it);
     } else {

@@ -158,4 +158,11 @@ class GetDataTypeT {
 template <int T>
 void* GetRuntimeContextT(int device_id);
 
+// Check if device runtime is still available (not shutting down).
+// Returns true if runtime is available, false if it's shutting down.
+template <int T>
+bool IsDeviceRuntimeAvailableT() {
+  return true;  // Default implementation assumes runtime is always available
+}
+
 }  // namespace ksana_llm

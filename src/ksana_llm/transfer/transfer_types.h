@@ -72,6 +72,7 @@ struct TransferTask {
   void* dst_ptr = nullptr;                                             // 目标指针，指向接收数据的内存或显存地址
   bool is_completed = false;                                           // 是否完成传输，标记任务完成状态
   bool is_skipped_task = false;  // 是否跳过任务，当传输block且该block命中prefix cache时为true(仅Decode节点)
+  std::time_t cancel_time = 0;   // 任务被取消的时间（重定向到黑洞），0表示未取消
   std::string addr;              // 目标地址
 
   // decode 设备信息

@@ -59,6 +59,14 @@ void BlockAllocator::PreAllocateBlocks() {
   }
 #endif
 
+  // For host memory, always use continuous allocation to avoid repeated cudaHostAlloc calls
+  if (location_ == MemoryLocation::LOCATION_HOST && block_num_ > 0) {
+    use_continuous_memory = true;
+    size_t host_bytes = block_num_ * block_size_;
+    malloc_fn_(reinterpret_cast<void**>(&base_mem_ptr), host_bytes);
+    blocks_base_ptr_ = base_mem_ptr;
+  }
+
   // NOTE: Make sure block ids on all worker nodes have same id range.
   free_blocks_.reserve(block_num_);
   void* memory_ptr = nullptr;
@@ -99,6 +107,17 @@ void BlockAllocator::Clear() {
   }
 #endif
 
+  // For host memory with continuous allocation, just free the base pointer
+  if (location_ == MemoryLocation::LOCATION_HOST && blocks_base_ptr_ != nullptr) {
+    std::unique_lock<std::shared_mutex> lock(shared_mutex_);
+    free_fn_(blocks_base_ptr_);
+    blocks_base_ptr_ = nullptr;
+    free_blocks_.clear();
+    used_blocks_.clear();
+    return;
+  }
+
+  // For non-continuous allocation (legacy path)
   {
     auto clear_fn = [&](std::unordered_map<int, void*>& blocks) -> void {
       for (auto it = blocks.begin(); it != blocks.end();) {

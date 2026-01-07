@@ -46,8 +46,12 @@ Connector::Connector(const ConnectorConfig& config, int attn_tensor_para_size, i
   if (circular_bucket_num >= env->GetMaxBatchSize()) {
     circular_bucket_num = env->GetMaxBatchSize();
   }
-  task_manager_ =
-      std::make_shared<TaskManager>(circular_bucket_num, config_.circular_bucket_size, config_.circular_thread_num);
+  // env->GetBlockManagerConfig(block_manager_config);
+  BlockManagerConfig block_manager_config;
+  env->GetBlockManagerConfig(block_manager_config);
+  size_t block_size = block_manager_config.device_allocator_config.block_size;
+  task_manager_ = std::make_shared<TaskManager>(circular_bucket_num, config_.circular_bucket_size,
+                                                config_.circular_thread_num, config_.device_count, block_size);
 
   //  4. 注册/创建所有需要的 task_dispatcher_
   task_dispatcher_ = std::make_shared<TaskDispatcher>(config_, task_manager_, comm_manager_);
@@ -107,6 +111,11 @@ void Connector::PushTask(const std::shared_ptr<TransferTask>& task) {
   KLLM_LOG_DEBUG << "Pushed task: " << task_key.ToString() << ", total tasks: " << task->tensor.dtype
                  << ", shape: " << task->tensor.shape.size()
                  << ", time: " << ProfileTimer::GetCurrentTimeInUs() - start_time;
+}
+
+void Connector::CancelRequestTasks(int req_id) {
+  task_manager_->CancelRequestTasks(req_id);
+  task_manager_->CleanupCanceledTasks(config_.task_expire_sec);
 }
 
 Connector::~Connector() {

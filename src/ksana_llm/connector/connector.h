@@ -44,6 +44,7 @@ class Connector {
   void SendConfigToPrefill(const std::string& kv_comm_group_key, size_t adp_num, size_t device_num);
 
   virtual void PushTask(const std::shared_ptr<TransferTask>& task);
+  virtual void CancelRequestTasks(int req_id);
 
  private:
   ConnectorConfig config_;

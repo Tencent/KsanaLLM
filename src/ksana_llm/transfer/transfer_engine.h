@@ -151,6 +151,13 @@ class TransferEngine {
     return meta_map_.erase(request_id) > 0;
   }
 
+  /**
+   * @brief 异步取消请求，在后台完成取消操作后执行回调
+   * @param request_id 请求ID
+   * @param callback 取消完成后的回调函数
+   */
+  void CancelRequestAsync(int request_id, std::function<void()> callback);
+
   void SetGroupRole(GroupRole group_role) { group_role_ = group_role; }
 
   GroupRole GetGroupRole() const { return group_role_; }

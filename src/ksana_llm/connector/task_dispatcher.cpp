@@ -11,8 +11,8 @@
 #include <unordered_map>
 #include "ksana_llm/connector/communicator/communicator_manager.h"
 #include "ksana_llm/connector/task_manager.h"
-#include "ksana_llm/utils/device_types.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/utils/device_types.h"
 
 #include "ksana_llm/connector/communicator/zmq/zmq_communicator.h"
 #ifdef ENABLE_CUDA
@@ -38,6 +38,11 @@ void TaskDispatcher::Shutdown() {
   // 先设置 running_ = false，通知线程退出
   running_ = false;
 
+  // 通知等待中的线程退出，必须在 join 之前调用
+  if (task_manager_ && task_manager_->notification_waiter_) {
+    task_manager_->notification_waiter_->Stop();
+  }
+
   // 等待所有线程结束 - 修复：检查线程是否joinable而不是角色
   if (decode_process_thread_.joinable()) {
     decode_process_thread_.join();
@@ -49,10 +54,6 @@ void TaskDispatcher::Shutdown() {
   // 停止线程池
   if (send_thread_pool_) {
     send_thread_pool_->Stop();
-  }
-
-  if (clean_task_thread_.joinable()) {
-    clean_task_thread_.join();
   }
 
   // 关闭通信管理器
@@ -95,7 +96,6 @@ Status TaskDispatcher::Initialize(std::shared_ptr<DeviceInfoManager> device_info
 
   buffer_pool_ = std::make_unique<PinnedMemoryBufferPool>(config_.device_count, config_.send_thread_num * 2,
                                                           config_.transfer_batch * sizeof(TaskKey));
-
   // 只在NCCL模式下才初始化NCCL
 #ifdef ENABLE_CUDA
   if (config_.communication_type == CommunicationType::NCCL) {
@@ -119,20 +119,13 @@ Status TaskDispatcher::Initialize(std::shared_ptr<DeviceInfoManager> device_info
     decode_process_thread_ = std::thread(&TaskDispatcher::SendToPrefill, this);
   }
 
-  clean_task_thread_ = std::thread([this]() {
-    while (running_) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-      task_manager_->CleanupExpiredTasks(config_.task_expire_sec);
-    }
-  });
-
   return Status();
 }
 
 void TaskDispatcher::SendConfigToPrefill(const std::string& group_key, size_t adp_num, size_t device_num) {
   // Build device configuration signal once (prefix + connection id)
-  std::string signal = std::string(kDeviceSignal) +
-                       MakeConnectionId(group_key, static_cast<int>(adp_num), static_cast<int>(device_num));
+  std::string signal =
+      std::string(kDeviceSignal) + MakeConnectionId(group_key, static_cast<int>(adp_num), static_cast<int>(device_num));
   if (group_key.empty()) {
     KLLM_LOG_ERROR << "Send device config info failed, group_key is empty";
     return;
@@ -150,6 +143,10 @@ void TaskDispatcher::SendToPrefill() {
   while (running_) {
     if (task_manager_->IsProcessingBufferEmpty()) {
       task_manager_->notification_waiter_->Wait();
+      // Check running_ after waking up from Wait() to handle shutdown
+      if (!running_) {
+        break;
+      }
       task_manager_->notification_waiter_->Reset(1);
       continue;
     }
@@ -294,6 +291,10 @@ void TaskDispatcher::ProcessPrefillReceivedTasks() {
   while (running_) {
     if (task_manager_->IsProcessingBufferEmpty()) {
       task_manager_->notification_waiter_->Wait();
+      // Check running_ after waking up from Wait() to handle shutdown
+      if (!running_) {
+        break;
+      }
       task_manager_->notification_waiter_->Reset(1);
       continue;
     }
@@ -730,7 +731,18 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_
                    << ", nccl send task_keys cost: " << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
     auto task = task_manager_->GetTask(tk);
     if (!task) {
+      KLLM_LOG_ERROR << "Task not found for task_key: " << tk.ToString();
+      // 使用黑洞任务占位，防止接收缓冲区错位
+      task = task_manager_->GetBlackHoleTask(tk);
+      recv_ptrs.push_back(task->dst_ptr);
+      recv_sizes.push_back(tk.tensor_size);
+      data_types.push_back(DataType::TYPE_BYTES);  // Add default data type for blackhole task
       continue;
+    }
+
+    if (task->cancel_time > 0) {
+      KLLM_LOG_WARNING << "Step_10: Decode task was cancelled  data for task_key: " << tk.ToString()
+                       << (ProfileTimer::GetCurrentTimeInUs() - tk.start_time_us);
     }
 
     if (tk.tensor_size > 0) {
@@ -740,7 +752,7 @@ void TaskDispatcher::RecvTaskDataWithNccl(const std::string& group_key, int src_
     }
   }
 
-  if (!recv_ptrs.empty()) {
+  if (!recv_ptrs.empty() && !data_types.empty()) {
     nccl_communicator_->RecvGroup(group_key, src_device_idx, dst_device_idx, static_cast<uint64_t>(0), recv_ptrs,
                                   recv_sizes, data_types[0]);
   }

@@ -23,6 +23,7 @@
 #include "ksana_llm/profiler/timer.h"
 #include "ksana_llm/transfer/transfer_types.h"
 #include "ksana_llm/utils/device_types.h"
+#include "ksana_llm/utils/pinned_mem_buffer_pool.h"
 #include "ksana_llm/utils/singleton.h"
 #include "ksana_llm/utils/waiter.h"
 
@@ -54,11 +55,11 @@ class TaskManager {
 
   // The stage of a task in the pipeline
   struct TaskStage {
-      std::time_t start_time = ProfileTimer::GetCurrentTime();
+    std::time_t start_time = ProfileTimer::GetCurrentTime();
 
     // If Decode confirms this task, transfer it to DecodeNode and set decode_confirmed to 1.
     // If Prefill produces this task first and Decode does not confirm it, decode_confirmed remains 0.
-      std::atomic<int> decode_confirmed = 0;
+    std::atomic<int> decode_confirmed = 0;
   };
 
   /**
@@ -83,21 +84,14 @@ class TaskManager {
    * @param circular_bucket_num Maximum number of concurrent batches (determines shard count)
    * @param bucket_size_hint Initial bucket size hint for hash tables
    */
-  explicit TaskManager(int circular_bucket_num, int bucket_size_hint = 16384, int circular_thread_num = 4);
+  explicit TaskManager(int circular_bucket_num, int bucket_size_hint, int circular_thread_num, int device_count,
+                       size_t block_size);
 
   ~TaskManager() = default;
 
   // Disable copy operations
   TaskManager(const TaskManager&) = delete;
   TaskManager& operator=(const TaskManager&) = delete;
-
-  /**
-   * @brief Get singleton instance of TaskManager
-   * @param circular_bucket_num Maximum number of concurrent batches (default: 256)
-   * @param bucket_size_hint Hash table bucket size hint (default: 16384)
-   * @return Shared pointer to TaskManager singleton instance
-   */
-  static std::shared_ptr<TaskManager> GetInstance(int circular_bucket_num = 16, int bucket_size_hint = 16384);
 
   //=============================================================================
   // Processing Buffer Operations (Priority Queue Interface)
@@ -108,6 +102,8 @@ class TaskManager {
    * @param task_key TaskKey to add to the processing buffer
    */
   void PutProcessingBuffer(const TaskKey& task_key);
+
+  void CancelRequestTasks(int req_id);
 
   /**
    * @brief Get a task from the processing buffer (round-robin across shards)
@@ -234,15 +230,17 @@ class TaskManager {
   //=============================================================================
 
   /**
-   * @brief Clean up expired tasks using parallel processing
-   * @param timeout_seconds Age threshold for task expiration
+   * @brief Clean up canceled tasks that have exceeded timeout
+   * @param timeout_seconds Timeout in seconds for canceled tasks
    */
-  void CleanupExpiredTasks(int timeout_seconds);
+  void CleanupCanceledTasks(int timeout_seconds);
 
   /**
    * @brief Shutdown the task manager and clean up all resources
    */
   void Shutdown();
+
+  std::shared_ptr<TransferTask> GetBlackHoleTask(const TaskKey& key);
 
   /**
    * @brief Set task notification callback
@@ -256,8 +254,6 @@ class TaskManager {
 
   // Notification system (public for direct access)
   std::shared_ptr<Waiter> notification_waiter_;  ///< Notifies when new tasks are available
-
-  tbb::concurrent_priority_queue<TaskKey> usage_tasks_;
 
  private:
   //=============================================================================
@@ -275,6 +271,9 @@ class TaskManager {
 
   // Processing buffer (priority queue)
   tbb::concurrent_priority_queue<TaskKey> processing_buffer_;
+
+  ///< 黑洞缓冲区，用于丢弃不需要的数据,避免阻塞传输
+  std::unique_ptr<PinnedMemoryBufferPool> black_hole_pool_;
   //=============================================================================
   // Private Methods
   //=============================================================================
@@ -299,6 +298,9 @@ class TaskManager {
    * @return Const reference to the corresponding TaskShard
    */
   const TaskShard& GetShard(int req_id) const { return *shards_[GetShardIndex(req_id)]; }
+
+  std::shared_ptr<TransferTask> black_hole_task_ = std::make_shared<TransferTask>();
+  std::vector<PinnedMemoryBufferBlock*> device_black_holes_;
 };
 
 }  // namespace ksana_llm

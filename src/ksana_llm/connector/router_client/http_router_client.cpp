@@ -16,9 +16,8 @@
 #include <random>
 #include <sstream>
 #include <string>
-#include "ksana_llm/utils/socket_util.h"
 #include "ksana_llm/connector/router_client/resolved_endpoint.h"
-
+#include "ksana_llm/utils/socket_util.h"
 
 namespace ksana_llm {
 
@@ -38,7 +37,7 @@ std::string HTTPRouterClient::GenerateTaskID() {
   auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
   // 生成随机数
-  static std::mt19937 rng(std::random_device {} ());
+  static std::mt19937 rng(std::random_device{}());
   std::uniform_int_distribution<int> dist(0, 999999);
 
   // 拼接成字符串
@@ -66,8 +65,8 @@ std::string HTTPRouterClient::MakeHttpRequest(const std::string& path, const std
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     // Set timeout to prevent hanging forever
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 60L);
 
     // Set custom request method if not GET
     if (method != "GET") {
@@ -255,9 +254,10 @@ Status HTTPRouterClient::SendHeartbeat(std::string& node_id, KVHeartbeatResponse
     try {
       response_json = nlohmann::json::parse(response_str);
     } catch (const std::exception& e) {
-      KLLM_LOG_ERROR << "Failed to parse heartbeat JSON response: " << e.what() << ", response: " << response_str;
-      return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR,
-                    "Failed to parse heartbeat JSON response: " + std::string(e.what()));
+      const std::string safe_response = response_str.empty() ? std::string("<empty response>") : response_str;
+      KLLM_LOG_ERROR << "Failed to parse heartbeat JSON response: " << e.what() << ", response: " << safe_response;
+      return Status(RetCode::RET_INTERNAL_UNKNOWN_ERROR, "Failed to parse heartbeat JSON response: " +
+                                                             std::string(e.what()) + ", response: " + safe_response);
     }
 
     // Check if the response indicates an error

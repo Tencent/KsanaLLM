@@ -288,6 +288,11 @@ class InferRequest {
   // The swappiness future.
   std::future<void> swap_future;
 
+  // The flag for tagging request prefix cache usage
+  bool is_use_prefix_cache = false;
+
+  bool is_prefix_only_request = false;
+
   // The prefix cache tokens number
   int prefix_cache_len = 0;
 

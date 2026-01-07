@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <atomic>
 
-#include "ksana_llm/utils/logger.h"
 #include "ksana_llm/profiler/reporter.h"
+#include "ksana_llm/utils/logger.h"
 
 namespace ksana_llm {
 
@@ -15,7 +15,8 @@ namespace ksana_llm {
 // Constructor and Singleton Management
 //=============================================================================
 
-TaskManager::TaskManager(int circular_bucket_num, int bucket_size_hint, int circular_thread_num)
+TaskManager::TaskManager(int circular_bucket_num, int bucket_size_hint, int circular_thread_num, int device_count,
+                         size_t block_size)
     : circular_bucket_num_(circular_bucket_num) {
   task_arena_.initialize(circular_thread_num);  // 设置最大并发为64
   // Initialize notification waiter
@@ -33,12 +34,14 @@ TaskManager::TaskManager(int circular_bucket_num, int bucket_size_hint, int circ
     shards_.push_back(std::move(shard));
   }
 
+  black_hole_pool_ = std::make_unique<PinnedMemoryBufferPool>(device_count, 1, block_size);
+  for (int i = 0; i < device_count; ++i) {
+    auto block = black_hole_pool_->get_block(i);
+    device_black_holes_.push_back(block);
+  }
+
   KLLM_LOG_INFO << "TaskManager initialized with " << circular_bucket_num_
                 << " shards, bucket_size_hint=" << bucket_size_hint << ", circular_thread_num=" << circular_thread_num;
-}
-
-std::shared_ptr<TaskManager> TaskManager::GetInstance(int circular_bucket_num, int bucket_size_hint) {
-  return Singleton<TaskManager>::GetInstance(circular_bucket_num, bucket_size_hint);
 }
 
 //=============================================================================
@@ -47,8 +50,6 @@ std::shared_ptr<TaskManager> TaskManager::GetInstance(int circular_bucket_num, i
 
 void TaskManager::PutProcessingBuffer(const TaskKey& task_key) {
   processing_buffer_.push(task_key);
-  usage_tasks_.push(task_key);
-
   if (notification_waiter_) {
     notification_waiter_->Notify();
   }
@@ -159,8 +160,7 @@ void TaskManager::CompleteTask(const TaskKey& key) {
   if (shard.request_map.find(accessor, key)) {
     if (accessor->second) {
       // 任务从PushTask到CompleteTask的总耗时
-      REPORT_METRIC("pd_task_total_cost_us",
-        ProfileTimer::GetCurrentTimeInUs() - accessor->first.start_time_us);
+      REPORT_METRIC("pd_task_total_cost_us", ProfileTimer::GetCurrentTimeInUs() - accessor->first.start_time_us);
       accessor->second->is_completed = true;
     }
     accessor.release();
@@ -207,45 +207,43 @@ void TaskManager::RegisterDecodeConfirmedTasks(const std::vector<TaskKey>& task_
   auto cur_us = ProfileTimer::GetCurrentTimeInUs();
   // Process each shard's tasks in parallel
   task_arena_.execute([&]() {
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, circular_bucket_num_),
-                      [&](const tbb::blocked_range<size_t>& range) {
-                        for (size_t shard_idx = range.begin(); shard_idx != range.end(); ++shard_idx) {
-                          auto& shard = *shards_[shard_idx];
-                          const auto& shard_task_keys = shard_tasks[shard_idx];
-                          for (auto& task_key : shard_task_keys) {
-                            // Insert into decode confirmed tasks
-                            typename decltype(shard.decode_confirmed_tasks)::accessor accessor;
-                            if (!shard.decode_confirmed_tasks.insert(accessor, task_key)) {
-                              REPORT_METRIC("pd_task_waiting_cost_us", cur_us - accessor->first.start_time_us);
-                              // Key already exists: re-key with updated decode device fields, preserve metadata
-                              const std::time_t prev_start_time = accessor->second.start_time;
-                              TaskKey actual_key = accessor->first;
-                              actual_key.decode_device_id = task_key.decode_device_id;
-                              actual_key.decode_device_offset = task_key.decode_device_offset;
-                              actual_key.is_skipped_task = task_key.is_skipped_task;
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, circular_bucket_num_), [&](const tbb::blocked_range<size_t>& range) {
+          for (size_t shard_idx = range.begin(); shard_idx != range.end(); ++shard_idx) {
+            auto& shard = *shards_[shard_idx];
+            const auto& shard_task_keys = shard_tasks[shard_idx];
+            for (auto& task_key : shard_task_keys) {
+              // Insert into decode confirmed tasks
+              typename decltype(shard.decode_confirmed_tasks)::accessor accessor;
+              if (!shard.decode_confirmed_tasks.insert(accessor, task_key)) {
+                REPORT_METRIC("pd_task_waiting_cost_us", cur_us - accessor->first.start_time_us);
+                // Key already exists: re-key with updated decode device fields, preserve metadata
+                const std::time_t prev_start_time = accessor->second.start_time;
+                TaskKey actual_key = accessor->first;
+                actual_key.decode_device_id = task_key.decode_device_id;
+                actual_key.decode_device_offset = task_key.decode_device_offset;
+                actual_key.is_skipped_task = task_key.is_skipped_task;
 
-                              shard.decode_confirmed_tasks.erase(accessor);
-                              shard.decode_confirmed_tasks.insert(accessor, actual_key);
+                shard.decode_confirmed_tasks.erase(accessor);
+                shard.decode_confirmed_tasks.insert(accessor, actual_key);
 
-                              // Restore start_time (or init if absent) and confirm
-                              accessor->second.start_time = (prev_start_time != 0) ?
-                                  prev_start_time : ProfileTimer::GetCurrentTime();
-                              accessor->second.decode_confirmed.store(1, std::memory_order_release);
+                // Restore start_time (or init if absent) and confirm
+                accessor->second.start_time = (prev_start_time != 0) ? prev_start_time : ProfileTimer::GetCurrentTime();
+                accessor->second.decode_confirmed.store(1, std::memory_order_release);
 
-                              PutProcessingBuffer(actual_key);
-                              KLLM_LOG_DEBUG << "Updated decode into shard.decode_confirmed_tasks (actual key): "
-                                             << actual_key.ToString();
-                            } else {
-                              // New insert: initialize start_time and confirm
-                              accessor->second.start_time = ProfileTimer::GetCurrentTime();
-                              accessor->second.decode_confirmed.store(1, std::memory_order_release);
-                              KLLM_LOG_DEBUG << "Inserting decode into shard.decode_confirmed_tasks (stored key): "
-                                             << accessor->first.ToString();
-                              usage_tasks_.push(task_key);
-                            }
-                          }
-                        }
-                      });
+                PutProcessingBuffer(actual_key);
+                KLLM_LOG_DEBUG << "Updated decode into shard.decode_confirmed_tasks (actual key): "
+                               << actual_key.ToString();
+              } else {
+                // New insert: initialize start_time and confirm
+                accessor->second.start_time = ProfileTimer::GetCurrentTime();
+                accessor->second.decode_confirmed.store(1, std::memory_order_release);
+                KLLM_LOG_DEBUG << "Inserting decode into shard.decode_confirmed_tasks (stored key): "
+                               << accessor->first.ToString();
+              }
+            }
+          }
+        });
   });
 
   // Notify waiting threads
@@ -261,11 +259,8 @@ void TaskManager::AddUnconfirmedTask(const TaskKey& task_key) {
   if (!shard.decode_confirmed_tasks.insert(accessor, task_key)) {
     if (accessor->second.decode_confirmed.load(std::memory_order_acquire) > 0) {
       PutProcessingBuffer(task_key);
-      KLLM_LOG_DEBUG << "Prefill task_key already confirmed, added to processing buffer: "
-                     << task_key.ToString();
+      KLLM_LOG_DEBUG << "Prefill task_key already confirmed, added to processing buffer: " << task_key.ToString();
     }
-  } else {
-    usage_tasks_.push(task_key);
   }
 }
 
@@ -275,8 +270,8 @@ bool TaskManager::TryActivateUnconfirmedTask(TaskKey& task_key) {
   // Check if confirmed by decode phase
   typename decltype(shard.decode_confirmed_tasks)::const_accessor accessor;
   KLLM_LOG_DEBUG << "Start find prefill Taskkey in decode_confirmed_tasks: " << task_key.ToString();
-  if (shard.decode_confirmed_tasks.find(accessor, task_key)
-          && accessor->second.decode_confirmed.load(std::memory_order_acquire) > 0) {
+  if (shard.decode_confirmed_tasks.find(accessor, task_key) &&
+      accessor->second.decode_confirmed.load(std::memory_order_acquire) > 0) {
     const TaskKey& decode_confirmed_task_key = accessor->first;
     task_key.SetIsSkippedTaskFlag(decode_confirmed_task_key.GetIsSkippedTaskFlag());
     KLLM_LOG_DEBUG << "Assigned skipping flag for task_key: " << task_key.ToString();
@@ -342,27 +337,111 @@ TaskManager::GroupByGroupKeyAndDevice(const std::vector<TaskKey>& batch, bool is
   return grouped;
 }
 
-//=============================================================================
-// Maintenance Operations
-//=============================================================================
+std::shared_ptr<TransferTask> TaskManager::GetBlackHoleTask(const TaskKey& key) {
+  black_hole_task_->dst_ptr = device_black_holes_[key.decode_device_id]->device_ptr;
+  return black_hole_task_;
+}
 
-void TaskManager::CleanupExpiredTasks(int timeout_seconds) {
-  // Snapshot current time in seconds to keep comparisons consistent
+void TaskManager::CancelRequestTasks(int req_id) {
+  auto& shard = GetShard(req_id);
+  size_t canceled_count = 0;
+  size_t redirected_count = 0;
+  const auto cancel_time = ProfileTimer::GetCurrentTime();
+
+  std::vector<TaskKey> keys_to_update;
+  for (auto it = shard.request_map.begin(); it != shard.request_map.end(); ++it) {
+    if (it->first.req_id == req_id) {
+      keys_to_update.push_back(it->first);
+    }
+  }
+
+  for (const auto& key : keys_to_update) {
+    typename decltype(shard.request_map)::accessor accessor;
+    if (!shard.request_map.find(accessor, key)) {
+      KLLM_LOG_ERROR << "Failed to find task to cancel for key: " << key.ToString();
+      continue;
+    }
+
+    auto original_task = accessor->second;
+    if (!original_task || original_task->cancel_time > 0) {
+      continue;
+    }
+
+    std::shared_ptr<TransferTask> updated_task = original_task;
+    bool redirected = false;
+    if (original_task->dst_ptr && !device_black_holes_.empty()) {
+      int device_id = key.decode_device_id;
+      const int device_cap = static_cast<int>(device_black_holes_.size());
+      if (device_id < 0 || device_id >= device_cap) {
+        if (device_cap > 0) {
+          int fallback = key.hash_device_id >= 0 ? key.hash_device_id : -key.hash_device_id;
+          device_id = fallback % device_cap;
+        } else {
+          device_id = -1;
+        }
+      }
+
+      if (device_id >= 0 && device_id < device_cap && device_black_holes_[device_id] != nullptr) {
+        updated_task = std::make_shared<TransferTask>(*original_task);
+        updated_task->dst_ptr = device_black_holes_[device_id]->device_ptr;
+        redirected = true;
+        ++redirected_count;
+      } else {
+        KLLM_LOG_WARNING << "Unable to redirect task " << key.ToString()
+                         << " to black hole: invalid device_id=" << device_id;
+      }
+    }
+
+    updated_task->cancel_time = cancel_time;
+    accessor->second = updated_task;
+    ++canceled_count;
+    if (redirected) {
+      KLLM_LOG_DEBUG << "Redirected task to black hole, device_id=" << key.decode_device_id
+                     << ", cancel_time=" << cancel_time;
+    }
+  }
+
+  // Erase from decode_confirmed_tasks immediately (no NCCL receive dependency)
+  std::vector<TaskKey> decode_keys_to_erase;
+  for (auto it = shard.decode_confirmed_tasks.begin(); it != shard.decode_confirmed_tasks.end(); ++it) {
+    if (it->first.req_id == req_id) {
+      decode_keys_to_erase.push_back(it->first);
+    }
+  }
+
+  for (const auto& key : decode_keys_to_erase) {
+    shard.decode_confirmed_tasks.erase(key);
+  }
+
+  KLLM_LOG_INFO << "CancelRequestTasks for req_id: " << req_id << ", canceled " << canceled_count
+                << " tasks, redirected " << redirected_count << " to black hole buffers";
+}
+
+void TaskManager::CleanupCanceledTasks(int timeout_seconds) {
   const auto now_sec = ProfileTimer::GetCurrentTime();
 
-  // Rebuild usage_tasks_ without expired entries (concurrent_vector has no erase)
-  TaskKey key;
-  while (usage_tasks_.try_pop(key)) {
-    if (key.start_time_us > 0
-        && (now_sec - (key.start_time_us / 1000000)) >= timeout_seconds) {
-      auto& shard = GetShard(key.req_id);
-      if (shard.decode_confirmed_tasks.erase(key) || shard.request_map.erase(key)) {
-        KLLM_LOG_INFO << "Cleaned up expired task: " << key.ToString()
-                      << ", timeout: " << timeout_seconds
-                      << " seconds and now: " << now_sec;
-      } else {
-        usage_tasks_.push(key);
+  for (auto& shard : shards_) {
+    std::vector<TaskKey> keys_to_erase;
+
+    // Find tasks that have been canceled and exceeded timeout
+    for (auto it = shard->request_map.begin(); it != shard->request_map.end(); ++it) {
+      typename decltype(shard->request_map)::const_accessor accessor;
+      if (shard->request_map.find(accessor, it->first)) {
+        auto task = accessor->second;  // 在锁保护下复制 shared_ptr
+
+        if (task && task->cancel_time > 0 && (now_sec - task->cancel_time) >= timeout_seconds) {
+          keys_to_erase.push_back(it->first);
+        }
       }
+    }
+
+    // Erase expired canceled tasks
+    for (const auto& key : keys_to_erase) {
+      shard->request_map.erase(key);
+    }
+
+    if (!keys_to_erase.empty()) {
+      KLLM_LOG_INFO << "Cleaned up " << keys_to_erase.size() << " expired canceled tasks";
     }
   }
 }
@@ -387,9 +466,7 @@ void TaskManager::Shutdown() {
   while (processing_buffer_.try_pop(dummy)) {
     // Empty the queue
   }
-  while (usage_tasks_.try_pop(dummy)) {
-    // Empty the queue
-  }
+
   KLLM_LOG_INFO << "TaskManager shutdown completed";
 }
 

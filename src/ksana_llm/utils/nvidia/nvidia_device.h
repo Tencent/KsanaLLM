@@ -151,4 +151,8 @@ class GetDataTypeT<DEVICE_TYPE_NVIDIA> {
 template <>
 void* GetRuntimeContextT<DEVICE_TYPE_NVIDIA>(int device_id);
 
+// Check if CUDA runtime is still available (not shutting down).
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_NVIDIA>();
+
 }  // namespace ksana_llm

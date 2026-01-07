@@ -162,4 +162,8 @@ class GetDataTypeT<DEVICE_TYPE_ASCEND> {
 template <>
 void* GetRuntimeContextT<DEVICE_TYPE_ASCEND>(int device_id);
 
+// Check if ACL runtime is still available.
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_ASCEND>();
+
 }  // namespace ksana_llm

@@ -291,4 +291,22 @@ void* GetRuntimeContextT<DEVICE_TYPE_NVIDIA>(int device_id) {
   return nullptr;
 }
 
+template <>
+bool IsDeviceRuntimeAvailableT<DEVICE_TYPE_NVIDIA>() {
+  // Check if CUDA runtime is still available
+  // During program exit, CUDA runtime may already be unloaded
+  // Use cudaGetDevice as it's a read-only operation without side effects
+  int device_id = -1;
+  cudaError_t err = cudaGetDevice(&device_id);
+  if (err == cudaErrorCudartUnloading || err == cudaErrorNoDevice) {
+    return false;
+  }
+  // Clear any error state that might have been set
+  if (err != cudaSuccess) {
+    cudaGetLastError();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace ksana_llm

@@ -637,8 +637,56 @@ class RealHTTPRouterClientTest : public HTTPRouterClient {
  public:
   explicit RealHTTPRouterClientTest(const std::string& endpoint) : HTTPRouterClient(endpoint) {}
 
-  // Expose the protected/private methods for testing
-  using HTTPRouterClient::MakeHttpRequest;
+  // Override MakeHttpRequest with short timeout for testing to avoid long waits
+  std::string MakeHttpRequest(const std::string& path, const std::string& method,
+                              const nlohmann::json& json_data) override {
+    CURL* curl = curl_easy_init();
+    std::string response;
+    if (curl) {
+      std::string url = endpoint_ + path;
+      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+      // Set up headers
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+      // Set short timeout for testing (3 seconds instead of default 60)
+      curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3L);
+      curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
+
+      // Set custom request method if not GET
+      if (method != "GET") {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
+        std::string post_data = json_data.dump();
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, post_data.length());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data.c_str());
+      }
+
+      // Perform the request
+      CURLcode res = curl_easy_perform(curl);
+
+      // Clean up
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(curl);
+
+      if (res != CURLE_OK) {
+        KLLM_LOG_WARNING << "HTTP request failed: " << curl_easy_strerror(res);
+        return "{}";
+      }
+    }
+    return response;
+  }
+
+ private:
+  static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
+    size_t total_size = size * nmemb;
+    userp->append(static_cast<char*>(contents), total_size);
+    return total_size;
+  }
 };
 
 // Fast-timeout version for unreachable host testing

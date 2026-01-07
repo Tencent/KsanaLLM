@@ -187,8 +187,6 @@ class TaskDispatcher {
   /** @brief Monitor thread */
   std::thread decode_process_thread_;
 
-  std::thread clean_task_thread_;
-
   /** @brief Prefill receive processing thread */
   std::thread prefill_recv_thread_;
 

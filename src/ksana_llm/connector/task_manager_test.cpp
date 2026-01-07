@@ -76,7 +76,8 @@ class TaskManagerTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // 每个测试创建独立的TaskManager实例
-    task_manager_ = std::make_shared<TaskManager>(8, 1024, 2);  // 8个分片，便于测试
+    // TaskManager(circular_bucket_num, bucket_size_hint, circular_thread_num, device_count, block_size)
+    task_manager_ = std::make_shared<TaskManager>(8, 1024, 2, 4, 16 * 1024 * 1024);  // 8个分片，4个设备，16MB block
     ASSERT_NE(task_manager_, nullptr);
     ASSERT_NE(task_manager_->notification_waiter_, nullptr);
   }
@@ -349,15 +350,6 @@ TEST_F(TaskManagerBasicTest, Constructor) {
   EXPECT_EQ(task_manager_->GetTaskCount(), 0);
   EXPECT_GE(task_manager_->GetLoadFactor(), 0.0f);
   EXPECT_NE(task_manager_->notification_waiter_, nullptr);
-}
-
-TEST_F(TaskManagerBasicTest, SingletonGetInstance) {
-  // 测试单例模式
-  auto instance1 = TaskManager::GetInstance(4, 512);
-  auto instance2 = TaskManager::GetInstance(8, 1024);  // 不同参数
-
-  // 单例应该返回相同的实例
-  EXPECT_EQ(instance1.get(), instance2.get());
 }
 
 TEST_F(TaskManagerBasicTest, SetNotificationWaiter) {
@@ -815,45 +807,6 @@ TEST_F(TaskManagerPromiseTest, RegisterDecodeConfirmedTasksWithSkippingFlag) {
   EXPECT_EQ(task, nullptr);
 }
 
-TEST_F(TaskManagerPromiseTest, CleanupExpiredTasks) {
-  TaskKey key1 = CreateTaskKey(1, 0, 0, 0, 100);
-  TaskKey key2 = CreateTaskKey(2, 0, 0, 0, 200);
-
-  // 添加一些pending和confirmed任务
-  task_manager_->AddUnconfirmedTask(key1);
-  std::vector<TaskKey> confirmed_keys = {key2};
-  task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
-
-  // 立即清理（超时时间为0秒）
-  task_manager_->CleanupExpiredTasks(0);
-
-  // 验证任务被清理后的行为
-  bool activated1 = task_manager_->TryActivateUnconfirmedTask(key1);
-  bool activated2 = task_manager_->TryActivateUnconfirmedTask(key2);
-
-  // 由于任务已过期被清理，激活应该失败
-  EXPECT_FALSE(activated1);
-  EXPECT_FALSE(activated2);
-}
-
-TEST_F(TaskManagerPromiseTest, CleanupNonExpiredTasks) {
-  TaskKey key = CreateTaskKey(1, 0, 0, 0, 100);
-
-  // 添加unconfirmed任务
-  task_manager_->AddUnconfirmedTask(key);
-
-  // 使用很长的超时时间，任务不应该被清理
-  task_manager_->CleanupExpiredTasks(3600);  // 1小时
-
-  // 注册确认任务
-  std::vector<TaskKey> confirmed_keys = {key};
-  task_manager_->RegisterDecodeConfirmedTasks(confirmed_keys);
-
-  // 任务应该仍然能够被激活
-  bool activated = task_manager_->TryActivateUnconfirmedTask(key);
-  EXPECT_TRUE(activated);
-}
-
 //=============================================================================
 // 多线程和并发测试
 //=============================================================================
@@ -1066,4 +1019,165 @@ TEST_F(TaskManagerPerformanceTest, LoadFactorUnderStress) {
 
   std::cout << "Load factor under stress: " << stress_load << std::endl;
 }
+
+//=============================================================================
+// CleanupCanceledTasks 测试
+//=============================================================================
+
+TEST_F(TaskManagerBasicTest, CleanupCanceledTasksBasic) {
+  // 创建并添加任务
+  TaskKey key1 = CreateTaskKey(100, 0, 0, 0, 1024);
+  TaskKey key2 = CreateTaskKey(100, 1, 0, 0, 1024);
+  TaskKey key3 = CreateTaskKey(200, 0, 0, 0, 1024);
+
+  auto task1 = CreateTestTask(100, 0, 0, 0, 1024);
+  auto task2 = CreateTestTask(100, 1, 0, 0, 1024);
+  auto task3 = CreateTestTask(200, 0, 0, 0, 1024);
+
+  task_manager_->AddTask(key1, task1);
+  task_manager_->AddTask(key2, task2);
+  task_manager_->AddTask(key3, task3);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 3);
+
+  // 取消 req_id=100 的任务
+  task_manager_->CancelRequestTasks(100);
+
+  // 验证 cancel_time 已设置
+  auto retrieved1 = task_manager_->GetTask(key1);
+  auto retrieved2 = task_manager_->GetTask(key2);
+  auto retrieved3 = task_manager_->GetTask(key3);
+
+  EXPECT_NE(retrieved1, nullptr);
+  EXPECT_GT(retrieved1->cancel_time, 0);
+  EXPECT_NE(retrieved2, nullptr);
+  EXPECT_GT(retrieved2->cancel_time, 0);
+  EXPECT_NE(retrieved3, nullptr);
+  EXPECT_EQ(retrieved3->cancel_time, 0);  // req_id=200 未取消
+
+  // 任务仍在 request_map 中
+  EXPECT_EQ(task_manager_->GetTaskCount(), 3);
+
+  // 立即清理（timeout=0），应该删除已取消的任务
+  task_manager_->CleanupCanceledTasks(0);
+
+  // 验证已取消的任务被删除
+  EXPECT_EQ(task_manager_->GetTaskCount(), 1);
+  EXPECT_EQ(task_manager_->GetTask(key1), nullptr);
+  EXPECT_EQ(task_manager_->GetTask(key2), nullptr);
+  EXPECT_NE(task_manager_->GetTask(key3), nullptr);  // 未取消的任务保留
+}
+
+TEST_F(TaskManagerBasicTest, CleanupCanceledTasksWithTimeout) {
+  // 创建并添加任务
+  TaskKey key1 = CreateTaskKey(100, 0, 0, 0, 1024);
+  TaskKey key2 = CreateTaskKey(100, 1, 0, 0, 1024);
+
+  auto task1 = CreateTestTask(100, 0, 0, 0, 1024);
+  auto task2 = CreateTestTask(100, 1, 0, 0, 1024);
+
+  task_manager_->AddTask(key1, task1);
+  task_manager_->AddTask(key2, task2);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 2);
+
+  // 取消任务
+  task_manager_->CancelRequestTasks(100);
+
+  // 使用较长的超时时间（5秒），不应该删除任何任务
+  task_manager_->CleanupCanceledTasks(5);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 2);
+  EXPECT_NE(task_manager_->GetTask(key1), nullptr);
+  EXPECT_NE(task_manager_->GetTask(key2), nullptr);
+
+  // 等待超过超时时间
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // 使用较短的超时时间（1秒），应该删除已超时的任务
+  task_manager_->CleanupCanceledTasks(1);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 0);
+  EXPECT_EQ(task_manager_->GetTask(key1), nullptr);
+  EXPECT_EQ(task_manager_->GetTask(key2), nullptr);
+}
+
+TEST_F(TaskManagerBasicTest, CleanupCanceledTasksMultipleRequests) {
+  // 创建多个请求的任务
+  TaskKey key1 = CreateTaskKey(100, 0, 0, 0, 1024);
+  TaskKey key2 = CreateTaskKey(200, 0, 0, 0, 1024);
+  TaskKey key3 = CreateTaskKey(300, 0, 0, 0, 1024);
+
+  auto task1 = CreateTestTask(100, 0, 0, 0, 1024);
+  auto task2 = CreateTestTask(200, 0, 0, 0, 1024);
+  auto task3 = CreateTestTask(300, 0, 0, 0, 1024);
+
+  task_manager_->AddTask(key1, task1);
+  task_manager_->AddTask(key2, task2);
+  task_manager_->AddTask(key3, task3);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 3);
+
+  // 取消 req_id=100 和 req_id=200
+  task_manager_->CancelRequestTasks(100);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 确保时间戳不同
+  task_manager_->CancelRequestTasks(200);
+
+  // 立即清理，应该删除所有已取消的任务
+  task_manager_->CleanupCanceledTasks(0);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 1);
+  EXPECT_EQ(task_manager_->GetTask(key1), nullptr);
+  EXPECT_EQ(task_manager_->GetTask(key2), nullptr);
+  EXPECT_NE(task_manager_->GetTask(key3), nullptr);  // req_id=300 未取消
+}
+
+TEST_F(TaskManagerBasicTest, CleanupCanceledTasksNoEffect) {
+  // 创建并添加任务
+  TaskKey key1 = CreateTaskKey(100, 0, 0, 0, 1024);
+  auto task1 = CreateTestTask(100, 0, 0, 0, 1024);
+  task_manager_->AddTask(key1, task1);
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 1);
+
+  // 不取消任何任务，直接清理
+  task_manager_->CleanupCanceledTasks(0);
+
+  // 任务应该保留
+  EXPECT_EQ(task_manager_->GetTaskCount(), 1);
+  EXPECT_NE(task_manager_->GetTask(key1), nullptr);
+}
+
+TEST_F(TaskManagerBasicTest, CleanupCanceledTasksCrossShards) {
+  // 创建分布在不同 shard 的任务
+  std::vector<TaskKey> keys;
+  for (int i = 0; i < 20; ++i) {
+    TaskKey key = CreateTaskKey(i * 100, 0, 0, 0, 1024);  // 不同 req_id 分布到不同 shard
+    auto task = CreateTestTask(i * 100, 0, 0, 0, 1024);
+    task_manager_->AddTask(key, task);
+    keys.push_back(key);
+  }
+
+  EXPECT_EQ(task_manager_->GetTaskCount(), 20);
+
+  // 取消所有奇数 req_id 的任务
+  for (int i = 1; i < 20; i += 2) {
+    task_manager_->CancelRequestTasks(i * 100);
+  }
+
+  // 立即清理
+  task_manager_->CleanupCanceledTasks(0);
+
+  // 验证只有偶数 req_id 的任务保留
+  EXPECT_EQ(task_manager_->GetTaskCount(), 10);
+  for (int i = 0; i < 20; ++i) {
+    auto task = task_manager_->GetTask(keys[i]);
+    if (i % 2 == 0) {
+      EXPECT_NE(task, nullptr);  // 偶数保留
+    } else {
+      EXPECT_EQ(task, nullptr);  // 奇数删除
+    }
+  }
+}
+
 }  // namespace ksana_llm
