@@ -313,6 +313,7 @@ void InferRequest::ResetPrefillingTokens() {
   remaining_workload_.sampling_token_num = std::max(kStepGenerateTokenNum, logits_custom_length);
 
   planning_workload_ = remaining_workload_;
+  sampling_token_num = planning_workload_.sampling_token_num;
 }
 
 void InferRequest::SetInflightTaskGenResultEstimation(size_t generated_token_num, size_t draft_token_num) {
