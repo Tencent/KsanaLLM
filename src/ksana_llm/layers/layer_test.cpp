@@ -16,7 +16,6 @@
 #include "ksana_llm/layers/attention_layer.h"
 #include "ksana_llm/layers/batched_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_matmul_layer.h"
-#include "ksana_llm/layers/lm_head_matmul_layer.h"
 #include "ksana_llm/layers/cutlass_moe_layer.h"
 #include "ksana_llm/layers/emb_lookup_layer.h"
 #include "ksana_llm/layers/finegrained_mixed_dtype_gemm_layer.h"
@@ -25,6 +24,7 @@
 #include "ksana_llm/layers/grouped_topk_layer.h"
 #include "ksana_llm/layers/layer_workspace_manager.h"
 #include "ksana_llm/layers/layernorm_layer.h"
+#include "ksana_llm/layers/lm_head_matmul_layer.h"
 #include "ksana_llm/layers/machete_matmul_layer.h"
 #include "ksana_llm/layers/marlin_matmul_layer.h"
 #include "ksana_llm/layers/marlin_moe_layer.h"
@@ -119,7 +119,6 @@ TEST_F(LayerTest, AttentionLayerTest) {
 #endif
 
 #ifdef ENABLE_CUDA
-  std::shared_ptr<Context> context = std::make_shared<Context>(1, 1, 1);
   FlashAttentionLayer flash_attention_layer;
   QuantMode quant_mode = QUANT_NONE;
   int head_num = 32;
@@ -182,7 +181,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                          true,
                          mrope_section_ptr,
                          enable_qk_pre_norm_before_rotary_pos},
-                        runtime_config, context, 0)
+                        runtime_config, context_, 0)
                   .OK());
 
   Tensor qkv, input_len, prefix_offsets, pos, mask, forward_shape, flag_tensor, flexible_rotary_embedding_pos,
@@ -313,7 +312,7 @@ TEST_F(LayerTest, AttentionLayerTest) {
                          false,
                          nullptr,
                          enable_qk_pre_norm_before_rotary_pos},
-                        runtime_config, context, 0)
+                        runtime_config, context_, 0)
                   .OK());
 #endif
 }
@@ -1090,6 +1089,7 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   // params
   MoeScaleNormMode moe_scale_norm_mode = ksana_llm::MoeScaleNormMode::NO_NORM;
   size_t max_token_num = 4096;
+  int layer_idx = 10;
   size_t expert_num = 4;
   size_t expert_hidden_size = 1024;
   size_t expert_inter_size = 2688;
@@ -1108,7 +1108,6 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_INVALID;
   int group_size = 0;
   bool apply_weight = false;
-  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -1485,6 +1484,7 @@ TEST_F(LayerTest, MoeLayerTest) {
   constexpr int kDeviceRank = 0;
   using dtype = __nv_bfloat16;
   using alpha_dtype = float;
+  setenv("QUANT_PROFILE", "0", 1);
 
   ModelConfig new_model_config = model_config;
   RuntimeConfig new_runtime_config = runtime_config;
@@ -1496,6 +1496,7 @@ TEST_F(LayerTest, MoeLayerTest) {
   // params
   MoeScaleNormMode moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;  // 用不到
   size_t max_token_num = 4096;
+  int layer_idx = 10;
   size_t expert_num = 32;
   size_t expert_hidden_size = 7168;
   size_t expert_inter_size = 2048;
@@ -1514,7 +1515,6 @@ TEST_F(LayerTest, MoeLayerTest) {
   DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
-  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -1945,6 +1945,8 @@ TEST_F(LayerTest, MoeLayerTest) {
       torch_output.index_add_(0, activated_tokens.nonzero().squeeze(), (fc2 * final_scale).to(torch_output.dtype()));
     }
   }
+
+  unsetenv("QUANT_PROFILE");
 #endif
 }
 
@@ -1955,9 +1957,12 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   }
   constexpr int kDeviceRank = 0;
 
+  setenv("QUANT_PROFILE", "1", 1);
+
   // params
   MoeScaleNormMode moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;  // 用不到
   size_t max_token_num = 4096;
+  int layer_idx = 10;
   size_t expert_num = 32;
   size_t expert_hidden_size = 7168;
   size_t expert_inter_size = 2048;
@@ -1976,7 +1981,6 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   DataType int_weight_dtype = DataType::TYPE_UINT4x2;
   int group_size = 128;
   bool apply_weight = false;  // 用不到
-  int layer_idx = 0;
 
   std::vector<std::any> params;
   params.push_back(moe_scale_norm_mode);
@@ -2039,6 +2043,8 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
 
   // 有缓存，创建多次耗时不应该增加太多
   EXPECT_TRUE(2 * duration12.count() > duration23.count());
+
+  unsetenv("QUANT_PROFILE");
 #endif
 }
 
@@ -2290,20 +2296,20 @@ TEST_F(LayerTest, FlashInferResourceManagerTest) {
   size_t head_dim = 128;
 
   // Test 1: Get pinned host workspace for rank 0 (first time initialization)
-  void* pinned_workspace_rank0 = FlashInferResourceManager::GetPinnedHostWorkspace(
-      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  void* pinned_workspace_rank0 =
+      FlashInferResourceManager::GetPinnedHostWorkspace(num_heads, num_kv_heads, head_dim, kDeviceRank0);
   EXPECT_NE(pinned_workspace_rank0, nullptr);
   KLLM_LOG_INFO << "Test 1 passed: Pinned host workspace initialized for rank 0";
 
   // Test 2: Get pinned host workspace again for rank 0 (should return same pointer)
-  void* pinned_workspace_rank0_again = FlashInferResourceManager::GetPinnedHostWorkspace(
-      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  void* pinned_workspace_rank0_again =
+      FlashInferResourceManager::GetPinnedHostWorkspace(num_heads, num_kv_heads, head_dim, kDeviceRank0);
   EXPECT_EQ(pinned_workspace_rank0, pinned_workspace_rank0_again);
   KLLM_LOG_INFO << "Test 2 passed: Pinned host workspace reused for rank 0";
 
   // Test 3: Get device workspace for rank 0
-  std::shared_ptr<Tensor>& device_workspace_rank0 = FlashInferResourceManager::GetDeviceWorkspace(
-      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  std::shared_ptr<Tensor>& device_workspace_rank0 =
+      FlashInferResourceManager::GetDeviceWorkspace(num_heads, num_kv_heads, head_dim, kDeviceRank0);
   EXPECT_NE(device_workspace_rank0, nullptr);
   EXPECT_GT(device_workspace_rank0->GetTotalBytes(), 0);
   EXPECT_EQ(device_workspace_rank0->location, MemoryLocation::LOCATION_DEVICE);
@@ -2312,8 +2318,8 @@ TEST_F(LayerTest, FlashInferResourceManagerTest) {
                 << device_workspace_rank0->GetTotalBytes() << " bytes";
 
   // Test 4: Get device workspace again for rank 0 (should return same reference)
-  std::shared_ptr<Tensor>& device_workspace_rank0_again = FlashInferResourceManager::GetDeviceWorkspace(
-      num_heads, num_kv_heads, head_dim, kDeviceRank0);
+  std::shared_ptr<Tensor>& device_workspace_rank0_again =
+      FlashInferResourceManager::GetDeviceWorkspace(num_heads, num_kv_heads, head_dim, kDeviceRank0);
   EXPECT_EQ(device_workspace_rank0.get(), device_workspace_rank0_again.get());
   KLLM_LOG_INFO << "Test 4 passed: Device workspace reused for rank 0";
 
@@ -2424,6 +2430,5 @@ TEST_F(LayerTest, LmHeadMatMulLayerTest) {
   }
 #endif
 }
-
 
 }  // namespace ksana_llm

@@ -45,6 +45,9 @@ class CutlassMoeLayer : public BaseLayer {
   Status InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                std::shared_ptr<Context> context, int rank);
 
+ private:
+  inline std::vector<int64_t> GetBestTactic(const size_t& num_rows);
+
  protected:
   bool set_workspace_buffer_info_ = true;
 

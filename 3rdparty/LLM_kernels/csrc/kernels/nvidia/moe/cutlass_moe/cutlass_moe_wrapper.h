@@ -48,8 +48,6 @@ class CutlassMoeWrapper {
                const Tensor& fc2_expert_weights, const std::vector<Tensor>& quant_scales,
                const std::vector<int64_t>& profile_ids, cudaStream_t stream);
 
-  int64_t GetTacticNum(const int64_t gemm_idx);
-
   size_t GetProfileWorkspace(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
                              const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
                              const int64_t num_rows, int64_t const gemm_idx, int64_t const profile_id,
@@ -61,10 +59,9 @@ class CutlassMoeWrapper {
                            int64_t const gemm_idx, int64_t const profile_id, bool const do_preparation,
                            cudaStream_t stream);
 
-  void RunGemmProfile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
-                      const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
-                      const int64_t num_rows, int64_t const gemm_idx, int64_t const profile_id,
-                      bool const do_preparation, cudaStream_t stream);
+  int64_t Profile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
+                  const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
+                  const int64_t num_rows, int64_t const gemm_idx, size_t warmup, size_t iters, cudaStream_t stream);
 
  private:
 #if ENABLE_CUTLASSMOE

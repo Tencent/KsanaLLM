@@ -71,14 +71,6 @@ void CutlassMoeWrapper::Forward(Tensor& output, const Tensor& input, const Tenso
 #endif
 }
 
-int64_t CutlassMoeWrapper::GetTacticNum(const int64_t gemm_idx) {
-#if ENABLE_CUTLASSMOE
-  return fused_moe_runner_->getTacticNum(gemm_idx);
-#else
-  KLLM_KERNEL_THROW("ENABLE_CUTLASSMOE=0, skipping Cutlass Moe kernel.");
-#endif
-}
-
 size_t CutlassMoeWrapper::GetProfileWorkspace(const Tensor& fc1_expert_weights,
                                               const std::optional<Tensor>& fc1_expert_biases,
                                               const Tensor& fc2_expert_weights,
@@ -111,15 +103,28 @@ void CutlassMoeWrapper::SetProfileWorkspace(void* profile_workspace_ptr, const T
 #endif
 }
 
-void CutlassMoeWrapper::RunGemmProfile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
-                                       const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
-                                       const int64_t num_rows, int64_t const gemm_idx, int64_t const profile_id,
-                                       bool const do_preparation, cudaStream_t stream) {
+int64_t CutlassMoeWrapper::Profile(const Tensor& fc1_expert_weights, const std::optional<Tensor>& fc1_expert_biases,
+                                   const Tensor& fc2_expert_weights, const std::optional<Tensor>& fc2_expert_biases,
+                                   const int64_t num_rows, int64_t const gemm_idx, size_t warmup, size_t iters,
+                                   cudaStream_t stream) {
 #if ENABLE_CUTLASSMOE
-  fused_moe_runner_->runGemmProfile(fc1_expert_weights, fc1_expert_biases, fc2_expert_weights, fc2_expert_biases,
-                                    num_rows, top_k_, tp_size_, tp_rank_, ep_size_, ep_rank_, cluster_size_,
-                                    cluster_rank_, enable_alltoall_, min_latency_mode_, gemm_idx, profile_id,
-                                    do_preparation, 0, stream);
+  int64_t tactic_num = fused_moe_runner_->getTacticNum(gemm_idx);
+  std::vector<float> tactic_times(tactic_num, std::numeric_limits<float>::max());
+  for (int64_t tactic = 0; tactic < tactic_num; tactic++) {
+    try {
+      auto kernel = [&]() {
+        fused_moe_runner_->runGemmProfile(fc1_expert_weights, fc1_expert_biases, fc2_expert_weights, fc2_expert_biases,
+                                          num_rows, top_k_, tp_size_, tp_rank_, ep_size_, ep_rank_, cluster_size_,
+                                          cluster_rank_, enable_alltoall_, min_latency_mode_, gemm_idx, tactic, false,
+                                          0, stream);
+      };
+      tactic_times[tactic] = MeasureCudaExecutionTime(kernel, stream, warmup, iters);
+    } catch (const std::exception& e) {
+      tactic_times[tactic] = std::numeric_limits<float>::max();
+    }
+  }
+  auto min_it = std::min_element(tactic_times.begin(), tactic_times.end());
+  return std::distance(tactic_times.begin(), min_it);
 #else
   KLLM_KERNEL_THROW("ENABLE_CUTLASSMOE=0, skipping Cutlass Moe kernel.");
 #endif

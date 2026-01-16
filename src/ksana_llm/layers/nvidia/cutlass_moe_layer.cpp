@@ -17,6 +17,15 @@ namespace ksana_llm {
 
 #define TRTLLM_CUTLASS_MOE_CHUNK_SIZE ((size_t)(8 * 1024))
 
+inline size_t bit_width_of_bit_floor(size_t n) {
+  size_t width = 0;
+  while (n > 1) {
+    n >>= 1;
+    ++width;
+  }
+  return width + 1;
+}
+
 Status CutlassMoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                              std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
@@ -124,30 +133,28 @@ size_t CutlassMoeLayer::GetWorkspaceSize() {
 }
 
 Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
-  const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 10);
+  const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 15);
   if (record_iters == 0) {
     KLLM_LOG_DEBUG << "$QUANT_PROFILE==0, Skipping CutlassMoeLayer Preprocess";
     return Status();
   }
-  const size_t warmup_iters = std::max(1UL, record_iters / 2);  // warmup不能为0
+  const size_t warmup_iters = std::max(1UL, record_iters / 3);  // warmup不能为0
 
   static std::mutex g_mtx;
   std::lock_guard<std::mutex> guard(g_mtx);
 
   const auto start_time = ProfileTimer::GetCurrentTime();
 
-  size_t max_profile_token = static_cast<size_t>(std::pow(2, std::ceil(std::log2(runtime_config.max_batch_size))));
   // 检查是否可以跳过
   if (Singleton<CutlassMoeSearchStatus>::GetInstance()->IsCutlassMoeScheduleContain(
           expert_topk_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_)) {
     config_map_ = Singleton<CutlassMoeSearchStatus>::GetInstance()->GetCutlassMoeSchedule(
         expert_topk_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_);
     KLLM_LOG_INFO << fmt::format("Reusing Profile CutlassMoeLayer Layer in rank:{}, token=({}~{}),({},{},{},{})", rank_,
-                                 1, max_profile_token, expert_topk_, expert_num_per_node_, expert_hidden_size_,
-                                 expert_inter_size_);
+                                 1, TRTLLM_CUTLASS_MOE_CHUNK_SIZE, expert_topk_, expert_num_per_node_,
+                                 expert_hidden_size_, expert_inter_size_);
     return Status();
   }
-  config_map_.resize(max_profile_token + 1);
 
   // 创建一份假权重
   Tensor w1_w3_weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8,
@@ -157,44 +164,29 @@ Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const Runtim
   KTensor fc1_expert_weights = TensorToKTensor(w1_w3_weight);
   KTensor fc2_expert_weights = TensorToKTensor(w2_weight);
 
-  for (size_t profile_token = 1; profile_token <= max_profile_token; profile_token *= 2) {
-    auto get_gemm_best_tactic = [&](int64_t gemm_idx, size_t warmup_iters, size_t profile_iters) -> int64_t {
-      // 获取workspace
-      size_t profile_workspace_size = cutlass_moe_wrapper_->GetProfileWorkspace(
-          fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, profile_token, gemm_idx, -1, true,
-          context_->GetComputeStreams()[rank_].Get());
-      // 开辟workspace
-      Tensor profile_workspace = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {profile_workspace_size}, rank_);
-      // 设置workspace
-      cutlass_moe_wrapper_->SetProfileWorkspace(profile_workspace.GetPtr<void>(), fc1_expert_weights, std::nullopt,
-                                                fc2_expert_weights, std::nullopt, profile_token, gemm_idx, -1, true,
-                                                context_->GetComputeStreams()[rank_].Get());
-      // 获取最优tactic
-      int64_t best_tactic = -1;
-      float best_tactic_time = std::numeric_limits<float>::max();
-      int64_t tactic_num = cutlass_moe_wrapper_->GetTacticNum(gemm_idx);
-      for (int64_t tactic = 0; tactic < tactic_num; tactic++) {
-        auto kernel = [&]() {
-          cutlass_moe_wrapper_->RunGemmProfile(fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt,
-                                               profile_token, gemm_idx, tactic, false,
-                                               context_->GetComputeStreams()[rank_].Get());
-        };
-        float tactic_time =
-            MeasureCudaExecutionTime(kernel, context_->GetComputeStreams()[rank_].Get(), warmup_iters, profile_iters);
-        if (tactic_time < best_tactic_time) {
-          best_tactic_time = tactic_time;
-          best_tactic = tactic;
-        }
-      }
-      // 结束
-      return best_tactic;
-    };
-    int64_t gemm1_tactic = get_gemm_best_tactic(1, warmup_iters, record_iters);
-    int64_t gemm2_tactic = get_gemm_best_tactic(2, warmup_iters, record_iters);
-    config_map_[profile_token] = {gemm1_tactic, gemm2_tactic};
-  }
-  for (size_t profile_token = 1; profile_token <= max_profile_token; profile_token++) {
-    config_map_[profile_token] = config_map_[std::pow(2, static_cast<int>(std::log2(profile_token)))];
+  auto get_gemm_best_tactic = [&](size_t num_rows, int64_t gemm_idx, size_t warmup_iters,
+                                  size_t profile_iters) -> int64_t {
+    // 获取workspace
+    size_t profile_workspace_size = cutlass_moe_wrapper_->GetProfileWorkspace(
+        fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, num_rows, gemm_idx, -1, true,
+        context_->GetComputeStreams()[rank_].Get());
+    // 开辟workspace
+    Tensor profile_workspace = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8, {profile_workspace_size}, rank_);
+    // 设置workspace
+    cutlass_moe_wrapper_->SetProfileWorkspace(profile_workspace.GetPtr<void>(), fc1_expert_weights, std::nullopt,
+                                              fc2_expert_weights, std::nullopt, num_rows, gemm_idx, -1, true,
+                                              context_->GetComputeStreams()[rank_].Get());
+    // 获取最优tactic
+    return cutlass_moe_wrapper_->Profile(fc1_expert_weights, std::nullopt, fc2_expert_weights, std::nullopt, num_rows,
+                                         gemm_idx, warmup_iters, profile_iters,
+                                         context_->GetComputeStreams()[rank_].Get());
+  };
+
+  config_map_.resize(1);  // NOTE(jinxcwu) 填充0位置占位，有效数据从1位置开始
+  for (size_t profile_token = 1; profile_token <= TRTLLM_CUTLASS_MOE_CHUNK_SIZE; profile_token *= 2) {
+    int64_t gemm1_tactic = get_gemm_best_tactic(profile_token, 1, warmup_iters, record_iters);
+    int64_t gemm2_tactic = get_gemm_best_tactic(profile_token, 2, warmup_iters, record_iters);
+    config_map_.push_back({gemm1_tactic, gemm2_tactic});
   }
 
   Singleton<CutlassMoeSearchStatus>::GetInstance()->AddCutlassMoeSchedule(
@@ -203,6 +195,18 @@ Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const Runtim
   KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassMoeLayer Preprocess cost time: {} s", rank_,
                                ProfileTimer::GetCurrentTime() - start_time);
   return Status();
+}
+
+inline std::vector<int64_t> CutlassMoeLayer::GetBestTactic(const size_t& num_rows) {
+  if (config_map_.empty()) {
+    return {};
+  } else {
+    if (num_rows <= TRTLLM_CUTLASS_MOE_CHUNK_SIZE) {
+      return config_map_[bit_width_of_bit_floor(num_rows)];
+    } else {
+      return config_map_.back();  // 超出profile范围，取最后一个tactic
+    }
+  }
 }
 
 Status CutlassMoeLayer::Forward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
@@ -291,17 +295,10 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
     KTensor token_selected_experts_ktensor = TensorToKTensor(chunk_topk_ids);
     KTensor token_final_scales_ktensor = TensorToKTensor(chunk_topk_weights);
 
-    std::vector<int64_t> best_config = {};
-    if (!config_map_.empty()) {
-      if (solve_token < config_map_.size()) {
-        best_config = config_map_[solve_token];
-      } else {
-        best_config = config_map_[config_map_.size() - 1];
-      }
-    }
     cutlass_moe_wrapper_->Forward(output_ktensor, input_ktensor, token_selected_experts_ktensor,
                                   token_final_scales_ktensor, fc1_expert_weights_ktensor, fc2_expert_weights_ktensor,
-                                  quant_scales_ktensors, best_config, context_->GetComputeStreams()[rank_].Get());
+                                  quant_scales_ktensors, GetBestTactic(solve_token),
+                                  context_->GetComputeStreams()[rank_].Get());
   }
   return Status();
 }
