@@ -369,7 +369,7 @@ cudaError_t InvokeCustomSmallMGemmWithFP32ComputeType(cudaStream_t stream, cubla
   bool is_launch_success = false;
   if (a_dtype == CUDA_R_16F) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16F) {
@@ -382,7 +382,7 @@ cudaError_t InvokeCustomSmallMGemmWithFP32ComputeType(cudaStream_t stream, cubla
     }
   } else if (a_dtype == CUDA_R_16BF) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16BF) {
@@ -397,7 +397,7 @@ cudaError_t InvokeCustomSmallMGemmWithFP32ComputeType(cudaStream_t stream, cubla
     }
   } else if (a_dtype == CUDA_R_32F) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_32F) {
@@ -525,7 +525,7 @@ cudaError_t InvokeCustomSmallMGemm(cudaStream_t stream, cublasOperation_t transa
   bool is_launch_success = false;
   if (a_dtype == CUDA_R_16F) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16F) {
@@ -538,7 +538,7 @@ cudaError_t InvokeCustomSmallMGemm(cudaStream_t stream, cublasOperation_t transa
     }
   } else if (a_dtype == CUDA_R_16BF) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_16BF) {
@@ -551,7 +551,7 @@ cudaError_t InvokeCustomSmallMGemm(cudaStream_t stream, cublasOperation_t transa
     }
   } else if (a_dtype == CUDA_R_32F) {
     if (k % 8 != 0) {
-      std::cerr << "Cutom gemm not support k % 8 != 0" << std::endl;
+      std::cerr << "Custom gemm not support k % 8 != 0" << std::endl;
       return cudaErrorNotSupported;
     }
     if (c_dtype == CUDA_R_32F) {
