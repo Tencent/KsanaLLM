@@ -1,5 +1,5 @@
 transformers==4.51.3
-sentencepiece==0.2.0
+sentencepiece==0.2.1
 uvicorn[standard]==0.29.0
 fastapi==0.110.0
 rouge_score==0.1.2
