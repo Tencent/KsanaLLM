@@ -2,4 +2,4 @@ discord==2.3.2
 torchvision==0.15.2
 einops==0.8.0
 timm==1.0.12
-sentencepiece==0.2.0
+sentencepiece==0.2.1
