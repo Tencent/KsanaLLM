@@ -10,7 +10,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
 - Utilizes optimized CUDA kernels, including high performance kernels from [vLLM](https://github.com/vllm-project/vllm), [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM), [FastTransformer](https://github.com/NVIDIA/FasterTransformer), [SGLang](https://github.com/sgl-project/sglang), [LightLLM](https://github.com/ModelTC/lightllm)
 - Efficient management of attention key and value memory with [PagedAttention](https://arxiv.org/abs/2309.06180)
-- Detailed optimization of task-scheduling and memory-uitlization for dynamic batching 
+- Detailed optimization of task-scheduling and memory-utilization for dynamic batching 
 - Prefix caching support
 - Sufficient testing has been conducted on GPU/NPU cards such as A10, A100, L20, L40, H20, 910B2C etc
 
